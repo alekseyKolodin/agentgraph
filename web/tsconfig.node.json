@@ -1,0 +1,10 @@
+{
+  "//": "Код, который выполняется в Node: конфиг Vite и тесты web/src/**/*.test.ts (node:test). Код для браузера — tsconfig.json, без типов Node.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts", "src/**/*.test.ts"],
+  "exclude": []
+}

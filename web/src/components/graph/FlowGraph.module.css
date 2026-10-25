@@ -1,0 +1,168 @@
+/* Граф flow: правила fg-* из ui/style.css в том же порядке, с поздними перебивками «Пульта» (system.md → «Граф»).
+   Холст — @xyflow/react: узлы и рамки — его узлы, рёбра — его рёбра (ломаные из модели), подписи — слой поверх узлов.
+   Обёртки xyflow (.react-flow__node) только ставят на место: вид — у вложенных .fg-node и .fg-frame. */
+.fg { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); margin-bottom: 14px; overflow: hidden; }
+.fg-scroll {
+  position: relative; overflow: hidden; cursor: grab; max-height: 480px;
+  background-color: var(--deck);
+  background-image: radial-gradient(color-mix(in srgb, var(--ink-2) 35%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.fg-flow-host .fg-scroll { max-height: min(50vh, 440px); }
+.fg-run-host .fg-scroll { max-height: 520px; }
+/* вкладка «Граф» страницы запуска: холст занимает экран, а не 520px (#run-pane-graph .fg-run-host .fg-scroll) */
+.fg-run-host .fg-scroll.fg-fill { max-height: none; height: calc(100vh - 290px); min-height: 360px; }
+/* панель масштаба — своя строка над холстом, а не поверх него: иначе при прокрутке закрывает подписи рёбер */
+.fg-bar { display: flex; justify-content: flex-end; align-items: center; gap: 4px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.fg-btn { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-meta); padding: 2px 8px; border-radius: var(--r-sm); cursor: pointer; }
+.fg-btn:hover { background: var(--hover); }
+.fg-zoom { font-size: var(--fs-cap); color: var(--ink-2); min-width: 36px; text-align: center; }
+.fg-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.fg-edge { fill: none; stroke: color-mix(in srgb, var(--live) 75%, var(--ink-2)); stroke-width: 1.6; }
+.fg-e-loop { stroke: var(--ink-2); stroke-dasharray: 5 4; }
+.fg-e-next { stroke: var(--ink-2); }
+.fg-e-art-write, .fg-e-art-read { stroke: var(--st-wait); stroke-width: 1.2; opacity: .45; }
+.fg-e-art-read { stroke-dasharray: 4 4; }
+.fg-hl .fg-e-art-write, .fg-hl .fg-e-art-read { opacity: .12; }
+.fg-hl .fg-edge.is-hl { opacity: 1; stroke-width: 2; }
+.fg-mk { fill: color-mix(in srgb, var(--live) 75%, var(--ink-2)); }
+.fg-mk-loop { fill: var(--ink-2); }
+.fg-mk-art { fill: var(--st-wait); }
+
+.fg-label {
+  position: absolute; transform: translate(-50%, -50%); z-index: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--fs-cap); line-height: 1.3; padding: 2px 8px; border-radius: var(--r-pill); background: var(--panel); border: 1px solid var(--line); color: var(--ink);
+  cursor: default;
+}
+.fg-l-loop, .fg-l-next { color: var(--ink-2); }
+
+.fg-frame { position: absolute; inset: 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--panel) 70%, transparent); }
+.fg-frame-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: var(--fs-meta); min-width: 0; white-space: nowrap; overflow: hidden; }
+.fg-block > .fg-frame-head { cursor: pointer; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+.fg-block > .fg-frame-head:hover b { color: var(--live); }
+.fg-frame-head b { overflow: hidden; text-overflow: ellipsis; }
+.fg-loop-note { color: var(--ink-2); }
+.fg-chips { display: flex; flex-wrap: wrap; gap: 4px; overflow: hidden; }
+.fg-chip { font-size: var(--fs-cap); padding: 0 6px; border-radius: var(--r-pill); border: 1px solid var(--line); }
+.fg-group { border: 1px dashed var(--live); background: color-mix(in srgb, var(--live) 5%, transparent); }
+.fg-group-head { color: var(--live); font-weight: 600; padding: 4px 10px; }
+.fg-arts { border-style: dashed; }
+.fg-arts-head { color: var(--ink-2); font-weight: 600; }
+
+.fg-node {
+  position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); cursor: pointer;
+  transition: border-color .15s, opacity .15s, box-shadow .15s;
+}
+.fg-node:hover, .fg-node:focus-visible { border-color: var(--live); outline: none; }
+.fg-node.is-selected { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 35%, transparent); }
+.fg-node.ai-changed { border-color: var(--st-ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--st-ok) 45%, transparent); }
+.fg-title { font-weight: 600; font-size: var(--fs-small); line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fg-num { color: var(--ink-2); font-weight: 600; margin-right: 6px; }
+.fg-sub { font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-in { font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-in b { color: var(--ink); font-weight: 600; }
+.fg-in :global(.err) { color: var(--st-fail); }
+.fg-foot { margin-top: auto; display: flex; gap: 8px; align-items: center; font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fg-badge { margin-left: auto; font-size: var(--fs-cap); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fg-badge:empty { display: none; }
+.fg-start { border-color: color-mix(in srgb, var(--live) 55%, var(--line)); background: color-mix(in srgb, var(--live) 7%, var(--panel)); }
+.fg-start .fg-sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fg-artifact { border-style: dashed; }
+.fg-artifact > * { flex-shrink: 0; }
+.fg-artifact .fg-info { display: flex; flex-wrap: wrap; gap: 4px; font-size: var(--fs-cap); color: var(--ink-2); overflow: hidden; }
+.fg-art-by { width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-artifact.is-locked { border-color: var(--st-wait); }
+
+/* ромб условия: квадрат, повёрнутый на 45°; подпись и бейдж — под ним */
+.fg-cond { padding: 0; overflow: visible; background: transparent; border: 0; align-items: center; justify-content: center; }
+.fg-diamond { width: 30px; height: 30px; transform: rotate(45deg); border-radius: var(--r-sm); border: 2px solid var(--st-wait); background: color-mix(in srgb, var(--st-wait) 18%, var(--panel)); transition: box-shadow .15s; }
+.fg-cond:hover .fg-diamond, .fg-cond:focus-visible .fg-diamond { box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-wait) 35%, transparent); }
+.fg-cond-label, .fg-cond .fg-badge { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: var(--fs-cap); color: var(--ink-2); max-width: 180px; overflow: hidden; text-overflow: ellipsis; margin: 0; }
+.fg-cond .fg-badge { top: calc(100% + 15px); color: var(--ink); }
+
+.fg-plus {
+  position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink-2); font-size: var(--fs-h3); line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s;
+}
+.fg-node:hover > .fg-plus, .fg-group:hover > .fg-plus, .fg-plus:focus-visible { opacity: 1; }
+.fg-plus:hover { color: var(--live); border-color: var(--live); }
+.fg-group > .fg-plus { top: 2px; }
+
+/* состояния запуска (graphApplyRun) */
+.fg-run .fg-node.is-pending, .fg-run .fg-node.is-skipped { opacity: .5; }
+.fg-run .fg-frame.is-skipped { opacity: .55; }
+.fg-node.is-done .fg-badge { color: var(--st-ok); }
+.fg-node.is-failed { border-color: var(--st-fail); }
+.fg-node.is-failed .fg-badge { color: var(--st-fail); }
+.fg-node.is-notmet .fg-badge { color: var(--st-wait); }
+.fg-node.is-done.fg-cond .fg-diamond { border-color: var(--st-ok); background: color-mix(in srgb, var(--st-ok) 18%, var(--panel)); }
+.fg-node.is-running { border-color: var(--live); }
+.fg-node.is-current { animation: fg-pulse 1.6s ease-in-out infinite; }
+.fg-node.is-current.fg-cond { animation: none; }
+.fg-node.is-current.fg-cond .fg-diamond { animation: fg-pulse 1.6s ease-in-out infinite; }
+@keyframes fg-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--live) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .fg-node.is-current, .fg-node.is-current.fg-cond .fg-diamond { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 45%, transparent); } }
+
+.fg-builder-host .fg-scroll { max-height: calc(100vh - 250px); min-height: 280px; }
+.fg-frame.fg-block.is-selected { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.fg-cond.is-selected .fg-diamond { border-color: var(--ink); }
+
+/* ---------- граф в стиле «Пульта» (system.md → «Граф»): тёмный холст в точку, узлы — ячейки пульта, цвет — только статус */
+.fg { background: var(--panel); border-color: var(--line); border-radius: var(--r-md); }
+.fg-bar { background: var(--panel); border-bottom-color: var(--line); }
+.fg-scroll { background-color: var(--well); background-image: radial-gradient(rgba(255, 255, 255, .07) 1px, transparent 1px); background-size: 16px 16px; }
+.fg-edge { stroke: var(--ink-3); stroke-width: 1.4; }
+.fg-mk { fill: var(--ink-3); }
+.fg-e-loop { stroke-dasharray: 4 4; }
+.fg-e-loop.is-notmet { stroke: var(--st-fail); }
+.fg-label { font-family: var(--font-mono); font-size: var(--fs-cap); background: var(--panel); border-color: var(--line); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.fg-l-loop.is-notmet { color: var(--st-fail); border-color: color-mix(in srgb, var(--st-fail) 45%, transparent); }
+.fg-l-loop.is-done { color: var(--st-ok); border-color: color-mix(in srgb, var(--st-ok) 40%, transparent); }
+
+.fg-frame { border-color: var(--line-strong); border-radius: var(--r-lg); background: rgba(255, 255, 255, .015); }
+.fg-frame-head { color: var(--ink-2); }
+.fg-frame-head b { font-weight: 500; }
+.fg-block > .fg-frame-head:hover b { color: var(--ink); }
+.fg-loop-note, .fg-frame-head .fg-badge { font-family: var(--font-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fg-run .fg-frame.is-pending { opacity: .5; }
+.fg-run .fg-frame.is-running { border-color: color-mix(in srgb, var(--live) 40%, var(--line-strong)); }
+.fg-run .fg-frame.is-running > .fg-frame-head .fg-badge { color: var(--live); }
+.fg-group { border: 1px dashed var(--line-strong); background: transparent; }
+.fg-group-head { color: var(--ink-3); font-weight: 500; }
+
+.fg-node { background: var(--panel); border-color: var(--line-strong); border-radius: var(--r-sm); gap: 2px; }
+.fg-node:hover, .fg-node:focus-visible { border-color: var(--ink-3); }
+.fg-node.is-selected { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.fg-title { font-weight: 500; }
+.fg-num { font-family: var(--font-mono); font-weight: 400; color: var(--ink-3); }
+.fg-sub { font-family: var(--font-mono); color: var(--ink-3); }
+.fg-foot { font-family: var(--font-mono); color: var(--ink-3); }
+.fg-start { background: var(--raised); border-color: var(--line-strong); }
+/* статус-точка в заголовке этапа на странице запуска */
+.fg-run .fg-phase .fg-title::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+.fg-run .fg-phase.is-done .fg-title::before { background: var(--st-ok); box-shadow: none; }
+.fg-run .fg-phase.is-running .fg-title::before { background: var(--live); box-shadow: none; }
+.fg-run .fg-phase.is-failed .fg-title::before { background: var(--st-fail); box-shadow: none; }
+.fg-node.is-running { border-color: var(--live); background: color-mix(in srgb, var(--live) 8%, var(--panel)); }
+.fg-node.is-running .fg-badge { color: var(--live); }
+.fg-run .fg-node.is-pending { opacity: .55; }
+
+.fg-diamond { border: 2px solid var(--ink-3); background: var(--panel); border-radius: var(--r-xs); }
+.fg-cond:hover .fg-diamond, .fg-cond:focus-visible .fg-diamond { box-shadow: 0 0 0 3px var(--line-strong); }
+.fg-node.is-notmet .fg-diamond { border-color: var(--st-fail); background: color-mix(in srgb, var(--st-fail) 16%, var(--panel)); }
+.fg-node.is-notmet .fg-badge { color: var(--st-fail); }
+.fg-node.is-running.fg-cond .fg-diamond { border-color: var(--live); background: color-mix(in srgb, var(--live) 16%, var(--panel)); }
+.fg-node.is-running.fg-cond { background: transparent; }
+.fg-cond-label { font-family: var(--font-mono); color: var(--ink-3); }
+
+/* обёртки xyflow: рёбра и узлы без своих стилей и событий, кроме наших */
+.fg :global(.react-flow__edge) { pointer-events: none; }
+.fg :global(.react-flow__node) { cursor: default; }
+.fg :global(.react-flow__handle) { opacity: 0; pointer-events: none; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
+.fg :global(.react-flow__pane) { cursor: grab; }
+.fg :global(.react-flow__pane.dragging) { cursor: grabbing; }

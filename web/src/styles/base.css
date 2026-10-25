@@ -1,0 +1,194 @@
+/* Базовые стили «Пульта»: глобальные примитивы, которыми пользуются все экраны (кнопки, строка, диалог, шапка вида).
+   Перенесены из ui/style.css как есть, с теми же именами классов. Стили экранов и компонентов — в их *.module.css. */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--deck);
+  color: var(--ink);
+  font: var(--fs-body)/1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+code, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
+/* фокус с клавиатуры — одно кольцо на всё; выделение (active/selected) им не рисуется */
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: none; box-shadow: var(--focus); }
+.muted { color: var(--ink-2); }
+.small { font-size: var(--fs-meta); }
+.error { color: var(--st-fail); white-space: pre-wrap; }
+.ok { color: var(--st-ok); } .warn { color: var(--st-wait); } .err { color: var(--st-fail); }
+
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+.view-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.view-head h1 { margin: 0 0 4px; font-size: var(--fs-h1); }
+.view-head h1 { font-weight: 600; letter-spacing: -.01em; }
+.view-head p { margin: 0; }
+
+/* «⋯» в шапке flow: правило до .btn — размер и отступы у кнопки от .btn, как в ui/style.css */
+.icon-more { font-size: var(--fs-h3); line-height: 1; padding: 4px 9px; letter-spacing: 1px; color: var(--ink-2); }
+.btn {
+  border: 1px solid var(--line-strong); background: var(--raised); color: var(--ink);
+  padding: 6px 12px; border-radius: var(--r-sm); cursor: pointer; font: inherit; font-weight: 500;
+  transition: background-color .12s, border-color .12s;
+}
+.btn:hover { background: color-mix(in srgb, var(--raised) 80%, var(--ink) 8%); }
+.btn:active { transform: scale(.97); }
+/* главное действие — светлое и нейтральное: синий занят статусом «идёт» */
+.btn.primary { background: var(--act); border-color: var(--act); color: var(--on-act); }
+.btn.primary:hover { background: var(--act-hover); border-color: var(--act-hover); }
+.btn.danger { color: var(--st-fail); }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.small { padding: 3px 9px; font-size: var(--fs-meta); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.btn[aria-disabled="true"]:hover { background: var(--raised); }
+.btn.primary[aria-disabled="true"]:hover { background: var(--act); }
+
+dialog { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); color: var(--ink); padding: 20px 22px; width: min(720px, 92vw); }
+dialog::backdrop { background: rgba(0, 0, 0, .55); }
+dialog h2 { margin: 0 0 8px; font-size: var(--fs-h2); }
+
+.dlg-confirm { width: min(480px, 92vw); }
+.dlg-confirm p { margin: 0 0 14px; white-space: pre-wrap; }
+.dlg-confirm .btn.danger-fill { background: var(--st-fail); border-color: var(--st-fail); color: var(--on-solid); }
+
+/* поля форм: диалоги и формы экранов */
+.form { display: flex; flex-direction: column; gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.form label > span { font-size: var(--fs-meta); color: var(--ink-2); }
+.form input, .form textarea, .form label > select {
+  width: 100%; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--panel); color: var(--ink); font: inherit; resize: vertical;
+}
+/* Chrome держит у select line-height: normal — высоту задаём явно по строке body (14px/1.5), чтобы «Модель» стояла вровень с соседними полями */
+.form label > select { height: calc(1.5em + 18px); }
+.pick-dir { flex: 0 0 auto; white-space: nowrap; }
+.msg { color: var(--ink-2); margin: 0; white-space: pre-wrap; font-size: var(--fs-small); }
+.msg.err { color: var(--st-fail); }
+.msg.ok { color: var(--st-ok); }
+.msg.warn { color: var(--st-wait); }
+
+/* статус запуска */
+.badge { display: inline-block; padding: 2px 9px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 600; margin-left: 8px; vertical-align: middle; }
+.badge.running { background: color-mix(in srgb, var(--live) 18%, transparent); color: var(--live); }
+.badge.done { background: color-mix(in srgb, var(--st-ok) 18%, transparent); color: var(--st-ok); }
+.badge.max_iterations { background: color-mix(in srgb, var(--st-wait) 18%, transparent); color: var(--st-wait); }
+.badge.failed, .badge.budget_exceeded, .badge.aborted, .badge.interrupted { background: color-mix(in srgb, var(--st-fail) 16%, transparent); color: var(--st-fail); }
+.badge.pending { background: var(--well); color: var(--ink-2); }
+.badge.waiting { background: color-mix(in srgb, var(--st-wait) 20%, transparent); color: var(--st-wait); }
+.badge.paused { background: var(--well); color: var(--ink); }
+
+/* чип с крестиком (вложения, теги, коннекторы): до .chip — его цвет у чипа тега перебивается, как в ui/style.css */
+.attach-chip { display: inline-flex; align-items: center; gap: 4px; cursor: default; color: var(--ink); }
+/* чипы: переключатели и ссылки на запуски */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: transparent; color: var(--ink-2); border-radius: var(--r-pill); padding: 3px 10px; font-size: var(--fs-meta); cursor: pointer; font-family: inherit; }
+.chip:hover { border-color: var(--live); color: var(--ink); }
+.chip.on { background: color-mix(in srgb, var(--live) 16%, transparent); border-color: var(--live); color: var(--ink); font-weight: 600; }
+
+/* пунктирная рамка: пауза, «главная заработает после перезапуска» */
+.run-paused { border: 1px dashed var(--line); border-radius: var(--r-md); padding: 8px 14px; color: var(--ink-2); white-space: pre-wrap; }
+.run-paused > * + * { margin-top: 8px; }
+.run-paused .md { white-space: normal; color: var(--ink); }
+
+.empty { max-width: 640px; margin: 60px auto; text-align: center; }
+.empty h1 { font-size: var(--fs-h1); }
+
+.dlg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
+
+/* markdown агента (lib/md.ts): разметку строит renderMarkdown, классы — глобальные */
+.md { line-height: 1.5; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 16px 0 6px; line-height: 1.3; }
+.md h1 { font-size: var(--fs-h1); } .md h2 { font-size: var(--fs-h2); } .md h3 { font-size: var(--fs-h3); }
+.md h4, .md h5, .md h6 { font-size: var(--fs-body); }
+.md h6 { color: var(--ink-2); }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md li.task { list-style: none; margin-left: -18px; }
+.md li.task input { margin: 0 4px 0 0; vertical-align: middle; }
+.md code { background: var(--well); border: 1px solid var(--line); padding: 0 4px; border-radius: var(--r-xs); }
+.md pre { background: var(--well); border: 1px solid var(--line); padding: 8px 10px; border-radius: var(--r-sm); overflow-x: auto; white-space: pre; margin: 8px 0; }
+.md pre code { background: none; border: 0; padding: 0; }
+.md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--ink-2); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.md a { color: var(--live); }
+.md-table { overflow-x: auto; margin: 8px 0; }
+.md table { border-collapse: collapse; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; overflow-wrap: normal; }
+.md th { background: color-mix(in srgb, var(--panel) 60%, var(--well)); }
+
+/* ---------- общее для flow и запуска (этап 3): вкладки страницы, меню «⋯», раскрывашки, чипы тегов, поле пути */
+/* вкладки — подчёркнутые, как переключатель режимов на пульте */
+.tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); }
+.tab { border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--ink-3); padding: 6px 0; border-radius: 0; cursor: pointer; font: inherit; font-weight: 500; }
+.tab:hover { color: var(--ink-2); }
+.tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+/* вкладки страницы (flow, запуск): во всю ширину под шапкой — главная навигация экрана */
+.page-tabs { margin: 4px 0 16px; }
+.view-head:has(+ .page-tabs) { margin-bottom: 12px; }
+
+/* меню под кнопкой «⋯»: редкие и опасные действия, чтобы не стояли рядом с навигацией */
+.menu-wrap { position: relative; }
+.icon-more:hover, .icon-more[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
+.menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 200px; display: flex; flex-direction: column; padding: 4px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
+.menu[hidden] { display: none; }
+.menu-item { border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer; white-space: nowrap; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--hover); outline: none; }
+.menu-item.danger { color: var(--st-fail); }
+
+.link-btn { display: block; border: 0; background: transparent; color: var(--live); font: inherit; font-size: var(--fs-meta); padding: 2px 0; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+
+/* заголовки, которые сворачивают содержимое: блоки и итерации запуска, чат, панель артефактов */
+.fold-head { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 6px 2px 0; border-radius: var(--r-sm); cursor: pointer; text-align: left; }
+.fold-head:hover { color: var(--ink); background: var(--hover); }
+.fold-head[aria-expanded="false"] .caret { transform: rotate(-90deg); }
+
+/* каретка раскрывашек и иконки 16×16 штрихом */
+.caret { display: inline-flex; width: 14px; color: var(--ink-2); transition: transform .12s; flex: none; }
+.caret svg, .icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.icon-btn { display: inline-flex; align-items: center; padding: 4px 6px; color: var(--ink-2); }
+.icon-btn:hover { color: var(--ink); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 10px; }
+.panel h3 { margin: 0; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); letter-spacing: .01em; }
+
+.radios label { flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; }
+.radios input { width: auto; margin: 0; }
+.path-field { display: flex; gap: 8px; align-items: stretch; }
+.path-field input, .path-field textarea { flex: 1; min-width: 0; }
+.path-field:has(textarea) { align-items: flex-start; }
+.field-label { font-size: var(--fs-meta); color: var(--ink-2); }
+
+/* чип с крестиком: вложения, теги, коннекторы */
+.attach-x { border: 0; background: transparent; color: var(--ink-2); cursor: pointer; font: inherit; padding: 0 2px; line-height: 1; }
+.attach-x:hover { color: var(--st-fail); }
+.badge.tag { border: 1px solid currentColor; font-weight: 500; }
+.badge.tag.knowledge { border-style: dashed; color: var(--st-ok); }
+/* разовый запуск: flow не сохранён в flows/ */
+.badge.adhoc { border: 1px dashed currentColor; font-weight: 500; }
+
+/* крупный редактор справа: общий вид для конструктора и «Тегов»; видимость — у каждого своя */
+.big-editor {
+  position: sticky; top: 8px; height: calc(100vh - 30px);
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 14px;
+}
+.big-editor:not(.empty-pane) { border-color: var(--line-strong); }
+.focus-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.focus-titles { min-width: 0; }
+.focus-ctx { font-size: var(--fs-meta); color: var(--ink-3); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.focus-label { font-weight: 500; font-size: var(--fs-h3); }
+.focus-head .small { white-space: nowrap; }
+.big-editor-text {
+  flex: 1; min-height: 0; width: 100%; resize: none;
+  padding: 12px 14px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--deck); color: var(--ink); font: 14px/1.6 var(--font-sans);
+}
+.big-editor-text.mono { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.6; }
+.big-editor-text:focus { outline: none; border-color: var(--live); }
+/* × закрыть инспектор: конструктор и вкладка «Граф» запуска */
+.insp-close { font-size: var(--fs-h3); line-height: 1; padding: 0 6px; }
+.focus-head .insp-close { flex: none; margin: -2px -6px 0 0; }

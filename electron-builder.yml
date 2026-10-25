@@ -1,0 +1,24 @@
+# Упаковка десктопного приложения: npm run desktop:build -> release/desktop/ (docs/GETTING_STARTED.md, «Десктопное приложение»).
+# Главный процесс — dist/desktop/main.js (tsc из src/desktop/main.ts), сервер — dist/*.js, UI — dist/web (vite).
+# node_modules — только dependencies из package.json: devDependencies (React, Vite, Electron) в приложение не попадают.
+appId: dev.agentgraph.desktop
+productName: agentgraph
+directories:
+  output: release/desktop
+files:
+  - package.json
+  - dist/**/*
+  - "!dist/**/*.map"
+  - "!dist/**/*.test.js"
+# Agent SDK запускает CLI Claude Code — нативный бинарник из пакета под платформу — дочерним процессом.
+# Изнутри app.asar exec невозможен: пакет лежит рядом, в app.asar.unpacked.
+asarUnpack:
+  - node_modules/@anthropic-ai/claude-agent-sdk-*/**
+# нативных модулей нет: пересобирать под Electron нечего
+npmRebuild: false
+mac:
+  category: public.app-category.developer-tools
+  # бинарник Claude Code — под одну архитектуру (пакет SDK ставится под машину сборки), поэтому без universal и x64
+  target:
+    - dmg
+    - zip

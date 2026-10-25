@@ -1,0 +1,69 @@
+/* Артефакты запуска (ui/style.css «артефакты запуска (artifacts.js)»): панель, значки шагов, окно артефакта.
+   id старого UI (#dlg-artifact, #art-win-text) здесь — классы; .btn[aria-disabled] — в base.css. */
+.art-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* margin-top: 12px старого перебит #run-pane-artifacts .run-artifacts: панель живёт только в своей вкладке */
+.run-artifacts { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 14px; display: flex; flex-direction: column; gap: 8px; }
+/* агент ждёт пользователя: рамка и полоска, текст пометки — в свёрнутой строке */
+.run-artifacts.attn { border-color: var(--st-wait); box-shadow: inset 3px 0 0 var(--st-wait); }
+.art-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.art-head :global(.fold-head) { font-weight: 600; }
+.art-head .push { margin-left: auto; gap: 8px; }
+.art-summary { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: var(--fs-small); color: var(--ink-2); min-width: 0; }
+.art-summary .sep { color: var(--line); }
+.art-mark { display: inline-block; font-size: var(--fs-meta); padding: 0 7px; border-radius: var(--r-pill); border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+.art-mark.lock { border-color: var(--live); color: var(--live); }
+.art-mark.warn { border-color: var(--st-wait); color: var(--st-wait); }
+.art-mark.draft { border-color: var(--st-wait); color: var(--ink); background: color-mix(in srgb, var(--st-wait) 14%, transparent); font-weight: 600; }
+.art-mark.err { border-color: var(--st-fail); color: var(--st-fail); }
+.art-mark.blank { border-style: dashed; }
+.art-mark.tasks { border-color: var(--st-wait); color: var(--ink); }
+.art-mark.tasks.done { border-color: var(--st-ok); color: var(--st-ok); }
+.art-body { display: flex; flex-direction: column; gap: 8px; }
+.art-hint { font-size: var(--fs-small); color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.art-hint a { color: var(--live); }
+.art-error { font-size: var(--fs-small); color: var(--st-fail); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.art-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.art-row { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
+.art-row:first-child { border-top: 0; }
+.art-open { border: 0; background: transparent; color: var(--live); font: inherit; font-weight: 600; padding: 2px 0; cursor: pointer; text-align: left; }
+.art-open:hover { text-decoration: underline; }
+.art-open:focus-visible, .art-head :global(.fold-head):focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+.art-author { color: var(--ink); }
+/* без вложенного flex: пометки переносятся как строки текста */
+.art-marks { display: inline-block; line-height: 22px; }
+.art-marks .art-mark { margin-right: 4px; vertical-align: middle; line-height: 1.5; }
+.art-warnings { font-size: var(--fs-small); border-top: 1px solid var(--line); padding-top: 6px; }
+.art-warnings ul { margin: 4px 0 0; padding-left: 18px; }
+.art-warnings li { margin: 2px 0; }
+.art-warn-head { font-weight: 600; }
+/* значки шагов: строка карточки этапа и условия, значок итерации, строка «Итога» */
+.art-step { font-size: var(--fs-small); color: var(--ink-2); display: flex; flex-direction: column; gap: 2px; }
+.art-step code { font-size: var(--fs-meta); }
+.art-denials { color: var(--st-wait); text-decoration: underline dotted; cursor: help; }
+.art-warn { color: var(--st-wait); }
+.art-iter { font-size: var(--fs-meta); font-weight: 600; }
+.art-final { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-small); }
+/* окно артефакта */
+.dlg-artifact { width: min(1100px, 95vw); }
+.dlg-artifact :global(.dlg-head) { gap: 12px; }
+.file-actions { display: flex; gap: 6px; align-items: center; }
+.art-win-title { margin: 0; font-size: var(--fs-h3); min-width: 0; overflow-wrap: anywhere; }
+.art-ver select { padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-meta); max-width: 360px; }
+.art-win-meta { margin: 0 0 8px; overflow-wrap: anywhere; }
+.art-path { user-select: all; }
+.art-note { margin: 0 0 8px; padding: 6px 10px; border-radius: var(--r-sm); font-size: var(--fs-small); border: 1px solid var(--line); background: var(--well); }
+.art-note.warn { border-color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 10%, var(--panel)); }
+.art-note.err { border-color: var(--st-fail); background: color-mix(in srgb, var(--st-fail) 8%, var(--panel)); }
+.art-win-body { max-height: 65vh; overflow: auto; background: var(--well); padding: 12px; border-radius: var(--r-sm); }
+.art-win-body > pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.art-win-body:has(> :global(.md)) { background: var(--panel); border: 1px solid var(--line); }
+.art-win-edit { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.art-win-edit.split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.art-win-text { width: 100%; min-height: 55vh; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.45; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; tab-size: 2; }
+.art-win-preview { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 12px; max-height: 60vh; overflow-y: auto; }
+.art-win-status { margin: 8px 0 0; min-height: 1.4em; }
+.art-win-actions { margin-top: 8px; gap: 8px; }
+.art-load-err { color: var(--st-fail); }
+@media (max-width: 800px) {
+  .art-win-edit.split { grid-template-columns: minmax(0, 1fr); }
+}

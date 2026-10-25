@@ -1,0 +1,120 @@
+/* Сайдбар: правила перенесены из старого ui/style.css как есть. Выбранный раздел — a.active от NavLink вместо li.active.
+   Тон строки «Сейчас» — классы live/wait из home.ts. */
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 14px 12px;
+  /* строки: бренд, разделы, «Сейчас», flow, запуски. Места строк заданы явно: скрытое «Сейчас» не сдвигает flow в строку auto */
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, max-content) minmax(0, max-content); align-content: start;
+}
+.sidebar > * + * { margin-top: 14px; }
+.sidebar > .side-nav { grid-row: 2; margin-top: 8px; }
+.sidebar > .side-live { grid-row: 3; }
+.sidebar > .sec-flows { grid-row: 4; }
+.sidebar > .sec-runs { grid-row: 5; }
+.brand { font-weight: 600; font-size: var(--fs-h2); letter-spacing: .2px; padding: 2px 6px 0; color: inherit; text-decoration: none; display: flex; align-items: center; gap: 8px; }
+.brand:hover { color: var(--ink-2); }
+.brand-count { font-size: var(--fs-cap); font-weight: 600; padding: 0 6px; border-radius: var(--r-pill); background: var(--st-wait); color: var(--on-solid); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+/* разделы — компактная строка, а не пункты одного веса с flow и запусками */
+.side-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; }
+.side-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; font-size: var(--fs-small); font-weight: 500; transition: background-color .12s; }
+.side-nav a:hover { background: var(--hover); color: var(--ink); }
+.side-nav a:global(.active) { background: var(--select); color: var(--ink); }
+
+/* «Сейчас»: идущие запуски строками с точкой статуса; ждущие тебя — янтарные и первыми */
+.side-count { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; padding-right: 2px; }
+.side-count.wait { color: var(--st-wait); }
+.live-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; }
+.lrun { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; }
+.lrun:hover { background: var(--hover); }
+.lrun.active { background: var(--select); }
+.lrun:focus-visible { outline: none; box-shadow: var(--focus); }
+.lrun-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
+.lrun.wait .lrun-dot { background: var(--st-wait); }
+.lrun-main { min-width: 0; display: flex; flex-direction: column; }
+.lrun-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lrun-sub { font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lrun.wait .lrun-sub { color: var(--st-wait); }
+.lrun-it { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.side-section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.side-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.side-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 6px 6px; }
+/* «Пульт»: заголовки секций — тихие подписи, а не капс (system.md → «Иерархия») */
+.side-head h2 { margin: 0; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); letter-spacing: .01em; }
+.sec-toggle { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--ink-2); padding: 2px 0; cursor: pointer; font: inherit; }
+.sec-toggle:hover h2 { color: var(--ink); }
+.caret { display: inline-flex; width: 14px; color: var(--ink-2); transition: transform .12s; flex: none; }
+.caret svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.collapsed > .side-head .caret { transform: rotate(-90deg); }
+.collapsed > .side-body { display: none; }
+.side-empty { margin: 0; padding: 4px 8px; font-size: var(--fs-small); }
+@media (max-width: 800px) {
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+
+/* ---------- список flow (этап 3): папки, поиск, перетаскивание. Правила ui/style.css: .list, .grp, .side-search */
+.side-actions { display: flex; align-items: center; gap: 4px; }
+.side-actions :global(.chip) { padding: 2px 9px; }
+.collapsed .fold { display: none; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li {
+  padding: 8px 8px; border-radius: var(--r-sm); cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.list li:hover { background: var(--hover); }
+.list li.active { background: var(--select); }
+.list .name { font-weight: 600; }
+.flow-list .list li { padding: 5px 8px; }
+.flow-list .list .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* flow под именем запуска: в списке, на главной и в шапке запуска */
+.sub-flow { color: var(--ink-2); opacity: .85; }
+/* поиск над списками сайдбара: вне перерисовываемого списка, как поиск тегов */
+.side-search { flex: none; width: auto; margin: 0 6px 6px; padding: 5px 9px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--deck); color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.side-search:focus { outline: none; border-color: var(--live); background: var(--panel); }
+.collapsed > .side-search { display: none; }
+.list li.invalid .name { color: var(--st-fail); }
+
+.grp { margin-bottom: 2px; border-radius: var(--r-sm); }
+.grp-head { width: 100%; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; text-align: left; }
+.grp-head:hover { background: var(--hover); }
+.grp-icon { color: var(--ink-2); flex: none; }
+.grp-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.grp-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grp-count { color: var(--ink-2); font-size: var(--fs-meta); font-weight: 400; flex: none; font-variant-numeric: tabular-nums; }
+.grp > .list { margin-left: 12px; padding-left: 6px; border-left: 1px solid var(--line); }
+.grp.collapsed > .list { display: none; }
+.grp.collapsed > .grp-head .caret { transform: rotate(-90deg); }
+
+/* перетаскивание флоу между папками */
+.list li[draggable="true"] { -webkit-user-drag: element; }
+.flow-list.dragging .list.root { min-height: 38px; border: 1px dashed var(--line); border-radius: var(--r-sm); margin-top: 4px; }
+.flow-list.dragging .list.root:empty::after { content: 'сюда — убрать из папки'; display: block; padding: 9px 10px; color: var(--ink-2); font-size: var(--fs-meta); }
+.flow-list .grp.drop-target, .flow-list .list.root.drop-target { outline: 2px dashed var(--live); outline-offset: -2px; background: var(--hover); }
+
+/* ---------- список запусков (этап 4): группы по проектам, живые счётчики, «ещё N», скрыть и удалить, фильтр по статусу */
+.grp-live { font-size: var(--fs-cap); font-weight: 600; flex: none; }
+.grp-live.running { color: var(--live); }
+.grp-live.waiting { color: var(--st-wait); }
+.grp-live.paused { color: var(--ink-2); }
+.list li.more { color: var(--live); font-size: var(--fs-meta); padding: 4px 8px; }
+.list li { position: relative; }
+.list li.hidden-run { opacity: .6; }
+.list li .li-acts { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; background: var(--hover); border-radius: var(--r-sm); }
+.list li:hover .li-acts { display: flex; }
+.li-acts :global(.icon-btn) { border: 0; background: transparent; color: var(--ink-2); padding: 3px; border-radius: var(--r-xs); cursor: pointer; display: flex; }
+.li-acts :global(.icon-btn):hover { color: var(--ink); background: var(--panel); }
+.li-acts :global(.icon-btn.danger):hover { color: var(--st-fail); }
+.li-acts svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.side-more { border: 0; background: transparent; color: var(--live); font: inherit; font-size: var(--fs-meta); padding: 6px 8px; cursor: pointer; }
+.side-more:hover { text-decoration: underline; }
+
+.run-filter { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 8px; }
+.run-filter :global(.chip) { padding: 1px 8px; font-size: var(--fs-meta); }
+.run-filter :global(.chip) .n { opacity: .7; font-weight: 400; }
+.run-filter .st:global(.on.running) { background: color-mix(in srgb, var(--live) 18%, transparent); border-color: var(--live); }
+.run-filter .st:global(.on.waiting), .run-filter .st:global(.on.max_iterations) { background: color-mix(in srgb, var(--st-wait) 18%, transparent); border-color: var(--st-wait); }
+.run-filter .st:global(.on.done) { background: color-mix(in srgb, var(--st-ok) 18%, transparent); border-color: var(--st-ok); }
+.run-filter .st:global(.on.failed), .run-filter .st:global(.on.budget_exceeded), .run-filter .st:global(.on.aborted), .run-filter .st:global(.on.interrupted) { background: color-mix(in srgb, var(--st-fail) 16%, transparent); border-color: var(--st-fail); }

@@ -1,0 +1,88 @@
+/* Страница «Теги» (ui/style.css «страница «Теги»», system.md → «Теги»): правила перенесены как есть, в том же порядке.
+   #view-tags, #tag-focus, #tag-form, #btn-tag-new, #tags-msg старого UI — классы view-tags, tag-focus, tag-form, btn-tag-new, tags-msg.
+   Правила с [hidden] у элементов, которые здесь не рисуются вовсе (вид тега, «Выбрать…», запуски, редактор), не нужны. */
+
+/* список (.list в ui/style.css, выше по файлу правил тегов): в сайдбаре он свой, здесь — нужные правила */
+.list { list-style: none; margin: 0; padding: 0; }
+.list li {
+  padding: 8px 8px; border-radius: var(--r-sm); cursor: pointer;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.list li:hover { background: var(--hover); }
+.list li.active { background: var(--select); }
+.list .name { font-weight: 600; }
+.list .sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* страница «Теги»: список — главный, слева; новый тег — компактной формой над ним по кнопке; редактор справа */
+.view-tags { container-type: inline-size; }
+.tags-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 24px; align-items: start; }
+@container (max-width: 680px) { .tags-layout { grid-template-columns: minmax(0, 1fr); } }
+/* крупный редактор поля тега — третьей колонкой, только когда в поле фокус и средней остаётся не меньше ~490 px.
+   .big-editor (base.css) задаёт display: flex; модуль идёт после base.css и перебивает его */
+.tag-focus { display: none; }
+.tags-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.tags-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; padding: 0 2px; }
+.tags-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.btn-tag-new.on { background: var(--select); }
+.tag-new { gap: 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 10px 12px; }
+.tag-new[hidden] { display: none; }
+.tag-new-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.tag-new :global(.row) { gap: 8px; }
+.tag-new :global(.msg):empty, .tags-msg:empty { display: none; }
+.tag-kind { display: flex; flex-direction: column; gap: 4px; }
+.tag-kind-label { font-size: var(--fs-meta); color: var(--ink-2); }
+.seg { display: flex; gap: 3px; background: var(--well); padding: 3px; border-radius: var(--r-sm); }
+:global(.form) .seg label { flex: 1; flex-direction: row; gap: 0; cursor: pointer; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; width: 0; }
+:global(.form) .seg label > span { flex: 1; text-align: center; padding: 5px 8px; border-radius: var(--r-sm); font-size: var(--fs-small); font-weight: 600; color: var(--ink-2); }
+.seg input:checked + span { background: var(--raised); color: var(--ink); }
+.seg input:focus-visible + span { outline: 2px solid var(--live); outline-offset: 1px; }
+.tags-count { font-size: var(--fs-cap); font-weight: 600; letter-spacing: 0; padding: 0 7px; border-radius: var(--r-pill); background: var(--well); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.tags-count:empty { display: none; }
+.tags-search { width: 100%; padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--deck); color: var(--ink); font: inherit; font-size: var(--fs-small); margin-bottom: 4px; }
+.tags-search:focus { outline: none; border-color: var(--live); background: var(--panel); }
+.tags-search[hidden] { display: none; }
+.tags-list { display: flex; flex-direction: column; gap: 2px; }
+.tags-list li { cursor: pointer; padding: 8px 10px; gap: 3px; border-radius: var(--r-sm); }
+.tags-list li.active { outline: 0; }
+.tags-list li.tags-none { cursor: default; padding: 6px; }
+.tags-list li.tags-none:hover { background: transparent; }
+.tags-list .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tags-list .name :global(.badge) { margin-left: 0; flex: none; }
+.tags-list .sub.preview { color: var(--ink); opacity: .8; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tags-list .sub.meta { font-size: var(--fs-meta); }
+.tags-main { min-width: 0; }
+/* в старом .tag-editor задаёт padding: 18px 20px и margin-bottom: 0, но .panel ниже по ui/style.css их перебивает:
+   действуют отступы .panel (14px 16px, снизу 14px) — их и оставляем */
+.tag-editor :global(.form) { gap: 16px; }
+.tag-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.tag-editor-head h2 { margin: 0; font-size: var(--fs-h3); display: flex; align-items: center; gap: 8px; }
+.tag-editor-head h2 :global(.badge) { margin-left: 0; font-size: var(--fs-small); padding: 3px 11px; }
+.tag-editor-head :global(.row) { gap: 8px; margin-left: auto; }
+.tag-editor textarea { line-height: 1.5; }
+.tag-editor textarea[name=summary] { font-family: var(--font-mono); min-height: 220px; }
+.tag-editor textarea[name=dirs] { font-family: var(--font-mono); font-size: var(--fs-small); }
+.tag-paths { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.tag-paths textarea { grid-column: 1 / -1; }
+.tag-attach { display: flex; flex-direction: column; gap: 8px; }
+.tag-attach-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tag-attach :global(.chips):empty { display: none; }
+.tag-runs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-small); padding-top: 14px; border-top: 1px solid var(--line); }
+.tag-runs a { color: inherit; text-decoration: none; padding: 2px 8px; border-radius: var(--r-sm); background: var(--well); }
+.tag-runs a:hover { background: var(--hover); }
+.tag-runs a :global(.badge) { margin-left: 4px; }
+.tag-empty { margin: 0; padding: 4px 2px; max-width: 520px; font-size: var(--fs-small); }
+
+/* крупный редактор (ui/style.css .big-editor.empty-pane …): пустая панель — без поля, с подсказкой */
+.tag-focus:global(.empty-pane) :global(.big-editor-text) { display: none; }
+.tag-focus:not(:global(.empty-pane)) .big-editor-empty { display: none; }
+
+/* в старом это правила #tag-focus и #tag-form — по id они сильнее .tag-editor textarea[name=summary]; здесь классы,
+   поэтому блок стоит после него */
+@container (min-width: 1200px) {
+  .tags-layout:has(.tag-focus:not(:global(.empty-pane))) { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(380px, 40%); }
+  .tag-focus:not(:global(.empty-pane)) { display: flex; }
+  .tag-editor .focused-src { outline: 1px solid var(--ink-3); outline-offset: 1px; }
+  /* при видимой панели саммари в форме — превью */
+  .tag-form textarea[name=summary] { min-height: 140px; }
+}

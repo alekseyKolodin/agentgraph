@@ -1,0 +1,46 @@
+/* Форма запуска на вкладке «Запуск» (ui/style.css: .run-form … .run-bar, вложения и недавние папки, теги, .run-link):
+   правила перенесены как есть, в порядке старого файла. id старого UI стали классами: #run-form.drop → .run-form.drop,
+   #run-source a → .run-source a, .run-link #wt-branch → .wt-branch. Глобальные .form, .row, .chips, .chip, .attach-chip,
+   .attach-x, .path-field, .pick-dir, .msg, .field-label — в base.css. */
+/* в ui/style.css .run-form { gap: 14px } перебито стоящим ниже .form { gap: 12px }: промежуток — 12px от .form */
+.run-form textarea[name=input] { min-height: 118px; }
+/* .run-source { gap: 8px } в ui/style.css перебито стоящим ниже .row { gap: 12px }: промежуток — 12px от .row */
+/* раскрывашка-строка: каретка, название, справа от него — тихая сводка того, что внутри */
+.run-more > summary { list-style: none; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 0; cursor: pointer; border-radius: var(--r-sm); }
+.run-more > summary::-webkit-details-marker { display: none; }
+.run-more:not([open]) > summary :global(.caret) { transform: rotate(-90deg); }
+.run-more > summary:hover .run-more-title { color: var(--ink); }
+.run-more-title { flex: none; font-weight: 500; color: var(--ink-2); }
+.run-more-sum { min-width: 0; margin-left: 4px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-more-sum.set { color: var(--ink-2); }
+.run-more-body { display: flex; flex-direction: column; gap: 14px; padding: 10px 0 2px 20px; }
+.run-limits label { min-width: 160px; }
+/* «Запустить» всегда на виду: панель липнет к низу экрана, пока форма длиннее него */
+.run-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 0; background: var(--deck); border-top: 1px solid var(--line); }
+
+/* вложения, доп. директории, чипы недавних путей */
+.run-form.drop { outline: 2px dashed var(--live); outline-offset: 6px; border-radius: var(--r-sm); }
+.run-attach, .run-adddirs { display: flex; flex-direction: column; gap: 6px; }
+.run-attach :global(.row) { gap: 8px; }
+.recent-dirs { margin-top: -6px; }
+.recent-dirs :global(.chip) { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-dirs .recent-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0; }
+.recent-chip > [data-dir] { border: 0; background: none; color: inherit; font: inherit; padding: 3px 0 3px 10px; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-chip > [data-dir]:last-child { padding-right: 10px; }
+.recent-chip > :global(.attach-x) { padding: 3px 8px 3px 2px; opacity: .35; }
+.recent-chip:hover > :global(.attach-x), .recent-chip > :global(.attach-x):focus-visible { opacity: 1; }
+.run-tag { display: flex; flex-direction: column; gap: 6px; }
+:global(.form) label.inline-check { flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; cursor: pointer; }
+:global(.form) label.inline-check > input { width: auto; }
+.run-tag-context { display: flex; flex-direction: column; gap: 4px; }
+.run-tag-context details { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 4px 8px; }
+.run-tag-context summary { cursor: pointer; font-size: var(--fs-small); }
+.tag-context-text { font-family: var(--font-mono); font-size: var(--fs-meta); white-space: pre-wrap; max-height: 260px; overflow: auto; margin: 6px 0 2px; color: var(--ink-2); }
+
+/* привязка к задаче, MR/PR или ветке и worktree (ui/dash.js renderRunLink) */
+.dash-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-link { display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--line); border-radius: var(--r-md); padding: 8px 12px; }
+.run-link :global(.row) { gap: 8px; }
+.run-link select, .run-link .wt-branch { padding: 5px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
+.run-link .wt-branch { flex: 1; min-width: 180px; width: auto; }
+.run-source a { color: var(--live); text-decoration: none; }

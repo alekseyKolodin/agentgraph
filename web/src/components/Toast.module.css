@@ -1,0 +1,7 @@
+/* всплывашка (ui/style.css .toast, перенесено как есть) */
+.toast {
+  position: fixed; right: 20px; bottom: 20px; z-index: 10; max-width: 420px; cursor: pointer;
+  background: var(--panel); border: 1px solid color-mix(in srgb, var(--st-wait) 60%, var(--line)); border-left: 4px solid var(--st-wait);
+  border-radius: var(--r-md); padding: 10px 14px; box-shadow: var(--shadow-pop);
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
+}
