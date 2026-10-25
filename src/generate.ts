@@ -16,7 +16,12 @@ export const ORCHESTRATOR_RULES = `How the orchestrator works:
 /** Правила проектирования этапов и условий: общее для генератора и редактора. */
 export const DESIGN_RULES = `0. Blocks. Most tasks need exactly ONE block. Use several blocks only when the task has distinct stages that each must be finished before the next starts, each with its own done-criterion: e.g. "write a spec until the judge approves it" -> "split it into tasks once" -> "implement until tests pass". Do not split one retry loop into several blocks. Phase names must be unique across the whole flow.
 
-1. Phases: 2-5 per block, each with ONE responsibility. The canonical shape is analyze -> implement -> verify (-> review). Drop phases the task does not need; add one only if it isolates a distinct skill or a different tool set.
+1. Phases: as FEW as possible, by default ONE. Every phase is a fresh session that sees nothing of the previous one except the text it handed over, so each extra phase is a lossy hand-off: the next phase works from a retelling instead of what the previous one actually read and saw. A single phase with all the tools the task needs (reading, editing, running tests) plus the block's stop condition is the canonical shape; the model plans and sequences the work inside the session itself ("analyze, then implement, then verify" is ONE phase, not three). Add a phase only at a context boundary, i.e. when the next step must NOT share the previous one's context or cannot run in it:
+   - independent verification or review: a read-only phase (no Edit/Write) after the implementing phase, so the reviewer judges the result without the implementer's reasoning and cannot be talked into its claims;
+   - parallel independent work (a group, see rule 8): research of separate questions, reviews from different angles;
+   - a step whose context would be too large to share: e.g. a long research or data-gathering step that must be condensed before implementation, or two tool sets that must not meet (web research vs. editing the repository);
+   - a step that talks to the user (AskUserQuestion) and must finish before the rest starts.
+   Never split by work type alone (analysis, planning, coding, testing) when the steps chain on each other's output and touch the same files: fold them into one phase. 1-3 phases per block is typical; more than 3 needs a context-boundary reason for every extra one.
 
 2. Prompts are self-contained. A phase sees nothing except its prompt, so embed what it needs via variables:
    - {{input}} — the original task. Include it in EVERY phase prompt.
@@ -28,9 +33,8 @@ export const DESIGN_RULES = `0. Blocks. Most tasks need exactly ONE block. Use s
    Put the hand-off contract into the phase's "handoff" field (not into the prompt): one or two sentences describing how the answer must end so the next phase can consume it, e.g. «раздел "## Результат": что найдено, файлы и строки, план правок». The orchestrator appends it to the prompt automatically.
 
 3. Least-privilege tools. Every listed tool is auto-approved without prompts, so grant only what the phase needs:
-   - analysis / review / planning: ["Read", "Grep", "Glob"]
-   - implementation: ["Read", "Edit", "Write", "Grep", "Glob"], plus "Bash" only if it must run builds or tests itself
-   - verification: ["Bash", "Read", "Grep", "Glob"]; when it must record results (a checklist, statuses of items), give it writes: [KEY] of that artifact instead of "Edit": writes lets it change only its artifacts, never the code it verifies
+   - the working phase (the default single phase: understands, implements and checks): ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]; drop "Bash" only when the phase has nothing to build or run itself (e.g. the block's command condition runs the tests and the phase only edits text)
+   - a separate review / verification phase (read-only, see rule 1): ["Read", "Grep", "Glob"], plus "Bash" when it must run builds or tests; when it must record results (a checklist, statuses of items), give it writes: [KEY] of that artifact instead of "Edit": writes lets it change only its artifacts, never the code it verifies
    - pure reasoning, writing, summarizing: []
    - web research: ["WebSearch", "WebFetch"]
    - the "Agent" (subagents) and "Skill" (skills) tools are added to every session automatically; do not list them. Subagents get only the phase's own tools.
@@ -48,7 +52,7 @@ export const DESIGN_RULES = `0. Blocks. Most tasks need exactly ONE block. Use s
 
 6. Leave model and effort unset unless the user asked. Set max_turns (1-3) only for phases with no tools and no writes or reads of artifacts. A phase with access to artifacts gets tools to read them even with tools: [], and models do open the file instead of trusting the copy in the prompt; a phase that writes spends turns reading and editing. Leave max_turns of such phases unset or give them at least 5.
 
-7. Set add_dirs only to directories the user explicitly named; never invent paths (a missing directory fails the run). Likewise, set a block's "knowledge" (list of knowledge-tag slugs the user keeps on the "Tags" page, e.g. [frontend, qa]) only to slugs the user named explicitly; never invent tags (a missing tag fails the run before the first phase).
+7. Set add_dirs only to directories the user explicitly named; never invent paths (a missing directory fails the run). Likewise, set a block's "knowledge" (list of knowledge-tag slugs the user keeps on the "Tags" page, e.g. [frontend, qa]) only to slugs the user named explicitly; never invent tags (a missing tag fails the run before the first phase). A knowledge tag reaches the phases as ONE line (what it is and when to consult it) plus the knowledge_read tool that returns its full notes, paths and attachments on demand, so do not retell a tag's content in prompts and do not add phases "to read the rules": the working phase consults the tag itself when relevant.
 
 8. Parallel groups. Give adjacent phases of one block the same "group" only when they are independent of each other: e.g. reviews from different angles, research of separate questions, mostly read-only work. Rules: at least two phases per group; at most one phase with "Edit" or "Write" (parallel "Bash" builds or tests in one directory can also collide — avoid them; a phase that writes only artifacts via writes does not count); no "AskUserQuestion" in a group; a member must not reference another member via {{phases.NAME}}; at most one member writes a given artifact, and no member reads an artifact a sibling writes; the phase after the group consumes their joined outputs via {{prev}} or each one via {{phases.NAME}}. If a block with a "marker" condition ends with a group, set until.phase explicitly. A group of N phases spends N times faster; most flows need no groups.
 

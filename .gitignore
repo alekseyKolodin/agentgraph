@@ -11,6 +11,11 @@ release/
 .claude/skills/*
 !.claude/skills/agentgraph/
 !.claude/skills/session-to-flow/
+!.claude/skills/agentgraph-core/
+!.claude/skills/agentgraph-web/
+!.claude/skills/agentgraph-tests/
+!.claude/skills/flow-author/
+!.claude/agents/
 flows/*
 !flows/example/
 !flows/.gitkeep

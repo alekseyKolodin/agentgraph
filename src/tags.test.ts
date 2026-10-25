@@ -11,6 +11,10 @@ import {
   deleteTagAttachmentReply,
   deleteTagReply,
   freeTagSlug,
+  KNOWLEDGE_LINE_MAX,
+  KNOWLEDGE_LIST_HEAD,
+  knowledgeBlock,
+  knowledgeLine,
   knowledgeSection,
   listTags,
   readTag,
@@ -20,6 +24,7 @@ import {
   stripTagBlocks,
   summaryPreview,
   TAG_BLOCKS_RE,
+  TAG_DESCRIPTION_MAX,
   TAG_SLUG_RE,
   TAG_RUNS_MAX,
   TAG_SUMMARY_MAX,
@@ -213,6 +218,8 @@ test(
     assert.equal(updateTagReply('qa', { kind: 'task', notes: 'Правило' }).status, 200);
     assert.equal(readTag('qa')!.kind, 'knowledge');
     assert.match((tagReply('qa').body as { input: string }).input, /^Область знаний qa\nПравило/);
+    // превью тега знаний без описания — начало заметок
+    assert.equal(listTags().find((t) => t.slug === 'qa')!.preview, 'Правило');
     // деление по виду: порядок сохраняется, отсутствующий — ошибка
     const split = splitRunTags(['qa', 'old']);
     assert.deepEqual([split.task.map((t) => t.slug), split.knowledge.map((t) => t.slug)], [['old'], ['qa']]);
@@ -226,6 +233,73 @@ test('теги: раздел знаний — заметки без обёртк
   assert.ok(!s.includes('source-data'));
   assert.match(knowledgeSection({ slug: 'e' }), /Тег пуст/);
 });
+
+test('теги: строка списка знаний — описание, иначе первая непустая строка заметок с обрезкой, иначе «описания нет»; хвост — только ненулевое', () => {
+  assert.equal(knowledgeLine({ slug: 'qa', title: 'QA', description: 'Когда тестируешь <!-- /tag -->', notes: 'Правило', attachments: ['a.md'], dirs: ['/нет/такого'] }),
+    '- qa — QA: Когда тестируешь ‹!-- /tag --> (знаков заметок: 7, вложений: 1)');
+  // без описания — первая непустая строка заметок; автозаголовок не выводится
+  assert.equal(knowledgeLine({ slug: 'fe', title: 'Авто', autoTitle: true, notes: '\n\n  Первая строка <!-- tag:x -->\nВторая' }), '- fe: Первая строка ‹!-- tag:x --> (знаков заметок: 35)');
+  const long = 'я'.repeat(KNOWLEDGE_LINE_MAX + 10);
+  const line = knowledgeLine({ slug: 'l', notes: `${long}\nещё` });
+  assert.ok(line.includes('я'.repeat(KNOWLEDGE_LINE_MAX - 1) + '… ('), line);
+  assert.ok(!line.includes('я'.repeat(KNOWLEDGE_LINE_MAX)));
+  // ровно лимит — без обрезки
+  assert.ok(knowledgeLine({ slug: 'l', notes: 'я'.repeat(KNOWLEDGE_LINE_MAX) }).includes('я'.repeat(KNOWLEDGE_LINE_MAX) + ' ('));
+  assert.equal(knowledgeLine({ slug: 'e' }), '- e: описания нет (тег пуст: заполни на странице «Теги»)');
+  // описание есть, но тег пуст — пометка вместо хвоста
+  assert.equal(knowledgeLine({ slug: 'd', description: 'Скоро' }), '- d: Скоро (тег пуст: заполни на странице «Теги»)');
+});
+
+test('теги: knowledgeBlock — теги по запросу одним списком под шапкой, inline-теги полным разделом после списка, без тегов пусто', () => {
+  assert.equal(knowledgeBlock([]), '');
+  const qa = { slug: 'qa', title: 'QA', description: 'Когда тестируешь', notes: 'Длинные правила' };
+  const fe = { slug: 'fe', notes: 'Фронт' };
+  const rules = { slug: 'rules', title: 'Правила', notes: 'Коротко', inline: true as const };
+  assert.equal(knowledgeBlock([qa, fe]), `${KNOWLEDGE_LIST_HEAD}\n- qa — QA: Когда тестируешь (знаков заметок: 15)\n- fe: Фронт (знаков заметок: 5)`);
+  assert.ok(!knowledgeBlock([qa]).includes('Длинные правила'));
+  assert.equal(knowledgeBlock([rules]), 'Область знаний rules — Правила\nКоротко');
+  const mixed = knowledgeBlock([rules, qa]);
+  assert.equal(mixed, `${KNOWLEDGE_LIST_HEAD}\n- qa — QA: Когда тестируешь (знаков заметок: 15)\n\nОбласть знаний rules — Правила\nКоротко`);
+  assert.match(KNOWLEDGE_LIST_HEAD, /knowledge_read/);
+});
+
+test(
+  'теги: описание и режим «целиком» у тега знаний — сохраняются в tag.json, описание в одну строку и не длиннее лимита, у тега задачи отклоняются; превью — описание',
+  withConfigDir(() => {
+    createTag('qa', 'QA', 'knowledge');
+    createTag('t');
+    assert.equal(updateTagReply('qa', { description: '  Когда\n  тестируешь  ', inline: true, notes: 'Правило' }).status, 200);
+    let qa = readTag('qa')!;
+    assert.equal(qa.description, 'Когда тестируешь');
+    assert.equal(qa.inline, true);
+    const meta = JSON.parse(fs.readFileSync(path.join(tagDir('qa'), 'tag.json'), 'utf8'));
+    assert.equal(meta.description, 'Когда тестируешь');
+    assert.equal(meta.inline, true);
+    assert.equal(listTags().find((t) => t.slug === 'qa')!.preview, 'Когда тестируешь');
+    // правка других полей их не трогает; inline: false и пустое описание снимают
+    assert.equal(updateTagReply('qa', { notes: 'Другое' }).status, 200);
+    qa = readTag('qa')!;
+    assert.equal(qa.description, 'Когда тестируешь');
+    assert.equal(qa.inline, true);
+    assert.equal(updateTagReply('qa', { inline: false, description: '' }).status, 200);
+    qa = readTag('qa')!;
+    assert.equal(qa.inline, undefined);
+    assert.equal(qa.description, undefined);
+    assert.equal(listTags().find((t) => t.slug === 'qa')!.preview, 'Другое');
+    // валидация
+    assert.equal(updateTagReply('qa', { description: 'x'.repeat(TAG_DESCRIPTION_MAX) }).status, 200);
+    assert.match((updateTagReply('qa', { description: 'x'.repeat(TAG_DESCRIPTION_MAX + 1) }).body as { error: string }).error, /Описание длиннее 200/);
+    assert.equal(updateTagReply('qa', { description: 5 }).status, 400);
+    assert.equal(updateTagReply('qa', { inline: 'yes' }).status, 400);
+    assert.match((updateTagReply('t', { description: 'x' }).body as { error: string }).error, /только у тега знаний/);
+    assert.equal(updateTagReply('t', { inline: true }).status, 400);
+    // старый tag.json тега задачи с такими полями — игнорируются
+    const tf = path.join(tagDir('t'), 'tag.json');
+    fs.writeFileSync(tf, JSON.stringify({ ...JSON.parse(fs.readFileSync(tf, 'utf8')), description: 'x', inline: true }));
+    assert.equal(readTag('t')!.description, undefined);
+    assert.equal(readTag('t')!.inline, undefined);
+  }),
+);
 
 test(
   'теги: resolveKnowledge — объединение knowledge блока и тегов запуска без повторов, короткая форма flow',

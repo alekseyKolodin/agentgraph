@@ -13,7 +13,7 @@ import type {
 import { flowBlocks, phaseSteps, type Block, type FlowSpec, type Phase, type Until } from './schema.js';
 import { emptyContext, render, type TemplateContext } from './template.js';
 import { randomUUID } from 'node:crypto';
-import { runSession, type AskAnswers, type EffortLevel, type AskQuestion, type SessionResult, type SessionTokens } from './agent.js';
+import { runSession, type AskAnswers, type EffortLevel, type AskQuestion, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
 import { ATTACHMENTS_DIR } from './attachments.js';
 import {
   artifactAccess,
@@ -29,12 +29,13 @@ import {
   type StepDelta,
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
-import { knowledgeDirs, knowledgeSection, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
+import { knowledgeBlock, knowledgeDirs, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
 import { dropRunPaths, parseTagSummary, tagSummaryPromptFile, tagSummaryRequest } from './tag-summary.js';
 import type { AutoTagReport } from './auto-tag.js';
 import type { RunTitleReport } from './run-title.js';
 import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
 import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
+import { KNOWLEDGE_TOOLS_ALLOW, KNOWLEDGE_TOOLS_SERVER, knowledgeToolsServer } from './knowledge-tools.js';
 
 export type RunOptions = {
   /** Рабочая директория агентов (репозиторий, над которым работаем). */
@@ -836,24 +837,28 @@ export function blockMaxIterations(block: Block, opts: { maxIterations?: number 
 export type RunExtras = Pick<RunOptions, 'addDirs' | 'attachments' | 'runDir'>;
 
 /**
- * Промпт фазы + инструкция «что передать дальше» (handoff) + доп. директории этапа и запуска + разделы тегов знаний
- * блока (knowledge) + раздел «Артефакты запуска» + вложения к задаче. art — артефакты этапа на старте шага
- * (подстановки и раздел); без них промпт как до артефактов, без knowledge — как до тегов знаний.
+ * Промпт фазы + инструкция «что передать дальше» (handoff) + доп. директории этапа и запуска + раздел тегов знаний
+ * блока (knowledge: список по строке на тег, inline-теги целиком) + раздел «Артефакты запуска» + вложения к задаче.
+ * art — артефакты этапа на старте шага (подстановки и раздел); без них промпт как до артефактов, без knowledge — как до тегов знаний.
  */
 export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[]): string {
   const vars = art ? { ...ctx, artifacts: art.snapshot } : ctx;
   let body = render(phase.prompt, vars);
-  if (phase.handoff?.trim()) {
-    body = `${body.trimEnd()}\n\nЧем закончить ответ (это уйдёт следующему этапу): ${render(phase.handoff, vars).trim()}`;
-  }
+  if (phase.handoff?.trim()) body = `${body.trimEnd()}\n\n${handoffTail(render(phase.handoff, vars))}`;
   const dirs = cwd ? [...new Set([...resolveAddDirs(phase, cwd), ...resolveDirList(run?.addDirs, cwd)])] : [];
-  if (dirs.length) {
-    body = `${body.trimEnd()}\n\nКроме директории проекта тебе доступны (правила, инструкции, скиллы — сверяйся с ними):\n${dirs.map((d) => `- ${d}`).join('\n')}`;
-  }
-  for (const t of knowledge ?? []) body = `${body.trimEnd()}\n\n${knowledgeSection(t)}`;
+  if (dirs.length) body = `${body.trimEnd()}\n\n${dirsTail(dirs)}`;
+  const known = knowledgeBlock(knowledge ?? []);
+  if (known) body = `${body.trimEnd()}\n\n${known}`;
   if (art?.section) body = `${body.trimEnd()}\n\n${art.section}`;
   return withAttachments(body, run);
 }
+
+/** Хвост промпта с handoff: чем этап заканчивает ответ. Общий с страницей «Контекст», которая считает его размер. */
+export const handoffTail = (handoff: string): string => `Чем закончить ответ (это уйдёт следующему этапу): ${handoff.trim()}`;
+
+/** Хвост промпта со списком доп. директорий этапа и запуска. */
+export const dirsTail = (dirs: string[]): string =>
+  `Кроме директории проекта тебе доступны (правила, инструкции, скиллы — сверяйся с ними):\n${dirs.map((d) => `- ${d}`).join('\n')}`;
 
 /** Хвост промпта со списком вложений абсолютными путями. Без вложений промпт не меняется. */
 export function withAttachments(body: string, run?: RunExtras): string {
@@ -911,7 +916,8 @@ export function phaseModel(spec: FlowSpec, phase: Phase, opts: Pick<RunOptions, 
 /**
  * Запрос сессии этапа. art — права на артефакты: папка артефактов доп. директорией (если есть доступ) и неявные
  * Read/Edit/Write в tools; их ограничивает guard, который навешивает runPhase. Без art — как до артефактов.
- * knowledge — теги знаний блока: их пути и папки вложений идут доп. директориями.
+ * knowledge — теги знаний блока: их пути и папки вложений идут доп. директориями, а тегам по запросу (не inline) —
+ * инструмент knowledge_read рядом с инструментом чтения артефактов.
  */
 export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts: RunOptions, art?: Pick<PhaseArtifacts, 'dir' | 'access' | 'sources'>, knowledge?: KnowledgeTag[]) {
   const d = spec.defaults ?? {};
@@ -932,14 +938,30 @@ export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts:
     // этап, закончивший ответ раньше своей фоновой задачи, теряет её результат
     foreground: true,
     abort: opts.abort,
-    ...artifactTools(art),
+    ...mergeTools(artifactTools(art), knowledgeTools(knowledge)),
   };
 }
 
+type McpTools = { mcpServers?: NonNullable<SessionRequest['mcpServers']>; allow?: string[] };
+
 /** Инструмент чтения артефактов по ключу: MCP-сервер на сессию и его имена в allow — только при доступе к артефактам. */
-function artifactTools(art?: Pick<PhaseArtifacts, 'access' | 'sources'>) {
+function artifactTools(art?: Pick<PhaseArtifacts, 'access' | 'sources'>): McpTools {
   if (!ARTIFACT_TOOLS_ENABLED || !art?.sources || !art.access.read.length) return {};
   return { mcpServers: { [ARTIFACT_TOOLS_SERVER]: artifactToolsServer(art.sources) }, allow: ARTIFACT_TOOLS_ALLOW };
+}
+
+/** Инструмент knowledge_read: только если среди тегов знаний блока есть тег по запросу (не inline). Судье не даётся. */
+function knowledgeTools(knowledge?: KnowledgeTag[]): McpTools {
+  const onDemand = knowledge?.filter((t) => !t.inline) ?? [];
+  if (!onDemand.length) return {};
+  return { mcpServers: { [KNOWLEDGE_TOOLS_SERVER]: knowledgeToolsServer(onDemand) }, allow: KNOWLEDGE_TOOLS_ALLOW };
+}
+
+/** Несколько наборов MCP-серверов в одном запросе: серверы и allow складываются; без серверов полей нет, как раньше. */
+function mergeTools(...parts: McpTools[]): McpTools {
+  const mcpServers = Object.assign({}, ...parts.map((p) => p.mcpServers ?? {})) as NonNullable<McpTools['mcpServers']>;
+  const allow = [...new Set(parts.flatMap((p) => p.allow ?? []))];
+  return Object.keys(mcpServers).length ? { mcpServers, allow } : {};
 }
 
 const JUDGE_SCHEMA: Record<string, unknown> = {

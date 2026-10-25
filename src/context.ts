@@ -8,12 +8,12 @@ import { query, type McpServerStatus, type Options, type Query } from '@anthropi
 import { CLAUDEAI_TOOL_PREFIX, NO_CLAUDEAI_CONNECTORS_ENV, sessionOptions } from './agent.js';
 import { connectorName, connectorToolName, isConnector, waitForConnectors } from './connectors.js';
 import { loadFlow, resolveFlowFile } from './flows.js';
-import { buildRequest, resolveAddDirs } from './runner.js';
-import { flowBlocks, flowPhases } from './schema.js';
+import { buildRequest, dirsTail, handoffTail, resolveAddDirs } from './runner.js';
+import { flowBlocks, flowPhases, type Phase } from './schema.js';
 import { ARTIFACTS_DIR, artifactAccess, hasArtifacts } from './artifacts.js';
 import { RUNS_DIR } from './paths.js';
-import { readTag, type Tag, type TagKind } from './tags.js';
-import type { ContextFile, ContextFileSaved, ContextKnowledge, ContextView, MemoryFile } from './api-types.js';
+import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, type Tag, type TagKind } from './tags.js';
+import type { ContextFile, ContextFileSaved, ContextKnowledge, ContextPrompt, ContextPromptPart, ContextView, MemoryFile } from './api-types.js';
 
 export type ContextRequest = {
   /** Директория проекта, абсолютный путь. */
@@ -29,8 +29,18 @@ export type ContextOptions = {
   options: Options;
   addDirs: { path: string; exists: boolean }[];
   knowledge: ContextKnowledge[];
+  /** Промпт этапа по источникам; нет — запрос без этапа. */
+  prompt?: ContextPrompt;
   warnings: string[];
 };
+
+/** Больше этого в промпте этапа ещё до подстановок — предупреждение: справочное лучше отдавать по запросу. */
+export const PROMPT_CHARS_WARN = 16_000;
+/** Теги знаний целиком занимают больше этой доли промпта (и не меньше PROMPT_INLINE_MIN знаков) — предупреждение. */
+export const PROMPT_INLINE_SHARE = 0.5;
+export const PROMPT_INLINE_MIN = 2_000;
+/** Источников инструкций (файлы памяти, теги целиком, свой системный промпт) от этого числа — предупреждение о противоречиях. */
+export const PROMPT_SOURCES_WARN = 4;
 
 export type { ContextFile, ContextFileSaved, ContextKnowledge, ContextView, MemoryFile } from './api-types.js';
 
@@ -86,7 +96,7 @@ export function contextOptions(req: ContextRequest): ContextOptions {
     if (!tag) warnings.push(`Нет тега знаний ${slug} (блок ${block!.name}): запуск упадёт до старта. Заведи его на странице «Теги» с видом «знание».`);
     else if (tag.kind !== 'knowledge') warnings.push(`${slug} в knowledge блока ${block!.name} — тег задачи, а не области знаний: запуск упадёт до старта.`);
     else known.push(tag);
-    return { slug, exists: Boolean(tag), ...(tag ? { kind: tag.kind } : {}) };
+    return { slug, exists: Boolean(tag), ...(tag ? { kind: tag.kind } : {}), ...(tag?.kind === 'knowledge' ? knowledgeView(tag) : {}) };
   });
   // права на артефакты: неявные Read/Edit/Write — как у раннера; папка артефактов появится только у запуска,
   // поэтому её путь условный и в листинг не идёт (там нет ни CLAUDE.md, ни скиллов — их уносит карантин)
@@ -102,7 +112,72 @@ export function contextOptions(req: ContextRequest): ContextOptions {
         (access.implicit.length ? `. Только для своих артефактов добавлены ${access.implicit.join(', ')}.` : '.'),
     );
   }
-  return { options, addDirs, knowledge, warnings };
+  const prompt = promptParts(phase, addDirs.map((d) => d.path), known);
+  warnings.push(...promptWarnings(prompt));
+  return { options, addDirs, knowledge, prompt, warnings };
+}
+
+const VAR_RE = /\{\{\s*([a-z_]+(?:\.[A-Za-z0-9_.-]+)*)\s*\}\}/g;
+
+/**
+ * Промпт этапа по источникам тем же кодом, что собирает его раннер (renderPhasePrompt), но без подстановок: шаблон,
+ * handoff, доп. директории, строки тегов по запросу одной частью, каждый тег целиком — своей. Раздел артефактов и
+ * вложения появляются только у запуска и сюда не входят.
+ */
+export function promptParts(phase: Phase, dirs: string[], known: Tag[]): ContextPrompt {
+  const parts: ContextPromptPart[] = [{ name: 'Промпт этапа (шаблон)', kind: 'prompt', chars: phase.prompt.length }];
+  if (phase.handoff?.trim()) parts.push({ name: 'Чем закончить ответ (handoff)', kind: 'handoff', chars: handoffTail(phase.handoff).length });
+  if (dirs.length) parts.push({ name: 'Список доп. директорий', kind: 'dirs', chars: dirsTail(dirs).length });
+  const onDemand = known.filter((t) => !t.inline);
+  if (onDemand.length) parts.push({ name: `Теги знаний по запросу: ${onDemand.map((t) => t.slug).join(', ')}`, kind: 'knowledge-lines', chars: knowledgeBlock(onDemand).length });
+  for (const t of known.filter((t) => t.inline)) parts.push({ name: `Тег знаний ${t.slug} целиком`, kind: 'knowledge-inline', chars: knowledgeSection(t).length });
+  const vars = [...new Set([...`${phase.prompt}\n${phase.handoff ?? ''}`.matchAll(VAR_RE)].map((m) => m[1]))];
+  return { parts, vars, chars: parts.reduce((n, p) => n + p.chars, 0) };
+}
+
+/** Предупреждения по составу промпта: теги целиком раздувают его, промпт велик ещё до подстановок. */
+export function promptWarnings(p: ContextPrompt): string[] {
+  const out: string[] = [];
+  const inline = p.parts.filter((x) => x.kind === 'knowledge-inline');
+  const inlineChars = inline.reduce((n, x) => n + x.chars, 0);
+  if (inlineChars >= PROMPT_INLINE_MIN && inlineChars > p.chars * PROMPT_INLINE_SHARE) {
+    out.push(
+      `Теги знаний целиком (${inline.map((x) => x.name.replace(/^Тег знаний | целиком$/g, '')).join(', ')}) занимают ${Math.round((inlineChars / p.chars) * 100)}% промпта этапа ` +
+        `(${inlineChars} знаков) и уйдут в каждую итерацию. Сними у них «Всегда вставлять заметки в промпт целиком» на странице «Теги»: этап получит строку с описанием и откроет тег инструментом knowledge_read, когда понадобится.`,
+    );
+  }
+  if (p.chars > PROMPT_CHARS_WARN) {
+    out.push(`Промпт этапа — ${p.chars} знаков ещё до подстановок (${p.vars.map((v) => `{{${v}}}`).join(', ') || 'без переменных'}). Справочное вынеси в тег знаний по запросу или в файл, который этап прочитает сам.`);
+  }
+  return out;
+}
+
+/**
+ * Инструкции этапу приходят из нескольких мест: файлы памяти (CLAUDE.md и правила, в том числе из доп. директорий),
+ * теги знаний целиком, свой системный промпт. От PROMPT_SOURCES_WARN источников — предупреждение: правило из одного
+ * молча перебивает другое, и никто не видит противоречия целиком.
+ */
+export function sourcesWarning(memoryFiles: number, inlineTags: number, customSystem: boolean): string | undefined {
+  const total = memoryFiles + inlineTags + (customSystem ? 1 : 0);
+  if (total < PROMPT_SOURCES_WARN) return undefined;
+  const what = [
+    memoryFiles ? `${memoryFiles} файл(ов) CLAUDE.md и правил` : '',
+    inlineTags ? `${inlineTags} тег(ов) знаний целиком` : '',
+    customSystem ? 'свой системный промпт' : '',
+  ].filter(Boolean);
+  return `Инструкции этапу приходят из ${total} источников: ${what.join(', ')}. Проверь, что они не противоречат друг другу: правило из одного файла молча перебивает другое, а этап видит их все сразу.`;
+}
+
+/** Как тег знаний попадает в промпт этапа (заметки целиком или строка + knowledge_read) и его объём. */
+function knowledgeView(tag: Tag): Omit<ContextKnowledge, 'slug' | 'exists' | 'kind'> {
+  return {
+    ...(tag.title ? { title: tag.title } : {}),
+    ...(tag.description ? { description: tag.description } : {}),
+    mode: tag.inline ? 'inline' : 'on-demand',
+    notesChars: tag.notes.trim().length,
+    attachments: tag.attachments.length,
+    dirs: existingTagPaths(tag).listed.length,
+  };
 }
 
 /** Чаще раза в минуту не спрашиваем: каждый листинг — запуск процесса Claude Code. */
@@ -158,7 +233,7 @@ async function* noPrompt(): AsyncGenerator<never> {
 }
 
 async function fetchContext(req: ContextRequest, deps: ContextDeps): Promise<ContextView> {
-  const { options, addDirs, knowledge, warnings } = contextOptions(req);
+  const { options, addDirs, knowledge, prompt, warnings } = contextOptions(req);
   // persistSession после спреда: buildRequest просит сохранять сессию, листинг сохранять незачем
   const q = deps.query({ prompt: noPrompt(), options: { ...options, persistSession: false } });
   let timer: NodeJS.Timeout | undefined;
@@ -187,6 +262,10 @@ async function fetchContext(req: ContextRequest, deps: ContextDeps): Promise<Con
     }
     const sp = options.systemPrompt;
     const custom = typeof sp === 'object' && !Array.isArray(sp) && sp.type === 'custom';
+    if (prompt) {
+      const w = sourcesWarning(memoryFiles.length, prompt.parts.filter((p) => p.kind === 'knowledge-inline').length, custom);
+      if (w) warnings.push(w);
+    }
     return {
       cwd: req.cwd,
       flow: req.flow,
@@ -205,6 +284,7 @@ async function fetchContext(req: ContextRequest, deps: ContextDeps): Promise<Con
       systemPromptText: custom ? [sp.prompt].flat().join('\n\n') : undefined,
       addDirs,
       knowledge,
+      ...(prompt ? { prompt } : {}),
       warnings,
       at: new Date().toISOString(),
     };

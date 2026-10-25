@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI: agentgraph "<задача>" | gen "<задача>" | edit flow "<правка>" | run flow.yaml | show flow.yaml | ui
+// CLI: agentgraph "<задача>" | gen "<задача>" | edit flow "<правка>" | run flow.yaml | show flow.yaml | eval flow --tasks | ui
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -19,6 +19,7 @@ import { c, fmtUsd } from './ui.js';
 import { createTag, listTags, readTag, runTagSlugs, splitRunTags, tagsRunDirs, withTagsInput } from './tags.js';
 import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
 import { pickRunTitle } from './run-title.js';
+import { evalDir, formatEvalTable, loadTasks, runEval } from './eval.js';
 
 const HELP = `agentgraph — задача -> flow.yaml -> цепочка сессий Claude в цикле
 
@@ -29,6 +30,8 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
   agentgraph edit <flow> "<правка>" поправить flow по описанию (ИИ правит файл на месте)
   agentgraph run <flow|file.yaml>  запустить готовый flow
   agentgraph show <flow|file.yaml> показать план flow
+  agentgraph eval <flow|file.yaml> --tasks <tasks.yaml> [--runs N] [--compare <flow2|file.yaml>] [--json out.json]
+                                   сквозной eval: прогнать набор задач через flow, посчитать долю решённых
   agentgraph tags                  список тегов (задачи и области знаний) с началом саммари или заметок
   agentgraph ui                    поднять веб-интерфейс (по умолчанию http://127.0.0.1:4747)
 
@@ -41,7 +44,8 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
   --max-budget <usd>      лимит стоимости, $: остановить запуск, если оценка превысит
   --model <id>            модель по умолчанию для всех сессий
   --tag <slug>            тег (можно несколько раз). Тег задачи: саммари, заметки и пути — в задачу, после done — обновить саммари.
-                          Тег знаний: его заметки, пути и вложения — в промпты этапов каждого блока. Новый слаг — тег задачи
+                          Тег знаний: в промпты этапов каждого блока — строка с описанием, полный текст этап берёт инструментом
+                          knowledge_read по запросу (тег с «всегда в промпт» — целиком). Новый слаг — тег задачи
   --no-save-tag           с --tag: не обновлять саммари тегов задачи после запуска
   --auto-tag              без тега задачи среди --tag: ИИ по тексту задачи заведёт новый тег задачи (слаг занят — с суффиксом -2…),
                           после done запишет его саммари. Продолжить фичу — --tag <её слаг>
@@ -49,6 +53,24 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
   --no-notify             ui: без системных уведомлений о вопросах агента и конце запуска
   -v, --verbose           печатать ход сессий (текст и вызовы инструментов)
   -h, --help
+
+Eval (agentgraph eval):
+  --tasks <tasks.yaml>    набор задач (обязательно):
+                            tasks:
+                              - name: fix-tests                 # латиница, цифры, - и _
+                                input: "Почини падающие тесты"  # задача ({{input}})
+                                cwd: ~/code/repo                # необязательно; иначе --cwd (от папки tasks.yaml)
+                                setup: git checkout -- . && git clean -fd   # необязательно: shell перед каждым прогоном
+                                check: npm test                 # необязательно: shell после прогона, 0 = решена
+                                timeout_sec: 600                # необязательно: таймаут setup и check
+                          без check задача решена, если запуск done; с check — done и код выхода 0
+  --runs <n>              прогонов каждой задачи на каждый flow (по умолчанию 1; советуем 2: поломки
+                          проявляются в одном из двух прогонов)
+  --compare <flow2>       второй flow на том же наборе: в итоге раздел «перевернувшиеся задачи»
+  --json <file>           копия results.json по этому пути (основной — runs/evals/<дата>-<flow>[-vs-<flow2>]/results.json)
+  --max-budget, --model, --max-iterations действуют на каждый запуск; --tag, --auto-tag, --once, -o, --input с eval несовместимы.
+  Вопросы агента (AskUserQuestion) в eval отклоняются, пауз нет: flow с AskUserQuestion и pause_marker для eval не годятся.
+  Запуски eval лежат в runs/ как обычные (имя «eval <flow> · <задача> #<n>») и видны в UI.
 `;
 
 async function main(): Promise<number> {
@@ -68,6 +90,10 @@ async function main(): Promise<number> {
       'auto-tag': { type: 'boolean', default: false },
       port: { type: 'string' },
       'no-notify': { type: 'boolean', default: false },
+      tasks: { type: 'string' },
+      runs: { type: 'string' },
+      compare: { type: 'string' },
+      json: { type: 'string' },
       verbose: { type: 'boolean', short: 'v', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -95,14 +121,17 @@ async function main(): Promise<number> {
   };
 
   const [cmd, ...rest] = positionals;
-  if (values.once && ['gen', 'edit', 'run', 'show', 'ui', 'tags'].includes(cmd)) return fail('--once — только для формы agentgraph "<задача>": сгенерировать и запустить без сохранения');
+  if (values.once && ['gen', 'edit', 'run', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--once — только для формы agentgraph "<задача>": сгенерировать и запустить без сохранения');
   if (values.once && values.out) return fail('--once не сохраняет flow: убери -o или --once');
   const tags = runTagSlugs(values.tag);
   const autoTag = values['auto-tag'];
   if (autoTag && values['no-save-tag']) return fail('--auto-tag с --no-save-tag: автотег без саммари бесполезен');
   if (values['no-save-tag'] && !tags.length) return fail('--no-save-tag — только вместе с --tag');
-  if (tags.length && ['gen', 'edit', 'show', 'ui', 'tags'].includes(cmd)) return fail('--tag — только для запуска: agentgraph run <flow> --tag <slug>');
-  if (autoTag && ['gen', 'edit', 'show', 'ui', 'tags'].includes(cmd)) return fail('--auto-tag — только для запуска: agentgraph run <flow> --auto-tag');
+  if (tags.length && ['gen', 'edit', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--tag — только для запуска: agentgraph run <flow> --tag <slug>');
+  if (autoTag && ['gen', 'edit', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--auto-tag — только для запуска: agentgraph run <flow> --auto-tag');
+  if (cmd !== 'eval' && (values.tasks || values.runs || values.compare || values.json)) return fail('--tasks, --runs, --compare и --json — только для eval: agentgraph eval <flow> --tasks <tasks.yaml>');
+  if (cmd === 'eval' && values.out) return fail('eval ничего не генерирует: убери -o');
+  if (cmd === 'eval' && values.input) return fail('eval берёт задачи из --tasks: убери --input');
   switch (cmd) {
     case 'tags': {
       const list = listTags();
@@ -161,6 +190,41 @@ async function main(): Promise<number> {
       if (!rest[0]) return fail('Укажи flow: agentgraph show flows/<name>.yaml');
       printPlan(loadFlow(rest[0]), true);
       return 0;
+    }
+    case 'eval': {
+      if (!rest[0]) return fail('Укажи flow: agentgraph eval <flow> --tasks <tasks.yaml>');
+      if (!values.tasks) return fail('Укажи набор задач: agentgraph eval <flow> --tasks <tasks.yaml>');
+      const runs = values.runs ? Number(values.runs) : 1;
+      if (!Number.isInteger(runs) || runs < 1) return fail('--runs: целое число от 1');
+      const flows = [{ name: '', spec: loadFlow(rest[0]) }];
+      if (values.compare) flows.push({ name: '', spec: loadFlow(values.compare) });
+      // подпись flow в таблице — его имя; два варианта одного flow из файлов с одним name различаем суффиксом
+      flows[0].name = flows[0].spec.name;
+      if (flows[1]) flows[1].name = flows[1].spec.name === flows[0].name ? `${flows[1].spec.name} (2)` : flows[1].spec.name;
+      const tasks = loadTasks(values.tasks);
+      const outDir = evalDir(RUNS_DIR, flows.map((f) => f.name));
+      console.log(`${c.bold('Eval')} ${flows.map((f) => f.name).join(c.dim(' vs '))}  ·  задач: ${tasks.length}, прогонов на задачу: ${runs}  ·  ${c.dim(outDir)}`);
+      const result = await runEval({
+        flows,
+        tasks,
+        runs,
+        cwd,
+        runsDir: RUNS_DIR,
+        outDir,
+        tasksFile: path.resolve(values.tasks),
+        maxBudgetUsd: runOpts.maxBudgetUsd,
+        maxIterations: runOpts.maxIterations,
+        model: values.model,
+        abort,
+        onEvent: values.verbose ? runOpts.onEvent : undefined,
+      });
+      if (values.json) {
+        fs.mkdirSync(path.dirname(path.resolve(values.json)), { recursive: true });
+        fs.writeFileSync(path.resolve(values.json), JSON.stringify(result, null, 2));
+      }
+      console.log(`\n${formatEvalTable(result, true)}`);
+      console.log(c.dim(`\nРезультаты: ${path.join(outDir, 'results.json')}${values.json ? `, копия ${path.resolve(values.json)}` : ''}`));
+      return result.aborted ? 2 : 0;
     }
     case 'ui': {
       const url = await startServer({ port: values.port ? Number(values.port) : 4747, host: '127.0.0.1', defaultCwd: cwd, notify: !values['no-notify'] });

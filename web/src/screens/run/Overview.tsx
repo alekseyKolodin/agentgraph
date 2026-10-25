@@ -18,6 +18,7 @@ import {
   ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows, runBlocks,
   runFinished, runSteps, stepKey, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
+import { Analysis } from './Analysis';
 import { art } from './artStore';
 import { ArtFinalLine, ArtIterMark, ArtStepLine } from './ArtifactsPanel';
 import { RunTail } from './RunLog';
@@ -39,6 +40,7 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
     <>
       {runFinished(r) && <RunFinal r={r} />}
       {r.live && <Summary st={st} spec={spec} graphNow={graphNow} />}
+      {runFinished(r) && <Analysis runId={r.id} />}
       <Ribbons st={st} spec={spec} />
       {r.live && (
         <section className={styles.runTailBox}>
