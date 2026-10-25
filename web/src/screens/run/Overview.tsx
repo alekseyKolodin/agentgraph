@@ -1,6 +1,6 @@
 // Вкладка «Обзор» страницы запуска (ui/app.js renderRunFinal, renderRunSummary, renderRunRibbons, renderRun — «Этапы по итерациям»):
 // итог завершённого запуска, сводка идущего, лента итераций, хвост живого лога, карточки этапов по итерациям, задача.
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { ConditionReport, PhaseReport, RunReport } from '@server/api-types';
 import { fetchRunFile, setMaxIterations, errorText } from '../../api';
@@ -285,6 +285,7 @@ function CondCard({ c, runId }: { c: ConditionReport; runId: string }) {
         <span className={styles.stats}>{`${c.detail || ''}${c.costUsd ? ` · ${usd(c.costUsd)}` : ''}`}</span>
         {c.logFile && <button className="btn small" onClick={() => void openRunFile(runId, c.logFile!, `Условие · итерация ${c.iteration}`)}>лог</button>}
       </div>
+      {c.summary && <div className={styles.condSum}>{c.summary}</div>}
       {art.on && <ArtStepLine rep={c} phase={null} />}
       {c.feedback && (
         // <details> пересоздаётся вместе с карточкой: раскрыт ли он, помним на запуск
@@ -438,9 +439,26 @@ function Ribbons({ st, spec }: { st: LiveState; spec: SpecBlocks }) {
   if (!rows.length) return null;
   const keys = runSteps(st, runState.fold).keys;
   const open = (bi: number, it: number) => openIteration(bi, it, keys);
+  // саммари в ячейках обрезано тремя строками; кнопку «полностью» показываем, только когда что-то и правда обрезано
+  const [full, setFull] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const bodies = ref.current?.querySelectorAll<HTMLElement>(`.${styles.rbBody}`) ?? [];
+      setClipped([...bodies].some((el) => el.scrollHeight > el.clientHeight + 1));
+    };
+    if (full) return;
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  });
   return (
-    <section className={styles.runRibbons}>
-      <div className={styles.runSecHead}><span className={styles.runLabel}>Итерации</span></div>
+    <section ref={ref} className={cx(styles.runRibbons, full && styles.rbFull)}>
+      <div className={styles.runSecHead}>
+        <span className={styles.runLabel}>Итерации</span>
+        {(full || clipped) && <button type="button" className="link-btn" onClick={() => setFull(!full)}>{full ? 'свернуть' : 'показать полностью'}</button>}
+      </div>
       {rows.map((row) => (
         <div key={row.bi} className={styles.rbRow}>
           {row.head && (

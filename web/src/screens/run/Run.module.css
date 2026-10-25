@@ -58,6 +58,7 @@
 .card.grouped { border-left: 3px solid var(--live); }
 .pgroup { font-size: var(--fs-cap); font-weight: 600; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 40%, transparent); border-radius: var(--r-pill); padding: 0 7px; white-space: nowrap; flex: none; }
 .card.cond { background: color-mix(in srgb, var(--panel) 80%, var(--well)); }
+.cond-sum { color: var(--ink-2); font-size: var(--fs-small); overflow-wrap: anywhere; }
 .card details { font-size: var(--fs-small); }
 .card details pre { white-space: pre-wrap; margin: 4px 0 0; background: var(--well); padding: 8px; border-radius: var(--r-sm); max-height: 240px; overflow: auto; }
 .card details > :global(.md) { margin: 4px 0 0; background: var(--well); padding: 4px 10px; border-radius: var(--r-sm); max-height: 240px; overflow: auto; }
@@ -191,6 +192,7 @@
 .rb-stuck { align-self: flex-start; font-size: var(--fs-cap); color: var(--st-wait); border: 1px solid color-mix(in srgb, var(--st-wait) 50%, transparent); border-radius: var(--r-pill); padding: 0 7px; }
 .run-older { align-self: flex-start; color: var(--ink-3); }
 .rb-body { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.rb-full .rb-body { display: block; -webkit-line-clamp: none; overflow: visible; }
 .rb-more { align-self: center; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); padding: 0 4px; }
 .rb-chain, .rb-body { color: var(--ink-2); }
 .rb-step { white-space: nowrap; }
