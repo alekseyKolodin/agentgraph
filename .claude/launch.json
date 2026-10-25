@@ -1,0 +1,59 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agentgraph-ui-test",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4748",
+        "--no-notify"
+      ],
+      "port": 4748
+    },
+    {
+      "name": "agentgraph-ui-digest",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4749",
+        "--no-notify"
+      ],
+      "port": 4749
+    },
+    {
+      "name": "agentgraph-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4750",
+        "--no-notify"
+      ],
+      "port": 4750
+    },
+    {
+      "name": "agentgraph-web-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4750",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5174",
+        "--strictPort"
+      ],
+      "port": 5174
+    }
+  ]
+}

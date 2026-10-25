@@ -1,0 +1,8 @@
+/* Окно файла запуска (ui/style.css #dlg-file, .file-session, .file-actions, #file-body). */
+.dlg-file { width: min(1000px, 94vw); }
+.file-session { margin: 0 0 8px; user-select: all; overflow-wrap: anywhere; }
+.file-actions { display: flex; gap: 6px; align-items: center; }
+.file-body { max-height: 75vh; overflow: auto; background: var(--well); padding: 12px; border-radius: var(--r-sm); margin: 0; }
+.file-body > pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+/* markdown читается как документ: светлый фон, блоки кода на --code-bg */
+.file-body:has(> :global(.md)) { background: var(--panel); border: 1px solid var(--line); }

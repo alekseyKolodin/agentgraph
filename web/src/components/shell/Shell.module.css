@@ -1,0 +1,7 @@
+/* Раскладка приложения: сайдбар слева, контент справа (ui/style.css .app, .main). */
+.app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+.main { overflow-y: auto; padding: 22px 28px 40px; }
+@media (max-width: 800px) {
+  .app { grid-template-columns: 1fr; height: auto; }
+  .main { padding: 16px; }
+}

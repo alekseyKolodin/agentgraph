@@ -1,0 +1,69 @@
+/* Карточка вопроса агента: правила ui/style.css в том же порядке — ранние («вопросы агента») и поздние перебивки
+   (system.md → «Карточка вопроса»). Markdown внутри — глобальные .md и .plain из MdText. */
+.qcard { background: color-mix(in srgb, var(--st-wait) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--st-wait) 50%, var(--line)); border-radius: var(--r-lg); padding: 14px 16px; margin: 12px 0; display: flex; flex-direction: column; gap: 12px; }
+.qcard .qhead { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.qcard .qitem { display: flex; flex-direction: column; gap: 6px; }
+/* вопрос и описания вариантов — markdown агента */
+.qcard .qtext { font-size: var(--fs-body); }
+.qcard .qtext :global(.md), .qcard .od :global(.md) { line-height: 1.55; }
+.qcard .qtext :global(.md) p { margin: 4px 0; }
+.qcard .qtext :global(.md) ul, .qcard .qtext :global(.md) ol { margin: 4px 0; }
+.qcard :global(.plain) { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qcard .qhdr { align-self: flex-start; font-size: var(--fs-cap); font-weight: 600; color: var(--st-wait); background: color-mix(in srgb, var(--st-wait) 16%, transparent); padding: 2px 8px; border-radius: var(--r-pill); }
+.qcard .opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer; background: var(--panel); }
+.qcard .opt:hover { border-color: var(--live); }
+.qcard .opt input { margin-top: 3px; }
+.qcard .opt > span { min-width: 0; }
+.qcard .opt .ol { font-weight: 600; }
+.qcard .opt .od { color: var(--ink-2); font-size: var(--fs-small); margin-top: 2px; }
+.qcard .opt .od :global(.md) p { margin: 2px 0; }
+.qcard .qpreface { max-height: 460px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-small); }
+.qcard .qpreface :global(.md) { line-height: 1.55; }
+.qcard .qpreface :global(.md) p { margin: 4px 0; }
+.qcard .qpreface-wrap summary { cursor: pointer; font-size: var(--fs-small); color: var(--ink-2); }
+.qcard .qpreface-wrap .qpreface { margin-top: 6px; }
+/* отвеченный вопрос в ленте этапов страницы запуска */
+.qcard .qa-q :global(.md) { line-height: 1.55; }
+.qcard .qa-q :global(.md) p { margin: 4px 0; }
+.qcard.answered { background: var(--panel); border-color: var(--line); gap: 8px; }
+.qcard.answered .qa { font-size: var(--fs-small); display: flex; flex-direction: column; gap: 4px; }
+.qcard.answered .qa + .qa { border-top: 1px solid var(--line); padding-top: 8px; }
+.qcard.answered .qa-a { padding: 4px 10px; border-left: 3px solid var(--live); background: var(--well); border-radius: 0; font-weight: 600; }
+
+/* главная */
+.qcard .qhead .qwait { margin-left: auto; font-size: var(--fs-meta); font-weight: 600; color: var(--st-wait); white-space: nowrap; }
+.qcard.flash { animation: qflash 1.2s ease-out; }
+@keyframes qflash { from { box-shadow: 0 0 0 3px var(--st-wait); } to { box-shadow: 0 0 0 3px transparent; } }
+
+/* ---------- вопрос агента (system.md → «Карточка вопроса»): контекст, варианты-кнопки без предвыбора, свой ответ рядом */
+.qcard { background: color-mix(in srgb, var(--st-wait) 6%, var(--panel)); border-color: color-mix(in srgb, var(--st-wait) 45%, transparent); border-radius: var(--r-md); gap: 12px; }
+.qcard .qhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-weight: 400; }
+.qcard .qrun { font-weight: 500; color: var(--ink); }
+.qcard .qwhere { font-size: var(--fs-meta); color: var(--ink-2); }
+.qcard .qhead .qwait { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-meta); font-weight: 400; color: var(--st-wait); }
+.qcard .qhead :global(.btn) { align-self: center; }
+.qctx { display: flex; flex-direction: column; gap: 3px; padding-left: 10px; border-left: 2px solid var(--line-strong); border-radius: 0; }
+.qctx > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; }
+.qctx-k { font-size: var(--fs-meta); color: var(--ink-3); }
+.qctx-v { font-size: var(--fs-small); color: var(--ink-2); overflow-wrap: anywhere; }
+.qctx-v :global(.err) { font-family: var(--font-mono); }
+.qcard .qpreface { max-height: 240px; background: var(--well); border-color: var(--line); color: var(--ink-2); }
+.qcard .qpreface-wrap summary { color: var(--ink-2); }
+.qpreface-lead { color: var(--ink-2); }
+.qcard .qtext { font-size: var(--fs-h3); font-weight: 500; color: var(--ink); text-wrap: pretty; }
+.qcard .qhdr { color: var(--st-wait); background: transparent; border: 1px solid color-mix(in srgb, var(--st-wait) 45%, transparent); }
+.qopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
+.qcard .opt { position: relative; display: flex; flex-direction: column; gap: 2px; max-width: 100%; padding: 7px 12px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--raised); cursor: pointer; transition: border-color .12s, background-color .12s; }
+.qcard .opt:hover { border-color: var(--ink-3); }
+.qcard .opt input { position: absolute; opacity: 0; pointer-events: none; }
+.qcard .opt:has(input:checked) { border-color: var(--ink); background: var(--select); box-shadow: inset 0 0 0 1px var(--ink); }
+.qcard .opt:has(input:focus-visible) { box-shadow: var(--focus); }
+.qcard .opt .ol { font-weight: 500; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qcard .opt .od { display: block; font-size: var(--fs-meta); color: var(--ink-2); }
+.qrec { font-size: var(--fs-cap); font-weight: 400; color: var(--ink-2); border: 1px solid var(--line-strong); border-radius: var(--r-pill); padding: 0 7px; }
+.qown { position: relative; }
+.qown-pick { position: absolute; opacity: 0; pointer-events: none; }
+.qown textarea { width: 100%; min-height: 34px; resize: none; overflow: hidden; padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--well); color: var(--ink); font: inherit; line-height: 1.45; }
+.qown textarea:focus { outline: none; border-color: var(--ink-3); }
+.qown:has(.qown-pick:checked) textarea { border-color: var(--ink); }
+.qsend { gap: 10px; }

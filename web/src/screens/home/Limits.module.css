@@ -1,0 +1,13 @@
+/* главная: лимиты подписки в шапке (ui/style.css, перенесено как есть) */
+.home-limits { display: flex; gap: 14px; align-items: flex-start; margin-left: auto; cursor: pointer; }
+.limit { width: 150px; }
+.limit-top { display: flex; justify-content: space-between; font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.limit-top b { color: var(--ink); }
+.limit-bar { height: 6px; border-radius: var(--r-xs); background: var(--line); overflow: hidden; margin: 3px 0 2px; }
+.limit-bar span { display: block; height: 100%; border-radius: var(--r-xs); }
+.limit:global(.ok) .limit-bar span { background: var(--st-ok); }
+.limit:global(.warn) .limit-bar span { background: var(--st-wait); }
+.limit:global(.err) .limit-bar span { background: var(--st-fail); }
+.limit:global(.warn) .limit-top b { color: var(--st-wait); }
+.limit:global(.err) .limit-top b { color: var(--st-fail); }
+@media (max-width: 700px) { :global(.view-head):has(.home-limits) { flex-wrap: wrap; } .home-limits { margin-left: 0; } }

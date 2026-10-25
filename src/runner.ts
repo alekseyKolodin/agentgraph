@@ -1,0 +1,1311 @@
+// Раннер: блоки по очереди; в блоке итерации -> этапы (каждый = свежая сессия) -> проверка условия остановки.
+// Ход выполнения отдаётся через события (onEvent), чтобы одинаково работать из CLI и из UI.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { stringify as toYaml } from 'yaml';
+import type { RunSource } from './intake.js';
+import type {
+  BlockReport, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunReport,
+  RunStatus, RunWorktree, TagSummaryReport,
+} from './api-types.js';
+import { flowBlocks, phaseSteps, type Block, type FlowSpec, type Phase, type Until } from './schema.js';
+import { emptyContext, render, type TemplateContext } from './template.js';
+import { randomUUID } from 'node:crypto';
+import { runSession, type AskAnswers, type EffortLevel, type AskQuestion, type SessionResult, type SessionTokens } from './agent.js';
+import { ATTACHMENTS_DIR } from './attachments.js';
+import {
+  artifactAccess,
+  declaredArtifacts,
+  hasArtifacts,
+  mappedKeys,
+  inlineKeys,
+  type ArtifactLite,
+  type ArtifactsReport,
+  type Denial,
+  type PhaseArtifacts,
+  type StepArtifacts,
+  type StepDelta,
+} from './artifacts.js';
+import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
+import { knowledgeDirs, knowledgeSection, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
+import { dropRunPaths, parseTagSummary, tagSummaryPromptFile, tagSummaryRequest } from './tag-summary.js';
+import type { AutoTagReport } from './auto-tag.js';
+import type { RunTitleReport } from './run-title.js';
+import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
+import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
+
+export type RunOptions = {
+  /** Рабочая директория агентов (репозиторий, над которым работаем). */
+  cwd: string;
+  /** Куда складывать логи запусков (если runDir не задан). */
+  runsDir: string;
+  /** Готовая директория запуска; создаётся через makeRunDir. */
+  runDir?: string;
+  maxIterations?: number;
+  maxBudgetUsd?: number;
+  model?: string;
+  abort?: AbortController;
+  /** Пауза: раннер ждёт checkpoint() перед каждым этапом и проверкой условия. */
+  control?: RunControl;
+  onEvent?: (event: RunEvent) => void;
+  /** Как отвечать на вопросы агента. Без обработчика вопросы отклоняются. */
+  onQuestion?: (q: QuestionRecord, signal: AbortSignal) => Promise<AskAnswers>;
+  /** Продолжение завершённого запуска: блоки, пройденные в нём целиком, не повторяются. */
+  continueFrom?: Continuation;
+  /** Откуда запуск: задача Jira, MR или ветка с главной. Раннер только сохраняет в отчёт. */
+  source?: RunSource;
+  /** Запуск идёт в git worktree (cwd = path). Раннер только сохраняет в отчёт. */
+  worktree?: RunWorktree;
+  /** Шов для тестов: чем запускать сессии этапов и судьи. По умолчанию runSession. */
+  session?: typeof runSession;
+  /** Доп. директории на весь запуск: добавляются к add_dirs каждого этапа. */
+  addDirs?: string[];
+  /** Вложения к задаче: пути относительно runDir (attachments/<имя>). Файлы уже лежат на диске. */
+  attachments?: string[];
+  /** Продолжение: артефакты берутся копией текущих файлов этого запуска (по ключу). */
+  artifactsFrom?: { runId: string; runDir: string };
+  /** Разовый запуск: flow не сохранён в flows/, единственная его копия — снимок flow.yaml в папке запуска. */
+  adhoc?: boolean;
+  /**
+   * Хранилище артефактов создано и заполнено — до события start. Только у flow с артефактами; через него сервер
+   * правит артефакты идущего запуска. Единственный путь создания хранилища у живого запуска.
+   */
+  onArtifactStore?: (store: ArtifactStore) => void;
+  /** Теги задачи (слаги): саммари фичи между запусками, см. tags.ts. Теги уже заведены, их блоки уже во вводе. */
+  tags?: string[];
+  /** Обновить саммари тегов после запуска со статусом done; по умолчанию — да. */
+  saveTag?: boolean;
+  /**
+   * Папки только для чтения из тегов: пути тегов и артефакты их прошлых запусков (на них ссылается саммари). Идут в
+   * additionalDirectories этапов и судьи, но не в addDirs запуска: при продолжении сервер пересчитывает их заново.
+   */
+  tagDirs?: string[];
+  /** Модель сессии саммари тега; по умолчанию haiku. */
+  tagSummaryModel?: string;
+  /** Теги области знаний (слаги) на весь запуск: их раздел получает каждый блок вместе со своим knowledge из flow. */
+  knowledge?: string[];
+  /** Итог автотега (auto-tag.ts): тег уже заведён и стоит в tags или ошибка подбора; стоимость входит в totalCostUsd. */
+  autoTag?: AutoTagReport;
+  /**
+   * Подбор имени запуска (run-title.ts): стартует после start и идёт параллельно этапам, раннер ждёт его только перед
+   * концом. Не бросает; signal прерывается остановкой запуска. Без опции имени нет и ключей title/titleSession тоже.
+   */
+  nameRun?: (input: string, signal: AbortSignal) => Promise<RunTitleReport>;
+  /** Готовое имя (продолжение берёт имя исходного запуска): в отчёте сразу, nameRun не зовётся. */
+  title?: string;
+  /**
+   * Итоги для человека (run-digest.ts): после каждой проверки условия и каждого блока без цикла — итог итерации
+   * (ConditionReport.summary) и сводка запуска (report.digest). Идут в фоне по одному, раннер ждёт их только перед
+   * концом. Не бросает; signal прерывается остановкой запуска. Без опции нет ни итогов, ни ключей digest/digestSession.
+   */
+  digest?: (input: DigestInput, signal: AbortSignal) => Promise<DigestReport>;
+};
+
+export type { RunWorktree } from './api-types.js';
+
+/**
+ * Что новый запуск берёт у прошлого при продолжении (continuationFrom). Только сплошное начало
+ * блоков, завершённых done: их этапы не повторяются, выводы подставляются в {{phases.*}}, {{prev}}
+ * и {{history}}. Блок, на котором прошлый запуск остановился, идёт с первой итерации и без своих
+ * старых выводов: в них могут быть устаревшие указания вроде «ждать ответа пользователя».
+ */
+export type Continuation = {
+  runId: string;
+  skipBlocks: string[];
+  /** Последний вывод каждого этапа пропускаемых блоков. */
+  phases: Record<string, string>;
+  /** Последний вывод последнего пропускаемого блока — как {{prev}} при обычном переходе между блоками. */
+  prev: string;
+  history: string[];
+};
+
+/**
+ * Управление паузой извне (UI). Пауза мягкая: текущая сессия доигрывает,
+ * а следующий шаг ждёт, пока checkpoint() не отпустит. Остановка должна отпускать ждущий checkpoint.
+ */
+export type RunControl = {
+  /** Вызывается перед каждым шагом; на паузе резолвится только после продолжения или остановки. */
+  checkpoint: () => Promise<void>;
+  /** Пауза по просьбе агента (loop.pause_marker): ближайший checkpoint() встанет. Причина уже лежит в report.pauseReason. */
+  requestPause?: () => void;
+};
+
+export type { QuestionRecord } from './api-types.js';
+export type {
+  BlockReport, BlockStatus, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, RunEvent, RunReport, TagSummaryReport,
+} from './api-types.js';
+
+// interrupted раннер не пишет: так сервер показывает running-запуск, чей процесс умер, не дописав run.json
+export type { RunStatus } from './api-types.js';
+
+export type { RunDigest } from './api-types.js';
+
+const HISTORY_ENTRY_MAX = 6000;
+const FEEDBACK_MAX = 6000;
+/** Как в LoopSchema.max_iterations. */
+const MAX_ITERATIONS_LIMIT = 50;
+
+export async function runFlow(spec: FlowSpec, opts: RunOptions): Promise<RunReport> {
+  const namer = new RunNamer();
+  const digester = new RunDigester();
+  try {
+    return await runFlowBody(spec, opts, namer, digester);
+  } finally {
+    // после выхода (в том числе исключением) поздний ответ подбора имени или итога ни run.json, ни событий не трогает
+    namer.close();
+    digester.close();
+  }
+}
+
+/**
+ * Подбор имени параллельно этапам. Колбэк пишет в тот же объект report и сохраняет его тем же save(), поэтому гонок
+ * с раннером нет; перед концом раннер ждёт подбор (settle), чтобы имя попало в end и CLI не вышел раньше записи.
+ */
+class RunNamer {
+  private closed = false;
+  private pending?: Promise<void>;
+  private readonly abort = new AbortController();
+
+  start(report: RunReport, opts: RunOptions, save: () => void, emit: (e: RunEvent) => void): void {
+    if (report.title || !opts.nameRun) return;
+    const stop = () => this.abort.abort();
+    opts.abort?.signal.addEventListener('abort', stop, { once: true });
+    if (opts.abort?.signal.aborted) stop();
+    const apply = (r: RunTitleReport) => {
+      if (this.closed) return;
+      if (r.title) report.title = r.title;
+      report.titleSession = { costUsd: r.costUsd, ...(r.tokens ? { tokens: r.tokens } : {}), ...(r.error ? { error: r.error } : {}) };
+      report.totalCostUsd += r.costUsd;
+      save();
+      emit({ type: 'title', ...(r.title ? { title: r.title } : {}), ...(r.error ? { error: r.error } : {}), totalCostUsd: report.totalCostUsd });
+    };
+    let call: Promise<RunTitleReport>;
+    try {
+      call = opts.nameRun(report.input, this.abort.signal);
+    } catch (err) {
+      call = Promise.reject(err);
+    }
+    this.pending = call
+      .catch((err): RunTitleReport => ({ error: err instanceof Error ? err.message : String(err), costUsd: 0 }))
+      .then(apply)
+      // сбой записи или подписчика событий не должен ронять запуск из колбэка
+      .catch(() => {})
+      .finally(() => opts.abort?.signal.removeEventListener('abort', stop));
+  }
+
+  /** Дождаться подбора: он ограничен таймаутом и остановкой запуска и не бросает. */
+  async settle(): Promise<void> {
+    await this.pending;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.abort.abort();
+  }
+}
+
+/** Что пересказать и куда записать: cond — отчёт проверки (у блока без цикла нет), file — его condition.json. */
+type DigestJob = { input: Omit<DigestInput, 'prev'>; block: string; iteration: number; cond?: ConditionReport; file?: string };
+
+/**
+ * Итоги параллельно этапам, по одному вызову за раз: пока идёт вызов, ждёт только самый свежий запрос (промежуточные
+ * остаются без итога — их показывает сырой текст). Прошлая сводка берётся в момент вызова, поэтому цепочка не рвётся.
+ * Колбэк пишет в тот же report тем же save(), как RunNamer; перед концом раннер ждёт очередь (settle).
+ */
+class RunDigester {
+  private closed = false;
+  private busy = false;
+  private queued?: DigestJob;
+  private pending?: Promise<void>;
+  private readonly abort = new AbortController();
+  private ctx?: { report: RunReport; opts: RunOptions; save: () => void; emit: (e: RunEvent) => void };
+
+  start(report: RunReport, opts: RunOptions, save: () => void, emit: (e: RunEvent) => void): void {
+    if (!opts.digest) return;
+    this.ctx = { report, opts, save, emit };
+    const stop = () => this.abort.abort();
+    if (opts.abort?.signal.aborted) stop();
+    else opts.abort?.signal.addEventListener('abort', stop, { once: true });
+  }
+
+  get enabled(): boolean {
+    return Boolean(this.ctx) && !this.closed;
+  }
+
+  /**
+   * Провал с теми же замечаниями, что у прошлой итерации блока, у которой итог уже есть: итог тот же, модель не зовём.
+   * Так «буксующий» цикл из 50 итераций стоит как один вызов. true — итог проставлен.
+   */
+  reuse(cond: ConditionReport): boolean {
+    if (!this.enabled || cond.done || !cond.feedback.trim()) return false;
+    const r = this.ctx!.report;
+    const prev = r.conditions.find((c) => c.block === cond.block && c.iteration === cond.iteration - 1);
+    if (!prev?.summary || prev.done || feedbackKey(prev.feedback) !== feedbackKey(cond.feedback)) return false;
+    cond.summary = prev.summary;
+    (r.digestSession ??= emptyDigestSession()).reused++;
+    return true;
+  }
+
+  push(job: DigestJob): void {
+    if (!this.enabled) return;
+    if (this.busy) {
+      this.queued = job;
+      return;
+    }
+    this.busy = true;
+    this.pending = this.drain(job);
+  }
+
+  private async drain(first: DigestJob): Promise<void> {
+    let job: DigestJob | undefined = first;
+    while (job && !this.closed) {
+      await this.one(job);
+      job = this.queued;
+      this.queued = undefined;
+    }
+    this.busy = false;
+  }
+
+  private async one(job: DigestJob): Promise<void> {
+    if (this.abort.signal.aborted) return;
+    const { report, opts } = this.ctx!;
+    let r: DigestReport;
+    try {
+      r = await opts.digest!({ ...job.input, ...(report.digest ? { prev: report.digest.text } : {}) }, this.abort.signal);
+    } catch (err) {
+      r = { error: err instanceof Error ? err.message : String(err), costUsd: 0 };
+    }
+    // остановка — не сбой итога: пустой ответ после неё не считаем
+    if (this.abort.signal.aborted && !r.costUsd && !r.iteration && !r.run) return;
+    try {
+      this.apply(job, r);
+    } catch {
+      // сбой записи или подписчика событий не должен ронять запуск из фона
+    }
+  }
+
+  private apply(job: DigestJob, r: DigestReport): void {
+    if (this.closed) return;
+    const { report, save, emit } = this.ctx!;
+    const ds = (report.digestSession ??= emptyDigestSession());
+    ds.calls++;
+    ds.costUsd += r.costUsd;
+    report.totalCostUsd += r.costUsd;
+    if (r.error) {
+      ds.failed++;
+      ds.error = r.error;
+    }
+    const summary = job.cond && r.iteration ? r.iteration : undefined;
+    if (summary) {
+      job.cond!.summary = summary;
+      if (job.file) fs.writeFileSync(job.file, JSON.stringify(job.cond, null, 2));
+    }
+    if (r.run) report.digest = { text: r.run, block: job.block, iteration: job.iteration, at: new Date().toISOString() };
+    save();
+    emit({
+      type: 'digest', block: job.block, iteration: job.iteration,
+      ...(summary ? { summary } : {}), ...(r.run ? { digest: report.digest } : {}), totalCostUsd: report.totalCostUsd,
+    });
+  }
+
+  /** Дождаться очереди: каждый вызов ограничен таймаутом и остановкой запуска и не бросает. */
+  async settle(): Promise<void> {
+    await this.pending;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.queued = undefined;
+    this.abort.abort();
+  }
+}
+
+const emptyDigestSession = (): DigestSession => ({ calls: 0, costUsd: 0, failed: 0, reused: 0 });
+
+async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, digester: RunDigester): Promise<RunReport> {
+  const runDir = opts.runDir ?? makeRunDir(opts.runsDir, spec.name);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'flow.yaml'), toYaml(spec, { lineWidth: 0 }));
+  const emit = opts.onEvent ?? (() => {});
+
+  const blocks = flowBlocks(spec);
+  // Один блок пишет логи как раньше (iter-NN/…), несколько — в NN-<блок>/iter-NN/….
+  const multi = blocks.length > 1;
+  const cont = opts.continueFrom;
+  const blockReports: BlockReport[] = blocks.map((b, i) => {
+    const skipped = Boolean(cont?.skipBlocks.includes(b.name));
+    return {
+      index: i,
+      name: b.name,
+      title: b.title ?? b.name,
+      status: skipped ? 'done' : 'pending',
+      iterations: 0,
+      maxIterations: skipped ? 0 : blockMaxIterations(b, opts),
+      condition: b.loop?.until.type ?? 'none',
+      looped: Boolean(b.loop),
+      onFail: b.on_fail ?? 'stop',
+      ...(skipped ? { skipped: true } : {}),
+    };
+  });
+  const report: RunReport = {
+    id: path.basename(runDir),
+    flow: spec.name,
+    description: spec.description,
+    input: spec.input ?? '',
+    cwd: opts.cwd,
+    status: 'running',
+    iterations: 0,
+    maxIterations: blockReports.reduce((n, b) => n + b.maxIterations, 0),
+    // подбор автотега прошёл до старта, но это тоже сессия запуска: его стоимость — в итоге и под --max-budget
+    totalCostUsd: opts.autoTag?.costUsd ?? 0,
+    blocks: blockReports,
+    phases: [],
+    conditions: [],
+    questions: [],
+    runDir,
+    startedAt: new Date().toISOString(),
+    pid: process.pid,
+    ...(cont ? { continuedFrom: cont.runId } : {}),
+    ...(opts.adhoc ? { adhoc: true as const } : {}),
+    ...(opts.source ? { source: opts.source } : {}),
+    ...(opts.worktree ? { worktree: opts.worktree } : {}),
+    ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
+    ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+    ...(opts.tags?.length ? { tags: opts.tags, saveTag: opts.saveTag !== false } : {}),
+    ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
+    ...(opts.autoTag ? { autoTag: opts.autoTag } : {}),
+    ...(opts.title ? { title: opts.title } : {}),
+  };
+  // абсолютные пути вложений считаются от runDir, а из CLI он в opts не приходит
+  const runOpts: RunOptions = { ...opts, runDir };
+  // теги знаний блоков считаются на старте (и при продолжении заново: тег мог измениться); ошибка — до первого этапа
+  let knowledge = new Map<string, KnowledgeTag[]>();
+  const save = () => fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(report, null, 2));
+  // Хранилище создаётся до start, ошибка его создания делает запуск failed (бросается в try ниже).
+  let store: ArtifactStore | undefined;
+  let storeError: unknown;
+  if (hasArtifacts(spec)) {
+    try {
+      store = new ArtifactStore({ runDir, declared: declaredArtifacts(spec), report, persist: save, emit, readTool: ARTIFACT_TOOLS_ENABLED });
+      store.init(opts.artifactsFrom);
+      opts.onArtifactStore?.(store);
+    } catch (err) {
+      store = undefined;
+      storeError = err;
+    }
+  }
+  save();
+  emit({ type: 'start', report });
+  namer.start(report, opts, save, emit);
+  digester.start(report, opts, save, emit);
+
+  const aborted = () => Boolean(opts.abort?.signal.aborted);
+  /** Граница шага: здесь запуск встаёт на паузу. true — запуск остановлен, дальше не идём. */
+  const checkpoint = async (): Promise<boolean> => {
+    if (opts.control) await opts.control.checkpoint();
+    return aborted();
+  };
+
+  // prev, phases.* и history переходят из блока в блок; feedback, outputs и счётчик итераций у каждого блока свои.
+  const ctx = emptyContext(spec.input ?? '', 0);
+  const history: string[] = [];
+  if (cont) {
+    Object.assign(ctx.phases, cont.phases);
+    ctx.prev = cont.prev;
+    history.push(...cont.history);
+    ctx.history = history.join('\n\n');
+  }
+
+  /**
+   * Один этап: промпт из снимка контекста, сессия, файлы и отчёт. Контекст не трогает — выводы
+   * сливает runBlock после шага, поэтому участники группы могут идти одновременно.
+   */
+  const runPhase = async (block: Block, phase: Phase, i: number, iter: number, iterRel: string, snap: TemplateContext, art?: PhaseArtifacts): Promise<PhaseRun> => {
+    const title = phase.title ?? phase.name;
+    const group = phase.group ? { group: phase.group } : {};
+    const known = knowledge.get(block.name);
+    const prompt = renderPhasePrompt(phase, snap, opts.cwd, runOpts, art, known);
+    const baseRel = `${iterRel}/${pad(i + 1)}-${phase.name}`;
+    const files: PhaseFiles = { prompt: `${baseRel}.prompt.md`, transcript: `${baseRel}.transcript.md`, output: `${baseRel}.output.md` };
+    fs.writeFileSync(path.join(runDir, files.prompt), prompt);
+    const transcript = fs.createWriteStream(path.join(runDir, files.transcript));
+    const log = (line: string) => {
+      transcript.write(line + '\n');
+      emit({ type: 'log', block: block.name, iteration: iter, phase: phase.name, line });
+    };
+
+    const asked = phaseModel(spec, phase, runOpts);
+    emit({
+      type: 'phase_start', block: block.name, iteration: iter, index: i, phase: phase.name, title, tools: phase.tools, files, ...group,
+      ...(asked.model ? { model: asked.model } : {}), ...(asked.effort ? { effort: asked.effort } : {}),
+    });
+    const onQuestion = opts.onQuestion
+      ? async (questions: AskQuestion[], signal: AbortSignal, preface?: string) => {
+          const q: QuestionRecord = {
+            id: randomUUID(),
+            block: block.name,
+            iteration: iter,
+            phase: phase.name,
+            title,
+            questions,
+            ...(preface ? { preface } : {}),
+            askedAt: new Date().toISOString(),
+          };
+          report.questions.push(q);
+          save();
+          emit({ type: 'question', question: q });
+          const answers = await opts.onQuestion!(q, signal);
+          q.answers = answers;
+          q.answeredAt = new Date().toISOString();
+          save();
+          emit({ type: 'answer', question: q });
+          log(`? ${questions.map((x) => x.question).join(' | ')}`);
+          log(`= ${Object.values(answers).join(' | ')}`);
+          return answers;
+        }
+      : undefined;
+    const startedAt = Date.now();
+    // у flow с артефактами каждый этап под guard: свои артефакты, папка запусков; отказы считаются в отчёт этапа
+    const denials: Denial[] = [];
+    const guard = store && art ? { guard: store.guard(phase.tools, art.access, (tool, reason) => countDenial(denials, tool, reason)) } : {};
+    let res: SessionResult;
+    let thrown: { err: unknown } | undefined;
+    try {
+      res = await (opts.session ?? runSession)({
+        ...buildRequest(spec, phase, prompt, runOpts, art, known),
+        onQuestion,
+        onModel: (model) => emit({ type: 'phase_model', block: block.name, iteration: iter, phase: phase.name, model }),
+        onContext: (c) => emit({ type: 'phase_context', block: block.name, iteration: iter, phase: phase.name, ...c }),
+        ...guard,
+      }, log);
+    } catch (err) {
+      // Этап вне группы, упавший исключением, обрывает запуск сразу, как раньше. Участник группы сначала
+      // пишет отчёт и phase_end: иначе он висел бы «выполняется», пока доигрывают соседи.
+      if (!phase.group) throw err;
+      thrown = { err };
+      const message = err instanceof Error ? err.message : String(err);
+      res = { ok: false, subtype: 'exception', text: message, costUsd: 0, turns: 0, durationMs: Date.now() - startedAt, errors: [message] };
+    } finally {
+      await new Promise<void>((resolve) => transcript.end(resolve));
+    }
+
+    const output = res.structured !== undefined ? JSON.stringify(res.structured, null, 2) : res.text;
+    fs.writeFileSync(path.join(runDir, files.output), output);
+    const phaseReport: PhaseReport = {
+      block: block.name,
+      iteration: iter,
+      index: i,
+      phase: phase.name,
+      title,
+      tools: phase.tools,
+      ...group,
+      ok: res.ok,
+      subtype: res.subtype,
+      costUsd: res.costUsd,
+      turns: res.turns,
+      durationMs: res.durationMs,
+      chars: output.length,
+      sessionId: res.sessionId,
+      errors: res.errors,
+      files,
+      ...(store ? { denials } : {}),
+      ...((res.model ?? asked.model) ? { model: res.model ?? asked.model } : {}),
+      ...(asked.effort ? { effort: asked.effort } : {}),
+      ...(res.tokens ? { tokens: res.tokens } : {}),
+    };
+    report.phases.push(phaseReport);
+    report.totalCostUsd += res.costUsd;
+    save();
+    emit({ type: 'phase_end', report: phaseReport });
+    if (thrown) throw thrown.err;
+    return { phase, index: i, res, output, files };
+  };
+
+  /** Итог итерации (или прохода блока без цикла) в фон: выводы её этапов, вердикт проверки и что будет дальше. */
+  const digestIteration = (block: Block, br: BlockReport, iter: number, outs: PhaseOutput[], cond?: ConditionReport, file?: string) => {
+    if (!digester.enabled) return;
+    const after = blocks[br.index + 1];
+    const next = cond && !cond.done
+      ? iter < br.maxIterations
+        ? `итерация ${iter + 1} из ${br.maxIterations}${cond.feedback.trim() ? ': этапы получат замечания проверки' : ''}`
+        : 'лимит итераций блока исчерпан'
+      : after ? `следующий блок «${after.title ?? after.name}»` : 'запуск завершается';
+    const title = (name: string) => block.phases.find((p) => p.name === name)?.title ?? name;
+    digester.push({
+      input: {
+        flow: spec.name,
+        task: report.input,
+        block: { title: br.title, index: br.index, total: blocks.length, iteration: iter, maxIterations: br.maxIterations, looped: br.looped },
+        phases: outs.map((o) => ({ title: title(o.phase), output: o.output })),
+        ...(cond ? { condition: { type: cond.type, done: cond.done, ...(cond.detail ? { detail: cond.detail } : {}), feedback: cond.feedback } } : {}),
+        next,
+      },
+      block: block.name,
+      iteration: iter,
+      ...(cond ? { cond } : {}),
+      ...(file ? { file } : {}),
+    });
+  };
+
+  /** Цикл одного блока: итерации -> шаги (этап или параллельная группа) -> условие. Возвращает итоговый статус блока. */
+  const runBlock = async (block: Block, br: BlockReport, blockRel: string): Promise<RunStatus> => {
+    ctx.feedback = '';
+    ctx.outputs = '';
+
+    // лимит читаем на каждом шаге: его можно поменять во время запуска (setBlockMaxIterations)
+    for (let iter = 1; iter <= br.maxIterations; iter++) {
+      // пауза до начала итерации, чтобы на паузе в отчёте не висела пустая итерация
+      if (await checkpoint()) return 'aborted';
+      // лимит могли уменьшить, пока стояли на паузе
+      if (iter > br.maxIterations) break;
+      ctx.iteration = iter;
+      ctx.max_iterations = br.maxIterations;
+      br.iterations = iter;
+      report.iterations++;
+      const iterRel = path.posix.join(blockRel, `iter-${pad(iter)}`);
+      fs.mkdirSync(path.join(runDir, iterRel), { recursive: true });
+      const iterOutputs: string[] = [];
+      const iterPhaseOutputs: PhaseOutput[] = [];
+      ctx.outputs = '';
+      emit({ type: 'iteration', block: block.name, iteration: iter, max: br.maxIterations });
+
+      for (const [si, step] of phaseSteps(block).entries()) {
+        // Пауза только между шагами: у сервера один release, и второй параллельный checkpoint
+        // перезаписал бы его — первая ветка группы так и осталась бы ждать.
+        if (si > 0 && (await checkpoint())) return 'aborted';
+        // Участники группы рендерят промпты из одного снимка: {{prev}} и {{phases.*}} — как до группы.
+        // Пока группа идёт, в ctx, history и выводы итерации никто не пишет: всё сливается после шага.
+        const snapshot: TemplateContext = { ...ctx, phases: { ...ctx.phases } };
+        // Артефакты: prepareStep → beginStep → снимок → синхронная часть runPhase без await между ними,
+        // finishStep и endStep — на любом выходе из шага.
+        let ref: Extract<StepRef, { kind: 'phases' }> | undefined;
+        const arts: PhaseArtifacts[] = [];
+        if (store) {
+          store.prepareStep();
+          ref = { kind: 'phases', block: block.name, iteration: iter, members: step.phases.map(({ phase }) => ({ name: phase.name, access: artifactAccess(phase) })) };
+          store.beginStep(ref);
+          const texts = store.snapshot(step.phases.flatMap(({ phase }) => [phase.prompt, phase.handoff ?? '']));
+          ref.members.forEach((m, k) => {
+            const { prompt, handoff } = step.phases[k].phase;
+            arts.push({
+              dir: store!.dir,
+              access: m.access,
+              section: store!.section(m.access, mappedKeys([prompt, handoff ?? ''], texts), inlineKeys([prompt, handoff ?? ''], texts)),
+              snapshot: texts,
+              ...(ARTIFACT_TOOLS_ENABLED ? { sources: store!.sources(m.access) } : {}),
+            });
+          });
+        }
+        let settled: PromiseSettledResult<PhaseRun>[];
+        try {
+          settled = await Promise.allSettled(
+            step.phases.map(({ phase, index }, k) => runPhase(block, phase, index, iter, iterRel, snapshot, arts[k])),
+          );
+        } finally {
+          if (store && ref) {
+            for (const m of ref.members) m.report = report.phases.find((p) => p.block === block.name && p.iteration === iter && p.phase === m.name);
+            store.finishStep(ref);
+            store.endStep();
+          }
+        }
+        if (aborted()) return 'aborted';
+        // Ошибки разбираем в порядке объявления: запуск получает ошибку первого упавшего участника.
+        // Этап, упавший исключением, обрывает запуск как раньше, но только когда соседи дописали отчёты.
+        const done: PhaseRun[] = [];
+        for (const s of settled) {
+          if (s.status === 'rejected') throw s.reason;
+          const { phase, res, output } = s.value;
+          done.push(s.value);
+          // Сессия с ошибкой (API, сон компьютера) отдаёт текст ошибки как вывод. Дальше он ушёл бы
+          // следующему этапу под видом результата, и тот принял бы «результатов нет» за «проблем нет».
+          if (!res.ok) {
+            report.error = `Этап ${phase.name} завершился с ошибкой: ${res.errors.join('; ') || output.trim() || res.subtype}`;
+            return 'failed';
+          }
+          if (!output.trim()) {
+            report.error = `Этап ${phase.name} не вернул вывод` + (res.errors.length ? `: ${res.errors.join('; ')}` : '');
+            return 'failed';
+          }
+        }
+
+        const where = multi ? `${block.name} · итерация ${iter}` : `Итерация ${iter}`;
+        mergeGroupOutputs(
+          { ctx, history, iterOutputs, iterPhaseOutputs },
+          done.map(({ phase, index, output, files }) => ({ phase: phase.name, index, output, file: files.output })),
+          where,
+        );
+
+        if (opts.maxBudgetUsd !== undefined && report.totalCostUsd > opts.maxBudgetUsd) {
+          report.error = `Лимит ${opts.maxBudgetUsd.toFixed(2)} превышен: ${report.totalCostUsd.toFixed(2)}`;
+          return 'budget_exceeded';
+        }
+      }
+
+      // Блок без цикла — один проход, условие не проверяется.
+      if (!block.loop) {
+        digestIteration(block, br, iter, iterPhaseOutputs);
+        return 'done';
+      }
+
+      if (await checkpoint()) return 'aborted';
+      // проверка условия — тоже шаг: изменения за неё получают автора «условие», судья читает все артефакты
+      let cref: Extract<StepRef, { kind: 'condition' }> | undefined;
+      let judgeArt: PhaseArtifacts | undefined;
+      if (store) {
+        store.prepareStep();
+        cref = { kind: 'condition', block: block.name, iteration: iter };
+        store.beginStep(cref);
+        if (block.loop.until.type === 'judge') judgeArt = store.forJudge(block.loop.until.prompt);
+      }
+      let cond!: ConditionReport;
+      try {
+        cond = await evaluateUntil(spec, block, ctx, runOpts, runDir, iterRel, emit, judgeArt, knowledge.get(block.name));
+      } finally {
+        if (store && cref) {
+          cref.report = cond;
+          store.finishStep(cref);
+          store.endStep();
+        }
+      }
+      report.conditions.push(cond);
+      report.totalCostUsd += cond.costUsd;
+      // повтор прошлого провала получает его итог сразу, остальные — позже, событием digest
+      const reused = digester.reuse(cond);
+      const condFile = path.join(runDir, iterRel, 'condition.json');
+      fs.writeFileSync(condFile, JSON.stringify(cond, null, 2));
+      save();
+      emit({ type: 'condition', report: cond });
+      if (!reused) digestIteration(block, br, iter, iterPhaseOutputs, cond, condFile);
+
+      if (cond.done) return 'done';
+      if (aborted()) return 'aborted';
+      ctx.feedback = cond.feedback;
+
+      // Агент сказал, что дальше без пользователя нельзя: встаём здесь, а не крутим итерации вхолостую.
+      const ask = block.loop.pause_marker ? findPauseRequest(iterPhaseOutputs, block.loop.pause_marker) : undefined;
+      if (ask) {
+        if (!opts.control?.requestPause) {
+          report.error = `Этап ${ask.phase} ждёт решения пользователя, а встать на паузу запуск без UI-сервера не может:\n${ask.text}`;
+          return 'failed';
+        }
+        const reason: PauseReason = { block: block.name, iteration: iter, phase: ask.phase, text: ask.text, output: ask.file, at: new Date().toISOString() };
+        report.pauseReason = reason;
+        const record: PauseReason = { ...reason };
+        (report.pauses ??= []).push(record);
+        save();
+        opts.control.requestPause();
+        if (await checkpoint()) return 'aborted';
+        record.resumedAt = new Date().toISOString();
+        delete report.pauseReason;
+        save();
+      }
+    }
+    return block.loop?.until.type === 'none' ? 'done' : 'max_iterations';
+  };
+
+  let current: BlockReport | undefined;
+  try {
+    if (storeError) throw storeError;
+    // несуществующую директорию ловим до первого этапа, а не молча отдаём сессии без неё
+    checkAddDirs(blocks, opts.cwd, opts.addDirs);
+    // как и несуществующий тег знаний
+    knowledge = resolveKnowledge(spec, opts.knowledge);
+    for (const [bi, block] of blocks.entries()) {
+      current = blockReports[bi];
+      if (current.skipped) continue;
+      current.status = 'running';
+      save();
+      emit({ type: 'block_start', block: current, total: blocks.length });
+
+      current.status = await runBlock(block, current, multi ? `${pad(bi + 1)}-${block.name}` : '');
+      save();
+      emit({ type: 'block_end', block: current });
+
+      if (current.status === 'done') continue;
+      if (current.status === 'max_iterations') {
+        if (current.onFail === 'continue') continue;
+        if (multi) report.error = `Блок ${current.title}: условие не выполнено за ${current.iterations} итераций`;
+      }
+      report.status = current.status;
+      break;
+    }
+  } catch (err) {
+    report.status = 'failed';
+    report.error = err instanceof Error ? err.message : String(err);
+    if (current?.status === 'running') {
+      current.status = 'failed';
+      emit({ type: 'block_end', block: current });
+    }
+  }
+
+  // финальная сверка: находки после последнего шага — его участникам, артефакты остаются в папке запуска целыми
+  try {
+    store?.prepareStep();
+  } catch (err) {
+    report.error ??= `Артефакты после последнего шага: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (report.status === 'running') report.status = 'done';
+  // пауза, запрошенная на последнем шаге, так и не наступила
+  delete report.pause;
+  // итог считаем до саммари тегов (им нужны пути выводов), а report.final присваиваем после finishedAt, как раньше:
+  // порядок ключей run.json у запусков без тегов не меняется
+  const final = finalPhases(report);
+  if (opts.tags?.length) report.tagSummaries = await updateTagSummaries(report, final, runOpts, emit);
+  // имя и последние итоги должны попасть в end и итоговый run.json: после конца в run.json никто не пишет
+  await Promise.all([namer.settle(), digester.settle()]);
+  report.finishedAt = new Date().toISOString();
+  report.final = final;
+  save();
+  emit({ type: 'end', report });
+  return report;
+}
+
+/**
+ * Сессии саммари тегов после запуска, по одной на тег и по очереди: только при статусе done и галочке. Ошибка сессии
+ * не меняет статус запуска — она в error этого тега, его старое саммари остаётся. Стоимость идёт в итог запуска.
+ */
+async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport[]> {
+  const out: TagSummaryReport[] = [];
+  for (const tag of opts.tags ?? []) {
+    let r: TagSummaryReport;
+    if (opts.saveTag === false) r = { tag, ok: false, costUsd: 0, skipped: 'галочка «Обновить саммари тегов» снята' };
+    else if (report.status !== 'done') r = { tag, ok: false, costUsd: 0, skipped: `запуск не завершён (${report.status})` };
+    // «Остановить» во время саммари прерывает оставшиеся сессии, запуск остаётся done
+    else if (opts.abort?.signal.aborted) r = { tag, ok: false, costUsd: 0, skipped: 'остановлено' };
+    else r = await updateTagSummary(report, final, tag, opts, emit);
+    out.push(r);
+  }
+  return out;
+}
+
+async function updateTagSummary(report: RunReport, final: FinalPhase[], tag: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport> {
+  let out: TagSummaryReport;
+  try {
+    const prev = readTag(tag)?.summary ?? '';
+    const req = tagSummaryRequest({ ...report, final }, tag, prev, { model: opts.tagSummaryModel ?? 'haiku', abort: opts.abort });
+    const file = tagSummaryPromptFile(tag);
+    fs.writeFileSync(path.join(report.runDir, file), req.prompt);
+    emit({ type: 'tag_summary_start', tag, file });
+    let res: SessionResult | undefined;
+    try {
+      res = await (opts.session ?? runSession)(req, () => {});
+      report.totalCostUsd += res.costUsd;
+      // ссылки на выводы этапов и прочие файлы папки запуска следующему запуску недоступны — вычищаем
+      const text = dropRunPaths(parseTagSummary(res), path.dirname(report.runDir));
+      writeTagSummary(tag, text, { id: report.id, flow: report.flow, finishedAt: new Date().toISOString(), status: report.status });
+      out = { tag, ok: true, costUsd: res.costUsd };
+    } catch (err) {
+      out = { tag, ok: false, costUsd: res?.costUsd ?? 0, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (res?.tokens) out.tokens = res.tokens;
+  } catch (err) {
+    out = { tag, ok: false, costUsd: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  emit({ type: 'tag_summary', tag, report: out });
+  return out;
+}
+
+/**
+ * Меняет лимит итераций блока у идущего запуска. Раннер читает лимит на каждой итерации,
+ * поэтому новое значение подхватится со следующей; {{max_iterations}} обновится в промптах следующих итераций.
+ * Нельзя опустить ниже уже начатой итерации; равный ей — блок завершится после текущей.
+ */
+export function setBlockMaxIterations(report: RunReport, blockName: string, value: number): BlockReport {
+  const br = report.blocks.find((b) => b.name === blockName);
+  if (!br) throw new Error(`Нет блока ${blockName}`);
+  if (!br.looped) throw new Error(`У блока ${br.title} нет цикла`);
+  if (br.status !== 'pending' && br.status !== 'running') throw new Error(`Блок ${br.title} уже завершён`);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_ITERATIONS_LIMIT) {
+    throw new Error(`Лимит итераций — целое от 1 до ${MAX_ITERATIONS_LIMIT}`);
+  }
+  if (value < br.iterations) throw new Error(`Блок уже на итерации ${br.iterations}: лимит не может быть меньше`);
+  br.maxIterations = value;
+  report.maxIterations = report.blocks.reduce((n, b) => n + b.maxIterations, 0);
+  return br;
+}
+
+/** Лимит итераций блока: у блока без цикла — один проход; --max-iterations переопределяет лимит каждого цикла. */
+export function blockMaxIterations(block: Block, opts: { maxIterations?: number }): number {
+  if (!block.loop) return 1;
+  return opts.maxIterations ?? block.loop.max_iterations;
+}
+
+/** Что запуск добавляет к каждому этапу: доп. директории и вложения. runDir нужен для абсолютных путей вложений. */
+export type RunExtras = Pick<RunOptions, 'addDirs' | 'attachments' | 'runDir'>;
+
+/**
+ * Промпт фазы + инструкция «что передать дальше» (handoff) + доп. директории этапа и запуска + разделы тегов знаний
+ * блока (knowledge) + раздел «Артефакты запуска» + вложения к задаче. art — артефакты этапа на старте шага
+ * (подстановки и раздел); без них промпт как до артефактов, без knowledge — как до тегов знаний.
+ */
+export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[]): string {
+  const vars = art ? { ...ctx, artifacts: art.snapshot } : ctx;
+  let body = render(phase.prompt, vars);
+  if (phase.handoff?.trim()) {
+    body = `${body.trimEnd()}\n\nЧем закончить ответ (это уйдёт следующему этапу): ${render(phase.handoff, vars).trim()}`;
+  }
+  const dirs = cwd ? [...new Set([...resolveAddDirs(phase, cwd), ...resolveDirList(run?.addDirs, cwd)])] : [];
+  if (dirs.length) {
+    body = `${body.trimEnd()}\n\nКроме директории проекта тебе доступны (правила, инструкции, скиллы — сверяйся с ними):\n${dirs.map((d) => `- ${d}`).join('\n')}`;
+  }
+  for (const t of knowledge ?? []) body = `${body.trimEnd()}\n\n${knowledgeSection(t)}`;
+  if (art?.section) body = `${body.trimEnd()}\n\n${art.section}`;
+  return withAttachments(body, run);
+}
+
+/** Хвост промпта со списком вложений абсолютными путями. Без вложений промпт не меняется. */
+export function withAttachments(body: string, run?: RunExtras): string {
+  const files = attachmentPaths(run);
+  if (!files.length) return body;
+  return `${body.trimEnd()}\n\nВложения к задаче (открой инструментом Read):\n${files.map((f) => `- ${f}`).join('\n')}`;
+}
+
+function attachmentPaths(run?: RunExtras): string[] {
+  if (!run?.runDir || !run.attachments?.length) return [];
+  return run.attachments.map((f) => path.resolve(run.runDir!, f));
+}
+
+/** Папка вложений запуска — в additionalDirectories, чтобы Read открыл файлы вне cwd. */
+function attachmentsDir(run?: RunExtras): string[] {
+  return attachmentPaths(run).length ? [path.join(run!.runDir!, ATTACHMENTS_DIR)] : [];
+}
+
+/** Доп. директории этапа абсолютными путями: ~ раскрывается, относительные — от рабочей директории. */
+export function resolveAddDirs(phase: Phase, cwd: string): string[] {
+  return resolveDirList(phase.add_dirs, cwd);
+}
+
+/** Список путей абсолютными: ~ раскрывается, относительные — от cwd, пустые и дубли убираются. */
+export function resolveDirList(list: string[] | undefined, cwd: string): string[] {
+  const dirs = (list ?? []).map((d) => d.trim()).filter(Boolean).map((d) => {
+    const home = d === '~' || d.startsWith('~/') ? path.join(os.homedir(), d.slice(1)) : d;
+    return path.resolve(cwd, home);
+  });
+  return [...new Set(dirs)];
+}
+
+/** Бросает ошибку, если какой-то доп. директории этапа или запуска нет на диске. */
+export function checkAddDirs(blocks: Block[], cwd: string, runDirs?: string[]): void {
+  const isDir = (d: string) => Boolean(fs.statSync(d, { throwIfNoEntry: false })?.isDirectory());
+  const missing = [
+    ...resolveDirList(runDirs, cwd).filter((d) => !isDir(d)).map((d) => `запуск: ${d}`),
+    ...blocks.flatMap((b) =>
+      b.phases.flatMap((p) =>
+        resolveAddDirs(p, cwd)
+          .filter((d) => !isDir(d))
+          .map((d) => `${p.name}: ${d}`),
+      ),
+    ),
+  ];
+  if (missing.length) throw new Error(`Нет директорий:\n${missing.join('\n')}`);
+}
+
+/** Модель и effort, с которыми пойдёт этап: единственное место приоритета (этап → defaults → opts.model для модели). */
+export function phaseModel(spec: FlowSpec, phase: Phase, opts: Pick<RunOptions, 'model'>): { model?: string; effort?: EffortLevel } {
+  const d = spec.defaults ?? {};
+  return { model: phase.model ?? d.model ?? opts.model, effort: phase.effort ?? d.effort };
+}
+
+/**
+ * Запрос сессии этапа. art — права на артефакты: папка артефактов доп. директорией (если есть доступ) и неявные
+ * Read/Edit/Write в tools; их ограничивает guard, который навешивает runPhase. Без art — как до артефактов.
+ * knowledge — теги знаний блока: их пути и папки вложений идут доп. директориями.
+ */
+export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts: RunOptions, art?: Pick<PhaseArtifacts, 'dir' | 'access' | 'sources'>, knowledge?: KnowledgeTag[]) {
+  const d = spec.defaults ?? {};
+  const implicit = art?.access.implicit.filter((t) => !phase.tools.includes(t)) ?? [];
+  const artDir = art?.access.read.length ? [art.dir] : [];
+  return {
+    prompt,
+    cwd: opts.cwd,
+    additionalDirectories: [...new Set([...resolveAddDirs(phase, opts.cwd), ...resolveDirList(opts.addDirs, opts.cwd), ...attachmentsDir(opts), ...artDir, ...(opts.tagDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
+    system: phase.system,
+    tools: implicit.length ? [...phase.tools, ...implicit] : phase.tools,
+    ...phaseModel(spec, phase, opts),
+    maxTurns: phase.max_turns ?? d.max_turns,
+    maxBudgetUsd: phase.max_budget_usd ?? d.max_budget_usd,
+    permissionMode: phase.permission_mode ?? d.permission_mode,
+    outputSchema: phase.output_schema,
+    persist: true,
+    // этап, закончивший ответ раньше своей фоновой задачи, теряет её результат
+    foreground: true,
+    abort: opts.abort,
+    ...artifactTools(art),
+  };
+}
+
+/** Инструмент чтения артефактов по ключу: MCP-сервер на сессию и его имена в allow — только при доступе к артефактам. */
+function artifactTools(art?: Pick<PhaseArtifacts, 'access' | 'sources'>) {
+  if (!ARTIFACT_TOOLS_ENABLED || !art?.sources || !art.access.read.length) return {};
+  return { mcpServers: { [ARTIFACT_TOOLS_SERVER]: artifactToolsServer(art.sources) }, allow: ARTIFACT_TOOLS_ALLOW };
+}
+
+const JUDGE_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    done: { type: 'boolean', description: 'true только если задача полностью выполнена и цикл можно завершить.' },
+    reason: { type: 'string', description: 'Краткое обоснование вердикта.' },
+    feedback: {
+      type: 'string',
+      description: 'Что конкретно нужно исправить или доделать на следующей итерации. Пустая строка, если done.',
+    },
+  },
+  required: ['done', 'reason', 'feedback'],
+  additionalProperties: false,
+};
+
+const JUDGE_SYSTEM =
+  'Ты строгий приёмщик результата многошагового агентского процесса. Тебе дают исходную задачу и выводы этапов текущей итерации. ' +
+  'Оцени по рубрике из промпта. Отвечай done=true только когда задача выполнена целиком; иначе перечисли конкретные пробелы в feedback.';
+
+/**
+ * Сессия судьи. Вложения — часть задачи: судья получает их список и папку attachments/.
+ * Доп. директории (этапа и запуска) ему не даются; артефакты (art) — даются: раздел в промпте и их папка.
+ * Теги знаний блока (knowledge) — только папками: рубрика судьи своя, текст знаний ему не даётся.
+ */
+export function judgeRequest(spec: FlowSpec, until: Extract<Until, { type: 'judge' }>, prompt: string, opts: RunOptions, art?: PhaseArtifacts, knowledge?: KnowledgeTag[]) {
+  return {
+    prompt: withAttachments(art?.section ? `${prompt.trimEnd()}\n\n${art.section}` : prompt, opts),
+    cwd: opts.cwd,
+    additionalDirectories: [...new Set([...attachmentsDir(opts), ...(art ? [art.dir] : []), ...(opts.tagDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
+    system: JUDGE_SYSTEM,
+    // Только чтение + сабагенты (Agent добавляет runSession): судья может сам проверить файлы.
+    tools: ['Read', 'Grep', 'Glob'],
+    model: until.model ?? spec.defaults?.model ?? opts.model,
+    maxTurns: 30,
+    outputSchema: JUDGE_SCHEMA,
+    persist: false,
+    foreground: true,
+    abort: opts.abort,
+    ...artifactTools(art),
+  };
+}
+
+async function evaluateUntil(
+  spec: FlowSpec,
+  block: Block,
+  ctx: TemplateContext,
+  opts: RunOptions,
+  runDir: string,
+  iterRel: string,
+  emit: (e: RunEvent) => void,
+  judgeArt?: PhaseArtifacts,
+  knowledge?: KnowledgeTag[],
+): Promise<ConditionReport> {
+  const until = block.loop!.until;
+  const base: ConditionReport = { block: block.name, iteration: ctx.iteration, type: until.type, done: false, feedback: '', costUsd: 0 };
+  const start = (kind: Until['type'], detail: string, file?: string) =>
+    emit({ type: 'condition_start', block: block.name, iteration: ctx.iteration, kind, detail, ...(file ? { file } : {}) });
+
+  switch (until.type) {
+    case 'none':
+      start('none', '');
+      return { ...base, done: false, detail: 'фиксированное число итераций' };
+
+    case 'marker': {
+      start('marker', until.marker);
+      const phaseName = until.phase ?? block.phases[block.phases.length - 1].name;
+      const output = ctx.phases[phaseName] ?? '';
+      const done = endsWithMarker(output, until.marker);
+      return { ...base, done, detail: `маркер ${until.marker} последней строкой вывода ${phaseName}: ${done ? 'есть' : 'нет'}` };
+    }
+
+    case 'command': {
+      start('command', until.run);
+      // асинхронно: синхронный запуск держал бы event loop, и UI-сервер не слышал бы «Остановить»
+      const r = await runCommand(until.run, opts.cwd, (until.timeout_sec ?? 600) * 1000, opts.abort?.signal);
+      const out = r.output;
+      const logFile = `${iterRel}/condition.command.log`;
+      fs.writeFileSync(path.join(runDir, logFile), out);
+      const done = r.code === 0;
+      const code = r.code ?? r.signal ?? '?';
+      const feedback = done ? '' : `Команда \`${until.run}\` завершилась с кодом ${code}. Вывод (хвост):\n${truncateTail(out, FEEDBACK_MAX)}`;
+      return { ...base, done, feedback, detail: `exit ${code}`, logFile };
+    }
+
+    case 'judge': {
+      const req = judgeRequest(spec, until, render(until.prompt, judgeArt ? { ...ctx, artifacts: judgeArt.snapshot } : ctx), opts, judgeArt, knowledge);
+      const logFile = `${iterRel}/condition.judge.prompt.md`;
+      fs.writeFileSync(path.join(runDir, logFile), req.prompt);
+      // событие после записи: промпт судьи можно открыть, пока он думает
+      start('judge', '', logFile);
+      const res: SessionResult = await (opts.session ?? runSession)(req, () => {});
+      const verdict = parseVerdict(res);
+      if (!verdict) {
+        return {
+          ...base,
+          done: false,
+          feedback: `Судья не вернул вердикт: ${res.errors.join('; ') || res.subtype}`,
+          detail: 'ошибка судьи',
+          costUsd: res.costUsd,
+          logFile,
+        };
+      }
+      return { ...base, done: verdict.done, feedback: verdict.feedback, detail: verdict.reason, costUsd: res.costUsd, logFile };
+    }
+  }
+}
+
+const COMMAND_OUTPUT_MAX = 64 * 1024 * 1024;
+
+/** Команда условия: stdout+stderr в одном буфере; таймаут и остановка убивают всю группу процессов шелла. */
+function runCommand(
+  cmd: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
+  return new Promise((resolve) => {
+    // detached — своя группа процессов, чтобы kill дошёл и до детей шелла (gradle, npm test…)
+    const child = spawn(cmd, { shell: true, cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const collect = (b: Buffer) => {
+      if (size >= COMMAND_OUTPUT_MAX) return;
+      chunks.push(b);
+      size += b.length;
+    };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    let note = '';
+    const kill = (why: string) => {
+      note ||= `\n[${why}]\n`;
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // группа уже завершилась
+      }
+    };
+    const timer = setTimeout(() => kill(`таймаут ${Math.round(timeoutMs / 1000)} с`), timeoutMs);
+    const onAbort = () => kill('запуск остановлен');
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    child.on('error', (err) => { note += `\n${err.message}\n`; });
+    child.on('close', (code, sig) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ code, signal: sig, output: Buffer.concat(chunks).toString('utf8') + note });
+    });
+  });
+}
+
+type Verdict = { done: boolean; reason: string; feedback: string };
+
+function parseVerdict(res: SessionResult): Verdict | undefined {
+  const raw = res.structured ?? tryJson(res.text);
+  if (!raw || typeof raw !== 'object') return undefined;
+  const v = raw as Partial<Verdict>;
+  if (typeof v.done !== 'boolean') return undefined;
+  return { done: v.done, reason: String(v.reason ?? ''), feedback: String(v.feedback ?? '') };
+}
+
+function tryJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    const m = s.match(/\{[\s\S]*\}/);
+    if (!m) return undefined;
+    try {
+      return JSON.parse(m[0]);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+export function makeRunDir(runsDir: string, name: string): string {
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}_${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}`;
+  let dir = path.join(runsDir, `${stamp}-${name}`);
+  for (let i = 2; fs.existsSync(dir); i++) dir = path.join(runsDir, `${stamp}-${name}-${i}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+type PhaseOutput = { phase: string; output: string; file: string };
+
+/** Что вернул этап шага: сливается в контекст после того, как закончат все участники. */
+type PhaseRun = { phase: Phase; index: number; res: SessionResult; output: string; files: PhaseFiles };
+
+/** Вывод этапа шага; index — номер этапа в блоке, по нему восстанавливается порядок объявления. */
+export type StepOutput = PhaseOutput & { index: number };
+
+/** Куда сливаются выводы шага: контекст шаблонов и накопители запуска и итерации. */
+export type OutputSink = { ctx: TemplateContext; history: string[]; iterOutputs: string[]; iterPhaseOutputs: PhaseOutput[] };
+
+/**
+ * Сливает выводы шага в порядке объявления, в каком бы порядке участники ни закончили:
+ * {{phases.*}}, {{outputs}}, {{history}} и выводы итерации — по этапу, {{prev}} — см. stepPrev.
+ */
+export function mergeGroupOutputs(sink: OutputSink, outs: StepOutput[], where: string): void {
+  const ordered = [...outs].sort((a, b) => a.index - b.index);
+  for (const o of ordered) {
+    sink.ctx.phases[o.phase] = o.output;
+    sink.iterOutputs.push(`### ${o.phase}\n${o.output}`);
+    sink.iterPhaseOutputs.push({ phase: o.phase, output: o.output, file: o.file });
+    sink.history.push(`## ${where} · ${o.phase}\n${truncateTail(o.output, HISTORY_ENTRY_MAX)}`);
+  }
+  sink.ctx.prev = stepPrev(ordered);
+  sink.ctx.outputs = sink.iterOutputs.join('\n\n');
+  sink.ctx.history = sink.history.join('\n\n');
+}
+
+/** {{prev}} после шага: вывод этапа как есть, у группы — склейка участников «### имя» по порядку, как в {{outputs}}. */
+function stepPrev(ordered: { phase: string; output: string }[]): string {
+  if (ordered.length === 1) return ordered[0].output;
+  return ordered.map((o) => `### ${o.phase}\n${o.output}`).join('\n\n');
+}
+
+/** Как continuationFrom читает прошлые запуски: отчёт по id и файл вывода по пути относительно папки запуска. */
+export type RunStore = {
+  report: (id: string) => RunReport | undefined;
+  output: (runId: string, rel: string) => string | undefined;
+};
+
+const CONTINUE_DEPTH_MAX = 50;
+
+/**
+ * Можно ли продолжить запуск prev текущей версией флоу spec — единственный источник ответа: им пользуются
+ * continuationFrom, кнопка «Продолжить» и правило «можно ли править артефакт» (через continuable в API).
+ * Смотрит только на статусы, файлы не читает. skip — сплошное начало блоков, завершённых в prev (done), по имени.
+ * prev — отчёт глазами сервера: у оборвавшегося запуска статус interrupted, а не running.
+ */
+export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'>, spec: FlowSpec): { ok: true; skip: Block[] } | { ok: false; reason: string } {
+  if (prev.status === 'running') return { ok: false, reason: 'Запуск ещё идёт: продолжить можно только завершённый' };
+  if (prev.status === 'done') return { ok: false, reason: 'Запуск завершён полностью: продолжать нечего' };
+  const blocks = flowBlocks(spec);
+  const skip: Block[] = [];
+  for (const b of blocks) {
+    if (prev.blocks?.find((x) => x.name === b.name)?.status !== 'done') break;
+    skip.push(b);
+  }
+  if (skip.length === blocks.length) return { ok: false, reason: 'Все блоки flow уже завершены в этом запуске: продолжать нечего' };
+  if (!skip.length) return { ok: false, reason: `Первый блок «${blocks[0].title ?? blocks[0].name}» не завершён: продолжать нечего, запусти заново` };
+  return { ok: true, skip };
+}
+
+/**
+ * Что взять у завершённого запуска prev, чтобы продолжить его текущей версией флоу spec.
+ * Пропускается сплошное начало блоков, которые в prev завершились done (сопоставление по имени);
+ * у каждого их этапа берётся последний вывод. Если prev сам был продолжением и блок в нём пропущен,
+ * выводы берутся из запуска, где блок выполнялся (по цепочке continuedFrom). Бросает ошибку, если
+ * продолжать нечего или вывода пропускаемого этапа нет: без него {{phases.*}} молча остался бы пустым.
+ */
+export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStore): Continuation {
+  const check = canContinue(prev, spec);
+  if (!check.ok) throw new Error(check.reason);
+  const blocks = flowBlocks(spec);
+  const multi = blocks.length > 1;
+  const skip = check.skip;
+
+  type Ran = { runId: string; p: PhaseReport };
+  const ranIn = (r: RunReport, block: string, depth: number): Ran[] => {
+    if (r.blocks?.find((x) => x.name === block)?.skipped && r.continuedFrom) {
+      if (depth >= CONTINUE_DEPTH_MAX) throw new Error(`Цепочка продолжений длиннее ${CONTINUE_DEPTH_MAX}`);
+      const from = store.report(r.continuedFrom);
+      if (!from) throw new Error(`Нет запуска ${r.continuedFrom}, который продолжал ${r.id}`);
+      return ranIn(from, block, depth + 1);
+    }
+    // участники группы пишут отчёты в порядке завершения; history строим в порядке объявления, как живой запуск
+    return r.phases
+      .filter((p) => p.block === block)
+      .map((p) => ({ runId: r.id, p }))
+      .sort((a, b) => a.p.iteration - b.p.iteration || (a.p.index ?? 0) - (b.p.index ?? 0));
+  };
+  const read = ({ runId, p }: Ran): string => {
+    const text = p.files?.output ? store.output(runId, p.files.output) : undefined;
+    if (text === undefined) throw new Error(`Нет вывода этапа ${p.phase} (${p.block}, итерация ${p.iteration}) в запуске ${runId}`);
+    return text;
+  };
+
+  const runs: Ran[] = [];
+  const phases: Record<string, string> = {};
+  for (const b of skip) {
+    const ran = ranIn(prev, b.name, 0);
+    runs.push(...ran);
+    for (const ph of b.phases) {
+      const last = ran.filter((x) => x.p.phase === ph.name).at(-1);
+      if (!last) throw new Error(`Этап ${ph.name} блока ${b.name} в прошлом запуске не выполнялся`);
+      phases[ph.name] = read(last);
+    }
+  }
+  const history = runs.map((x) => {
+    const where = multi ? `${x.p.block} · итерация ${x.p.iteration}` : `Итерация ${x.p.iteration}`;
+    return `## ${where} · ${x.p.phase}\n${truncateTail(read(x), HISTORY_ENTRY_MAX)}`;
+  });
+  // {{prev}} — как при обычном переходе между блоками: вывод последнего шага, у группы — склейка участников
+  const lastStep = phaseSteps(skip.at(-1)!).at(-1)!;
+  const tail = stepPrev(lastStep.phases.map(({ phase }) => ({ phase: phase.name, output: phases[phase.name] })));
+  return { runId: prev.id, skipBlocks: skip.map((b) => b.name), phases, prev: tail, history };
+}
+
+/**
+ * Итог запуска — последний выполненный шаг: этап с наибольшими (порядок блока, итерация, номер в блоке).
+ * report.phases идёт в порядке завершения, у группы он случайный, поэтому «последний элемент» не годится.
+ * Если этап в группе, берутся все участники группы той же итерации по порядку объявления.
+ * Упавший этап тоже в итоге (ok: false). Этап вне группы, упавший исключением, отчёта не пишет — в итоге будет шаг до него.
+ */
+export function finalPhases(report: Pick<RunReport, 'blocks' | 'phases'>): FinalPhase[] {
+  const order = (p: PhaseReport) => report.blocks?.findIndex((b) => b.name === p.block) ?? 0;
+  const key = (p: PhaseReport) => [order(p), p.iteration ?? 0, p.index ?? 0];
+  const later = (a: PhaseReport, b: PhaseReport) => {
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] > kb[i];
+    return false;
+  };
+  let last: PhaseReport | undefined;
+  for (const p of report.phases ?? []) if (!last || later(p, last)) last = p;
+  if (!last) return [];
+  const step = last.group
+    ? report.phases
+        .filter((p) => p.block === last.block && p.iteration === last.iteration && p.group === last.group)
+        .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    : [last];
+  return step.map((p) => ({
+    block: p.block,
+    iteration: p.iteration,
+    phase: p.phase,
+    title: p.title || p.phase,
+    ok: p.ok,
+    output: p.files?.output ?? '',
+  }));
+}
+
+const PAUSE_TEXT_MAX = 4000;
+
+/**
+ * Первый этап итерации, чей вывод заканчивается маркером паузы (последняя непустая строка ровно маркер).
+ * Маркер в середине текста не считается: выводы этапов попадают в промпты следующих ({{prev}}, {{phases.*}}),
+ * и цитата чужого маркера не должна ставить запуск на паузу.
+ */
+export function findPauseRequest(outputs: PhaseOutput[], marker: string): { phase: string; text: string; file: string } | undefined {
+  for (const o of outputs) {
+    if (!endsWithMarker(o.output, marker)) continue;
+    const lines = o.output.trimEnd().split('\n');
+    return { phase: o.phase, text: truncateTail(lines.slice(0, -1).join('\n').trim(), PAUSE_TEXT_MAX), file: o.file };
+  }
+  return undefined;
+}
+
+/**
+ * Последняя непустая строка вывода — ровно маркер. Маркер внутри текста не считается: цитата чужого
+ * вывода или фраза «маркер <DONE> не вывожу» не должны завершать цикл или ставить паузу.
+ */
+export function endsWithMarker(output: string, marker: string): boolean {
+  const m = marker.trim();
+  if (!m) return false;
+  const lines = output.trimEnd().split('\n');
+  return lines[lines.length - 1].trim() === m;
+}
+
+function truncateTail(s: string, max: number): string {
+  return s.length > max ? '…' + s.slice(-max) : s;
+}

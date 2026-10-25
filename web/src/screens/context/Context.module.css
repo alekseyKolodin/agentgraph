@@ -1,0 +1,54 @@
+/* Страница «Контекст» (ui/style.css «страница «Контекст»» и .home-sec главной): правила перенесены как есть, в том же порядке,
+   с поздней перебивкой заголовков секций. #ctx-edit-text старого UI — класс ctx-edit-text. */
+
+/* секции — как на главной (.home-sec), заголовок — тихая подпись (поздняя перебивка .home-sec > h2 в ui/style.css) */
+.home-sec { margin-bottom: 22px; }
+.home-sec > h2 { font-size: var(--fs-small); color: var(--ink-2); margin: 0 0 4px; }
+.home-sec > h2 :global(.small) { text-transform: none; letter-spacing: 0; }
+
+.ctx-form { margin-bottom: 18px; }
+.ctx-form .ctx-cwd { flex: 1 1 360px; }
+.ctx-form select { min-width: 160px; padding: 7px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
+.ctx-form select:disabled { opacity: .55; }
+.ctx-warn { border: 1px solid var(--st-wait); border-radius: var(--r-md); padding: 6px 14px; margin-bottom: 16px; color: var(--st-wait); }
+.ctx-warn p { margin: 4px 0; }
+.ctx-sec { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; }
+.ctx-sec p { margin: 4px 0; }
+.ctx-total { font-size: var(--fs-h3); }
+.ctx-bar { display: flex; height: 10px; border-radius: var(--r-xs); overflow: hidden; background: var(--line); margin: 6px 0 8px; }
+.ctx-bar span { display: block; height: 100%; min-width: 2px; }
+.ctx-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-small); }
+.ctx-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+.ctx-bar .c0, .ctx-legend .c0 { background: var(--cat-1); }
+.ctx-bar .c1, .ctx-legend .c1 { background: var(--cat-2); }
+.ctx-bar .c2, .ctx-legend .c2 { background: var(--cat-3); }
+.ctx-bar .c3, .ctx-legend .c3 { background: var(--cat-4); }
+.ctx-bar .c4, .ctx-legend .c4 { background: var(--cat-5); }
+.ctx-bar .c5, .ctx-legend .c5 { background: var(--cat-6); }
+.ctx-bar .c6, .ctx-legend .c6 { background: var(--cat-7); }
+.ctx-bar .c7, .ctx-legend .c7 { background: var(--cat-8); }
+/* отступ справа — чтобы полоса прокрутки (на macOS она поверх контента) не закрывала числа токенов */
+.ctx-list { list-style: none; margin: 4px 0 0; padding: 0 12px 0 0; max-height: 360px; overflow-y: auto; }
+.ctx-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; border-top: 1px solid var(--line); }
+.ctx-row:first-child { border-top: 0; }
+.ctx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-row :global(.chip) { cursor: default; }
+.ctx-row :global(.chip):hover { border-color: var(--line); color: var(--ink-2); }
+.ctx-tok { min-width: 44px; text-align: right; color: var(--ink-2); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
+.ctx-sec :global(.err) { color: var(--st-fail); }
+.ctx-pre { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; white-space: pre-wrap; max-height: 240px; overflow-y: auto; margin: 4px 0; }
+.ctx-editor { background: var(--panel); border: 1px solid color-mix(in srgb, var(--live) 35%, var(--line)); border-radius: var(--r-md); padding: 8px 14px 12px; margin-bottom: 22px; }
+.ctx-edit-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.ctx-edit-head .push { margin-left: auto; }
+.ctx-edit-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ctx-edit-text { width: 100%; min-height: 320px; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-small); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; }
+.ctx-edit-text[readonly] { background: var(--well); }
+.ctx-edit-preview { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 12px; max-height: 520px; overflow-y: auto; }
+@media (max-width: 800px) {
+  .ctx-edit-split { grid-template-columns: 1fr; }
+  .ctx-row { flex-wrap: wrap; }
+  .ctx-name { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* ---------- «Пульт»: заголовки секций — тихие подписи, а не капс (system.md → «Иерархия») */
+.home-sec > h2 { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); letter-spacing: .01em; }

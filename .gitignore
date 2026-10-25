@@ -1,0 +1,20 @@
+node_modules/
+dist/
+runs/
+.DS_Store
+release/
+
+# личное: в git идёт только общий набор (scripts/share.sh, функция keep)
+.claude/*
+!.claude/launch.json
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/agentgraph/
+!.claude/skills/session-to-flow/
+flows/*
+!flows/example/
+!flows/.gitkeep
+docs/redesign/
+*.zip
+.env
+.env.*

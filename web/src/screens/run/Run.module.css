@@ -1,0 +1,244 @@
+/* Страница запуска: правила ui/style.css в том же порядке, с поздними перебивками «Пульта» (system.md → «Страницы»).
+   #view-run, #run-sub, #run-limit и другие id старого UI здесь — классы; глобальные примитивы (.btn, .badge, .tab, .md,
+   .caret, .fold-head, .link-btn, .insp-close, .run-paused, .error) — в base.css. */
+.view-head { flex-wrap: wrap; }
+.view-head > div:first-child { flex: 1 1 320px; min-width: 0; }
+.view-head > :global(.row) { flex: 0 1 auto; max-width: 100%; flex-wrap: wrap; }
+
+/* flow под именем запуска */
+.run-flow { margin: -4px 0 4px; }
+.run-flow a { color: inherit; }
+.run-sub { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.run-sub > * { flex: none; }
+.run-sub > .sub-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.card .stats, .pctx, .iter-sum { font-variant-numeric: tabular-nums; }
+.tools { color: var(--ink-2); font-size: var(--fs-meta); }
+.pmodel { color: var(--ink-2); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.pctx { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; }
+.pctx.warn { color: var(--st-wait); }
+.pctx.crit { color: var(--st-fail); font-weight: 600; }
+
+.run-extras { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; }
+.run-extras a { color: var(--live); }
+
+.run-final .tag-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-small); }
+.run-final .tag-line :global(.badge) { margin-left: 0; }
+.run-final .tag-line a { text-decoration: none; }
+
+.run-input { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; white-space: pre-wrap; }
+.run-input a { color: var(--live); overflow-wrap: anywhere; }
+/* итог завершённого запуска */
+.run-final { margin: 12px 0; border-color: color-mix(in srgb, var(--live) 40%, var(--line)); gap: 10px; }
+.run-final > .head .title { font-size: var(--fs-h3); }
+.run-final > .head :global(.badge) { margin-left: 0; }
+.run-final > .head .stats { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.run-final .final-blocks { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-small); }
+.run-final .final-blocks :global(.badge) { margin-left: 4px; }
+.run-final .final-out { display: flex; flex-direction: column; gap: 6px; }
+.run-final .final-out .head :global(.btn) { margin-left: auto; }
+.run-final .final-body { max-height: 420px; overflow: auto; background: var(--well); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-small); }
+.run-final .final-body > pre { white-space: pre-wrap; margin: 0; }
+.run-final .final-body :global(.md) pre { background: var(--panel); }
+.phases { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+.block-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; margin-top: 14px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.iter-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.iter-head :global(.fold-head) { font-weight: 600; color: var(--ink-2); font-size: var(--fs-meta); }
+.iter-sum { color: var(--ink-2); font-size: var(--fs-meta); }
+.block-head :global(.fold-head) { font-weight: 600; }
+.run-fold-ctl { justify-content: flex-end; gap: 4px; margin-top: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.card .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card .status { width: 18px; text-align: center; }
+.card .title { font-weight: 600; }
+.card .stats { color: var(--ink-2); font-size: var(--fs-meta); }
+.card .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.card.pending { border-style: dashed; }
+/* этап параллельной группы: полоска слева и метка ∥ группа */
+.card.grouped { border-left: 3px solid var(--live); }
+.pgroup { font-size: var(--fs-cap); font-weight: 600; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 40%, transparent); border-radius: var(--r-pill); padding: 0 7px; white-space: nowrap; flex: none; }
+.card.cond { background: color-mix(in srgb, var(--panel) 80%, var(--well)); }
+.card details { font-size: var(--fs-small); }
+.card details pre { white-space: pre-wrap; margin: 4px 0 0; background: var(--well); padding: 8px; border-radius: var(--r-sm); max-height: 240px; overflow: auto; }
+.card details > :global(.md) { margin: 4px 0 0; background: var(--well); padding: 4px 10px; border-radius: var(--r-sm); max-height: 240px; overflow: auto; }
+.card details > :global(.md) pre { max-height: none; background: var(--panel); white-space: pre; padding: 8px 10px; margin: 8px 0; }
+
+.log-body { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 8px; }
+/* Длинный лог — граница раскладки: без неё любая правка в виде запуска перекладывает весь текст лога.
+   Containment требует заданной высоты, поэтому включаем, когда строк уже больше, чем влезает в 50vh. */
+.log-body.tall { height: 50vh; contain: strict; }
+
+/* ---------- чат запуска */
+.run-chat { background: var(--panel); border: 1px solid color-mix(in srgb, var(--live) 35%, var(--line)); border-radius: var(--r-md); padding: 8px 14px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
+.run-chat.collapsed { padding-bottom: 8px; }
+.run-chat.collapsed .chat-body { display: none; }
+.chat-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chat-head :global(.fold-head) { font-weight: 600; }
+.chat-head .push { margin-left: auto; gap: 6px; }
+.chat-head select { padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-meta); }
+.chat-body { display: flex; flex-direction: column; gap: 8px; }
+.chat-log { max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
+.chat-hint { color: var(--ink-2); font-size: var(--fs-small); }
+.cmsg { max-width: 85%; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.5; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.cmsg .ctext { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.cmsg.user { align-self: flex-end; background: color-mix(in srgb, var(--live) 14%, var(--panel)); }
+.cmsg.assistant { align-self: flex-start; background: var(--deck); border: 1px solid var(--line); }
+.cmsg.assistant.error { border-color: var(--st-fail); }
+.cmsg.note { align-self: center; color: var(--ink-2); font-size: var(--fs-meta); padding: 2px 8px; }
+.cmsg .cmeta { color: var(--ink-2); font-size: var(--fs-cap); }
+.cmsg pre { background: var(--well); padding: 8px; border-radius: var(--r-sm); overflow-x: auto; margin: 4px 0; white-space: pre; }
+.cmsg code { background: var(--well); padding: 0 4px; border-radius: var(--r-xs); }
+.cmsg.busy { color: var(--ink-2); }
+.cmsg.busy .activity { align-self: stretch; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--fs-meta); max-height: 160px; overflow: auto; }
+.chat-form { display: flex; flex-direction: column; gap: 6px; }
+.chat-form textarea { width: 100%; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+
+/* секция «Схема» на странице запуска */
+.graph-box { margin-bottom: 12px; }
+.graph-box-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.run-now { font-size: var(--fs-small); }
+.card.flash, .block-head.flash, :global(.fold-head).flash { outline: 2px solid var(--live); outline-offset: 2px; }
+
+/* лимит итераций у идущего запуска */
+.limit-ctl { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.limit-ctl :global(.btn.small) { padding: 0 7px; line-height: 18px; }
+.limit-ctl b { min-width: 1.4em; text-align: center; }
+/* у старого — #run-limit: id перебивает .view-head p { margin: 0 } */
+.view-head .run-limit { margin-top: 4px; }
+
+
+/* поле ответа на паузу: продолжение карточки паузы над ним */
+.run-answer { border: 1px dashed var(--line); border-top: 0; border-radius: 0 0 var(--r-md) var(--r-md); padding: 4px 14px 10px; margin-top: -6px; display: flex; flex-direction: column; gap: 4px; }
+.run-answer label { font-size: var(--fs-meta); color: var(--ink-2); }
+.run-answer textarea { width: 100%; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+
+/* ---------- «Пульт» */
+.iter-head :global(.fold-head) { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+
+/* ---------- страница запуска: вкладки, сводка, лента итераций (system.md → «Страницы») */
+.run-attn:empty { display: none; }
+.run-tabs { margin: 4px 0 16px; }
+.run-tabs :global(.tab) { display: inline-flex; align-items: center; gap: 6px; }
+.tab-dot { width: 6px; height: 6px; border-radius: 50%; }
+.tab-dot.live { background: var(--live); }
+.tab-dot.attn { background: var(--st-wait); }
+.run-pane { display: flex; flex-direction: column; gap: 16px; }
+.run-pane[hidden] { display: none; }
+.run-pane > .phases { margin: -8px 0 0; }
+.run-pane > .run-input { margin: -8px 0 0; color: var(--ink-2); }
+.run-sec-head { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.run-label { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.run-sec-head :global(.link-btn) { margin-left: auto; color: var(--ink-3); }
+.run-sec-head :global(.link-btn):hover { color: var(--ink); }
+.run-steps-head .run-fold-ctl { margin: 0 0 0 auto; }
+
+/* сводка — фокус «Обзора»: самая крупная строка экрана после заголовка */
+.run-summary { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; }
+.sum-facts { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.sum-now { font-size: var(--fs-h3); font-weight: 500; color: var(--ink); text-wrap: balance; }
+.sum-line { color: var(--ink-2); }
+.sum-line :global(.ok), .sum-line :global(.err) { font-family: var(--font-mono); margin-right: 4px; }
+.sum-line.attn { color: var(--st-wait); }
+/* сводка «где мы сейчас» от модели: между «Сейчас» и вердиктом, обычным текстом; та же строка — в карточке «Итог» */
+.sum-digest { color: var(--ink); text-wrap: pretty; overflow-wrap: anywhere; }
+
+/* лента итераций — сигнатура: ячейка на итерацию, вердикт условия и короткий итог */
+.run-ribbons { display: flex; flex-direction: column; gap: 10px; }
+.rb-row { display: flex; flex-direction: column; gap: 6px; }
+.rb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rb-head :global(.badge) { margin-left: 0; }
+.rb-bn { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); }
+.rb-title { font-weight: 500; }
+/* подробные ячейки — всегда один ряд: последние группы итераций */
+.rb-cells { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 6px; align-items: stretch; }
+@media (max-width: 900px) { .rb-cells { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* полоска-история: риска на итерацию, цвет — вердикт; видно, где агент начал буксовать */
+.rb-strip { display: flex; align-items: center; gap: 8px; }
+.rb-edge { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.rb-ticks { flex: 0 1 auto; display: flex; gap: 2px; min-width: 0; }
+.rb-tick { flex: 0 1 16px; min-width: 3px; height: 14px; padding: 0; border: 0; border-radius: 2px; cursor: pointer; background: var(--line-strong); transition: transform .12s; }
+.rb-tick:hover:not([disabled]) { transform: scaleY(1.3); }
+.rb-tick.ok { background: var(--st-ok); }
+.rb-tick.fail { background: color-mix(in srgb, var(--st-fail) 75%, var(--panel)); }
+.rb-tick.live { background: var(--live); }
+.rb-tick.wait { background: var(--st-wait); }
+.rb-tick.stop { background: var(--ink-3); }
+.rb-tick.future { background: transparent; box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
+.rb-tick.stuck { box-shadow: 0 3px 0 -1px var(--st-wait); }
+.rb-tick.open { outline: 1px solid var(--ink); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .rb-tick { transition: none; } }
+.rb-cell {
+  display: flex; flex-direction: column; gap: 4px; min-width: 0; text-align: left; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 7px 9px;
+  color: var(--ink-2); font: inherit; font-size: var(--fs-meta); line-height: 1.4;
+  transition: border-color .12s, background-color .12s;
+}
+.rb-cell:hover:not([disabled]) { border-color: var(--line-strong); background: var(--raised); }
+.rb-cell.open { background: var(--raised); border-color: var(--line-strong); }
+.rb-cell[disabled] { cursor: default; background: transparent; border-style: dashed; color: var(--ink-off); min-height: 34px; }
+.rb-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.rb-n { color: var(--ink); }
+.rb-cell[disabled] .rb-n { color: var(--ink-off); }
+.rb-mark { white-space: nowrap; }
+.rb-cell.ok .rb-mark { color: var(--st-ok); }
+.rb-cell.fail .rb-mark { color: var(--st-fail); }
+.rb-cell.live { border-color: color-mix(in srgb, var(--live) 70%, transparent); }
+.rb-cell.live .rb-mark { color: var(--live); }
+.rb-cell.wait { border-color: color-mix(in srgb, var(--st-wait) 70%, transparent); background: color-mix(in srgb, var(--st-wait) 8%, var(--panel)); }
+.rb-cell.wait .rb-mark { color: var(--st-wait); }
+.rb-cell.stop .rb-mark { color: var(--ink-3); }
+.rb-cell.stuck { border-color: color-mix(in srgb, var(--st-wait) 60%, transparent); }
+.rb-stuck { align-self: flex-start; font-size: var(--fs-cap); color: var(--st-wait); border: 1px solid color-mix(in srgb, var(--st-wait) 50%, transparent); border-radius: var(--r-pill); padding: 0 7px; }
+.run-older { align-self: flex-start; color: var(--ink-3); }
+.rb-body { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.rb-more { align-self: center; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); padding: 0 4px; }
+.rb-chain, .rb-body { color: var(--ink-2); }
+.rb-step { white-space: nowrap; }
+.rb-step.ok { color: var(--st-ok); }
+.rb-step.err { color: var(--st-fail); }
+.rb-step.live { color: var(--live); }
+.rb-step.off { color: var(--ink-3); }
+.rb-sep { color: var(--ink-off); margin: 0 4px; }
+
+/* хвост живого лога на «Обзоре» */
+.run-tail-box { display: flex; flex-direction: column; gap: 6px; }
+.run-tail { margin: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; font-size: var(--fs-meta); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; min-height: 3.2em; max-height: 9.6em; overflow: hidden; }
+.run-tail:empty::before { content: 'пока тихо'; color: var(--ink-off); }
+
+/* лог во вкладке занимает экран, а не 50vh */
+.log-pane .log-body { max-height: none; height: calc(100vh - 300px); min-height: 320px; margin-top: 0; }
+.log-pane .log-body.tall { height: calc(100vh - 300px); }
+.log-pane .log > p { margin: 0 0 8px; }
+
+/* вкладка «Граф»: холст и инспектор выбранного узла (есть, только когда узел выбран) */
+.run-graph-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.run-graph-split.with-insp { grid-template-columns: minmax(0, 1fr) 340px; }
+.run-graph-split > .graph-col > div { margin-bottom: 0; }
+.follow-check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-2); cursor: pointer; }
+.follow-check input { margin: 0; accent-color: var(--live); }
+.run-inspector { position: sticky; top: 8px; max-height: calc(100vh - 250px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 12px; }
+.insp-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.insp-where { flex: 1; min-width: 0; font-size: var(--fs-meta); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.insp-top { display: flex; flex-direction: column; gap: 3px; }
+.insp-top :global(.badge) { margin-left: 0; align-self: flex-start; }
+.insp-title { font-size: var(--fs-h3); font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.insp-st { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.insp-st.live { color: var(--live); }
+.insp-st.ok { color: var(--st-ok); }
+.insp-st.err { color: var(--st-fail); }
+.insp-st.wait { color: var(--st-wait); }
+.insp-st.off { color: var(--ink-3); }
+.insp-meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); overflow-wrap: anywhere; }
+.insp-sec { display: flex; flex-direction: column; gap: 4px; }
+.insp-text { color: var(--ink-2); font-size: var(--fs-small); overflow-wrap: anywhere; }
+.insp-text:global(.mono) { font-size: var(--fs-meta); }
+.insp-feedback { max-height: 260px; overflow: auto; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 10px; font-size: var(--fs-small); }
+.insp-feedback pre { margin: 0; white-space: pre-wrap; }
+.insp-hist { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.insp-hist li { display: grid; grid-template-columns: 28px 16px 1fr auto; gap: 6px; padding: 2px 0; border-top: 1px solid var(--line); }
+.insp-hist li:first-child { border-top: 0; }
+.insp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.insp-actions:empty { display: none; }
+.insp-goto { align-self: flex-start; color: var(--ink-3); }
+.insp-goto:hover { color: var(--ink); }
+@media (max-width: 1100px) { .run-graph-split.with-insp { grid-template-columns: minmax(0, 1fr); } .run-inspector { position: static; max-height: none; } }
