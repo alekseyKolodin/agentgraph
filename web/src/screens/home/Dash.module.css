@@ -35,11 +35,19 @@ a.dash-key { color: var(--live); text-decoration: none; }
 .flow-picker .sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dlg-dash h3 { margin: 14px 0 0; font-size: var(--fs-body); }
 .dlg-dash :global(.form) + :global(.form) { border-top: 1px solid var(--line); margin-top: 16px; }
-.proj-list { display: flex; flex-direction: column; gap: 10px; }
-.proj-item { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
-.proj-item label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 150px; }
-.proj-item label > span { font-size: var(--fs-meta); color: var(--ink-2); }
-.proj-item input, .proj-add input { padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
+/* «Подключения»: список подключённого и выбор типа — строки-кнопки; форма одного подключения — .form */
+.conn-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.conn-head h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.conn-list li + li { border-top: 1px solid var(--line); }
+.conn-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 14px; border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.conn-row:hover { background: var(--hover); }
+.conn-row:focus-visible { outline: none; box-shadow: inset var(--focus); }
+.conn-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.conn-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-type { flex: none; width: 36px; text-align: center; padding: 2px 0; border-radius: var(--r-xs); background: var(--well); color: var(--ink-2); font-size: var(--fs-cap); font-weight: 600; }
+.conn-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.proj-add { flex-wrap: nowrap; }
 .proj-add input { flex: 1; }
 @media (max-width: 720px) {
   .dash-row { flex-wrap: wrap; }
