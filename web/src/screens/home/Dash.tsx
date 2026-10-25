@@ -28,9 +28,12 @@ export function Dash({ onLaunch, onSettings }: { onLaunch: OnLaunch; onSettings:
         <h2 title="«Запустить…» заполнит форму запуска, запустишь сам">Задачи и код</h2>
         <button className="btn small" onClick={onSettings}>Подключения</button>
       </div>
-      <div className={styles.dashBox}>
-        {info.error ? <p className="msg err">{errorText(info.error)}</p> : info.data && <Jira info={info.data} onLaunch={onLaunch} onSettings={onSettings} />}
-      </div>
+      {/* Jira без токена не показываем: подключить её можно в «Подключениях» */}
+      {(info.error || info.data?.jira?.hasToken) && (
+        <div className={styles.dashBox}>
+          {info.error ? <p className="msg err">{errorText(info.error)}</p> : info.data && <Jira info={info.data} onLaunch={onLaunch} />}
+        </div>
+      )}
       {/* фоновый перезапрос упал — ошибка в блоке Jira, проекты остаются, как в старом loadDash */}
       {info.data && (
         <div>
@@ -91,7 +94,7 @@ function More({ n, onClick }: { n: number; onClick: () => void }) {
   return <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={onClick}>Ещё {n}</button>;
 }
 
-function Jira({ info, onLaunch, onSettings }: { info: IntegrationsInfo; onLaunch: OnLaunch; onSettings: () => void }) {
+function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }) {
   const qc = useQueryClient();
   const runs = useRuns().data ?? [];
   const [preset, setPreset] = useMemoryState<JiraPreset>('dash.jira.preset', 'sprint');
@@ -111,15 +114,6 @@ function Jira({ info, onLaunch, onSettings }: { info: IntegrationsInfo; onLaunch
   // «Своя JQL» без запроса ничего не ищет
   const enabled = Boolean(j?.hasToken) && (preset !== 'jql' || Boolean(query.trim()));
   const issues = useQuery({ queryKey: key, queryFn: () => fetchJiraIssues(preset, query), enabled, staleTime: DASH_STALE_MS });
-
-  if (!j?.hasToken) {
-    return (
-      <>
-        <div className={styles.dashTitle}><b>Jira</b></div>
-        <p className="muted small">Не подключена. <button className="btn small" onClick={onSettings}>Подключить</button></p>
-      </>
-    );
-  }
 
   // выбор пресета, ↻ и «Найти» всегда загружают заново, со «Загружаю…»
   const reload = (k: readonly unknown[]) => {
