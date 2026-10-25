@@ -21,8 +21,10 @@ export type { TagKind, TagListItem } from './api-types.js';
 export const TAG_KINDS: readonly TagKind[] = ['task', 'knowledge'];
 /** Саммари длиннее обрезается кодом: модель просят 5–15 строк, лимит — страховка. */
 export const TAG_SUMMARY_MAX = 2500;
-/** Заметки пользователя к тегу: уходят в задачу каждого запуска, поэтому тоже с лимитом. */
+/** Заметки пользователя к тегу: уходят в задачу каждого запуска (у тега знаний — по запросу или целиком), поэтому тоже с лимитом. */
 export const TAG_NOTES_MAX = 4000;
+/** Описание тега знаний («когда нужен»): одна строка в промпте каждого этапа блока, поэтому короткое. */
+export const TAG_DESCRIPTION_MAX = 200;
 /** Путей у тега не больше: каждый уходит доп. директорией во все этапы. */
 export const TAG_DIRS_MAX = 20;
 /** Тегов на один запуск не больше: блок каждого — в задаче, по каждому — сессия саммари. */
@@ -54,7 +56,8 @@ export function tagDir(slug: string): string {
 const metaFile = (slug: string) => path.join(tagDir(slug), 'tag.json');
 const summaryFile = (slug: string) => path.join(tagDir(slug), 'summary.md');
 const notesFile = (slug: string) => path.join(tagDir(slug), 'notes.md');
-const attachDir = (slug: string) => path.join(tagDir(slug), ATTACHMENTS_DIR);
+/** Папка вложений тега: этапы читают их отсюда (она среди доп. директорий), промпт и knowledge_read перечисляют их абсолютными путями. */
+export const attachDir = (slug: string) => path.join(tagDir(slug), ATTACHMENTS_DIR);
 
 function writeAtomic(file: string, text: string): void {
   const tmp = `${file}.${process.pid}.tmp`;
@@ -69,6 +72,9 @@ function readText(file: string): string {
     return '';
   }
 }
+
+/** Описание тега — одна строка: оно идёт строкой списка в промпт, перевод строки сломал бы формат «по строке на тег». */
+const oneLine = (text: string): string => text.trim().replace(/\s*\n\s*/g, ' ');
 
 function readMeta(slug: string): TagMeta | undefined {
   // неверный слаг — своя ошибка, а не «не читается»
@@ -88,6 +94,9 @@ function readMeta(slug: string): TagMeta | undefined {
     kind: raw.kind === 'knowledge' ? 'knowledge' : 'task',
     ...(raw.title ? { title: raw.title } : {}),
     ...(raw.title && raw.autoTitle === true ? { autoTitle: true as const } : {}),
+    // описание и режим «целиком» — только у тега знаний: у тега задачи заметки и так идут в задачу
+    ...(raw.kind === 'knowledge' && typeof raw.description === 'string' && oneLine(raw.description) ? { description: oneLine(raw.description) } : {}),
+    ...(raw.kind === 'knowledge' && raw.inline === true ? { inline: true as const } : {}),
     createdAt: raw.createdAt ?? now,
     updatedAt: raw.updatedAt ?? raw.createdAt ?? now,
     ...(dirs.length ? { dirs } : {}),
@@ -145,7 +154,8 @@ export function listTags(): TagListItem[] {
       ...(tag.title ? { title: tag.title } : {}),
       updatedAt: tag.updatedAt,
       runs: tag.runs.length,
-      preview: summaryPreview(tag.summary || tag.notes),
+      // у тега знаний превью — его описание («когда нужен»), без описания — начало заметок
+      preview: tag.kind === 'knowledge' ? tag.description ?? summaryPreview(tag.notes) : summaryPreview(tag.summary || tag.notes),
     });
   }
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -214,8 +224,11 @@ export function writeTagSummary(slug: string, text: string, run: TagRun): Tag {
   return readTag(slug)!;
 }
 
-/** kind в патче игнорируется: вид тега после создания не меняется (переделать — заведи новый тег). */
-export type TagPatch = { title?: unknown; summary?: unknown; notes?: unknown; dirs?: unknown; kind?: unknown };
+/**
+ * kind в патче игнорируется: вид тега после создания не меняется (переделать — заведи новый тег). description и inline —
+ * только у тега знаний: описание («когда нужен») и режим «заметки всегда в промпте целиком».
+ */
+export type TagPatch = { title?: unknown; summary?: unknown; notes?: unknown; dirs?: unknown; kind?: unknown; description?: unknown; inline?: unknown };
 
 /** Пути тега: абсолютные, без повторов, не больше TAG_DIRS_MAX. Существование не проверяется: проверит запуск. */
 function checkDirs(raw: unknown): string[] {
@@ -230,23 +243,32 @@ function checkDirs(raw: unknown): string[] {
 export function updateTag(slug: string, patch: TagPatch): Tag | undefined {
   const meta = readMeta(slug);
   if (!meta) return undefined;
-  for (const k of ['title', 'summary', 'notes'] as const) {
+  for (const k of ['title', 'summary', 'notes', 'description'] as const) {
     if (patch[k] !== undefined && typeof patch[k] !== 'string') throw new Error(`${k} — строка`);
   }
+  if (patch.inline !== undefined && typeof patch.inline !== 'boolean') throw new Error('inline — true или false');
   if (patch.summary !== undefined && meta.kind === 'knowledge') throw new Error('У тега знаний нет саммари: его знание — заметки');
+  if ((patch.description !== undefined || patch.inline !== undefined) && meta.kind !== 'knowledge') {
+    throw new Error('Описание и режим «целиком» есть только у тега знаний');
+  }
   const notes = patch.notes as string | undefined;
   if (notes !== undefined && notes.trim().length > TAG_NOTES_MAX) throw new Error(`Заметки длиннее ${TAG_NOTES_MAX} знаков`);
+  const description = patch.description === undefined ? meta.description : oneLine(patch.description as string);
+  if (description !== undefined && description.length > TAG_DESCRIPTION_MAX) throw new Error(`Описание длиннее ${TAG_DESCRIPTION_MAX} знаков`);
+  const inline = patch.inline === undefined ? meta.inline : patch.inline === true ? (true as const) : undefined;
   const dirs = patch.dirs === undefined ? meta.dirs : checkDirs(patch.dirs);
   const title = patch.title === undefined ? meta.title : (patch.title as string).trim();
   if (patch.summary !== undefined) writeAtomic(summaryFile(slug), clampSummary(patch.summary as string) + '\n');
   if (notes !== undefined) writeAtomic(notesFile(slug), notes.trim() ? notes.trim() + '\n' : '');
   // переписанный руками заголовок — уже текст пользователя
   const autoTitle = meta.autoTitle && title === meta.title;
-  const { title: _t, autoTitle: _a, dirs: _d, ...rest } = meta;
+  const { title: _t, autoTitle: _a, dirs: _d, description: _desc, inline: _i, ...rest } = meta;
   writeMeta({
     ...rest,
     ...(title ? { title } : {}),
     ...(autoTitle ? { autoTitle: true as const } : {}),
+    ...(description ? { description } : {}),
+    ...(inline ? { inline } : {}),
     ...(dirs?.length ? { dirs } : {}),
     updatedAt: new Date().toISOString(),
   });
@@ -294,7 +316,7 @@ const TAG_DATA_NOTE =
   'Пути из него можно открыть только для чтения.';
 
 /** Маркеры блока внутри текста тега обезвреживаются: иначе регэксп замены (UI, withTagsInput) отрезал бы блок посередине. */
-function defuseMarkers(text: string): string {
+export function defuseMarkers(text: string): string {
   return text.replace(/<!--(\s*\/?\s*tag\b)/gi, '‹!--$1');
 }
 
@@ -312,7 +334,7 @@ export function stripTagBlocks(input: string): string {
  * Пути тега, которые есть на диске: папка — как есть, у файла — его папка; плюс папка вложений тега, если они есть.
  * Уходят доп. директориями этапов.
  */
-function existingTagPaths(tag: Pick<Tag, 'slug'> & Partial<Pick<Tag, 'dirs' | 'attachments'>>): { listed: string[]; dirs: string[] } {
+export function existingTagPaths(tag: Pick<Tag, 'slug'> & Partial<Pick<Tag, 'dirs' | 'attachments'>>): { listed: string[]; dirs: string[] } {
   const listed: string[] = [];
   const dirs: string[] = [];
   for (const p of tag.dirs ?? []) {
@@ -327,17 +349,17 @@ function existingTagPaths(tag: Pick<Tag, 'slug'> & Partial<Pick<Tag, 'dirs' | 'a
 
 type TagForInput = Pick<Tag, 'slug' | 'summary'> & Partial<Pick<Tag, 'title' | 'autoTitle' | 'notes' | 'dirs' | 'attachments'>>;
 
-/** Тег знаний для промпта этапа: заметки, пути и вложения; саммари у него нет. */
-export type KnowledgeTag = Pick<Tag, 'slug'> & Partial<Pick<Tag, 'title' | 'autoTitle' | 'notes' | 'dirs' | 'attachments'>>;
+/** Тег знаний для промпта этапа: описание, заметки, пути и вложения, режим inline; саммари у него нет. */
+export type KnowledgeTag = Pick<Tag, 'slug'> & Partial<Pick<Tag, 'title' | 'autoTitle' | 'description' | 'inline' | 'notes' | 'dirs' | 'attachments'>>;
 
 /**
  * Заголовок в шапке блока — вне обёртки source-data, поэтому только заголовок пользователя. Автозаголовок модели не
  * выводится: он пересказ той же задачи, а придуман по недоверенному тексту (тикет пишет кто угодно).
  */
-const titleSuffix = (tag: Pick<KnowledgeTag, 'title' | 'autoTitle'>) => (tag.title && !tag.autoTitle ? ` — ${defuseMarkers(tag.title)}` : '');
+export const titleSuffix = (tag: Pick<KnowledgeTag, 'title' | 'autoTitle'>) => (tag.title && !tag.autoTitle ? ` — ${defuseMarkers(tag.title)}` : '');
 
 /**
- * Единственный составитель текста тега знаний для конца промпта этапа: шапка и пути — от нас, заметки — текст
+ * Полный раздел тега знаний (режим inline, он же ответ GET /api/tags/:slug.input): шапка и пути — от нас, заметки — текст
  * пользователя (инструкции, без обёртки source-data). Пустой тег говорит, где его заполнить.
  */
 export function knowledgeSection(tag: KnowledgeTag): string {
@@ -351,6 +373,52 @@ export function knowledgeSection(tag: KnowledgeTag): string {
   }
   if (body.length === 1) body.push('Тег пуст: заполни заметки, пути или вложения на странице «Теги».');
   return body.join('\n');
+}
+
+/** Имя инструмента, которым этап получает полный текст тега знаний по запросу (src/knowledge-tools.ts). */
+export const KNOWLEDGE_READ_TOOL = 'knowledge_read';
+/** Шапка списка тегов по запросу в промпте этапа. */
+export const KNOWLEDGE_LIST_HEAD = `Области знаний (подробности — инструментом ${KNOWLEDGE_READ_TOOL} со слагом; открывай только когда нужно):`;
+/** Первая строка заметок в строке списка — не длиннее. */
+export const KNOWLEDGE_LINE_MAX = 120;
+
+/** Пустой ли тег знаний: ни заметок, ни существующих путей, ни вложений. */
+export const knowledgeEmpty = (tag: KnowledgeTag): boolean =>
+  !tag.notes?.trim() && !existingTagPaths(tag).listed.length && !tag.attachments?.length;
+
+/**
+ * Строка списка тегов по запросу: «- slug — Заголовок: описание (знаков заметок: N, вложений: M, путей: K)». Без описания —
+ * первая непустая строка заметок до KNOWLEDGE_LINE_MAX знаков, без заметок — «описания нет»; хвост в скобках — только
+ * ненулевое. Пустой тег вместо хвоста получает пометку, где его заполнить.
+ */
+export function knowledgeLine(tag: KnowledgeTag): string {
+  const notes = tag.notes?.trim() ?? '';
+  const firstLine = notes.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  const brief = tag.description?.trim()
+    || ([...firstLine].length > KNOWLEDGE_LINE_MAX ? [...firstLine].slice(0, KNOWLEDGE_LINE_MAX - 1).join('') + '…' : firstLine)
+    || 'описания нет';
+  const paths = existingTagPaths(tag).listed.length;
+  const stats = [
+    ...(notes ? [`знаков заметок: ${notes.length}`] : []),
+    ...(tag.attachments?.length ? [`вложений: ${tag.attachments.length}`] : []),
+    ...(paths ? [`путей: ${paths}`] : []),
+  ];
+  const tail = knowledgeEmpty(tag) ? ' (тег пуст: заполни на странице «Теги»)' : stats.length ? ` (${stats.join(', ')})` : '';
+  return `- ${tag.slug}${titleSuffix(tag)}: ${defuseMarkers(brief)}${tail}`;
+}
+
+/**
+ * Единственный составитель раздела знаний для конца промпта этапа. Теги по запросу — одним списком под шапкой
+ * KNOWLEDGE_LIST_HEAD: по строке на тег, полный текст этап получит инструментом knowledge_read. Теги с inline — полным
+ * разделом knowledgeSection каждый, после списка. Без тегов — пустая строка.
+ */
+export function knowledgeBlock(tags: KnowledgeTag[]): string {
+  const onDemand = tags.filter((t) => !t.inline);
+  const inline = tags.filter((t) => t.inline);
+  const parts: string[] = [];
+  if (onDemand.length) parts.push([KNOWLEDGE_LIST_HEAD, ...onDemand.map(knowledgeLine)].join('\n'));
+  parts.push(...inline.map(knowledgeSection));
+  return parts.join('\n\n');
 }
 
 /**

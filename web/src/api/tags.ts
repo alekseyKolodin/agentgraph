@@ -7,7 +7,8 @@ const enc = encodeURIComponent;
 
 export const fetchTags = () => api<{ tags: TagListItem[] }>('GET', '/api/tags');
 export const createTag = (body: { slug: string; title?: string; kind?: TagKind }) => api<TagDetail>('POST', '/api/tags', body);
-export const saveTag = (slug: string, patch: { title?: string; summary?: string; notes?: string; dirs?: string[] }) =>
+/** description и inline — только у тега знаний: описание «когда нужен» и режим «заметки всегда в промпте целиком». */
+export const saveTag = (slug: string, patch: { title?: string; summary?: string; notes?: string; dirs?: string[]; description?: string; inline?: boolean }) =>
   api<TagDetail>('PUT', `/api/tags/${enc(slug)}`, patch);
 export const deleteTag = (slug: string) => api<{ ok: true }>('DELETE', `/api/tags/${enc(slug)}`);
 /** Вложение грузится сразу на сервер: лимиты и типы проверяет он же, что и у вложений запуска. data — base64. */

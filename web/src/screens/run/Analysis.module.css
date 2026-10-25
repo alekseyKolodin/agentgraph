@@ -1,0 +1,40 @@
+/* Карточка «Анализ flow» на «Обзоре» завершённого запуска: вердикт в шапке, рекомендации по серьёзности, таблица фактов. */
+.box { margin: 12px 0; gap: 10px; }
+.box .head-btn { margin-left: auto; }
+.box :global(.badge) { margin-left: 0; }
+.hint { color: var(--ink-2); font-size: var(--fs-small); margin: 0; text-wrap: pretty; }
+
+/* идёт анализ: точка пульсирует, как живой лог */
+.wait { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--fs-small); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+@keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+.summary { color: var(--ink); text-wrap: pretty; overflow-wrap: anywhere; }
+
+/* рекомендации: группа по серьёзности, у каждой — цветная полоска слева */
+.group { display: flex; flex-direction: column; gap: 6px; }
+.group-head { font-size: var(--fs-meta); font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .02em; }
+.sug { border-left: 3px solid var(--line-strong); padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 4px; }
+.sug.high { border-left-color: var(--st-fail); }
+.sug.medium { border-left-color: var(--st-wait); }
+.sug-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kind { font-size: var(--fs-cap); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); background: var(--well); border-radius: var(--r-pill); padding: 1px 8px; white-space: nowrap; }
+.sug-title { font-weight: 600; }
+.phases { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.phases code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); background: var(--well); border-radius: var(--r-xs); padding: 0 5px; }
+.text { font-size: var(--fs-small); color: var(--ink); overflow-wrap: anywhere; text-wrap: pretty; }
+.text b { color: var(--ink-3); font-weight: 600; }
+
+/* факты по этапам: моноширинные цифры, этап слева */
+.facts { font-size: var(--fs-small); }
+.facts summary { cursor: pointer; color: var(--ink-2); }
+.facts table { width: 100%; border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.facts th, .facts td { text-align: left; padding: 4px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+.facts th { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); border-top: 0; white-space: nowrap; }
+.facts td.num { text-align: right; white-space: nowrap; }
+.facts th.num { text-align: right; }
+.facts code { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.facts .tools { color: var(--ink-2); font-size: var(--fs-meta); }
+.facts .notes { color: var(--ink-3); font-size: var(--fs-meta); }
+.facts .warn { color: var(--st-wait); }
+.facts .crit { color: var(--st-fail); font-weight: 600; }

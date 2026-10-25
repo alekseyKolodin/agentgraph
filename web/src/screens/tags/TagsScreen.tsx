@@ -16,8 +16,9 @@ import { readBase64 } from '../../components/readBase64';
 import { useMemoryState } from '../../components/useMemoryState';
 import { when } from '../../lib/format';
 import {
-  filterTags, newTagBody, tagDirLines, TAG_DIRTY_TEXT, TAG_FOCUS_MONO, tagDeleteText, tagFocusCount, tagFocusField, tagFocusLabel, tagFormOf, tagMetaLine,
-  tagNotesLabel, tagPatch, tagPreview, tagsNoneText, tagSnapshot, type TagField, type TagForm,
+  filterTags, newTagBody, TAG_DESCRIPTION_HINT, TAG_DESCRIPTION_LABEL, TAG_DESCRIPTION_MAX, tagDirLines, TAG_DIRTY_TEXT, TAG_FOCUS_MONO, TAG_INLINE_HINT, TAG_INLINE_LABEL,
+  tagDeleteText, tagFocusCount, tagFocusField, tagFocusLabel, tagFormOf, tagMetaLine, tagNotesHint, tagNotesLabel, tagPatch, tagPreview, tagsNoneText, tagSnapshot,
+  type TagField, type TagForm,
 } from '../../lib/tags';
 import styles from './Tags.module.css';
 
@@ -25,7 +26,7 @@ const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boole
 
 type Msg = { cls: string; text: string };
 const NO_MSG: Msg = { cls: 'msg', text: '' };
-const EMPTY_FORM: TagForm = { title: '', summary: '', notes: '', dirs: '' };
+const EMPTY_FORM: TagForm = { title: '', summary: '', notes: '', dirs: '', description: '', inline: false };
 type NewTag = { open: boolean; slug: string; title: string; kind: TagKind };
 const NEW_CLOSED: NewTag = { open: false, slug: '', title: '', kind: 'task' };
 
@@ -235,7 +236,7 @@ export function TagsScreen() {
     }
   };
 
-  const edit = (field: keyof TagForm, value: string) => setForm((f) => ({ ...f, [field]: value }));
+  const edit = (field: Exclude<keyof TagForm, 'inline'>, value: string) => setForm((f) => ({ ...f, [field]: value }));
   const knows = tag?.kind === 'knowledge';
   const tagsMsg = editorErr || listErr;
   const src = (field: TagField) => cx(focus === field && styles.focusedSrc);
@@ -292,7 +293,7 @@ export function TagsScreen() {
             </div>
             {kinds && (
               <div className={styles.tagKind}>
-                <span className={styles.tagKindLabel} title="Тег задачи — саммари фичи между запусками, встаёт в начало задачи. Тег знаний — что должны знать этапы блока (фронтенд, бэкенд, QA): заметки, пути и вложения уходят в промпты этапов блоков с полем knowledge. Вид после создания не меняется">Вид</span>
+                <span className={styles.tagKindLabel} title="Тег задачи — саммари фичи между запусками, встаёт в начало задачи. Тег знаний — что должны знать этапы блока (фронтенд, бэкенд, QA): в промпт этапов блоков с полем knowledge идёт строка с описанием, а заметки, пути и вложения этап запрашивает инструментом knowledge_read (или получает целиком, если включить «всегда вставлять»). Вид после создания не меняется">Вид</span>
                 <div className={styles.seg}>
                   <label><input type="radio" name="kind" value="task" checked={nt.kind === 'task'} onChange={() => setNt((v) => ({ ...v, kind: 'task' }))} /><span>Задача</span></label>
                   <label><input type="radio" name="kind" value="knowledge" checked={nt.kind === 'knowledge'} onChange={() => setNt((v) => ({ ...v, kind: 'knowledge' }))} /><span>Область знаний</span></label>
@@ -343,6 +344,28 @@ export function TagsScreen() {
                   </span>
                 </div>
                 <label><span>Заголовок</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
+                {/* у тега знаний: описание — строка в промпте каждого этапа блока, полный текст этап берёт инструментом knowledge_read;
+                    чекбокс inline возвращает старое поведение — заметки целиком в каждом промпте */}
+                {knows && (
+                  <>
+                    <label>
+                      <span title={TAG_DESCRIPTION_HINT}>{TAG_DESCRIPTION_LABEL}</span>
+                      <input
+                        name="description"
+                        autoComplete="off"
+                        maxLength={TAG_DESCRIPTION_MAX}
+                        placeholder="Правила проверки и тест-кейсы: открывай перед тестированием"
+                        title={TAG_DESCRIPTION_HINT}
+                        value={form.description}
+                        onChange={(e) => edit('description', e.target.value)}
+                      />
+                    </label>
+                    <label className="row" title={TAG_INLINE_HINT}>
+                      <input type="checkbox" name="inline" checked={form.inline} onChange={(e) => setForm((f) => ({ ...f, inline: e.target.checked }))} />
+                      <span>{TAG_INLINE_LABEL}</span>
+                    </label>
+                  </>
+                )}
                 {/* у тега знаний нет саммари и запусков: его знание — заметки, пути и вложения */}
                 {!knows && (
                   <label>
@@ -351,7 +374,7 @@ export function TagsScreen() {
                   </label>
                 )}
                 <label>
-                  <span title="Твой текст к тегу: правила, договорённости, что важно помнить. Уходит в задачу каждого запуска с тегом; сессия саммари его не трогает">{tagNotesLabel(tag.kind)}</span>
+                  <span title={tagNotesHint(tag.kind, form.inline)}>{tagNotesLabel(tag.kind)}</span>
                   <textarea name="notes" rows={4} className={src('notes')} value={form.notes} onFocus={() => setFocus('notes')} onChange={(e) => edit('notes', e.target.value)} />
                 </label>
                 <div className={styles.tagPaths}>

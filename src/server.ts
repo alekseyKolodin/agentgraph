@@ -69,6 +69,7 @@ import {
   type Tag,
 } from './tags.js';
 import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
+import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
 
 export type ServerOptions = {
   port: number;
@@ -123,6 +124,8 @@ type ChatTurnState = { abort: AbortController; lines: string[]; clients: Set<htt
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
+/** Идущие анализы flow (POST /api/runs/:id/analysis): один на запуск, второй одновременно — 409 busy. */
+const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
 const homeClients = new Map<http.ServerResponse, boolean>();
 const LOG_REPLAY_MAX = 3000;
@@ -197,7 +200,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', ...(canPickDir ? ['pick-dir'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -609,6 +612,31 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
   }
 
+  // Анализ flow по завершённому запуску (run-analysis.ts): GET — сохранённый analysis.json, POST { model? } — новый анализ, ответ — готовый RunAnalysis.
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/analysis$/)) && (method === 'GET' || method === 'POST')) {
+    const id = m[1];
+    const report = readReport(id);
+    if (!report) return sendJson(res, 404, { error: 'Запуск не найден' });
+    if (method === 'GET') {
+      const saved = readAnalysis(path.join(RUNS_DIR, id));
+      return saved ? sendJson(res, 200, saved satisfies RunAnalysis) : sendJson(res, 404, { error: 'Анализа ещё нет', code: 'missing' });
+    }
+    const body = (await readJson(req)) as { model?: unknown };
+    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined;
+    // состояние — после чтения тела: проверка занятости и пометка идут синхронно, без await между ними
+    if (live.has(id) || readReport(id)?.status === 'running') return sendJson(res, 409, { error: 'Запуск ещё идёт', code: 'live' });
+    if (analyses.has(id)) return sendJson(res, 409, { error: 'Анализ этого запуска уже идёт', code: 'busy' });
+    analyses.add(id);
+    // вкладку закрыли — сессию прерываем, чтобы не тратить деньги на ответ, который некому отдать
+    const abort = new AbortController();
+    req.on('close', () => abort.abort());
+    try {
+      return sendJson(res, 200, (await analyzeFinishedRun(id, model, abort)) satisfies RunAnalysis);
+    } finally {
+      analyses.delete(id);
+    }
+  }
+
   // --- артефакты запуска: список, артефакт с версиями, запись пользователем (UI, хелпер скилла)
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/artifacts$/)) && method === 'GET') {
     const run = artifactRun(m[1]);
@@ -983,6 +1011,20 @@ function specOf(report: RunReport): FlowSpec {
     },
     snapshot: (id) => readRunFlow(RUNS_DIR, id),
   });
+}
+
+/**
+ * Анализ flow по завершённому запуску (занятость проверяет маршрут). Flow — снимок runs/<id>/flow.yaml, по которому
+ * запуск шёл; нет снимка (старый запуск) — текущая версия из flows/ через specOf.
+ */
+async function analyzeFinishedRun(id: string, model: string | undefined, abort?: AbortController): Promise<RunAnalysis> {
+  const report = readReport(id);
+  if (!report) throw new HttpError(404, 'Запуск не найден');
+  const runDir = path.join(RUNS_DIR, id);
+  const hasSnapshot = fs.existsSync(path.join(runDir, 'flow.yaml'));
+  const spec = hasSnapshot ? readRunFlow(RUNS_DIR, id) : specOf(report);
+  const flowYaml = hasSnapshot ? fs.readFileSync(path.join(runDir, 'flow.yaml'), 'utf8') : flowToYaml(spec);
+  return analyzeRun(withFinal(report), spec, flowYaml, { runDir, model, abort });
 }
 
 /** Продолжение завершённого запуска текущей версией флоу: done-блоки не повторяются (continuationFrom). */

@@ -374,3 +374,47 @@ phases:
     assert.ok(w.warnings.some((x) => /\(2\), вызвать этап может только перечисленные в tools \(2\)/.test(x)), w.warnings.join('\n'));
   }),
 );
+
+test(
+  'контекст: промпт этапа по источникам — шаблон, handoff, директории, теги по запросу одной частью и целиком своей; предупреждения о тегах целиком и об источниках',
+  withTmp(async (dir) => {
+    const prevCfg = process.env.AGENTGRAPH_CONFIG_DIR;
+    process.env.AGENTGRAPH_CONFIG_DIR = path.join(dir, 'cfg');
+    try {
+      const { createTag, updateTag } = await import('./tags.js');
+      createTag('qa', 'QA', 'knowledge');
+      updateTag('qa', { description: 'правила проверки', notes: 'коротко' });
+      createTag('big', 'Большой', 'knowledge');
+      updateTag('big', { notes: 'x'.repeat(3000), inline: true });
+      const cwd = path.join(dir, 'proj');
+      fs.mkdirSync(path.join(cwd, 'extra'), { recursive: true });
+      const flow = write(
+        path.join(dir, 'ctx-prompt.yaml'),
+        'name: ctx-prompt\nblocks:\n  - name: b\n    knowledge: [qa, big]\n    phases:\n      - {name: w, tools: [], add_dirs: [extra], prompt: "Задача {{input}}, прошлое {{prev}} и {{ phases.w }}", handoff: "итог"}\n      - {name: plain, tools: [], prompt: p}\n',
+      );
+      const r = contextOptions({ cwd, flow, phase: 'w' });
+      const p = r.prompt!;
+      assert.deepEqual(p.parts.map((x) => x.kind), ['prompt', 'handoff', 'dirs', 'knowledge-lines', 'knowledge-inline']);
+      assert.equal(p.parts[0].chars, 'Задача {{input}}, прошлое {{prev}} и {{ phases.w }}'.length);
+      assert.ok(p.parts[2].chars > path.join(cwd, 'extra').length);
+      assert.match(p.parts[3].name, /по запросу: qa/);
+      assert.equal(p.parts[4].name, 'Тег знаний big целиком');
+      assert.ok(p.parts[4].chars >= 3000);
+      assert.deepEqual(p.vars, ['input', 'prev', 'phases.w']);
+      assert.equal(p.chars, p.parts.reduce((n, x) => n + x.chars, 0));
+      assert.ok(r.warnings.some((w) => /Теги знаний целиком \(big\) занимают \d+% промпта/.test(w)), r.warnings.join('\n'));
+      // этап без хвостов: одна часть, без предупреждений
+      const plain = contextOptions({ cwd, flow, phase: 'plain' });
+      assert.deepEqual(plain.prompt!.parts.map((x) => x.kind), ['prompt', 'knowledge-lines', 'knowledge-inline']);
+      // без этапа состава промпта нет
+      assert.equal(contextOptions({ cwd, flow }).prompt, undefined);
+      // предупреждение об источниках: 2 файла памяти + 1 тег целиком + свой system = 4
+      const { sourcesWarning } = await import('./context.js');
+      assert.match(sourcesWarning(2, 1, true)!, /из 4 источников: 2 файл\(ов\) CLAUDE.md и правил, 1 тег\(ов\) знаний целиком, свой системный промпт/);
+      assert.equal(sourcesWarning(2, 1, false), undefined);
+    } finally {
+      if (prevCfg === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+      else process.env.AGENTGRAPH_CONFIG_DIR = prevCfg;
+    }
+  }),
+);

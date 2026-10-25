@@ -1,0 +1,35 @@
+---
+name: agentgraph-web
+description: Правила правок веб-интерфейса agentgraph в web/ (React 19 + TypeScript + Vite, CSS Modules, токены «Пульта») — экраны, граф flow, формы запуска, лента, вёрстка; где что лежит, как проверять в браузере через превью из .claude/launch.json. Загружать перед любой правкой файлов в web/.
+---
+
+# Веб-интерфейс agentgraph: правила правок в `web/`
+
+UI — React 19 + TypeScript strict + Vite в `web/`. Скилл загружается, когда правка касается `web/`; раньше это был сабагент ui-engineer, теперь работа идёт в основной сессии. Его потом обернут в Electron поверх того же сервера, поэтому UI общается с сервером только по HTTP и SSE. UI перенесён со старого ванильного `ui/` один в один: правила переноса, решения и то, что не проверено, — в `docs/redesign/react-migration.md` («Статус»). Комментарии вида «порт `ui/app.js` …» ссылаются на старый UI, он есть в git до коммита этапа 7.
+
+## Где что
+- `web/` — UI. Сборка `npm run build:web` → `dist/web`, сервер раздаёт её на `/` (`src/web-static.ts`). Маршруты — пути (`/flow/<имя>`, `/run/<id>`, `/tags/<slug>`, `/context`, `/draft`), сервер отдаёт на них `index.html`. Старые адреса: хеши `/#run/<id>` и подобные `main.tsx` переводит на пути (`lib/legacy-url.ts`), `/next/…` сервер отправляет на `/…` ответом 308. Экраны, кроме главной, грузятся лениво (`React.lazy` в `App.tsx`); React, граф (`@xyflow/react`) и CodeMirror — отдельные файлы сборки (`codeSplitting` в `web/vite.config.ts`).
+- `web/src/api/` — единственная дорога к серверу: `api()` (ошибки — `ApiError` с `status`, `code`, `data`), `useEventStream()` (SSE с переподключением), запросы React Query, `useFeature()` по `features` из `/api/config`.
+- `web/src/lib/` — чистая логика без React и DOM, тесты `*.test.ts` рядом (`node:test`, запускаются из `npm test`).
+- `web/src/components/` — общие компоненты: оболочка и поток `/api/events` (`shell/`; свёрнутость секций и групп сайдбара — `shell/fold.ts`, список flow — `shell/FlowList.tsx`), граф flow `graph/FlowGraph.tsx` на `@xyflow/react` (один на конструктор, вкладку «Запуск» и страницу запуска; модель и раскладка — `lib/graph/`), диалог подтверждения `useConfirm()`, всплывашка `useToast()`, карточка вопроса агента `question/QuestionCard`, markdown агента `MdText` (только через `lib/md.ts`), `Badge`, `PickDirButton`, `useMemoryState` (состояние экрана, которое переживает уход и возврат). `web/src/screens/<экран>/` — экраны.
+- `web/src/screens/flow/` — экран flow и конструктор: состояние открытого flow — `store.ts` (рабочая копия правится на месте, перерисовка через `useFlowStore()`), переходы с подтверждениями — `nav.ts`, уход с экрана ловит `useBlocker` в `FlowScreen.tsx` (поэтому роутер в data-режиме, `createBrowserRouter`). Логика конструктора без React — `lib/flow/`. Форма запуска на вкладке «Запуск» — `RunForm.tsx`, её состояние — `formStore.ts` (сброс по `formSeq`/`extrasSeq` из `store.ts`), логика — `lib/run-form.ts`. Список запусков в сайдбаре — `components/shell/RunList.tsx`, логика — `lib/runs.ts`.
+- `web/src/screens/run/` — страница запуска: состояние открытого запуска и вкладок — `store.ts` (события потока правят его на месте, перерисовка раз в кадр), «Обзор» — `Overview.tsx`, граф с инспектором — `RunGraph.tsx`, живой лог мимо React — `RunLog.tsx`, чат — `RunChat.tsx`, ответ на паузу — `pauseAnswer.ts`. Логика без React — `lib/run/` (`events.ts` — события потока, `log.ts` — буфер лога, `view.ts` — что показывать). Окно файла — `components/file/FileDialog.tsx` (`openRunFile`, `openTagSummary`). Артефакты запуска: состояние, черновики, окно и «Возобновить»/«Продолжить» с черновиком или ответом на паузу — `artStore.ts` (событие `artifacts` правит только его), панель и значки шагов — `ArtifactsPanel.tsx`, окно — `ArtifactWindow.tsx`, диалог несохранённой правки — `DraftsDialog.tsx` (в оболочке), логика — `lib/run/artifacts.ts`.
+- `web/src/screens/tags/` — страница «Теги» (логика `lib/tags.ts`), `web/src/screens/context/` — «Контекст» (логика `lib/context.ts`).
+- `web/src/styles/tokens.css` — токены «Пульта», `base.css` — глобальные примитивы (`.btn`, `.row`, `.muted`, `dialog`, `.view-head`). Остальные стили — CSS Modules рядом с компонентом.
+- Ключи `localStorage` — `agentgraph.*`, общие со старым UI: у людей уже сохранены значения, формат не менять без миграции.
+
+## Правила
+- Новый экран или элемент повторяет соседние: раскладка, тон, короткие тексты, подсказки `title`. Визуальная система — «Пульт» (`.interface-design/system.md`).
+- Стили — CSS Modules рядом с компонентом (`camelCaseOnly`: `.home-limits` в CSS → `styles.homeLimits` в TSX), общие примитивы — в `base.css`, он подключается в `main.tsx` до модулей. Порядок правил в модуле важен: поздние перебивки (заголовки секций, `.view-head h1`, `.ok/.warn/.err`) стоят в конце. Цвета и размеры — только через токены; нового токена нет в `tokens.css` — заведи его там и в `.interface-design/system.md`.
+- Типы ответов API — `import type` из `@server/*` (лучше из `src/api-types.ts`). Рантайм-импорт из `src/` ломает сборку намеренно (плагин в `web/vite.config.ts`). В браузерном коде нет Node и обращений к файловой системе.
+- Зависимости — `react`, `react-dom`, `react-router`, `@tanstack/react-query`, `@xyflow/react`, пакеты CodeMirror 6, Vite. Новая — только с обоснованием (в ответе и в сообщении коммита). Без Tailwind и UI-китов.
+- Тексты интерфейса на русском, коротко, с подсказками в `title`, как в соседних элементах.
+- Если меняется API, сделай минимальную правку сервера по правилам скилла `agentgraph-core`, с тестом в `src/*.test.ts`; скилл `/agentgraph` (`.claude/skills/agentgraph/agentgraph.mjs`) ходит в тот же API и не должен сломаться. `src/server-guard.ts` не ослаблять.
+- Для решений по визуалу можно звать скиллы `interface-design`, `design-review`, `design-deslop`. Контекст редизайна — в `docs/redesign/`, система — `.interface-design/system.md`.
+
+## Проверка
+- `npm run typecheck` (сервер, `web/` и Node-часть `web/`), `npm test`, `npm run build:web` — все зелёные.
+- Превью из `.claude/launch.json`: `agentgraph-web` — сервер на 4750 (`npm run ui` сам пересобирает `dist/web`, если `web/` новее), UI на `/`; `agentgraph-web-dev` — Vite с HMR на 5174, `/api` и SSE проксируются на 4750, поэтому сначала подними `agentgraph-web`. Прокси переписывает `Host` и `Origin`, сервер ничего не ослабляет. Порт занят чужим сервером — заведи временную конфигурацию на свободном и убери её после.
+- Проверяй на реальных данных из `runs/` и `flows/`, редкие состояния — на подменённых `fetch` и `EventSource`: скриншоты и вычисленные стили (`getComputedStyle`, `getBoundingClientRect`). Сохранение проверяй на копии flow, а не на `flows/example/*`; генерацию и «Правку с ИИ» — на подменённом ответе `fetch`. В скрытой панели браузера `requestAnimationFrame` стоит: фокус и перерисовку «через кадр» так не проверить.
+- Запуски flow, которые тратят деньги, не делать. Если без запуска не проверить, взять `flows/example/*` с `--max-budget 0.2` и моделью haiku и указать это.
+- В ответе перечисли изменённые файлы, что проверено в браузере, а что нет.

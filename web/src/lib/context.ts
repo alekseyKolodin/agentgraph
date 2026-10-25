@@ -82,11 +82,37 @@ export type CtxNote = { text: string; err: boolean };
 export const ctxAddDirs = (d: Pick<ContextView, 'addDirs'>, home: string | undefined): CtxNote[] =>
   d.addDirs.map((x) => ({ text: `${ctxHome(x.path, home)}${x.exists ? '' : ' — нет'}`, err: !x.exists }));
 
+/** Тег знаний блока: слаг, режим («по запросу» — строка в промпте и knowledge_read, «в промпте целиком») и описание; ошибки — как раньше. */
 export const ctxKnowledge = (d: Pick<ContextView, 'knowledge'>): CtxNote[] =>
-  (d.knowledge || []).map((k) => ({
-    text: `${k.slug}${!k.exists ? ' — нет' : k.kind !== 'knowledge' ? ' — тег задачи' : ''}`,
-    err: !(k.exists && k.kind === 'knowledge'),
-  }));
+  (d.knowledge || []).map((k) => {
+    const ok = k.exists && k.kind === 'knowledge';
+    const mode = k.mode === 'inline' ? 'в промпте целиком' : k.mode === 'on-demand' ? 'по запросу' : '';
+    const detail = ok ? [mode, k.description].filter(Boolean).join(': ') : '';
+    return {
+      text: `${k.slug}${!k.exists ? ' — нет' : k.kind !== 'knowledge' ? ' — тег задачи' : detail ? ` — ${detail}` : ''}`,
+      err: !ok,
+    };
+  });
+
+// ---------- промпт этапа по источникам
+
+export type CtxPromptRow = { name: string; chars: string; share: string; inline: boolean };
+/** Знаков на токен для оценки «≈ токенов»: русский текст плотнее английского, берём среднее. */
+const CHARS_PER_TOKEN = 3.2;
+export const ctxPromptTokens = (chars: number): string => `≈ ${ctxTokens(Math.round(chars / CHARS_PER_TOKEN))} токенов`;
+export const ctxChars = (n: number): string => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+/** Части промпта по убыванию размера с долей в процентах; теги целиком помечены. */
+export function ctxPromptRows(p: { parts: { name: string; kind: string; chars: number }[]; chars: number }): CtxPromptRow[] {
+  const total = p.chars || 1;
+  return [...p.parts]
+    .sort((a, b) => b.chars - a.chars)
+    .map((x) => ({ name: x.name, chars: ctxChars(x.chars), share: `${Math.round((x.chars / total) * 100)}%`, inline: x.kind === 'knowledge-inline' }));
+}
+
+/** Подпись переменных: «подстановки {{input}}, {{prev}} добавятся в запуске» или что их нет. */
+export const ctxPromptVars = (vars: string[]): string =>
+  vars.length ? `Подстановки ${vars.map((v) => `{{${v}}}`).join(', ')} добавятся в запуске, их размер заранее неизвестен.` : 'Переменных шаблона нет: промпт в запуске будет ровно таким.';
 
 export const ctxOpenTitle = (editable: boolean): string => (editable ? 'Открыть и править' : 'Только просмотр: managed-политика, плагин или не .md');
 
