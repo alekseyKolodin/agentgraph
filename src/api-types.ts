@@ -231,6 +231,16 @@ export type TagMeta = {
    * его не перепишут на странице «Теги».
    */
   autoTitle?: true;
+  /**
+   * Тег знаний: короткое «когда нужен этот тег», до TAG_DESCRIPTION_MAX знаков. Идёт одной строкой в промпт каждого
+   * этапа блока; полный текст этап запрашивает инструментом knowledge_read.
+   */
+  description?: string;
+  /**
+   * Тег знаний: заметки всегда вставляются в промпт целиком (как до прогрессивного раскрытия) — для коротких правил,
+   * которые должны действовать всегда. Без поля — режим по запросу: строка в промпте и инструмент knowledge_read.
+   */
+  inline?: true;
   createdAt: string;
   updatedAt: string;
   /** Абсолютные пути (папки или файлы), которые тег открывает этапам на чтение. */
@@ -728,10 +738,33 @@ export type ChatStreamEvent =
 
 // ---------- страница «Контекст»: GET /api/context, GET|PUT /api/context/file (src/context.ts)
 
-/** Тег знаний блока этапа: exists — тег есть на диске, kind — его вид (тег задачи в knowledge — тоже ошибка запуска). */
-export type ContextKnowledge = { slug: string; exists: boolean; kind?: TagKind };
+/**
+ * Тег знаний блока этапа: exists — тег есть на диске, kind — его вид (тег задачи в knowledge — тоже ошибка запуска).
+ * У существующего тега знаний: mode — как он попадает в промпт («inline» — заметки целиком, «on-demand» — строка и
+ * инструмент knowledge_read), notesChars/attachments/dirs — объём заметок, число вложений и путей.
+ */
+export type ContextKnowledge = {
+  slug: string;
+  exists: boolean;
+  kind?: TagKind;
+  title?: string;
+  description?: string;
+  mode?: 'inline' | 'on-demand';
+  notesChars?: number;
+  attachments?: number;
+  dirs?: number;
+};
 
 export type MemoryFile = { path: string; type: string; tokens: number; editable: boolean };
+
+/**
+ * Часть промпта этапа по источнику: шаблон промпта, handoff, список доп. директорий, строки тегов знаний по запросу,
+ * тег знаний целиком (inline). chars — знаков в шаблоне до подстановок: {{input}}, {{prev}} и артефакты известны только в запуске.
+ */
+export type ContextPromptPart = { name: string; kind: 'prompt' | 'handoff' | 'dirs' | 'knowledge-lines' | 'knowledge-inline'; chars: number };
+
+/** Промпт этапа по источникам: части, переменные шаблона и общий размер в знаках. */
+export type ContextPrompt = { parts: ContextPromptPart[]; vars: string[]; chars: number };
 
 /** GET /api/context: что получит сессия этапа до первого сообщения. */
 export type ContextView = {
@@ -755,6 +788,8 @@ export type ContextView = {
   addDirs: { path: string; exists: boolean }[];
   /** Теги знаний блока этапа (из knowledge в flow.yaml). */
   knowledge: ContextKnowledge[];
+  /** Промпт этапа по источникам; только у запроса с этапом. */
+  prompt?: ContextPrompt;
   warnings: string[];
   /** Когда данные получены, ISO 8601. */
   at: string;
@@ -765,3 +800,128 @@ export type ContextFile = { path: string; text: string; mtimeMs: number; editabl
 
 /** PUT /api/context/file: новое mtimeMs файла — с ним идёт следующее сохранение. */
 export type ContextFileSaved = { mtimeMs: number };
+
+// ---------- анализ flow по завершённому запуску (src/run-analysis.ts): GET|POST /api/runs/:id/analysis
+
+/** Итерация блока глазами условия: stale — замечания повторяют прошлую итерацию (feedbackKey), агент буксует. */
+export type AnalysisIteration = {
+  iteration: number;
+  done: boolean;
+  detail?: string;
+  /** Начало замечаний, не больше 300 знаков. */
+  feedback: string;
+  stale: boolean;
+  costUsd: number;
+};
+
+export type AnalysisBlock = {
+  name: string;
+  title: string;
+  status: BlockStatus;
+  looped: boolean;
+  condition: UntilType;
+  maxIterations: number;
+  iterations: number;
+  /** Теги знаний блока из flow. */
+  knowledge: string[];
+  /** Этапы блока по порядку объявления во flow. */
+  phases: string[];
+  /** Застой: сколько итераций подряд (включая первую из серии) провалились с теми же замечаниями, максимум по блоку. */
+  stuck: number;
+  log: AnalysisIteration[];
+};
+
+/** Что этап берёт из шаблона промпта: по регэкспам по тексту flow. */
+export type AnalysisPromptUses = { prev: boolean; feedback: boolean; phases: string[]; artifacts: string[] };
+
+/** Последний запуск этапа (последняя итерация). */
+export type AnalysisPhaseRun = {
+  iteration: number;
+  ok: boolean;
+  subtype: string;
+  turns: number;
+  costUsd: number;
+  durationMs: number;
+  chars: number;
+  contextPeak?: number;
+  /** Доля окна модели в процентах, если окно известно. */
+  contextPct?: number;
+};
+
+/** Этап flow: сводка по всем запускам (итерациям) и последний запуск. */
+export type AnalysisPhase = {
+  name: string;
+  title: string;
+  block: string;
+  tools: string[];
+  /** Пишущий этап: Edit или Write в tools либо непустой writes. */
+  writer: boolean;
+  model?: string;
+  effort?: EffortLevel;
+  group?: string;
+  /** Запусков этапа за весь запуск (по итерациям); 0 — этап не выполнялся. */
+  runs: number;
+  failed: number;
+  turnsAvg: number;
+  turnsMax: number;
+  /** Лимит ходов из flow (этап → defaults); нет — без лимита. */
+  maxTurns?: number;
+  /** Сколько запусков упёрлось в лимит ходов (subtype error_max_turns). */
+  maxTurnsHits: number;
+  costUsd: number;
+  durationMs: number;
+  chars: number;
+  /** Максимум пика контекста по запускам и окно модели (последнее известное). */
+  contextPeak?: number;
+  contextWindow?: number;
+  contextPct?: number;
+  denials: number;
+  /** Длина шаблона промпта во flow (без подстановок). */
+  promptChars: number;
+  handoff: boolean;
+  uses: AnalysisPromptUses;
+  reads: string[];
+  writes: string[];
+  last?: AnalysisPhaseRun;
+};
+
+/** Детерминированный дайджест запуска для анализа: без модели, из run.json и flow. */
+export type AnalysisFacts = {
+  flow: string;
+  status: RunStatus;
+  totalCostUsd: number;
+  durationMs: number;
+  phaseCount: number;
+  blockCount: number;
+  /** Объявленные артефакты flow (ключи). */
+  artifacts: string[];
+  blocks: AnalysisBlock[];
+  phases: AnalysisPhase[];
+};
+
+export type AnalysisVerdict = 'keep' | 'improve' | 'rework';
+export type AnalysisKind = 'merge' | 'split' | 'remove' | 'tools' | 'condition' | 'prompt' | 'context' | 'parallel' | 'other';
+export type AnalysisSeverity = 'high' | 'medium' | 'low';
+
+export type AnalysisSuggestion = {
+  kind: AnalysisKind;
+  severity: AnalysisSeverity;
+  /** Имена этапов, о которых речь. */
+  phases: string[];
+  title: string;
+  why: string;
+  how: string;
+};
+
+/** runs/<id>/analysis.json: вердикт модели по flow и факты. Сбой модели — error, verdict и summary пустые, факты на месте. */
+export type RunAnalysis = {
+  at: string;
+  model?: string;
+  costUsd: number;
+  tokens?: SessionTokens;
+  verdict?: AnalysisVerdict;
+  summary: string;
+  suggestions: AnalysisSuggestion[];
+  facts: AnalysisFacts;
+  error?: string;
+};

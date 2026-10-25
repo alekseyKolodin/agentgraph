@@ -3,8 +3,26 @@ import assert from 'node:assert/strict';
 import type { ContextView } from '@server/api-types';
 import {
   ctxAddDirs, ctxDirty, ctxEditState, ctxFlowOptions, ctxHome, ctxKnowledge, ctxListSum, ctxMcpServers, ctxMeta, ctxPhaseGroups, ctxProjectMd,
-  ctxProjects, ctxQuery, ctxRows, ctxTokens, ctxTotals, type CtxEdit,
+  ctxProjects, ctxPromptRows, ctxPromptTokens, ctxPromptVars, ctxQuery, ctxRows, ctxTokens, ctxTotals, type CtxEdit,
 } from './context';
+
+test('контекст: части промпта по убыванию с долей, теги целиком помечены, подпись переменных', () => {
+  const rows = ctxPromptRows({
+    parts: [
+      { name: 'Промпт этапа (шаблон)', kind: 'prompt', chars: 300 },
+      { name: 'Тег знаний qa целиком', kind: 'knowledge-inline', chars: 1700 },
+    ],
+    chars: 2000,
+  });
+  assert.deepEqual(rows, [
+    { name: 'Тег знаний qa целиком', chars: '1.7k', share: '85%', inline: true },
+    { name: 'Промпт этапа (шаблон)', chars: '300', share: '15%', inline: false },
+  ]);
+  assert.deepEqual(ctxPromptRows({ parts: [], chars: 0 }), []);
+  assert.equal(ctxPromptTokens(3200), '≈ 1.0k токенов');
+  assert.match(ctxPromptVars(['input', 'prev']), /\{\{input\}\}, \{\{prev\}\} добавятся в запуске/);
+  assert.match(ctxPromptVars([]), /ровно таким/);
+});
 
 test('контекст: токены коротко и путь с «~»', () => {
   assert.equal(ctxTokens(0), '0');
@@ -91,6 +109,11 @@ test('контекст: память — свой CLAUDE.md, доп. дирек�
   assert.deepEqual(ctxKnowledge(view({ knowledge: [{ slug: 'fe', exists: true, kind: 'knowledge' }, { slug: 'x', exists: false }, { slug: 't', exists: true, kind: 'task' }] })), [
     { text: 'fe', err: false }, { text: 'x — нет', err: true }, { text: 't — тег задачи', err: true },
   ]);
+  // режим тега знаний и описание
+  assert.deepEqual(ctxKnowledge(view({ knowledge: [
+    { slug: 'qa', exists: true, kind: 'knowledge', mode: 'on-demand', description: 'правила QA', notesChars: 10, attachments: 0, dirs: 1 },
+    { slug: 'be', exists: true, kind: 'knowledge', mode: 'inline', notesChars: 10, attachments: 0, dirs: 0 },
+  ] })), [{ text: 'qa — по запросу: правила QA', err: false }, { text: 'be — в промпте целиком', err: false }]);
 });
 
 test('контекст: списки по убыванию токенов, MCP по серверам', () => {

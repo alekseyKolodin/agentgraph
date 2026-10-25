@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Tag } from '@server/api-types';
 import {
-  filterTags, newTagBody, tagFocusCount, tagFocusField, tagFocusLabel, tagFormOf, tagMetaLine, tagPatch, tagPreview, tagSnapshot, tagsNoneText,
+  filterTags, newTagBody, tagFocusCount, tagFocusField, tagFocusLabel, tagFormOf, tagMetaLine, tagNotesHint, tagPatch, tagPreview, tagSnapshot, tagsNoneText,
 } from './tags';
 
 const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, kind: 'task' as const, updatedAt: '', runs: 0 });
@@ -33,13 +33,18 @@ test('теги: строка списка — первая строка прев
   assert.equal(tagsNoneText(2), 'Ничего не нашлось');
 });
 
-test('теги: снимок формы — саммари тега знаний не считается', () => {
+test('теги: снимок формы — саммари тега знаний не считается, описание и режим «целиком» — только у него', () => {
   const f = tagFormOf(tag());
-  assert.deepEqual(f, { title: 'Карта', summary: 'S', notes: 'N', dirs: '/a\n/b' });
+  assert.deepEqual(f, { title: 'Карта', summary: 'S', notes: 'N', dirs: '/a\n/b', description: '', inline: false });
   assert.notEqual(tagSnapshot(f, 'task'), tagSnapshot({ ...f, summary: 'X' }, 'task'));
   assert.equal(tagSnapshot(f, 'knowledge'), tagSnapshot({ ...f, summary: 'X' }, 'knowledge'));
   assert.notEqual(tagSnapshot(f, 'knowledge'), tagSnapshot({ ...f, notes: 'X' }, 'knowledge'));
-  assert.deepEqual(tagFormOf(tag({ title: undefined, dirs: undefined })), { title: '', summary: 'S', notes: 'N', dirs: '' });
+  assert.notEqual(tagSnapshot(f, 'knowledge'), tagSnapshot({ ...f, description: 'когда QA' }, 'knowledge'));
+  assert.notEqual(tagSnapshot(f, 'knowledge'), tagSnapshot({ ...f, inline: true }, 'knowledge'));
+  assert.equal(tagSnapshot(f, 'task'), tagSnapshot({ ...f, description: 'x', inline: true }, 'task'));
+  assert.deepEqual(tagFormOf(tag({ title: undefined, dirs: undefined })), { title: '', summary: 'S', notes: 'N', dirs: '', description: '', inline: false });
+  assert.deepEqual(tagFormOf(tag({ kind: 'knowledge', description: 'Правила QA', inline: true })).description, 'Правила QA');
+  assert.equal(tagFormOf(tag({ kind: 'knowledge', inline: true })).inline, true);
 });
 
 test('теги: патч — только изменённые поля; пути без пустых строк и пробелов; саммари тега знаний не уходит', () => {
@@ -49,9 +54,17 @@ test('теги: патч — только изменённые поля; пут�
   assert.deepEqual(tagPatch({ ...tagFormOf(t), dirs: ' /a \n\n/b\n' }, t), {});
   assert.deepEqual(tagPatch({ ...tagFormOf(t), dirs: '/a\n/c' }, t), { dirs: ['/a', '/c'] });
   assert.deepEqual(tagPatch({ ...tagFormOf(t), dirs: '' }, t), { dirs: [] });
-  assert.deepEqual(tagPatch({ title: '', summary: 'S2', notes: 'N', dirs: '/a\n/b' }, t), { title: '', summary: 'S2' });
+  assert.deepEqual(tagPatch({ title: '', summary: 'S2', notes: 'N', dirs: '/a\n/b', description: '', inline: false }, t), { title: '', summary: 'S2' });
   const k = tag({ kind: 'knowledge' });
   assert.deepEqual(tagPatch({ ...tagFormOf(k), summary: 'S2' }, k), {});
+  // описание и режим «целиком» уходят только у тега знаний и только изменённые
+  assert.deepEqual(tagPatch({ ...tagFormOf(k), description: ' когда QA ', inline: true }, k), { description: 'когда QA', inline: true });
+  assert.deepEqual(tagPatch({ ...tagFormOf(k), description: '' }, tag({ kind: 'knowledge', description: 'старое' })), { description: '' });
+  assert.deepEqual(tagPatch({ ...tagFormOf(k), inline: false }, tag({ kind: 'knowledge', inline: true })), { inline: false });
+  assert.deepEqual(tagPatch({ ...tagFormOf(t), description: 'x', inline: true }, t), {});
+  assert.match(tagNotesHint('knowledge', false), /knowledge_read/);
+  assert.match(tagNotesHint('knowledge', true), /целиком/);
+  assert.match(tagNotesHint('task', false), /задачу каждого запуска/);
 });
 
 test('теги: новый тег — без пустого слага, заголовок по желанию, вид знаний только при фиче', () => {
@@ -65,7 +78,7 @@ test('теги: крупный редактор — подпись, счётчи
   assert.equal(tagFocusLabel('dirs', 'task'), 'Пути');
   assert.equal(tagFocusLabel('summary', 'task'), 'Саммари');
   assert.equal(tagFocusLabel('notes', 'task'), 'Заметки (промпт тега)');
-  assert.equal(tagFocusLabel('notes', 'knowledge'), 'Знание (промпт для этапов)');
+  assert.equal(tagFocusLabel('notes', 'knowledge'), 'Знание (текст для этапов)');
   assert.equal(tagFocusCount(''), 'строк: 0 · знаков: 0');
   assert.equal(tagFocusCount('ab\nc'), 'строк: 2 · знаков: 4');
   assert.equal(tagFocusField(undefined, 'task'), 'summary');

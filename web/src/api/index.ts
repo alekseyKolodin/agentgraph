@@ -12,8 +12,8 @@ export {
   deleteRun, fetchTag, hideRecentDir, prepareWorktree, recentDirsKey, RUN_DELETED, setRunHidden, startRun, useRecentDirs,
 } from './runs';
 export {
-  abortRun, clearChat, continueRun, fetchArtifact, fetchArtifacts, fetchChat, fetchRun, fetchRunFile, fetchRunFlow, pauseRun, postChat, resumeRun, runFileUrl, saveRunFlow,
-  saveArtifact, setMaxIterations, stopChat, type RunFlowView,
+  abortRun, clearChat, continueRun, fetchAnalysis, fetchArtifact, fetchArtifacts, fetchChat, fetchRun, fetchRunFile, fetchRunFlow, pauseRun, postChat, resumeRun,
+  runAnalysis, runFileUrl, saveRunFlow, saveArtifact, setMaxIterations, stopChat, type RunFlowView,
 } from './run';
 export { addTagAttachment, createTag, deleteTag, deleteTagAttachment, fetchTags, saveTag } from './tags';
 export { fetchContext, fetchContextFile, saveContextFile } from './context';
