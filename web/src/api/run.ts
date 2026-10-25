@@ -1,6 +1,6 @@
 // Запросы страницы запуска: отчёт, снимок flow, файлы запуска, управление (пауза, лимит, остановка, продолжение),
 // «Сохранить как flow», артефакты и чат запуска (ответ — поток NDJSON).
-import type { ApiErrorBody, ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunDetail } from '@server/api-types';
+import type { ApiErrorBody, ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
 import type { Block, FlowSpec } from '@server/schema';
 import { api, ApiError } from './client';
 
@@ -28,6 +28,10 @@ export const abortRun = (id: string) => api<unknown>('POST', `${runUrl(id)}/abor
 export const setMaxIterations = (id: string, block: string, value: number) => api<unknown>('POST', `${runUrl(id)}/max-iterations`, { block, value });
 export const continueRun = (id: string) => api<{ id: string }>('POST', `${runUrl(id)}/continue`, {});
 export const saveRunFlow = (id: string, body: { name?: string; folder: string }) => api<{ name: string; folder?: string }>('POST', `${runUrl(id)}/save-flow`, body);
+
+/** Анализ flow по завершённому запуску: сохранённый (404 с code missing — ещё не делали) и новый, ответ — готовый анализ (запуск идёт — 409 live, уже анализируется — 409 busy). */
+export const fetchAnalysis = (id: string) => api<RunAnalysis>('GET', `${runUrl(id)}/analysis`);
+export const runAnalysis = (id: string, model?: string) => api<RunAnalysis>('POST', `${runUrl(id)}/analysis`, model ? { model } : {});
 
 const artUrl = (id: string, key?: string) => `${runUrl(id)}/artifacts${key === undefined ? '' : `/${encodeURIComponent(key)}`}`;
 export const fetchArtifacts = (id: string) => api<ArtifactList>('GET', artUrl(id));

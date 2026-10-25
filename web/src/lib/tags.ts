@@ -28,33 +28,47 @@ export const tagsNoneText = (total: number): string => (total ? 'Ничего н
 
 // ---------- форма тега
 
-export type TagForm = { title: string; summary: string; notes: string; dirs: string };
+/** description и inline — поля тега знаний: описание «когда нужен» и «заметки всегда в промпте целиком»; у тега задачи скрыты. */
+export type TagForm = { title: string; summary: string; notes: string; dirs: string; description: string; inline: boolean };
 export type TagField = 'summary' | 'notes' | 'dirs';
+
+/** Лимит описания тега знаний — как TAG_DESCRIPTION_MAX на сервере. */
+export const TAG_DESCRIPTION_MAX = 200;
 
 export const tagFormOf = (tag: Tag): TagForm => ({
   title: tag.title || '',
   summary: tag.summary || '',
   notes: tag.notes || '',
   dirs: (tag.dirs || []).join('\n'),
+  description: tag.description || '',
+  inline: tag.inline === true,
 });
 
-/** Снимок полей формы: по нему — «есть несохранённое». У тега знаний саммари нет: его поле скрыто и в снимок не идёт. */
-export const tagSnapshot = (f: TagForm, kind: TagKind): string =>
-  JSON.stringify([f.title, kind === 'knowledge' ? '' : f.summary, f.notes, f.dirs]);
+/**
+ * Снимок полей формы: по нему — «есть несохранённое». У тега знаний саммари нет: его поле скрыто и в снимок не идёт;
+ * у тега задачи так же скрыты описание и режим «целиком».
+ */
+export const tagSnapshot = (f: TagForm, kind: TagKind): string => {
+  const knows = kind === 'knowledge';
+  return JSON.stringify([f.title, knows ? '' : f.summary, f.notes, f.dirs, knows ? f.description : '', knows ? f.inline : false]);
+};
 
 /** Строки поля «Пути»: без пробелов по краям и пустых. */
 export const tagDirLines = (text: string): string[] => text.split('\n').map((x) => x.trim()).filter(Boolean);
 
-export type TagPatch = { title?: string; summary?: string; notes?: string; dirs?: string[] };
+export type TagPatch = { title?: string; summary?: string; notes?: string; dirs?: string[]; description?: string; inline?: boolean };
 
 /** Только изменённые поля: пока страница открыта, запуск мог переписать саммари — правка заметок его не затрёт. */
 export function tagPatch(f: TagForm, t: Tag): TagPatch {
   const dirs = tagDirLines(f.dirs);
+  const knows = t.kind === 'knowledge';
   return {
     ...(f.title !== (t.title || '') ? { title: f.title } : {}),
-    ...(t.kind !== 'knowledge' && f.summary !== (t.summary || '') ? { summary: f.summary } : {}),
+    ...(!knows && f.summary !== (t.summary || '') ? { summary: f.summary } : {}),
     ...(f.notes !== (t.notes || '') ? { notes: f.notes } : {}),
     ...(dirs.join('\n') !== (t.dirs || []).join('\n') ? { dirs } : {}),
+    ...(knows && f.description.trim() !== (t.description || '') ? { description: f.description.trim() } : {}),
+    ...(knows && f.inline !== (t.inline === true) ? { inline: f.inline } : {}),
   };
 }
 
@@ -67,7 +81,23 @@ export function newTagBody(slug: string, title: string, kind: TagKind, kinds: bo
 
 export const TAG_DIRTY_TEXT = 'В теге есть несохранённые правки. Перейти без сохранения?';
 export const tagDeleteText = (slug: string): string => `Удалить тег ${slug}: саммари, заметки, пути и вложения? Запуски с ним останутся.`;
-export const tagNotesLabel = (kind: TagKind): string => (kind === 'knowledge' ? 'Знание (промпт для этапов)' : 'Заметки (промпт тега)');
+export const tagNotesLabel = (kind: TagKind): string => (kind === 'knowledge' ? 'Знание (текст для этапов)' : 'Заметки (промпт тега)');
+
+/** Подсказка к полю заметок: у тега знаний — как текст попадает к этапам (по запросу или целиком), у тега задачи — как раньше. */
+export const tagNotesHint = (kind: TagKind, inline: boolean): string =>
+  kind !== 'knowledge'
+    ? 'Твой текст к тегу: правила, договорённости, что важно помнить. Уходит в задачу каждого запуска с тегом; сессия саммари его не трогает'
+    : inline
+      ? 'Правила области знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими'
+      : 'Правила области знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда область ему понадобится';
+
+export const TAG_DESCRIPTION_LABEL = 'Описание — когда этот тег нужен';
+export const TAG_DESCRIPTION_HINT = 'Одна строка в промпт каждого этапа блока; полный текст этап запросит инструментом knowledge_read, когда понадобится';
+export const TAG_INLINE_LABEL = 'Всегда вставлять заметки в промпт целиком';
+export const TAG_INLINE_HINT = 'Для коротких правил, которые должны действовать всегда. По умолчанию заметки отдаются по запросу: в промпте — строка с описанием, полный текст — инструментом knowledge_read';
+
+/** Режим тега знаний словами — для списка и страницы «Контекст». */
+export const tagModeText = (inline: boolean | undefined): string => (inline ? 'в промпте целиком' : 'по запросу');
 
 // ---------- крупный редактор справа: зеркало поля тега, в котором стоит фокус
 

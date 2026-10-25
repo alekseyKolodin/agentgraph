@@ -13,7 +13,7 @@ import { useToast } from '../../components/Toast';
 import {
   CTX_HINT, CTX_LS, CTX_TEXT, ctxAddDirs, ctxDirty, ctxEditState, ctxFlowOptions, ctxHome, ctxKnowledge, ctxListSum, ctxMcpServers, ctxMeta,
   ctxOpenTitle, ctxPhaseGroups, ctxProjectMd, ctxProjects, ctxQuery, ctxRows, ctxSum, ctxTokens, ctxTotals, type CtxEdit, type CtxRow,
-  type CtxSelection, type PhaseGroup,
+  type CtxSelection, type PhaseGroup, ctxChars, ctxPromptRows, ctxPromptTokens, ctxPromptVars,
 } from '../../lib/context';
 import { modelOptions } from '../../lib/flow/tools';
 import { LS } from '../../lib/storage';
@@ -411,6 +411,23 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
           : <p>Стандартный промпт Claude Code (preset <code>claude_code</code>).</p>}
         <p><span className="muted">Инструменты:</span>{` ${d.tools ? d.tools.join(', ') : 'все инструменты Claude Code'}`}</p>
       </section>
+      {d.prompt && (
+        <section className={sec}>
+          <h2 title="Что раннер соберёт в первое сообщение этапа, по источникам; без подстановок, артефактов и вложений — они известны только в запуске">
+            {'Промпт этапа по источникам '}<span className="small muted">{`· ${ctxChars(d.prompt.chars)} знаков, ${ctxPromptTokens(d.prompt.chars)}`}</span>
+          </h2>
+          <ul className={styles.ctxList}>
+            {ctxPromptRows(d.prompt).map((x, i) => (
+              <li key={i} className={styles.ctxRow}>
+                <span className={styles.ctxName}>{x.name}</span>
+                {x.inline && <span className="chip" title="Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»">целиком</span>}
+                <span className={styles.ctxTok}>{`${x.chars} · ${x.share}`}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">{ctxPromptVars(d.prompt.vars)}</p>
+        </section>
+      )}
       <CtxList title="Скиллы" hint={CTX_HINT.skills} list={d.skills} />
       <CtxList title="Сабагенты" hint={CTX_HINT.agents} list={d.agents} />
       <CtxList title="MCP" hint={CTX_HINT.mcp} list={ctxMcpServers(d)} />

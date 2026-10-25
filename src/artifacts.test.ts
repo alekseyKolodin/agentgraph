@@ -181,7 +181,7 @@ test('H2: тексты генератора и «Правки с ИИ» опис
     ['ссылайся на артефакт, а не на пересказ этапа', /Refer to the artifact, not to a phase's retelling of it/],
     ['когда артефакт полезнее {{prev}}', /Declare an artifact when state must outlive one hand-off[^\n]*a plan[^\n]*a checklist[^\n]*decisions/],
     ['по умолчанию без артефактов', /By default a flow has none/],
-    ['этап проверки: writes вместо Edit', /verification: [^\n]*writes: \[KEY\] of that artifact instead of "Edit"/],
+    ['этап проверки: writes вместо Edit', /review \/ verification phase[^\n]*writes: \[KEY\] of that artifact instead of "Edit"/],
     ['судья проверяет по файлам проекта и командам', /checked against the project's files and the results of commands, not against what an artifact/],
     ['группа: один писатель артефакта', /at most one member writes a given artifact/],
     ['правило 6: max_turns 1-3 только без tools и без артефактов', /Set max_turns \(1-3\) only for phases with no tools and no writes or reads of artifacts/],
