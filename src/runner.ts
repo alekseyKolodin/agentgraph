@@ -711,6 +711,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     if (storeError) throw storeError;
     // несуществующую директорию ловим до первого этапа, а не молча отдаём сессии без неё
     checkAddDirs(blocks, opts.cwd, opts.addDirs);
+    checkPlugins(blocks, opts.cwd);
     // как и несуществующий тег знаний
     knowledge = resolveKnowledge(spec, opts.knowledge);
     for (const [bi, block] of blocks.entries()) {
@@ -907,6 +908,23 @@ export function checkAddDirs(blocks: Block[], cwd: string, runDirs?: string[]): 
   if (missing.length) throw new Error(`Нет директорий:\n${missing.join('\n')}`);
 }
 
+/** Плагины этапа абсолютными путями: plugins блока, затем этапа; ~ и относительные — как у add_dirs. */
+export function resolvePlugins(spec: FlowSpec, phase: Phase, cwd: string): string[] {
+  // имена этапов уникальны во всём flow: ищем по имени, а не по объекту — клон этапа плагины блока не теряет
+  const block = flowBlocks(spec).find((b) => b.phases.some((p) => p.name === phase.name));
+  return resolveDirList([...(block?.plugins ?? []), ...(phase.plugins ?? [])], cwd);
+}
+
+/** Бросает ошибку, если какой-то папки плагина (блока или этапа) нет на диске. */
+export function checkPlugins(blocks: Block[], cwd: string): void {
+  const isDir = (d: string) => Boolean(fs.statSync(d, { throwIfNoEntry: false })?.isDirectory());
+  const missing = blocks.flatMap((b) => [
+    ...resolveDirList(b.plugins, cwd).filter((d) => !isDir(d)).map((d) => `блок ${b.name}: ${d}`),
+    ...b.phases.flatMap((p) => resolveDirList(p.plugins, cwd).filter((d) => !isDir(d)).map((d) => `${p.name}: ${d}`)),
+  ]);
+  if (missing.length) throw new Error(`Нет папок плагинов:\n${missing.join('\n')}`);
+}
+
 /** Модель и effort, с которыми пойдёт этап: единственное место приоритета (этап → defaults → opts.model для модели). */
 export function phaseModel(spec: FlowSpec, phase: Phase, opts: Pick<RunOptions, 'model'>): { model?: string; effort?: EffortLevel } {
   const d = spec.defaults ?? {};
@@ -923,6 +941,7 @@ export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts:
   const d = spec.defaults ?? {};
   const implicit = art?.access.implicit.filter((t) => !phase.tools.includes(t)) ?? [];
   const artDir = art?.access.read.length ? [art.dir] : [];
+  const plugins = resolvePlugins(spec, phase, opts.cwd);
   return {
     prompt,
     cwd: opts.cwd,
@@ -938,6 +957,7 @@ export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts:
     // этап, закончивший ответ раньше своей фоновой задачи, теряет её результат
     foreground: true,
     abort: opts.abort,
+    ...(plugins.length ? { plugins } : {}),
     ...mergeTools(artifactTools(art), knowledgeTools(knowledge)),
   };
 }
@@ -1209,7 +1229,9 @@ export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'>, spec: Fl
     skip.push(b);
   }
   if (skip.length === blocks.length) return { ok: false, reason: 'Все блоки flow уже завершены в этом запуске: продолжать нечего' };
-  if (!skip.length) return { ok: false, reason: `Первый блок «${blocks[0].title ?? blocks[0].name}» не завершён: продолжать нечего, запусти заново` };
+  // первый блок, упёршийся в лимит итераций, продолжаем: он идёт заново с новым лимитом, а код и артефакты остаются
+  const first = prev.blocks?.find((x) => x.name === blocks[0].name)?.status;
+  if (!skip.length && first !== 'max_iterations') return { ok: false, reason: `Первый блок «${blocks[0].title ?? blocks[0].name}» не завершён: продолжать нечего, запусти заново` };
   return { ok: true, skip };
 }
 
@@ -1263,8 +1285,8 @@ export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStor
     return `## ${where} · ${x.p.phase}\n${truncateTail(read(x), HISTORY_ENTRY_MAX)}`;
   });
   // {{prev}} — как при обычном переходе между блоками: вывод последнего шага, у группы — склейка участников
-  const lastStep = phaseSteps(skip.at(-1)!).at(-1)!;
-  const tail = stepPrev(lastStep.phases.map(({ phase }) => ({ phase: phase.name, output: phases[phase.name] })));
+  const lastStep = skip.length ? phaseSteps(skip.at(-1)!).at(-1)! : undefined;
+  const tail = lastStep ? stepPrev(lastStep.phases.map(({ phase }) => ({ phase: phase.name, output: phases[phase.name] }))) : '';
   return { runId: prev.id, skipBlocks: skip.map((b) => b.name), phases, prev: tail, history };
 }
 

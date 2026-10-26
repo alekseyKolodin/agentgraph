@@ -34,6 +34,8 @@ export type SessionRequest = {
   foreground?: boolean;
   /** Продолжить сохранённую сессию с этим id: разговор подгружается. Нужен тот же cwd, что у неё. */
   resume?: string;
+  /** Папки локальных плагинов Claude Code (как --plugin-dir), абсолютные пути: скиллы, агенты, хуки и MCP плагина — только этой сессии. */
+  plugins?: string[];
   /** MCP-серверы сессии (например, in-process из createSdkMcpServer). Их инструменты разрешаются через allow. */
   mcpServers?: Options['mcpServers'];
   /** Инструменты сверх tools, разрешённые без подтверждений: имена MCP-инструментов (mcp__<сервер>__<инструмент>). */
@@ -340,6 +342,7 @@ export function sessionOptions(req: SessionRequest, preface?: Preface): Options 
     if (auto.length > 0) options.allowedTools = auto;
   }
   if (req.resume) options.resume = req.resume;
+  if (req.plugins?.length) options.plugins = req.plugins.map((p) => ({ type: 'local', path: p }));
   if (req.mcpServers) options.mcpServers = req.mcpServers;
   if (req.allow?.length) options.allowedTools = [...(options.allowedTools ?? []), ...req.allow];
   if (req.guard) {

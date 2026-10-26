@@ -8,7 +8,7 @@ import { query, type McpServerStatus, type Options, type Query } from '@anthropi
 import { CLAUDEAI_TOOL_PREFIX, NO_CLAUDEAI_CONNECTORS_ENV, sessionOptions } from './agent.js';
 import { connectorName, connectorToolName, isConnector, waitForConnectors } from './connectors.js';
 import { loadFlow, resolveFlowFile } from './flows.js';
-import { buildRequest, dirsTail, handoffTail, resolveAddDirs } from './runner.js';
+import { buildRequest, dirsTail, handoffTail, resolveAddDirs, resolvePlugins } from './runner.js';
 import { flowBlocks, flowPhases, type Phase } from './schema.js';
 import { ARTIFACTS_DIR, artifactAccess, hasArtifacts } from './artifacts.js';
 import { RUNS_DIR } from './paths.js';
@@ -83,6 +83,9 @@ export function contextOptions(req: ContextRequest): ContextOptions {
   // раннер до запуска падает в checkAddDirs; здесь показываем, что этап получит, и предупреждаем
   const addDirs = resolveAddDirs(phase, req.cwd).map((d) => ({ path: d, exists: Boolean(fs.statSync(d, { throwIfNoEntry: false })?.isDirectory()) }));
   for (const d of addDirs) if (!d.exists) warnings.push(`Нет директории из add_dirs: ${d.path}. Запуск этого этапа упадёт до старта.`);
+  // раннер падает в checkPlugins; здесь предупреждаем, а несуществующую папку в листинг не передаём
+  const missingPlugins = resolvePlugins(spec, phase, req.cwd).filter((d) => !fs.statSync(d, { throwIfNoEntry: false })?.isDirectory());
+  for (const d of missingPlugins) warnings.push(`Нет папки плагина из plugins: ${d}. Запуск упадёт до старта.`);
   // теги знаний блока этапа — так же: раннер падает в resolveKnowledge, здесь предупреждаем; пути тегов — в доп. директории
   const block = flowBlocks(spec).find((b) => b.phases.includes(phase));
   const known: Tag[] = [];
@@ -104,7 +107,8 @@ export function contextOptions(req: ContextRequest): ContextOptions {
   const artDir = path.join(RUNS_DIR, '<id запуска>', ARTIFACTS_DIR);
   // инструмент чтения по ключу — тот же MCP-сервер, что у раннера (без файлов: на странице только его описание)
   const request = buildRequest(spec, phase, '', { cwd: req.cwd, runsDir: '', model: req.model }, access ? { dir: artDir, access, sources: [] } : undefined, known);
-  const options = sessionOptions({ ...request, additionalDirectories: request.additionalDirectories.filter((d) => d !== artDir) });
+  const plugins = request.plugins?.filter((d) => !missingPlugins.includes(d));
+  const options = sessionOptions({ ...request, additionalDirectories: request.additionalDirectories.filter((d) => d !== artDir), plugins });
   if (access?.read.length) {
     const read = access.read.filter((k) => !access.write.includes(k));
     warnings.push(

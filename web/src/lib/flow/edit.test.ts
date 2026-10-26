@@ -206,3 +206,18 @@ test('сводка «Схемы»: один блок — этапы и цикл,
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk(false, 1)] }), '1 этап · один проход');
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk(false, 1), blk(true, 4)] }), '2 блока · 5 этапов');
 });
+
+test('collectSpec: plugins этапа и блока сохраняются как есть, пустые — не сохраняются', () => {
+  const out = collectSpec(spec([{ name: 'm', plugins: ['~/my-plugin'], phases: [ph('x', { plugins: ['/p'] }), ph('y', { plugins: [] })] }])) as { blocks: Record<string, unknown>[] };
+  const [b] = out.blocks;
+  assert.deepEqual(b!.plugins, ['~/my-plugin']);
+  const [x, y] = b!.phases as Record<string, unknown>[];
+  assert.deepEqual(x!.plugins, ['/p']);
+  assert.equal('plugins' in y!, false);
+});
+
+test('specChanges: правка плагинов этапа и блока видна в сводке', () => {
+  const before = spec([{ name: 'a', phases: [ph('x')] }]);
+  const after = spec([{ name: 'a', plugins: ['~/qa'], phases: [ph('x', { plugins: ['/p'] })] }]);
+  assert.deepEqual(specChanges(before, after).lines.map((l) => l.text), ['Блок «a»: плагины', 'Этап x: плагины']);
+});
