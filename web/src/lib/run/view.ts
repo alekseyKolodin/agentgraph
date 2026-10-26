@@ -72,11 +72,12 @@ export const LIMIT_MAX = 50;
 
 /**
  * Видна ли «Продолжить с места остановки». Решает сервер (continuable); старый сервер поля не отдаёт — тогда прежнее правило:
- * завершённый не done запуск, у которого первый блок прошёл целиком.
+ * завершённый не done запуск, у которого первый блок прошёл целиком или упёрся в лимит итераций.
  */
 export function continueVisible(r: RunView): boolean {
   if ('continuable' in r) return Boolean(r.continuable);
-  return !(r.live || r.status === 'done' || r.status === 'running' || r.blocks?.[0]?.status !== 'done');
+  const first = r.blocks?.[0]?.status;
+  return !(r.live || r.status === 'done' || r.status === 'running' || (first !== 'done' && first !== 'max_iterations'));
 }
 
 /** Первая строка карточки паузы. */
