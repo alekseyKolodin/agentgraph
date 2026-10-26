@@ -1,41 +1,41 @@
 # agentgraph
 
-**Оркестратор агентов Claude Code с гарантированным результатом.** agentgraph описывает инженерную задачу как процесс: один или несколько этапов, условие приёмки и цикл. Процесс прогоняется, пока результат не пройдёт формальную приёмку: тесты, LLM-судью по рубрике или явный маркер готовности. Работает локально: в браузере, в десктопном приложении или из CLI.
+**An orchestrator for Claude Code agents with a guaranteed result.** agentgraph describes an engineering task as a process: one or more phases, an acceptance condition and a loop. The process runs until the result passes formal acceptance: tests, an LLM judge with a rubric, or an explicit done marker. It runs locally: in the browser, in the desktop app or from the CLI.
 
-<p align="center"><img src="docs/assets/run-overview.png" width="960" alt="Страница запуска: сводка «где мы сейчас», вердикт судьи по первой итерации и лента итераций по блокам"></p>
+<p align="center"><img src="docs/assets/run-overview.png" width="960" alt="Run page: the &quot;where we are now&quot; summary, the judge's verdict on the first iteration and the feed of iterations by block"></p>
 
-## Какую проблему решает
+## What problem it solves
 
-Одиночная сессия AI-агента — это попытка, а не результат. Агент может остановиться на полпути, «закрыть» задачу без проверки или потерять контекст в длинном разговоре. Команда тратит время на то, чтобы перепроверять и дожимать.
+A single AI agent session is an attempt, not a result. The agent can stop halfway, "close" a task without checking it, or lose context in a long conversation. The team spends time re-checking and pushing the work to completion.
 
-agentgraph превращает работу агента в управляемый процесс:
+agentgraph turns agent work into a controlled process:
 
-| Задача бизнеса | Как решается |
+| Business need | How it's solved |
 |---|---|
-| **Предсказуемое качество** | Каждая итерация проходит приёмку: `npm test`, судью по рубрике или маркер. Если работа не принята, замечания уходят в следующую итерацию, и агент дорабатывает сам. |
-| **Контроль затрат** | Лимит бюджета на запуск и на этап, лимит ходов и итераций, своя модель на каждый этап (дешёвая на рутину, сильная на проектирование). Стоимость видна по каждому этапу. |
-| **Повторяемость** | Процесс хранится как YAML-файл в git: его можно ревьюить, версионировать и передавать команде. Удачную сессию можно превратить во flow одной командой. |
-| **Прозрачность** | Промпт, транскрипт, вывод и стоимость каждого этапа. Модель кратко пересказывает, где сейчас запуск и чем закончилась каждая итерация. |
-| **Человек в контуре** | Агент может задать вопрос или поставить запуск на паузу. Ответ даётся в интерфейсе, после чего запуск продолжается с того же места. |
-| **Масштаб** | Несколько запусков параллельно, каждый в своём проекте или git worktree. Вопросы со всех запусков собираются на одной странице. |
+| **Predictable quality** | Every iteration goes through acceptance: `npm test`, a judge with a rubric, or a marker. If the work isn't accepted, the feedback goes into the next iteration and the agent reworks it on its own. |
+| **Cost control** | A budget limit per run and per phase, a turn limit and an iteration limit, a separate model for each phase (a cheap one for routine work, a strong one for design). Cost is shown for every phase. |
+| **Repeatability** | The process is stored as a YAML file in git: you can review it, version it and share it with the team. A successful session can be turned into a flow with one command. |
+| **Transparency** | Prompt, transcript, output and cost of every phase. A model briefly sums up where the run is now and how each iteration ended. |
+| **Human in the loop** | The agent can ask a question or pause the run. You answer in the interface, and the run continues from the same place. |
+| **Scale** | Several runs in parallel, each in its own project or git worktree. Questions from all runs are collected on one page. |
 
-## Как это работает
+## How it works
 
 ```
-задача ──► этап (обычно один) ──► условие приёмки ──► готово
+task ──► phase (usually one) ──► acceptance condition ──► done
               ▲                          │
-              └──── замечания условия ───┘   следующая итерация
+              └─── condition feedback ───┘   next iteration
 ```
 
-- **Flow** — последовательность блоков. Блок — цепочка этапов с необязательным циклом и условием приёмки.
-- **Этап** — отдельная сессия Claude Code со своим промптом, набором инструментов, моделью и уровнем рассуждений. Следующий этап получает вывод предыдущего, а не весь разговор. Это и преимущество (чистый контекст, ревьюер не видит рассуждений исполнителя), и цена (пересказ теряет детали), поэтому этапов должно быть как можно меньше: по умолчанию один, разделение только там, где контексты и правда не должны смешиваться — независимое ревью, параллельная работа, слишком большой контекст.
-- **Условие приёмки** бывает четырёх видов: `command` (код выхода shell-команды), `judge` (LLM-судья по рубрике, читает файлы проекта), `marker` (этап заканчивает вывод заданной строкой), `none` (фиксированное число итераций).
-- **Параллельные группы.** Этапы блока с общим `group` идут одновременно, например независимые ревью с разных сторон.
-- **Артефакты** — файлы запуска с явными правами доступа: какой этап читает, какой пишет. Пользователь может поправить их между шагами.
-- **Теги** подмешивают контекст на запуске: саммари фичи из прошлых запусков (тег задачи) идёт в задачу, а правила области (тег знаний) этап получает одной строкой и читает полностью по запросу. Flow остаётся универсальным, а контекст подставляется на запуске.
-- **Анализ flow и eval.** После запуска модель по фактам (пик контекста каждого этапа, застой замечаний, лишние права) предлагает, какие этапы объединить, какие разбить. Команда `eval` прогоняет набор задач через два варианта flow и показывает, какие задачи «перевернулись».
+- **Flow** — a sequence of blocks. A block is a chain of phases with an optional loop and acceptance condition.
+- **Phase** — a separate Claude Code session with its own prompt, set of tools, model and reasoning level. The next phase gets the previous phase's output, not the whole conversation. This is both an advantage (clean context, the reviewer doesn't see the implementer's reasoning) and a cost (a retelling loses details), so keep the number of phases as small as possible: one by default, split only where the contexts really must not mix — independent review, parallel work, a context that is too large.
+- **Acceptance condition** comes in four types: `command` (exit code of a shell command), `judge` (an LLM judge with a rubric that reads the project files), `marker` (the phase ends its output with a given string), `none` (a fixed number of iterations).
+- **Parallel groups.** Phases of a block with a shared `group` run at the same time, for example independent reviews from different angles.
+- **Artifacts** — run files with explicit access rights: which phase reads, which phase writes. You can edit them between steps.
+- **Tags** mix in context at run time: a feature summary from past runs (task tag) goes into the task, and area rules (knowledge tag) reach the phase as a single line, which the phase reads in full on demand. The flow stays generic, and the context is filled in at run time.
+- **Flow analysis and eval.** After a run, a model looks at the facts (each phase's peak context, stalled feedback, excess permissions) and suggests which phases to merge and which to split. The `eval` command runs a set of tasks through two variants of a flow and shows which tasks "flipped".
 
-Пример блока с циклом до одобрения судьи. Ревью здесь отдельным этапом не по типу работы, а по контексту: ревьюер только читает и не видит рассуждений исполнителя, поэтому не поддаётся его объяснениям.
+An example of a block that loops until the judge approves. The review is a separate phase here not because of the type of work but because of context: the reviewer only reads and doesn't see the implementer's reasoning, so it isn't swayed by the implementer's explanations.
 
 ```yaml
 blocks:
@@ -45,43 +45,43 @@ blocks:
       until:
         type: judge
         prompt: |
-          Задача: {{input}}
-          Результат: {{outputs}}
-          done=true, только если требования выполнены и тесты не сломаны; иначе — замечания в feedback.
+          Task: {{input}}
+          Result: {{outputs}}
+          done=true only if the requirements are met and the tests aren't broken; otherwise, put feedback in feedback.
     phases:
       - name: code
         tools: [Read, Grep, Glob, Edit, Bash]
         prompt: |
           {{input}}
-          Замечания прошлой итерации: {{feedback}}
+          Feedback from the previous iteration: {{feedback}}
       - name: review
-        tools: [Read, Grep, Glob]   # ревьюер не может править код
+        tools: [Read, Grep, Glob]   # the reviewer can't edit code
         prompt: |
-          Проверь изменения из этапа code: {{phases.code}}
+          Review the changes from the code phase: {{phases.code}}
 ```
 
-Flow можно сгенерировать из текстового описания, собрать в визуальном конструкторе или поправить словами («добавь этап ревью с судьёй»).
+You can generate a flow from a text description, build it in the visual builder, or edit it in words ("add a review phase with a judge").
 
-<p align="center"><img src="docs/assets/builder-blocks.png" width="860" alt="Конструктор: граф flow из трёх блоков — цикл до одобрения судьи, шаги в один проход, цикл до маркера готовности"></p>
+<p align="center"><img src="docs/assets/builder-blocks.png" width="860" alt="Builder: a flow graph of three blocks — a loop until the judge approves, single-pass steps, a loop until the done marker"></p>
 
-## Теги
+## Tags
 
-Тег — контекст, который живёт вне flow и подставляется на запуске. Так один и тот же flow годится для разных фич и разных частей кода. Тегов два вида, вид задаётся при создании и потом не меняется.
+A tag is context that lives outside the flow and is filled in at run time. This way the same flow works for different features and different parts of the code. There are two kinds of tags; the kind is set at creation and can't be changed later.
 
-| | Тег задачи (`task`) | Тег области знаний (`knowledge`) |
+| | Task tag (`task`) | Knowledge tag (`knowledge`) |
 |---|---|---|
-| **Зачем** | Фича, которая переходит между запусками: реализация → фикс багов → правки по ревью → конфликты. Описывать её заново не нужно. | Что должны знать этапы: правила фронтенда, бэкенда, QA. |
-| **Что внутри** | Саммари, заметки, пути, вложения | Описание «когда нужен», заметки (инструкции), пути, вложения; саммари нет |
-| **Куда попадает** | Блок `<!-- tag:<slug> -->` в начале задачи (`{{input}}`) | Одна строка на тег в конце промпта каждого этапа блока; полный текст этап получает инструментом `knowledge_read`, когда он ему нужен (как скилл). Тег с пометкой «всегда в промпт» вставляется целиком |
-| **Как подключить** | Форма запуска или `--tag <slug>`; новый тег может завести ИИ (`--auto-tag`) | Поле `knowledge` блока во flow.yaml, на весь запуск — чипом в форме или `--tag <slug>` |
-| **После запуска** | Если запуск завершился со статусом «готово», короткая сессия (haiku, только чтение) переписывает саммари целиком: суть, где код, ключевые решения, что осталось | Не меняется |
+| **Why** | A feature that carries over between runs: implementation → bug fixes → review fixes → conflicts. You don't have to describe it again. | What the phases need to know: frontend, backend, QA rules. |
+| **What's inside** | Summary, notes, paths, attachments | A "when it's needed" description, notes (instructions), paths, attachments; no summary |
+| **Where it goes** | A `<!-- tag:<slug> -->` block at the start of the task (`{{input}}`) | One line per tag at the end of the prompt of every phase in the block; the phase gets the full text with the `knowledge_read` tool when it needs it (like a skill). A tag marked "always in the prompt" is inserted in full |
+| **How to attach** | The run form or `--tag <slug>`; AI can create a new tag (`--auto-tag`) | The block's `knowledge` field in flow.yaml; for the whole run, as a chip in the form or `--tag <slug>` |
+| **After the run** | If the run ended with the "done" status, a short session (haiku, read-only) rewrites the summary in full: the gist, where the code is, key decisions, what's left | Doesn't change |
 
-Тег знаний вешается на блок по слагу:
+A knowledge tag is attached to a block by its slug:
 
 ```yaml
 blocks:
   - name: implement
-    knowledge: [frontend-rules]   # строка с описанием тега — всем этапам блока, полный текст — по запросу через knowledge_read
+    knowledge: [frontend-rules]   # the line with the tag description goes to every phase of the block, the full text on demand via knowledge_read
     phases:
       - name: code
         tools: [Read, Grep, Glob, Edit, Bash]
@@ -89,56 +89,56 @@ blocks:
           {{input}}
 ```
 
-Слаг — строчные латинские буквы, цифры и дефис, до 64 знаков. Если тега нет или это тег задачи, запуск падает с ошибкой до первого этапа.
+A slug is lowercase Latin letters, digits and hyphens, up to 64 characters. If the tag doesn't exist or is a task tag, the run fails with an error before the first phase.
 
-Тег знаний раскрывается постепенно: в промпте этапа только «что это и когда нужно», а заметки, пути и вложения этап запрашивает инструментом `knowledge_read`, когда задача этого касается. Так тег «Android» не раздувает каждую итерацию правилами про сборку, если этап правит документацию. Короткие правила, которые должны действовать всегда, помечаются на странице «Теги» как «всегда вставлять в промпт целиком». Пути тега и папка его вложений подключаются этапам дополнительными директориями в любом режиме. Тег задачи вдобавок открывает этапам артефакты трёх последних запусков с ним: на них ссылается саммари. Саммари в задаче обёрнуто как данные, а не инструкции: его писала модель. Заметки — текст пользователя и идут как есть.
+A knowledge tag is disclosed gradually: the phase prompt contains only "what it is and when it's needed", and the phase requests the notes, paths and attachments with the `knowledge_read` tool when the task touches on them. This way an "Android" tag doesn't bloat every iteration with build rules when the phase is editing documentation. Short rules that must always apply are marked on the **Tags** page as "always insert into the prompt in full". The tag's paths and its attachments folder are attached to phases as additional directories in either mode. A task tag also gives phases access to the artifacts of the last three runs with it: the summary refers to them. The summary in the task is wrapped as data, not instructions: a model wrote it. Notes are your own text and go in as is.
 
-Каждый тег — папка `~/.agentgraph/tags/<slug>/`:
+Each tag is a folder `~/.agentgraph/tags/<slug>/`:
 
 ```
-summary.md     саммари тега задачи: текущее состояние фичи, не журнал
-notes.md       заметки пользователя, сессия саммари их не трогает
-attachments/   вложения тега
-tag.json       вид, заголовок, пути, последние 20 запусков; у тега знаний — описание и режим «целиком»
+summary.md     task tag summary: the current state of the feature, not a log
+notes.md       your notes; the summary session doesn't touch them
+attachments/   tag attachments
+tag.json       kind, title, paths, last 20 runs; for a knowledge tag, the description and the "in full" mode
 ```
 
-Смотреть и править теги (заголовок, саммари, заметки, пути, вложения, а у тега знаний ещё описание и галочку «всегда вставлять целиком») — на странице **Теги** в интерфейсе; список с видом каждого тега — `npm run agentgraph -- tags`. Галочка **Обновить саммари тегов после запуска** в форме (или `--no-save-tag`) отключает перезапись саммари. Лимиты: до 10 тегов на запуск, до 20 путей у тега, заметки до 4000 знаков, описание до 200, саммари до 2500.
+You view and edit tags (title, summary, notes, paths, attachments, and for a knowledge tag also the description and the "always insert in full" checkbox) on the **Tags** page in the interface; the list with each tag's kind is `npm run agentgraph -- tags`. The **Update tag summaries after the run** checkbox in the form (or `--no-save-tag`) turns off summary rewriting. Limits: up to 10 tags per run, up to 20 paths per tag, notes up to 4000 characters, description up to 200, summary up to 2500.
 
-## Возможности
+## Features
 
-- **Визуальный конструктор.** Граф flow с блоками, параллельными группами, условиями и артефактами, а также YAML-редактор и правка с ИИ.
-- **Живой мониторинг.** Статусы узлов на графе в реальном времени, лента итераций с вердиктами, хвост лога, инспектор этапа, предупреждение «буксует», если агент раз за разом падает на одном и том же.
-- **Управление запуском.** Пауза, остановка, смена лимита итераций на ходу, продолжение с места остановки, `claude --resume` любой сессии, чат с агентом о запуске.
-- **Вход из рабочих систем.** Запуск по задаче Jira, merge request в GitLab (`glab`), pull request в GitHub (`gh`) или ветке, с автоматической подготовкой git worktree.
-- **Главная страница.** Вопросы агентов со всех запусков, идущие запуски, MR и PR, которым нужно внимание, лента событий, лимиты подписки Claude.
-- **Проверка архитектуры flow.** Кнопка «Анализ flow» на странице завершённого запуска: модель по фактам (пик контекста каждого этапа, застой замечаний, ходы, лишние права) советует, какие этапы объединить, какие разбить, где заменить судью командой. Команда `eval` прогоняет набор задач через два варианта flow по несколько раз и показывает, какие задачи «перевернулись».
-- **Что уходит в контекст.** Страница «Контекст» показывает для любого этапа CLAUDE.md и правила, скиллы, сабагенты, MCP и токены, а также из чего собран промпт этапа с долей каждого источника, и предупреждает, если теги знаний раздувают промпт.
-- **Интеграция с Claude Code.** Скилл `/agentgraph` запускает flow из чата и пересылает туда вопросы агента. Скилл `/session-to-flow` превращает прошедшую сессию во flow.
+- **Visual builder.** A flow graph with blocks, parallel groups, conditions and artifacts, plus a YAML editor and editing with AI.
+- **Live monitoring.** Real-time node statuses on the graph, an iteration feed with verdicts, the log tail, a phase inspector, and a "stuck" warning when the agent fails on the same thing over and over.
+- **Run control.** Pause, stop, change the iteration limit on the fly, continue from where it stopped, `claude --resume` for any session, chat with the agent about the run.
+- **Entry from work systems.** Run from a Jira issue, a GitLab merge request (`glab`), a GitHub pull request (`gh`) or a branch, with automatic git worktree setup.
+- **Home page.** Agent questions from all runs, active runs, MRs and PRs that need attention, the events feed, Claude subscription limits.
+- **Flow architecture check.** The **Analyze flow** button on a finished run's page: a model looks at the facts (each phase's peak context, stalled feedback, turns, excess permissions) and advises which phases to merge, which to split, and where to replace a judge with a command. The `eval` command runs a set of tasks through two variants of a flow several times and shows which tasks "flipped".
+- **What goes into the context.** The **Context** page shows, for any phase, CLAUDE.md and rules, skills, subagents, MCP and tokens, as well as what the phase prompt is built from with each source's share, and warns you if knowledge tags bloat the prompt.
+- **Claude Code integration.** The `/agentgraph` skill runs a flow from the chat and forwards the agent's questions there. The `/session-to-flow` skill turns a past session into a flow.
 
-## Безопасность
+## Security
 
-- Сервер слушает только `127.0.0.1` и отклоняет запросы с чужих страниц: проверяются `Host`, `Origin` и тип тела запроса, что защищает от DNS rebinding и CSRF.
-- Инструменты выдаются этапу явно: этап без `Edit` и `Write` не может менять файлы проекта.
-- Права на артефакты (`reads`, `writes`) проверяются хуком перед каждым вызовом инструмента, в том числе в сабагентах.
-- Текст агентов и внешних систем выводится в интерфейсе как текст: markdown рендерится через экранирующий парсер.
-- Настройки и токены интеграций хранятся в `~/.agentgraph`, вне репозитория и вне журналов запусков.
+- The server listens only on `127.0.0.1` and rejects requests from other pages: it checks `Host`, `Origin` and the request body type, which protects against DNS rebinding and CSRF.
+- Tools are granted to a phase explicitly: a phase without `Edit` and `Write` can't change project files.
+- Artifact permissions (`reads`, `writes`) are checked by a hook before every tool call, including in subagents.
+- Text from agents and external systems is shown in the interface as text: markdown is rendered through an escaping parser.
+- Settings and integration tokens are stored in `~/.agentgraph`, outside the repository and outside run logs.
 
-## Технологии
+## Technologies
 
-| Слой | Стек |
+| Layer | Stack |
 |---|---|
-| Ядро и сервер | Node.js 20+, TypeScript (strict, ESM), `node:http` без фреймворков, SSE для живых событий |
-| Агенты | `@anthropic-ai/claude-agent-sdk`: та же авторизация и инструменты, что у `claude` (подписка или `ANTHROPIC_API_KEY`) |
-| Схема flow | YAML + zod-валидация |
-| Веб-интерфейс | React 19, TypeScript, Vite, React Router, TanStack Query, React Flow (`@xyflow/react`), CodeMirror 6 |
-| Десктоп | Electron: тот же сервер и тот же интерфейс в нативном окне macOS |
-| Тесты и CI | `node:test`, typecheck сервера и UI, сборка UI в CI |
+| Core and server | Node.js 20+, TypeScript (strict, ESM), `node:http` without frameworks, SSE for live events |
+| Agents | `@anthropic-ai/claude-agent-sdk`: the same authorization and tools as `claude` (subscription or `ANTHROPIC_API_KEY`) |
+| Flow schema | YAML + zod validation |
+| Web interface | React 19, TypeScript, Vite, React Router, TanStack Query, React Flow (`@xyflow/react`), CodeMirror 6 |
+| Desktop | Electron: the same server and the same interface in a native macOS window |
+| Tests and CI | `node:test`, server and UI typecheck, UI build in CI |
 
-Интерфейс общается с сервером только по HTTP и SSE, поэтому браузерная и десктопная версии используют один и тот же код.
+The interface talks to the server only over HTTP and SSE, so the browser and desktop versions use the same code.
 
-## Быстрый старт
+## Quick start
 
-Нужны Node.js 20+ и установленный, авторизованный `claude` CLI.
+You need Node.js 20+ and the `claude` CLI installed and signed in.
 
 ```bash
 npm install
@@ -148,58 +148,58 @@ npm install
 npm run ui
 ```
 
-Откройте http://127.0.0.1:4747, выберите **example → example-blocks**, вкладку **Запуск**, нажмите **Запустить**. У этапов примера нет инструментов, прогон стоит несколько центов.
+Open http://127.0.0.1:4747, pick **example → example-blocks**, the **Run** tab, and click **Run**. The example's phases have no tools; a run costs a few cents.
 
-Десктопное приложение (macOS):
+Desktop app (macOS):
 
 ```bash
 npm run desktop:dev
 ```
 
-Командная строка:
+Command line:
 
 ```bash
-# сгенерировать flow из описания и сразу запустить
-npm run agentgraph -- "Почини падающие тесты, сами тесты не меняй" --cwd ~/code/my-repo --max-budget 3
+# generate a flow from a description and run it right away
+npm run agentgraph -- "Fix the failing tests, don't change the tests themselves" --cwd ~/code/my-repo --max-budget 3
 
-# запустить готовый flow с тегами фичи и правил области
+# run an existing flow with feature and area-rules tags
 npm run agentgraph -- run add-feature --cwd ~/code/my-repo --tag loyalty-card --tag frontend-rules
 
-# сравнить два варианта flow на наборе задач, каждую задачу по два раза
+# compare two variants of a flow on a set of tasks, each task twice
 npm run agentgraph -- eval fix-tests --compare fix-tests-solo --tasks evals/tasks.yaml --runs 2 --cwd ~/code/my-repo
 ```
 
-Формат `tasks.yaml` и рецепт «нужен ли этот этап» — в разделе «Eval» [руководства](docs/GETTING_STARTED.md).
+The `tasks.yaml` format and the "do you need this phase" recipe are in the "Eval" section of the [guide](docs/GETTING_STARTED.md).
 
-## Структура проекта
+## Project structure
 
 ```
-src/            ядро: схема flow, раннер, сессии Agent SDK, сервер API, интеграции (Jira, GitLab, GitHub, git)
-src/desktop/    главный процесс Electron
-web/            веб-интерфейс на React
-flows/example/  примеры flow: блоки, вопросы агента, пауза, параллельные группы, артефакты
-docs/           руководство и справочник
-scripts/        сборка UI, публикация, релизы, проверка хуков SDK
-.claude/        скиллы /agentgraph и /session-to-flow, правила разработки (скиллы agentgraph-core, -web, -tests, flow-author), сабагент code-reviewer
+src/            core: flow schema, runner, Agent SDK sessions, API server, integrations (Jira, GitLab, GitHub, git)
+src/desktop/    Electron main process
+web/            React web interface
+flows/example/  example flows: blocks, agent questions, pause, parallel groups, artifacts
+docs/           guide and reference
+scripts/        UI build, publishing, releases, SDK hook check
+.claude/        /agentgraph and /session-to-flow skills, development rules (agentgraph-core, -web, -tests, flow-author skills), code-reviewer subagent
 ```
 
-Журнал каждого запуска (промпты, транскрипты, выводы, стоимость) пишется в `runs/<дата>-<flow>/`, теги хранятся в `~/.agentgraph/tags/`.
+The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`; tags are stored in `~/.agentgraph/tags/`.
 
-## Разработка
+## Development
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `npm run ui` | Сервер и собранный UI на http://127.0.0.1:4747 |
-| `npm run dev:web` | UI с горячей перезагрузкой (нужен запущенный `npm run ui`) |
-| `npm run typecheck` | Проверка типов сервера и UI |
-| `npm test` | Тесты |
-| `npm run build:web` | Сборка UI в `dist/web` |
-| `npm run desktop:build` | Сборка `.app` и `.dmg` в `release/desktop/` |
+| `npm run ui` | Server and built UI at http://127.0.0.1:4747 |
+| `npm run dev:web` | UI with hot reload (needs `npm run ui` running) |
+| `npm run typecheck` | Type check of the server and UI |
+| `npm test` | Tests |
+| `npm run build:web` | UI build into `dist/web` |
+| `npm run desktop:build` | Build `.app` and `.dmg` into `release/desktop/` |
 
-Правила работы над кодом лежат скиллами в `.claude/skills/` и подгружаются в сессию Claude Code сами, когда правка касается их области: `agentgraph-core` для `src/`, `agentgraph-web` для `web/`, `agentgraph-tests` для тестов, `flow-author` для flow. Независимое ревью перед коммитом — сабагент `code-reviewer` в `.claude/agents/`: только чтение и чистый контекст.
+The rules for working on the code live as skills in `.claude/skills/` and load into a Claude Code session on their own when an edit touches their area: `agentgraph-core` for `src/`, `agentgraph-web` for `web/`, `agentgraph-tests` for tests, `flow-author` for flows. Independent review before a commit is the `code-reviewer` subagent in `.claude/agents/`: read-only and a clean context.
 
-## Документация
+## Documentation
 
-- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — установка, первый прогон, повседневная работа, развёртывание, устройство кода.
-- [docs/REFERENCE.md](docs/REFERENCE.md) — справочник: все поля `flow.yaml`, экраны интерфейса, артефакты, теги, стоимость, ограничения.
-- [flows/example/](flows/example/) — готовые примеры flow.
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — installation, first run, day-to-day work, deployment, how the code is organized.
+- [docs/REFERENCE.md](docs/REFERENCE.md) — reference: all `flow.yaml` fields, interface screens, artifacts, tags, cost, limitations.
+- [flows/example/](flows/example/) — ready-made example flows.
