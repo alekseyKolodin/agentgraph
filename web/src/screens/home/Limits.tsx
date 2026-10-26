@@ -6,10 +6,11 @@ import type { LimitWindow } from '@server/api-types';
 import { errorText, fetchLimits, keys } from '../../api';
 import { clock, when } from '../../lib/format';
 import { limitView } from '../../lib/limits';
+import { t } from '../../lib/i18n';
 import styles from './Limits.module.css';
 
 const LIMITS_POLL_MS = 60_000;
-const BASE_TITLE = 'Лимиты подписки Claude: доля окна, израсходованная всеми сессиями аккаунта';
+const BASE_TITLE = t('Лимиты подписки Claude: доля окна, израсходованная всеми сессиями аккаунта');
 
 export function Limits() {
   // клик просит свежие данные: следующий запрос идёт с force=1
@@ -37,19 +38,19 @@ export function Limits() {
   if (!d?.available) {
     return (
       <div className={styles.homeLimits} title={BASE_TITLE} onClick={reload}>
-        <span className="muted small">Лимиты недоступны: {error}</span>
+        <span className="muted small">{t('Лимиты недоступны: {error}', { error })}</span>
       </div>
     );
   }
-  const title = `Лимиты подписки Claude (${d.subscription || '—'}): доля окна, израсходованная всеми сессиями аккаунта. Данные на ${clock(d.at)}, клик — обновить`;
+  const title = t('Лимиты подписки Claude ({plan}): доля окна, израсходованная всеми сессиями аккаунта. Данные на {time}, клик — обновить', { plan: d.subscription || '—', time: clock(d.at) });
   return (
     <div className={styles.homeLimits} title={title} onClick={reload}>
-      <Limit label="5 часов" w={d.fiveHour} />
-      <Limit label="Неделя" w={d.weekly} />
+      <Limit label={t('5 часов')} w={d.fiveHour} />
+      <Limit label={t('Неделя')} w={d.weekly} />
       {error && (
         <>
           {' '}
-          <span className="muted small" title={error}>· не обновились</span>
+          <span className="muted small" title={error}>· {t('не обновились')}</span>
         </>
       )}
     </div>

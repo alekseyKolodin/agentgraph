@@ -17,6 +17,7 @@ import {
 } from '../../lib/context';
 import { modelOptions } from '../../lib/flow/tools';
 import { LS } from '../../lib/storage';
+import { t } from '../../lib/i18n';
 import styles from './Context.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -178,7 +179,7 @@ export function ContextScreen() {
         changed();
         return;
       }
-      if (!(await askConfirm(CTX_TEXT.other, { ok: 'Открыть' }))) return;
+      if (!(await askConfirm(CTX_TEXT.other, { ok: t('Открыть') }))) return;
     }
     try {
       const f = await fetchContextFile(file);
@@ -203,7 +204,7 @@ export function ContextScreen() {
       e.mtimeMs = r.mtimeMs;
       e.saved = text;
       e.conflict = false;
-      e.msg = 'Сохранено';
+      e.msg = t('Сохранено');
       ctx.saving = false;
       changed();
       // токены файла поменялись: сервер сбросил кэш, листинг пересчитаем
@@ -217,13 +218,13 @@ export function ContextScreen() {
   };
 
   const cancelFile = async () => {
-    if (ctxDirty(ctx.edit) && !(await askConfirm(CTX_TEXT.close, { ok: 'Закрыть' }))) return;
+    if (ctxDirty(ctx.edit) && !(await askConfirm(CTX_TEXT.close, { ok: t('Закрыть') }))) return;
     ctx.edit = null;
     changed();
   };
 
   const reloadFile = async () => {
-    if (ctxDirty(ctx.edit) && !(await askConfirm(CTX_TEXT.reload, { ok: 'Перечитать' }))) return;
+    if (ctxDirty(ctx.edit) && !(await askConfirm(CTX_TEXT.reload, { ok: t('Перечитать') }))) return;
     if (ctx.edit) void openFile(ctx.edit.path, true);
   };
 
@@ -238,17 +239,17 @@ export function ContextScreen() {
     <>
       <header className="view-head">
         <div>
-          <h1>Контекст</h1>
-          <p className="muted">{!ctx.rendered ? 'Что получит сессия этапа до первого сообщения' : d ? ctxMeta(d) : ''}</p>
+          <h1>{t('Контекст')}</h1>
+          <p className="muted">{!ctx.rendered ? t('Что получит сессия этапа до первого сообщения') : d ? ctxMeta(d) : ''}</p>
         </div>
         <div className="row">
-          <button className="btn" title="Спросить Claude Code заново: листинг кэшируется на минуту" onClick={() => void loadContext(true)}>Обновить</button>
+          <button className="btn" title={t('Спросить Claude Code заново: листинг кэшируется на минуту')} onClick={() => void loadContext(true)}>{t('Обновить')}</button>
         </div>
       </header>
       <form className={cx('form', styles.ctxForm)} onSubmit={submit}>
         <div className="row">
           <label className={styles.ctxCwd}>
-            <span title="Её CLAUDE.md, .claude/rules и скиллы попадут в контекст вместе с пользовательскими">Директория проекта</span>
+            <span title={t('Её CLAUDE.md, .claude/rules и скиллы попадут в контекст вместе с пользовательскими')}>{t('Директория проекта')}</span>
             <input
               name="cwd"
               list="ctx-projects"
@@ -267,7 +268,7 @@ export function ContextScreen() {
           </label>
           <PickDirButton
             className="btn"
-            prompt="Выбери директорию проекта"
+            prompt={t('Выбери директорию проекта')}
             start={() => ctx.sel.cwd.trim() || config.defaultCwd}
             onPick={(p) => {
               set({ cwd: p });
@@ -287,12 +288,12 @@ export function ContextScreen() {
                 void fillPhases(ev.target.value, '').then(() => loadContext());
               }}
             >
-              <option value="">без flow</option>
+              <option value="">{t('без flow')}</option>
               {flowOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </label>
           <label>
-            <span title="У этапа свои модель, инструменты, system и add_dirs">Этап</span>
+            <span title={t('У этапа свои модель, инструменты, system и add_dirs')}>{t('Этап')}</span>
             <select
               name="phase"
               disabled={!flowValue}
@@ -302,7 +303,7 @@ export function ContextScreen() {
                 void loadContext();
               }}
             >
-              <option value="">без этапа</option>
+              <option value="">{t('без этапа')}</option>
               {ctx.phases.map((g) =>
                 g.label
                   ? <optgroup key={g.label} label={g.label}>{g.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</optgroup>
@@ -310,7 +311,7 @@ export function ContextScreen() {
             </select>
           </label>
           <label>
-            <span>Модель</span>
+            <span>{t('Модель')}</span>
             <select
               name="model"
               value={ctx.sel.model}
@@ -322,7 +323,7 @@ export function ContextScreen() {
               {modelOptions(ctx.sel.model).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
           </label>
-          <button type="submit" className="btn primary">Показать</button>
+          <button type="submit" className="btn primary">{t('Показать')}</button>
           <span className={ctx.msg.cls}>{ctx.msg.text}</span>
         </div>
         <datalist id="ctx-projects">
@@ -335,8 +336,8 @@ export function ContextScreen() {
             <span className="mono" title={e.path}>{ctxHome(e.path, home)}</span>
             <span className={cx('row', styles.push)}>
               <span className={es.msgClass}>{es.msg}</span>
-              <button type="button" className="btn small" hidden={!es.reload} onClick={() => void reloadFile()}>Перечитать</button>
-              <button type="button" className="btn small primary" hidden={!es.save} disabled={es.saveDisabled || ctx.saving} onClick={() => void saveFile()}>Сохранить</button>
+              <button type="button" className="btn small" hidden={!es.reload} onClick={() => void reloadFile()}>{t('Перечитать')}</button>
+              <button type="button" className="btn small primary" hidden={!es.save} disabled={es.saveDisabled || ctx.saving} onClick={() => void saveFile()}>{t('Сохранить')}</button>
               <button type="button" className="btn small ghost" onClick={() => void cancelFile()}>{es.cancel}</button>
             </span>
           </div>
@@ -371,8 +372,8 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
     <>
       {d.warnings.length > 0 && <div className={styles.ctxWarn}>{d.warnings.map((w, i) => <p key={i}>{w}</p>)}</div>}
       <section className={sec}>
-        <h2 title="Оценка до первого сообщения: так сессия этапа начнёт">Токены на старте сессии</h2>
-        <p className={styles.ctxTotal}><b>{ctxTokens(d.totalTokens)}</b>{` из ${ctxTokens(d.maxTokens)} `}<span className="muted">{`· ${d.percentage}% окна`}</span></p>
+        <h2 title={t('Оценка до первого сообщения: так сессия этапа начнёт')}>{t('Токены на старте сессии')}</h2>
+        <p className={styles.ctxTotal}><b>{ctxTokens(d.totalTokens)}</b>{` ${t('из {max}', { max: ctxTokens(d.maxTokens) })} `}<span className="muted">{`· ${t('{pct}% окна', { pct: d.percentage })}`}</span></p>
         <div className={styles.ctxBar}>
           {bar.map((p, i) => <span key={i} className={styles[`c${p.c}`]} style={{ width: p.width }} title={p.title} />)}
         </div>
@@ -387,10 +388,10 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
         </ul>
       </section>
       <section className={sec}>
-        <h2>Память: CLAUDE.md и правила <span className="small muted">{`· ${ctxTokens(ctxSum(d.memoryFiles))}`}</span></h2>
-        {!ctxProjectMd(d) && <p className="muted small">В директории проекта нет своего CLAUDE.md.</p>}
-        {dirs.length > 0 && <p className="muted small">Доп. директории этапа (add_dirs): {notes(dirs)}</p>}
-        {knowledge.length > 0 && <p className="muted small">Теги знаний блока (knowledge): {notes(knowledge)}</p>}
+        <h2>{t('Память: CLAUDE.md и правила')} <span className="small muted">{`· ${ctxTokens(ctxSum(d.memoryFiles))}`}</span></h2>
+        {!ctxProjectMd(d) && <p className="muted small">{t('В директории проекта нет своего CLAUDE.md.')}</p>}
+        {dirs.length > 0 && <p className="muted small">{t('Доп. директории этапа (add_dirs):')} {notes(dirs)}</p>}
+        {knowledge.length > 0 && <p className="muted small">{t('Теги знаний блока (knowledge):')} {notes(knowledge)}</p>}
         <ul className={styles.ctxList}>
           {d.memoryFiles.length
             ? d.memoryFiles.map((f) => (
@@ -398,29 +399,29 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
                 <span className={cx(styles.ctxName, 'mono')} title={f.path}>{ctxHome(f.path, home)}</span>
                 <span className="chip">{f.type}</span>
                 <span className={styles.ctxTok}>{ctxTokens(f.tokens)}</span>
-                <button type="button" className="btn small" title={ctxOpenTitle(f.editable)} onClick={() => open(f.path)}>{f.editable ? 'Открыть' : 'Смотреть'}</button>
+                <button type="button" className="btn small" title={ctxOpenTitle(f.editable)} onClick={() => open(f.path)}>{f.editable ? t('Открыть') : t('Смотреть')}</button>
               </li>
             ))
-            : <li className="muted">Ни одного файла</li>}
+            : <li className="muted">{t('Ни одного файла')}</li>}
         </ul>
       </section>
       <section className={sec}>
-        <h2>Системный промпт и инструменты</h2>
+        <h2>{t('Системный промпт и инструменты')}</h2>
         {d.systemPrompt === 'custom'
-          ? <><p>Свой промпт этапа (system) вместо стандартного:</p><pre className={styles.ctxPre}>{d.systemPromptText || ''}</pre></>
-          : <p>Стандартный промпт Claude Code (preset <code>claude_code</code>).</p>}
-        <p><span className="muted">Инструменты:</span>{` ${d.tools ? d.tools.join(', ') : 'все инструменты Claude Code'}`}</p>
+          ? <><p>{t('Свой промпт этапа (system) вместо стандартного:')}</p><pre className={styles.ctxPre}>{d.systemPromptText || ''}</pre></>
+          : <p>{t('Стандартный промпт Claude Code (preset')} <code>claude_code</code>).</p>}
+        <p><span className="muted">{t('Инструменты:')}</span>{` ${d.tools ? d.tools.join(', ') : t('все инструменты Claude Code')}`}</p>
       </section>
       {d.prompt && (
         <section className={sec}>
-          <h2 title="Что раннер соберёт в первое сообщение этапа, по источникам; без подстановок, артефактов и вложений — они известны только в запуске">
-            {'Промпт этапа по источникам '}<span className="small muted">{`· ${ctxChars(d.prompt.chars)} знаков, ${ctxPromptTokens(d.prompt.chars)}`}</span>
+          <h2 title={t('Что раннер соберёт в первое сообщение этапа, по источникам; без подстановок, артефактов и вложений — они известны только в запуске')}>
+            {`${t('Промпт этапа по источникам')} `}<span className="small muted">{`· ${t('{n} знаков', { n: ctxChars(d.prompt.chars) })}, ${ctxPromptTokens(d.prompt.chars)}`}</span>
           </h2>
           <ul className={styles.ctxList}>
             {ctxPromptRows(d.prompt).map((x, i) => (
               <li key={i} className={styles.ctxRow}>
                 <span className={styles.ctxName}>{x.name}</span>
-                {x.inline && <span className="chip" title="Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»">целиком</span>}
+                {x.inline && <span className="chip" title={t('Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»')}>{t('целиком')}</span>}
                 <span className={styles.ctxTok}>{`${x.chars} · ${x.share}`}</span>
               </li>
             ))}
@@ -428,8 +429,8 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
           <p className="muted small">{ctxPromptVars(d.prompt.vars)}</p>
         </section>
       )}
-      <CtxList title="Скиллы" hint={CTX_HINT.skills} list={d.skills} />
-      <CtxList title="Сабагенты" hint={CTX_HINT.agents} list={d.agents} />
+      <CtxList title={t('Скиллы')} hint={CTX_HINT.skills} list={d.skills} />
+      <CtxList title={t('Сабагенты')} hint={CTX_HINT.agents} list={d.agents} />
       <CtxList title="MCP" hint={CTX_HINT.mcp} list={ctxMcpServers(d)} />
     </>
   );
@@ -441,7 +442,7 @@ const notes = (list: { text: string; err: boolean }[]) =>
 
 function CtxList({ title, hint, list }: { title: string; hint: string; list: CtxRow[] }) {
   const sec = cx(styles.homeSec, styles.ctxSec);
-  if (!list.length) return <section className={sec}><h2 title={hint}>{title}</h2><p className="muted small">Нет</p></section>;
+  if (!list.length) return <section className={sec}><h2 title={hint}>{title}</h2><p className="muted small">{t('Нет')}</p></section>;
   return (
     <section className={sec}>
       <h2 title={hint}>{`${title} `}<span className="small muted">{ctxListSum(list)}</span></h2>

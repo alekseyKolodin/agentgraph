@@ -1,6 +1,7 @@
 // Диалоги вместо confirm/alert (ui/app.js askConfirm, notify): системные диалоги в некоторых встроенных браузерах
 // молча отклоняются. Один <dialog> на приложение; экраны зовут useConfirm().
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { t } from '../lib/i18n';
 
 export type ConfirmOptions = {
   /** Текст кнопки подтверждения. */
@@ -51,10 +52,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<ConfirmApi>(() => ({
-    askConfirm: (text, { ok = 'Подтвердить', danger = false } = {}) =>
+    askConfirm: (text, { ok = t('Подтвердить'), danger = false } = {}) =>
       new Promise((resolve) => open({ text, ok, danger, cancel: true, resolve })),
     notify: (text) =>
-      new Promise((resolve) => open({ text, ok: 'Ок', danger: false, cancel: false, resolve: () => resolve() })),
+      new Promise((resolve) => open({ text, ok: t('Ок'), danger: false, cancel: false, resolve: () => resolve() })),
   }), [open]);
 
   return (
@@ -71,9 +72,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         <p>{ask?.text}</p>
         <div className="row">
           <button ref={okBtn} className={'btn ' + (ask?.danger ? 'danger-fill' : 'primary')} onClick={() => done(true)}>
-            {ask?.ok ?? 'Подтвердить'}
+            {ask?.ok ?? t('Подтвердить')}
           </button>
-          <button className="btn ghost" hidden={!ask?.cancel} onClick={() => done(false)}>Отмена</button>
+          <button className="btn ghost" hidden={!ask?.cancel} onClick={() => done(false)}>{t('Отмена')}</button>
         </div>
       </dialog>
     </Ctx.Provider>

@@ -9,6 +9,7 @@ import {
   allWarnings, artClock, artKey, artLite, artQuote, ART_EDIT_MAX, draftDirty, draftsDialog, draftSaveWhy, loadErrText, mergeItems, mergeStep, saveError, winEditable,
   type ArtDraft, type ArtItem, type ArtWarning, type ArtWin, type StepInfo,
 } from '../../lib/run/artifacts';
+import { t } from '../../lib/i18n';
 import { PAUSE_ANSWER_MAX, textBytes } from '../../lib/run/view';
 import { answerKey, dropPauseAnswer, dropRunPauseAnswers, hasPauseAnswers, pauseAnswerOf } from './pauseAnswer';
 import { runState } from './store';
@@ -139,7 +140,7 @@ export async function artLoad(): Promise<void> {
     art.loadedAt = new Date();
   } catch (err) {
     if (seq !== art.seq || runState.id !== runId) return;
-    art.error = loadErrText(errLike(err), 'Список артефактов не загрузился');
+    art.error = loadErrText(errLike(err), t('Список артефактов не загрузился'));
   } finally {
     if (seq === art.seq) art.loading = false;
   }
@@ -278,7 +279,8 @@ async function saveDrafts(drafts: ArtDraft[], stopped: string, ui: Ui): Promise<
       }
     }
     artBump();
-    await ui.notify(`${saved.length ? `Сохранено: ${artQuote(saved)}. ` : ''}Не сохранено: «${d.title}» — ${why}. ${stopped}`);
+    const head = saved.length ? `${t('Сохранено: {titles}.', { titles: artQuote(saved) })} ` : '';
+    await ui.notify(`${head}${t('Не сохранено: «{title}» — {why}.', { title: d.title, why })} ${stopped}`);
     return null;
   }
   artBump();
@@ -302,11 +304,11 @@ export async function artResume(runId: string, homeRun: ResumeRun | undefined, u
     const choice = await askDrafts(draftsDialog(drafts.map((d) => d.title), paused ? 'resume' : 'requested'));
     if (choice === 'cancel') return;
     if (choice === 'save') {
-      const ok = await saveDrafts(drafts, 'Запуск не возобновлён.', ui);
+      const ok = await saveDrafts(drafts, t('Запуск не возобновлён.'), ui);
       if (!ok) return;
       saved = ok;
       if (!paused) {
-        ui.toast(`Сохранено: ${artQuote(saved)}. Пауза осталась: запуск встанет после текущего шага`);
+        ui.toast(t('Сохранено: {titles}. Пауза осталась: запуск встанет после текущего шага', { titles: artQuote(saved) }));
         return;
       }
     }
@@ -325,18 +327,20 @@ export async function artResume(runId: string, homeRun: ResumeRun | undefined, u
   const say = async (text: string) => (onPage ? setAnswerMsg(key, text, 'err') : void (await ui.notify(text)));
   if (textBytes(answer) > PAUSE_ANSWER_MAX) {
     art.resumingHere.delete(runId);
-    return say('Ответ больше 64 КБ: сократи его. Запуск остался на паузе.');
+    return say(t('Ответ больше 64 КБ: сократи его. Запуск остался на паузе.'));
   }
   try {
-    if (onPage) setAnswerMsg(key, 'Записываю ответ…');
+    if (onPage) setAnswerMsg(key, t('Записываю ответ…'));
     await resumeRun(runId, answer);
     dropPauseAnswer(key);
     if (onPage) setAnswerMsg(key, '');
-    ui.toast(`${saved.length ? `Сохранено: ${artQuote(saved)}. ` : ''}Ответ записан, запуск возобновлён`);
+    ui.toast(`${saved.length ? `${t('Сохранено: {titles}.', { titles: artQuote(saved) })} ` : ''}${t('Ответ записан, запуск возобновлён')}`);
   } catch (err) {
     art.resumingHere.delete(runId);
-    const what = saved.length ? `Правка ${artQuote(saved)} сохранена, но ответ не записан` : 'Ответ не записан';
-    await say(`${what}: ${err instanceof ApiError ? err.message : 'сервер недоступен'}. Запуск остался на паузе, текст ответа — в поле.`);
+    const what = saved.length ? t('Правка {titles} сохранена, но ответ не записан', { titles: artQuote(saved) }) : t('Ответ не записан');
+    await say(
+      t('{what}: {error}. Запуск остался на паузе, текст ответа — в поле.', { what, error: err instanceof ApiError ? err.message : t('сервер недоступен') }),
+    );
   }
 }
 
@@ -346,7 +350,7 @@ export async function artBeforeContinue(runId: string, ui: Ui): Promise<boolean>
   if (!drafts.length) return true;
   const choice = await askDrafts(draftsDialog(drafts.map((d) => d.title), 'continue'));
   if (choice === 'cancel') return false;
-  if (choice === 'save') return Boolean(await saveDrafts(drafts, 'Запуск не продолжен.', ui));
+  if (choice === 'save') return Boolean(await saveDrafts(drafts, t('Запуск не продолжен.'), ui));
   return true;
 }
 
@@ -355,8 +359,10 @@ export async function artConfirmLeave(curId: string, askConfirm: ConfirmFn): Pro
   const drafts = dirtyDrafts(curId);
   if (!drafts.length) return true;
   return askConfirm(
-    `Несохранённая правка ${artQuote(drafts.map((d) => d.title))} в этом запуске. Черновик останется до перезагрузки страницы: вернуться к нему можно здесь же. Перейти?`,
-    { ok: 'Перейти' },
+    t('Несохранённая правка {titles} в этом запуске. Черновик останется до перезагрузки страницы: вернуться к нему можно здесь же. Перейти?', {
+      titles: artQuote(drafts.map((d) => d.title)),
+    }),
+    { ok: t('Перейти') },
   );
 }
 
@@ -388,7 +394,7 @@ export async function winLoad(): Promise<void> {
     w.error = '';
   } catch (err) {
     if (art.win !== w || seq !== w.seqCur) return;
-    w.error = loadErrText(errLike(err), 'Артефакт не загрузился');
+    w.error = loadErrText(errLike(err), t('Артефакт не загрузился'));
   }
   w.loading = false;
   artBump();
@@ -411,7 +417,7 @@ export async function winVersion(n: number): Promise<void> {
   } catch (err) {
     if (art.win !== w || seq !== w.seqVer) return;
     w.ver = null;
-    w.error = loadErrText(errLike(err), `Версия ${n} не загрузилась`);
+    w.error = loadErrText(errLike(err), t('Версия {n} не загрузилась', { n }));
   }
   artBump();
 }
@@ -423,7 +429,7 @@ function winSync() {
   const it = art.items.get(w.key);
   if (!it) return;
   if (it.lockedBy.length) {
-    Object.assign(w.cur, { editable: false, reason: 'writing', lockedBy: it.lockedBy, message: `Пишет этап ${it.lockedBy.join(', ')}: правка откроется после конца шага` });
+    Object.assign(w.cur, { editable: false, reason: 'writing', lockedBy: it.lockedBy, message: t('Пишет этап {phases}: правка откроется после конца шага', { phases: it.lockedBy.join(', ') }) });
   }
   artBump();
   void winLoad();
@@ -459,7 +465,7 @@ export function winEdit(): void {
 export async function winFromVersion(askConfirm: ConfirmFn): Promise<void> {
   const w = art.win;
   if (!w?.ver || !winEditable(w)) return;
-  if (draftDirty(draftOf(w.runId, w.key)) && !(await askConfirm('В редакторе уже есть несохранённая правка. Заменить её текстом этой версии?', { ok: 'Заменить' }))) return;
+  if (draftDirty(draftOf(w.runId, w.key)) && !(await askConfirm(t('В редакторе уже есть несохранённая правка. Заменить её текстом этой версии?'), { ok: t('Заменить') }))) return;
   startDraft(w.runId, w.key, w.title, w.ver.text!, w.cur!.hash!, w.cur!.text!);
   w.ver = null;
   w.conflict = null;
@@ -471,7 +477,7 @@ export async function winDiscard(askConfirm: ConfirmFn): Promise<void> {
   const w = art.win;
   const d = w && draftOf(w.runId, w.key);
   if (!w || !d) return;
-  if (draftDirty(d) && !(await askConfirm(`Отбросить несохранённую правку «${w.title}»? Текст пропадёт.`, { ok: 'Отбросить', danger: true }))) return;
+  if (draftDirty(d) && !(await askConfirm(t('Отбросить несохранённую правку «{title}»? Текст пропадёт.', { title: w.title }), { ok: t('Отбросить'), danger: true }))) return;
   art.drafts.delete(artKey(w.runId, w.key));
   w.conflict = null;
   w.saveFailed = false;
@@ -483,7 +489,7 @@ export async function winDiscard(askConfirm: ConfirmFn): Promise<void> {
 export async function winReload(askConfirm: ConfirmFn): Promise<void> {
   const w = art.win;
   if (!w) return;
-  if (draftDirty(draftOf(w.runId, w.key)) && !(await askConfirm('Перечитать файл с диска? Твоя правка пропадёт: скопируй её, если нужна.', { ok: 'Перечитать' }))) return;
+  if (draftDirty(draftOf(w.runId, w.key)) && !(await askConfirm(t('Перечитать файл с диска? Твоя правка пропадёт: скопируй её, если нужна.'), { ok: t('Перечитать') }))) return;
   art.drafts.delete(artKey(w.runId, w.key));
   w.conflict = null;
   w.msg = '';
@@ -514,7 +520,7 @@ export function winSizeCheck(): void {
   const d = w && draftOf(w.runId, w.key);
   if (!w || !d) return;
   const big = textBytes(d.text) > ART_EDIT_MAX;
-  if (big !== w.msg.startsWith('Текст больше 1 МБ')) winMsg(big ? 'Текст больше 1 МБ: так не сохранится.' : '', big ? 'err' : '');
+  if (big !== w.msg.startsWith(t('Текст больше 1 МБ'))) winMsg(big ? t('Текст больше 1 МБ: так не сохранится.') : '', big ? 'err' : '');
 }
 
 const authorAt = (a: { at?: string } | object): string | undefined => ('at' in a ? (a as { at?: string }).at : undefined);
@@ -525,8 +531,8 @@ export async function winSave(opts: { resume?: boolean; force?: boolean }, ui: U
   const d = w && draftOf(w.runId, w.key);
   if (!w || !d || w.saving) return;
   if (!winEditable(w)) return; // aria-disabled: причина уже в строке статуса
-  if (textBytes(d.text) > ART_EDIT_MAX) return winMsg('Текст больше 1 МБ: так не сохранится, сократи его. Текст остался в редакторе.', 'err');
-  if (opts.force && !(await ui.askConfirm('Сохранить поверх? Изменение файла после того, как ты его открыл, будет заменено твоим текстом; прежняя версия останется в истории.', { ok: 'Сохранить поверх', danger: true }))) return;
+  if (textBytes(d.text) > ART_EDIT_MAX) return winMsg(t('Текст больше 1 МБ: так не сохранится, сократи его. Текст остался в редакторе.'), 'err');
+  if (opts.force && !(await ui.askConfirm(t('Сохранить поверх? Изменение файла после того, как ты его открыл, будет заменено твоим текстом; прежняя версия останется в истории.'), { ok: t('Сохранить поверх'), danger: true }))) return;
   const base = opts.force ? w.conflict?.hash ?? w.cur?.hash : d.base;
   const runId = w.runId;
   // ответ на паузу в поле или черновики других артефактов: эта правка сохраняется отдельно, а возобновление идёт
@@ -536,7 +542,7 @@ export async function winSave(opts: { resume?: boolean; force?: boolean }, ui: U
   const chain = Boolean(opts.resume) && Boolean(answer || dirtyDrafts(runId).some((x) => x.key !== w.key));
   const atomic = Boolean(opts.resume) && !chain;
   w.saving = true;
-  w.msg = 'Сохраняю…';
+  w.msg = t('Сохраняю…');
   w.msgKind = '';
   artBump();
   if (atomic) art.resumingHere.add(runId);
@@ -548,19 +554,19 @@ export async function winSave(opts: { resume?: boolean; force?: boolean }, ui: U
     w.conflict = null;
     w.saveFailed = false;
     const at = artClock(authorAt(r.author));
-    const readers = r.readers?.length ? ` Этап ${r.readers.join(', ')} уже получил прежнюю версию: правка учтётся со следующего шага.` : '';
+    const readers = r.readers?.length ? ` ${t('Этап {phases} уже получил прежнюю версию: правка учтётся со следующего шага.', { phases: r.readers.join(', ') })}` : '';
     if (chain) {
       closeWin();
-      ui.toast(`«${w.title}» сохранён в ${at}`);
+      ui.toast(t('«{title}» сохранён в {time}', { title: w.title, time: at }));
       void artResume(runId, undefined, ui);
       return;
     }
     if (atomic) {
       closeWin();
-      ui.toast(`«${w.title}» сохранён в ${at}, запуск возобновлён`);
+      ui.toast(t('«{title}» сохранён в {time}, запуск возобновлён', { title: w.title, time: at }));
       return;
     }
-    w.msg = `Сохранено в ${at}.${readers}`;
+    w.msg = `${t('Сохранено в {time}.', { time: at })}${readers}`;
     w.msgKind = 'ok';
     w.saving = false;
     await winLoad();

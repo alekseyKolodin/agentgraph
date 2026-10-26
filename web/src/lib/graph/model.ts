@@ -1,5 +1,6 @@
 // Модель и раскладка графа flow (порт ui/graph.js flowGraphModel): узлы, рёбра и рамки с готовыми координатами.
 // Один граф для конструктора, вкладки «Запуск» и страницы запуска; рисует его components/graph/FlowGraph.tsx.
+import { t } from '../i18n';
 import { iterTo, iterWord, loopLabel, textW } from './text';
 
 /** Этап в той форме, которую читает граф: editable-spec конструктора или снимок flow запуска. */
@@ -123,15 +124,15 @@ export const isGroupStep = (s: BlockStep | null | undefined): boolean => Boolean
 
 /** Источник {{prev}} для шага: этап или группа. */
 export const stepSource = (block: GraphBlock, s: BlockStep): string =>
-  isGroupStep(s) ? `группа ${s.group}` : block.phases[s.from]?.name || '';
+  isGroupStep(s) ? t('группа {g}', { g: s.group }) : block.phases[s.from]?.name || '';
 
 /** Что шаг передаёт дальше: handoff этапа или склейку выводов группы. */
 export const stepHandoff = (block: GraphBlock, s: BlockStep): string =>
-  isGroupStep(s) ? `выводы группы ${s.group} (склейка)` : block.phases[s.from]?.handoff || 'весь ответ';
+  isGroupStep(s) ? t('выводы группы {g} (склейка)', { g: s.group }) : block.phases[s.from]?.handoff || t('весь ответ');
 
 export function condLabel(loop: GraphLoop): string {
   const u = loop.until;
-  return u.type === 'command' ? `$ ${u.run || '…'}` : u.type === 'judge' ? '⚖ судья' : u.type === 'marker' ? `маркер ${u.marker || '…'}` : `ровно ${iterWord(loop.max_iterations)}`;
+  return u.type === 'command' ? `$ ${u.run || '…'}` : u.type === 'judge' ? t('⚖ судья') : u.type === 'marker' ? t('маркер {m}', { m: u.marker || '…' }) : t('ровно {n}', { n: iterWord(loop.max_iterations) });
 }
 
 /** Совпадает с artifactAccess на сервере. Чтение: reads и подстановки в промпте и handoff. Запись: writes, она включает чтение. */
@@ -142,7 +143,7 @@ export function phaseArtifactAccess(p: GraphPhase): { read: string[]; write: str
   return { read, write };
 }
 
-export const blockHeading = (b: { title?: string }, bi: number): string => `Блок ${bi + 1}${b.title ? ` · ${b.title}` : ''}`;
+export const blockHeading = (b: { title?: string }, bi: number): string => `${t('Блок {n}', { n: bi + 1 })}${b.title ? ` · ${b.title}` : ''}`;
 
 /**
  * Оценка ширины шапки рамки блока: название, «↺ до N», чипы знаний и запас под бейдж «итер. X/N» / «пропущен».
@@ -169,7 +170,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
   const edges: GraphEdge[] = [];
   const frames: GraphFrame[] = [];
   const x0 = MARGIN + NODE_W + COL_GAP + GPAD + FPAD; // левый край первой колонки этапов
-  const start: GraphNode = { id: 'start', key: 'start', kind: 'start', x: MARGIN, y: MARGIN, w: NODE_W, h: NODE_H, title: 'Задача', sub: '{{input}}' };
+  const start: GraphNode = { id: 'start', key: 'start', kind: 'start', x: MARGIN, y: MARGIN, w: NODE_W, h: NODE_H, title: t('Задача'), sub: '{{input}}' };
   nodes.push(start);
   let laneTop = MARGIN;
   let right = start.x + start.w;
@@ -219,7 +220,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
         };
         if (opts.inputsOf) {
           n.inputs = opts.inputsOf(bi, i) || [];
-          if (!n.inputs.length) n.warn = 'ничего не получает';
+          if (!n.inputs.length) n.warn = t('ничего не получает');
         }
         nodes.push(n);
         return n;
@@ -237,7 +238,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     });
     let cond: GraphNode | null = null;
     if (b.loop) {
-      cond = { id: `c:${b.name}`, key: `c:${b.name}`, kind: 'cond', b: bi, block: b.name, type: b.loop.until?.type, title: 'Условие', sub: condLabel(b.loop), x, y: mid - COND / 2, w: COND, h: COND };
+      cond = { id: `c:${b.name}`, key: `c:${b.name}`, kind: 'cond', b: bi, block: b.name, type: b.loop.until?.type, title: t('Условие'), sub: condLabel(b.loop), x, y: mid - COND / 2, w: COND, h: COND };
       nodes.push(cond);
       x += COND;
     } else {
@@ -262,7 +263,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       for (const l of mine) artLinks.push({ ...l, y: contentBottom + 12 + lanes.indexOf(l.li) * ART_LANE });
       if (lanes.length) contentBottom += 12 + lanes.length * ART_LANE;
     }
-    if (!prev) connect([start], firstCol.members, 'задача', 'flow', mid);
+    if (!prev) connect([start], firstCol.members, t('задача'), 'flow', mid);
     else {
       const e = prev.end;
       const sx = e.x + e.w / 2;
@@ -294,8 +295,8 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
 
     let frameBottom = contentBottom;
     if (framed) {
-      const title = multi ? blockHeading(b, bi) : b.title || 'Блок';
-      const loopNote = b.loop ? `↺ до ${iterTo(b.loop.max_iterations)}` : 'один проход';
+      const title = multi ? blockHeading(b, bi) : b.title || t('Блок');
+      const loopNote = b.loop ? t('↺ до {n}', { n: iterTo(b.loop.max_iterations) }) : t('один проход');
       const knowledge = [...(b.knowledge || [])];
       const fr: GraphFrame = {
         kind: 'block', key: `b:${b.name}`, b: bi, block: b.name, title, loop: loopNote, knowledge,
@@ -315,7 +316,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     const loop = b.loop;
     const nextLabel = !loop
       ? stepHandoff(b, lastCol.s)
-      : loop.until?.type === 'none' ? `после ${iterWord(loop.max_iterations)} →` : b.on_fail === 'continue' ? 'выполнено или лимит →' : 'выполнено →';
+      : loop.until?.type === 'none' ? t('после {n} →', { n: iterWord(loop.max_iterations) }) : b.on_fail === 'continue' ? t('выполнено или лимит →') : t('выполнено →');
     prev = { end: cond || (isGroupStep(lastCol.s) ? { ...lastCol.box, id: lastCol.frameKey } : lastCol.members[0]!), frameBottom, label: nextLabel };
     laneTop = frameBottom + LANE_GAP;
   });
@@ -338,7 +339,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       nodes.push(n);
     });
     const frame: GraphFrame = {
-      kind: 'arts', key: 'arts', title: 'Артефакты', x: ax - FPAD, y: MARGIN,
+      kind: 'arts', key: 'arts', title: t('Артефакты'), x: ax - FPAD, y: MARGIN,
       w: ART_W + 2 * FPAD, h: FRAME_HEAD + arts.length * (ART_H + ART_GAP) - ART_GAP + FPAD,
     };
     frames.push(frame);

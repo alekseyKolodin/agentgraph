@@ -2,6 +2,7 @@
 // renderInspector, runGraphGoto из ui/app.js) — без React и DOM: компоненты только раскладывают готовые данные.
 import type { ConditionReport, PhaseReport, QuestionRecord, RunReport, SessionTokens } from '@server/api-types';
 import { dur, excerpt, usd } from '../format';
+import { t } from '../i18n';
 import { markdownFits } from '../md';
 import { ctxLabel, ctxLevel, tokensShort } from '../graph/text';
 import type { LiveState, PendingCond, PendingPhase, RunView } from './events';
@@ -38,7 +39,7 @@ export function currentBlockIndex(blocks: RunBlockView[]): number {
   return running >= 0 ? running : blocks.findLastIndex((b) => b.status !== 'pending' && !b.skipped);
 }
 
-export const COND_LABEL: Record<string, string> = { command: 'команда', judge: 'судья', marker: 'маркер', none: 'без условия' };
+export const COND_LABEL: Record<string, string> = { command: t('команда'), judge: t('судья'), marker: t('маркер'), none: t('без условия') };
 
 /** Ключ карточки шага на странице запуска (data-step): по нему клик по узлу графа находит карточку. */
 export const stepKey = (block: string | undefined, iteration: number, phase: string): string => `${block ?? ''}|${iteration}|${phase}`;
@@ -54,12 +55,12 @@ export function headerStatus(r: RunView): string {
 /** «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; идущее саммари тега. */
 export function runMeta(r: RunView, tagPending: LiveState['tagPending']): string {
   const blocks = runBlocks(r);
-  let progress = `итерация ${r.iterations}/${r.maxIterations ?? '?'}`;
+  let progress = t('итерация {i}/{n}', { i: r.iterations, n: r.maxIterations ?? '?' });
   if (blocks.length > 1) {
     const cur = Math.max(0, blocks.findLastIndex((b) => b.status !== 'pending'));
-    progress = `блок ${cur + 1}/${blocks.length} · итераций: ${r.iterations}`;
+    progress = t('блок {k}/{n} · итераций: {i}', { k: cur + 1, n: blocks.length, i: r.iterations });
   }
-  return `${progress} · ≈${usd(r.totalCostUsd)}${tagPending ? ` · обновляю саммари тега ${tagPending.tag}…` : ''}`;
+  return `${progress} · ≈${usd(r.totalCostUsd)}${tagPending ? ` · ${t('обновляю саммари тега {tag}…', { tag: tagPending.tag })}` : ''}`;
 }
 
 /** Лимит итераций можно менять у живого запуска, пока блок с циклом не завершился. */
@@ -83,8 +84,8 @@ export function continueVisible(r: RunView): boolean {
 /** Первая строка карточки паузы. */
 export const pauseText = (pause: 'requested' | 'paused' | undefined): string =>
   pause === 'paused'
-    ? 'Запуск на паузе: следующий шаг не начнётся, пока не нажмёшь «Возобновить».'
-    : pause === 'requested' ? 'Пауза после текущего шага: идущая сессия доработает, следующая не начнётся.' : '';
+    ? t('Запуск на паузе: следующий шаг не начнётся, пока не нажмёшь «Возобновить».')
+    : pause === 'requested' ? t('Пауза после текущего шага: идущая сессия доработает, следующая не начнётся.') : '';
 
 /** Артефакт решений запуска: ответ на паузу допишется в него. Есть только у flow с артефактами. */
 export const decisionsArtifact = (r: Pick<RunReport, 'artifacts'>): { key: string; title: string } | undefined => {
@@ -96,16 +97,16 @@ export const decisionsArtifact = (r: Pick<RunReport, 'artifacts'>): { key: strin
 export function pauseHint(r: RunView, artifacts: boolean): { text: string; openArtifacts: boolean } | null {
   const why = r.pauseReason;
   if (!why) return null;
-  const head = `Паузу попросил этап «${why.phase}» (итерация ${why.iteration}): дальше нужен твой ответ.`;
-  if (!artifacts) return { text: `${head} Запиши решение туда, куда просит агент, и нажми «Возобновить».`, openArtifacts: false };
+  const head = t('Паузу попросил этап «{phase}» (итерация {it}): дальше нужен твой ответ.', { phase: why.phase, it: why.iteration });
+  if (!artifacts) return { text: `${head} ${t('Запиши решение туда, куда просит агент, и нажми «Возобновить».')}`, openArtifacts: false };
   const dec = decisionsArtifact(r);
   if (dec) {
     return {
-      text: `${head} Напиши его в поле «Ответ» ниже и нажми «Возобновить с ответом»: ответ допишется в артефакт «${dec.title}». Поправить остальные артефакты можно в панели «Артефакты».`,
+      text: `${head} ${t('Напиши его в поле «Ответ» ниже и нажми «Возобновить с ответом»: ответ допишется в артефакт «{title}». Поправить остальные артефакты можно в панели «Артефакты».', { title: dec.title })}`,
       openArtifacts: false,
     };
   }
-  return { text: `${head} Поправь артефакты и нажми «Возобновить».`, openArtifacts: true };
+  return { text: `${head} ${t('Поправь артефакты и нажми «Возобновить».')}`, openArtifacts: true };
 }
 
 /** Ответ на паузу — до 64 КБ в байтах, как на сервере. */
@@ -133,12 +134,12 @@ export function iterSummary(phases: PhaseReport[], cond: ConditionReport | undef
   }
   const ms = [...longest.values()].reduce((n, x) => n + x, 0);
   const failed = phases.filter((p) => !p.ok).length;
-  const out: Part[] = [{ text: `этапов ${phases.length}` }];
-  if (failed) out.push({ text: `с ошибкой ${failed}`, cls: 'warn' });
+  const out: Part[] = [{ text: t('этапов {n}', { n: phases.length }) }];
+  if (failed) out.push({ text: t('с ошибкой {n}', { n: failed }), cls: 'warn' });
   if (ms) out.push({ text: dur(ms) });
   if (cost) out.push({ text: usd(cost) });
-  if (pending) out.push({ text: '⏳ идёт' });
-  else if (cond && cond.type !== 'none') out.push(cond.done ? { text: '✔ условие выполнено', cls: 'ok' } : { text: '↻ условие не выполнено', cls: 'warn' });
+  if (pending) out.push({ text: t('⏳ идёт') });
+  else if (cond && cond.type !== 'none') out.push(cond.done ? { text: t('✔ условие выполнено'), cls: 'ok' } : { text: t('↻ условие не выполнено'), cls: 'warn' });
   return out;
 }
 
@@ -176,7 +177,7 @@ export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; key
         foldKeys.set(`b:${bi}`, blockOpen);
       }
       const cost = blockOpen ? 0 : phases.reduce((n, p) => n + p.costUsd, 0) + r.conditions.filter(inBlock).reduce((n, c) => n + c.costUsd, 0);
-      items.push({ kind: 'block', bi, foldKey: iters > 0 ? `b:${bi}` : undefined, open: blockOpen, label: `Блок ${bi + 1} · ${b.title || b.name}`, block: b, cost });
+      items.push({ kind: 'block', bi, foldKey: iters > 0 ? `b:${bi}` : undefined, open: blockOpen, label: t('Блок {n} · {title}', { n: bi + 1, title: String(b.title || b.name) }), block: b, cost });
       if (b.status === 'max_iterations' && b.onFail === 'continue') items.push({ kind: 'onfail', bi });
     }
     if (!blockOpen) return;
@@ -199,7 +200,7 @@ export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; key
       for (const c of [...done, ...running].sort((a, z) => a.index - z.index)) {
         if (c.p) items.push({ kind: 'phase', p: c.p });
         else {
-          const doing = waiting ? 'ждёт твоего ответа' : pause ? `выполняется… пауза после ${running.length > 1 ? 'группы' : 'этапа'}` : 'выполняется…';
+          const doing = waiting ? t('ждёт твоего ответа') : pause ? (running.length > 1 ? t('выполняется… пауза после группы') : t('выполняется… пауза после этапа')) : t('выполняется…');
           items.push({ kind: 'running', x: c.x!, doing });
         }
         const name = c.p?.phase ?? c.x!.phase;
@@ -223,7 +224,7 @@ export function phaseModelChip(x: { model?: string; effort?: string }): { label:
   if (!x.model && !x.effort) return null;
   return {
     label: [x.model, x.effort].filter(Boolean).join(' · '),
-    title: `Модель: ${x.model || 'не задана (по умолчанию)'} · effort: ${x.effort || 'не задан (по умолчанию модели)'}`,
+    title: t('Модель: {model} · effort: {effort}', { model: x.model || t('не задана (по умолчанию)'), effort: x.effort || t('не задан (по умолчанию модели)') }),
   };
 }
 
@@ -239,13 +240,17 @@ export function ctxChipInfo(
   const window = live ? x.ctx?.window : x.tokens?.contextWindow;
   if (!(peak! > 0)) return null;
   const n = tokensShort;
-  const parts = [`Контекст этапа: пик ${ctxLabel(peak!, window)}${window ? '' : ' (окно модели неизвестно)'}`];
+  const parts = [`${t('Контекст этапа: пик {peak}', { peak: ctxLabel(peak!, window) })}${window ? '' : ` ${t('(окно модели неизвестно)')}`}`];
   if (!live) {
-    const t = x.tokens!;
-    if (t.contextStart > 0) parts.push(`старт ${n(t.contextStart)}`);
-    if (t.requests > 0) parts.push(`запросов к модели: ${t.requests}`);
-    if (t.input !== undefined) parts.push(`input ${n(t.input) || 0} · output ${n(t.output) || 0} · кэш: чтение ${n(t.cacheRead) || 0}, запись ${n(t.cacheCreation) || 0} (по всем моделям сессии, включая сабагентов)`);
-  } else if (x.ctx!.requests > 0) parts.push(`запросов к модели: ${x.ctx!.requests}`);
+    const tk = x.tokens!;
+    if (tk.contextStart > 0) parts.push(t('старт {n}', { n: n(tk.contextStart) }));
+    if (tk.requests > 0) parts.push(t('запросов к модели: {n}', { n: tk.requests }));
+    if (tk.input !== undefined) {
+      parts.push(t('input {i} · output {o} · кэш: чтение {r}, запись {w} (по всем моделям сессии, включая сабагентов)', {
+        i: n(tk.input) || 0, o: n(tk.output) || 0, r: n(tk.cacheRead) || 0, w: n(tk.cacheCreation) || 0,
+      }));
+    }
+  } else if (x.ctx!.requests > 0) parts.push(t('запросов к модели: {n}', { n: x.ctx!.requests }));
   return { text: `ctx ${ctxLabel(peak!, window)}`, level: ctxLevel(peak!, window), title: parts.join('\n') };
 }
 
@@ -327,16 +332,16 @@ export function blockIters(st: LiveState, bi: number, spec: SpecBlocks): BlockIt
     const running = pend.some((x) => x.iteration === it) || condRun?.iteration === it;
     const asking = waiting && r.questions.some((q) => !q.answers && q.iteration === it && (sole || q.block === b.name));
     const item: IterItem = { it, st: 'future', mark: '', text: '', key: '' };
-    if (asking) Object.assign(item, { st: 'wait', mark: 'ждёт ответа', chain: chain(it) });
-    else if (running) Object.assign(item, { st: 'live', mark: condRun?.iteration === it ? 'проверка' : 'идёт', chain: chain(it) });
+    if (asking) Object.assign(item, { st: 'wait', mark: t('ждёт ответа'), chain: chain(it) });
+    else if (running) Object.assign(item, { st: 'live', mark: condRun?.iteration === it ? t('проверка') : t('идёт'), chain: chain(it) });
     else if (c) {
       const ok = c.done || c.type === 'none';
       item.st = ok ? 'ok' : 'fail';
       item.mark = `${ok ? '✓' : '✕'} ${COND_LABEL[c.type] || c.type}`;
       // итог модели, пока его нет — начало замечаний
-      item.text = c.summary || excerpt(ok ? c.detail || 'условие выполнено' : c.feedback || c.detail || 'условие не выполнено', 120);
+      item.text = c.summary || excerpt(ok ? c.detail || t('условие выполнено') : c.feedback || c.detail || t('условие не выполнено'), 120);
       if (!ok) item.key = verdictKey(c);
-    } else if (it <= iters) Object.assign(item, { st: 'stop', mark: 'прервана', chain: chain(it) });
+    } else if (it <= iters) Object.assign(item, { st: 'stop', mark: t('прервана'), chain: chain(it) });
     items.push(item);
   }
   const groups: IterGroup[] = [];
@@ -369,7 +374,7 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
   const sole = blocks.length === 1;
   const rows: RibbonRow[] = [];
   blocks.forEach((b, bi) => {
-    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: b.skipped ? 'пропущен' : b.looped ? `↺ до ${b.maxIterations ?? '?'}` : 'один проход' };
+    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: b.skipped ? t('пропущен') : b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход') };
     const bs = blockIters(st, bi, spec);
     if (!b.looped || b.skipped) {
       if (!sole) rows.push({ bi, head, chain: bs.iters > 0 && !b.skipped ? bs.chain(1) : undefined });
@@ -380,7 +385,7 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
     const strip = bs.total > RIBBON_CELLS
       ? {
         total: bs.total,
-        ticks: bs.items.map((x) => ({ ...x, open: isOpen(x.it), stuck: inStuck(x.it), title: `${x.it} · ${x.st === 'future' ? 'впереди' : x.mark}${x.text ? ` — ${x.text}` : ''}` })),
+        ticks: bs.items.map((x) => ({ ...x, open: isOpen(x.it), stuck: inStuck(x.it), title: `${x.it} · ${x.st === 'future' ? t('впереди') : x.mark}${x.text ? ` — ${x.text}` : ''}` })),
       }
       : undefined;
     // подробные ячейки: последние группы, у идущего блока — добиваем ближайшими «впереди»
@@ -396,7 +401,7 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
         n,
         stuck: Boolean(bs.stuck && g.from === bs.stuck.from),
         open: g.st !== 'future' && isOpen(g.to),
-        title: g.st === 'future' ? 'Впереди' : n > 1 ? `Итерации ${g.from}–${g.to}: одно и то же замечание. Показать последнюю` : 'Показать этапы итерации',
+        title: g.st === 'future' ? t('Впереди') : n > 1 ? t('Итерации {from}–{to}: одно и то же замечание. Показать последнюю', { from: g.from, to: g.to }) : t('Показать этапы итерации'),
         label: n > 1 ? `${g.mark} ×${n}` : g.mark,
       };
     });
@@ -425,10 +430,10 @@ export function summaryView(st: LiveState, graphNow: string, spec: SpecBlocks, n
   const cur = blocks[Math.max(0, ci)];
   let text = graphNow;
   if (!text) {
-    const names = [...st.pending.values()].map((x) => `«${x.title || x.phase}»`);
+    const names = [...st.pending.values()].map((x) => t('«{name}»', { name: x.title || x.phase }));
     text = [
-      cur?.looped ? `итерация ${cur.iterations || 1}/${cur.maxIterations ?? '?'}` : '',
-      names.length ? `${names.length > 1 ? 'этапы' : 'этап'} ${names.join(', ')}` : st.condPending ? 'проверка условия' : 'между шагами',
+      cur?.looped ? t('итерация {i}/{n}', { i: cur.iterations || 1, n: cur.maxIterations ?? '?' }) : '',
+      names.length ? t(names.length > 1 ? 'этапы {names}' : 'этап {names}', { names: names.join(', ') }) : st.condPending ? t('проверка условия') : t('между шагами'),
     ].filter(Boolean).join(' · ');
   }
   const out: SummaryView = { now: text.charAt(0).toUpperCase() + text.slice(1), waiting: runWaiting(r), paused: runPause(r) === 'paused', facts: '' };
@@ -437,13 +442,13 @@ export function summaryView(st: LiveState, graphNow: string, spec: SpecBlocks, n
   const last = cur ? r.conditions.filter((c) => sole || c.block === cur.name).at(-1) : undefined;
   if (last && last.type !== 'none') {
     out.last = last.done
-      ? { ok: true, text: `Итерация ${last.iteration}: ${last.summary || `условие выполнено${last.detail ? ` — ${excerpt(last.detail)}` : ''}`}` }
-      : { ok: false, text: `Итерация ${last.iteration} не прошла: ${last.summary || excerpt(last.feedback || last.detail) || 'условие не выполнено'}` };
+      ? { ok: true, text: t('Итерация {it}: {text}', { it: last.iteration, text: last.summary || `${t('условие выполнено')}${last.detail ? ` — ${excerpt(last.detail)}` : ''}` }) }
+      : { ok: false, text: t('Итерация {it} не прошла: {text}', { it: last.iteration, text: last.summary || excerpt(last.feedback || last.detail) || t('условие не выполнено') }) };
   }
   const stuck = ci >= 0 && blocks[ci]!.looped ? blockIters(st, ci, spec).stuck : null;
   if (stuck) out.stuck = { from: stuck.from, to: stuck.to };
   const took = r.startedAt ? now - new Date(r.startedAt).getTime() : 0;
-  out.facts = [`итераций ${r.iterations}`, `≈${usd(r.totalCostUsd)}`, took > 0 ? dur(took) : ''].filter(Boolean).join(' · ');
+  out.facts = [t('итераций {n}', { n: r.iterations }), `≈${usd(r.totalCostUsd)}`, took > 0 ? dur(took) : ''].filter(Boolean).join(' · ');
   return out;
 }
 
@@ -452,7 +457,7 @@ export function summaryView(st: LiveState, graphNow: string, spec: SpecBlocks, n
 /** Цифры карточки «Итог»: итераций, стоимость, длительность. */
 export function finalFacts(r: RunReport): string[] {
   const took = r.finishedAt && r.startedAt ? new Date(r.finishedAt).getTime() - new Date(r.startedAt).getTime() : 0;
-  return [`итераций: ${r.iterations}`, `≈${usd(r.totalCostUsd)}`, took > 0 ? dur(took) : ''].filter(Boolean);
+  return [t('итераций: {n}', { n: r.iterations }), `≈${usd(r.totalCostUsd)}`, took > 0 ? dur(took) : ''].filter(Boolean);
 }
 
 /** При неуспехе — чего не хватило по мнению последнего условия (принятое замечаний не показывает). */
@@ -469,9 +474,9 @@ export function tagFinalLines(r: Pick<RunReport, 'tags' | 'tagSummaries' | 'auto
   const lines = (r.tags || []).map((tag): TagLine => {
     const s = byTag.get(tag);
     const auto = r.autoTag?.slug === tag;
-    if (s?.ok) return { tag, state: 'ok', text: 'Саммари тега обновлено', costUsd: s.costUsd, auto };
-    if (s?.error) return { tag, state: 'error', text: `Саммари тега не обновлено: ${s.error}`, auto };
-    return { tag, state: 'skip', text: `Саммари тега не обновлено${s?.skipped ? `: ${s.skipped}` : ''}`, auto };
+    if (s?.ok) return { tag, state: 'ok', text: t('Саммари тега обновлено'), costUsd: s.costUsd, auto };
+    if (s?.error) return { tag, state: 'error', text: t('Саммари тега не обновлено: {why}', { why: s.error }), auto };
+    return { tag, state: 'skip', text: s?.skipped ? t('Саммари тега не обновлено: {why}', { why: s.skipped }) : t('Саммари тега не обновлено'), auto };
   });
   return { ...(r.autoTag?.error ? { autoTagError: r.autoTag.error } : {}), lines };
 }
@@ -525,7 +530,7 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
   const bi = sole ? 0 : blocks.findIndex((b) => b.name === sel.block);
   const b = blocks[bi];
   const specBlock = specBlocks?.[bi];
-  const where = !sole && b ? `Блок ${bi + 1} · ${b.title || b.name}` : '';
+  const where = !sole && b ? t('Блок {n} · {title}', { n: bi + 1, title: String(b.title || b.name) }) : '';
   if (sel.kind === 'phase') {
     const spec = specBlock?.phases.find((p) => p.name === sel.name);
     const done = r.phases.filter((p) => inBlock(p) && p.phase === sel.name).sort((a, z) => a.iteration - z.iteration);
@@ -533,36 +538,38 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
     const rep = done.at(-1);
     const it = run ? run.iteration : rep?.iteration;
     const asking = Boolean(run && r.live && r.questions.some((q) => !q.answers && q.phase === sel.name));
-    const status: InspectPhase['status'] = asking ? { cls: 'wait', text: '● ждёт ответа' }
-      : run ? { cls: 'live', text: `● идёт${run.at ? ` · ${dur(now - run.at)}` : ''}` }
-      : rep ? (rep.ok ? { cls: 'ok', text: '✓ готово' } : { cls: 'err', text: '! ошибка' })
-      : { cls: 'off', text: '○ ещё не выполнялся' };
+    const status: InspectPhase['status'] = asking ? { cls: 'wait', text: t('● ждёт ответа') }
+      : run ? { cls: 'live', text: `${t('● идёт')}${run.at ? ` · ${dur(now - run.at)}` : ''}` }
+      : rep ? (rep.ok ? { cls: 'ok', text: t('✓ готово') } : { cls: 'err', text: t('! ошибка') })
+      : { cls: 'off', text: t('○ ещё не выполнялся') };
     const tools = spec?.tools ?? run?.tools ?? rep?.tools;
     const prev = it && it > 1 ? r.conditions.find((c) => inBlock(c) && c.iteration === it - 1 && !c.done && c.type !== 'none') : undefined;
     const input = prev
       ? {
-        label: 'Получил на вход',
+        label: t('Получил на вход'),
         title: excerpt(prev.feedback || prev.detail, 400),
-        text: prev.summary ? `Итог итерации ${prev.iteration}: ${prev.summary}` : `Замечания итерации ${prev.iteration}: ${excerpt(prev.feedback || prev.detail, 260)}`,
+        text: prev.summary
+          ? t('Итог итерации {it}: {text}', { it: prev.iteration, text: prev.summary })
+          : t('Замечания итерации {it}: {text}', { it: prev.iteration, text: excerpt(prev.feedback || prev.detail, 260) }),
       }
-      : spec?.handoff ? { label: 'Передаёт дальше', text: spec.handoff } : undefined;
+      : spec?.handoff ? { label: t('Передаёт дальше'), text: spec.handoff } : undefined;
     const f = (run || rep)?.files;
     const files = [
-      f?.prompt ? { file: f.prompt, title: `Промпт · ${sel.name}` } : null,
-      f?.transcript ? { file: f.transcript, title: `Транскрипт · ${sel.name}`, session: rep && !run ? rep.sessionId || '' : '' } : null,
-      !run && f?.output ? { file: f.output, title: `Вывод · ${sel.name}` } : null,
+      f?.prompt ? { file: f.prompt, title: t('Промпт · {name}', { name: String(sel.name) }) } : null,
+      f?.transcript ? { file: f.transcript, title: t('Транскрипт · {name}', { name: String(sel.name) }), session: rep && !run ? rep.sessionId || '' : '' } : null,
+      !run && f?.output ? { file: f.output, title: t('Вывод · {name}', { name: String(sel.name) }) } : null,
     ].filter((x): x is NonNullable<typeof x> => Boolean(x));
     return {
       where,
       kind: 'phase',
       title: spec?.title || run?.title || rep?.title || sel.name || '',
       status,
-      meta: [it ? `итер. ${it}` : '', (run || rep)?.model || spec?.model || ''].filter(Boolean),
+      meta: [it ? t('итер. {it}', { it }) : '', (run || rep)?.model || spec?.model || ''].filter(Boolean),
       tools,
       input,
       running: Boolean(run),
       last: rep && !run
-        ? { iteration: rep.iteration, text: `${rep.turns} ходов · ${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
+        ? { iteration: rep.iteration, text: `${t('{n} ходов', { n: rep.turns })} · ${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
         : undefined,
       hist: done.length > 1 ? done.slice(-6) : [],
       files,
@@ -573,14 +580,14 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
     const cp = st.condPending && inBlock(st.condPending) ? st.condPending : null;
     const c = conds.at(-1);
     const until = specBlock?.loop?.until;
-    const status: InspectCond['status'] = cp ? { cls: 'live', text: '● проверка' }
-      : c ? (c.done || c.type === 'none' ? { cls: 'ok', text: '✓ выполнено' } : { cls: 'err', text: '✕ не выполнено' })
-      : { cls: 'off', text: '○ ещё не проверялось' };
-    const meta = [until?.type ? COND_LABEL[until.type] || until.type : '', until?.run ? `$ ${until.run}` : '', c ? `итер. ${c.iteration}` : ''].filter(Boolean).join(' · ');
+    const status: InspectCond['status'] = cp ? { cls: 'live', text: t('● проверка') }
+      : c ? (c.done || c.type === 'none' ? { cls: 'ok', text: t('✓ выполнено') } : { cls: 'err', text: t('✕ не выполнено') })
+      : { cls: 'off', text: t('○ ещё не проверялось') };
+    const meta = [until?.type ? COND_LABEL[until.type] || until.type : '', until?.run ? `$ ${until.run}` : '', c ? t('итер. {it}', { it: c.iteration }) : ''].filter(Boolean).join(' · ');
     return { where, kind: 'cond', status, meta, c };
   }
   if (sel.kind === 'start') return { where, kind: 'start', input: r.input || '' };
-  return { where, kind: 'block', title: b ? b.title || b.name || 'Блок' : 'Блок', status: b?.status, meta: b?.looped ? `итераций ${b.iterations || 0} / ${b.maxIterations}` : 'один проход' };
+  return { where, kind: 'block', title: b ? b.title || b.name || t('Блок') : t('Блок'), status: b?.status, meta: b?.looped ? t('итераций {i} / {n}', { i: b.iterations || 0, n: b.maxIterations }) : t('один проход') };
 }
 
 /**
@@ -604,14 +611,14 @@ export function gotoTarget(
     const done = r.phases.filter((p) => inBlock(p) && p.phase === sel.name);
     const run = [...st.pending.values()].find((x) => inBlock(x) && x.phase === sel.name);
     const it = run ? run.iteration : Math.max(0, ...done.map((p) => p.iteration));
-    if (!it) return { msg: `Этап «${sel.name}» ещё не выполнялся` };
+    if (!it) return { msg: t('Этап «{name}» ещё не выполнялся', { name: String(sel.name) }) };
     const rep = run || done.find((p) => p.iteration === it)!;
     target = { it, key: stepKey(rep.block, it, sel.name!) };
   } else if (sel.kind === 'cond') {
     const conds = r.conditions.filter(inBlock);
     const cp = st.condPending && inBlock(st.condPending) ? st.condPending : null;
     const it = cp ? cp.iteration : Math.max(0, ...conds.map((c) => c.iteration));
-    if (!it) return { msg: 'Условие ещё не проверялось' };
+    if (!it) return { msg: t('Условие ещё не проверялось') };
     target = { it, key: stepKey(cp ? cp.block : conds.find((c) => c.iteration === it)!.block, it, '#cond') };
   }
   const open: string[] = [];
@@ -633,5 +640,5 @@ export function chatText(text: string): string {
 /** Строка над чатом: сообщений, потрачено, «агент отвечает…». */
 export function chatMeta(messages: { role: string }[], totalCostUsd: number | undefined, busy: boolean): string {
   const n = messages.filter((m) => m.role !== 'note').length;
-  return [n ? `сообщений ${n}` : '', totalCostUsd ? `потрачено ${usd(totalCostUsd)}` : '', busy ? 'агент отвечает…' : ''].filter(Boolean).join(' · ');
+  return [n ? t('сообщений {n}', { n }) : '', totalCostUsd ? t('потрачено {cost}', { cost: usd(totalCostUsd) }) : '', busy ? t('агент отвечает…') : ''].filter(Boolean).join(' · ');
 }

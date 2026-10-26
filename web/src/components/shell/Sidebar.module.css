@@ -15,6 +15,9 @@
 .sidebar > .sec-runs { grid-row: 5; }
 .brand { font-weight: 600; font-size: var(--fs-h2); letter-spacing: .2px; padding: 2px 6px 0; color: inherit; text-decoration: none; display: flex; align-items: center; gap: 8px; }
 .brand:hover { color: var(--ink-2); }
+.brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lang-switch { font: inherit; font-family: var(--font-mono); font-size: var(--fs-cap); font-weight: 600; color: var(--ink-3); background: none; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px 6px; cursor: pointer; }
+.lang-switch:hover { color: var(--ink); background: var(--hover); }
 .brand-count { font-size: var(--fs-cap); font-weight: 600; padding: 0 6px; border-radius: var(--r-pill); background: var(--st-wait); color: var(--on-solid); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* разделы — компактная строка, а не пункты одного веса с flow и запусками */
 .side-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; }

@@ -7,6 +7,7 @@ import type { HomeEvent } from '@server/api-types';
 import { keys, useEventStream, useFeature } from '../../api';
 import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { useToast } from '../Toast';
 import { browserNotifies, tabAway, useNotifyPermission } from './notifications';
 
@@ -28,8 +29,8 @@ export function useHomeEvents(): void {
 
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
-    const t = timers.current;
-    return () => t.forEach(clearTimeout);
+    const pending = timers.current;
+    return () => pending.forEach(clearTimeout);
   }, []);
   const soon = useCallback(
     (key: readonly string[]) => {
@@ -44,7 +45,7 @@ export function useHomeEvents(): void {
   const announceQuestion = (e: HomeEvent) => {
     const q = e.question!;
     const text = q.questions.map((x) => x.question).join(' · ');
-    const title = `${e.flow}: вопрос от «${q.title || q.phase}»`;
+    const title = t('{flow}: вопрос от «{phase}»', { flow: e.flow, phase: q.title || q.phase });
     if (tabAway()) {
       if (browserNotifies()) {
         const n = new Notification(title, { body: text, tag: q.id });
@@ -63,7 +64,7 @@ export function useHomeEvents(): void {
   // Конец запуска объявляем только уведомлением, когда вкладка не на виду; остановку руками — нет, её только что нажали.
   const announceEnd = (e: HomeEvent) => {
     if (e.status === 'aborted' || !tabAway() || !browserNotifies()) return;
-    const n = new Notification(`${e.flow}: запуск завершён`, { body: `${statusLabel(e.status ?? '')} · ${usd(e.costUsd)}`, tag: e.runId });
+    const n = new Notification(t('{flow}: запуск завершён', { flow: e.flow }), { body: `${statusLabel(e.status ?? '')} · ${usd(e.costUsd)}`, tag: e.runId });
     n.onclick = () => {
       window.focus();
       n.close();

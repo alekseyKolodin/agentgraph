@@ -10,6 +10,7 @@ import { flashQuestion } from '../../components/question/QuestionCard';
 import { feedTime, usd, when } from '../../lib/format';
 import { FEED_SEEN_KEY, FEED_SHOWN, feedTone, feedWhat, isUnread, unreadCount } from '../../lib/feed';
 import { LS } from '../../lib/storage';
+import { t } from '../../lib/i18n';
 import { useMemoryState } from '../../components/useMemoryState';
 import styles from './Feed.module.css';
 
@@ -35,12 +36,12 @@ export function Feed({ now }: { now: number }) {
   return (
     <aside className={styles.homeFeed}>
       <div className={styles.feedHead}>
-        <h2 title="Вопросы агентов, паузы и концы запусков — то же, о чём приходят уведомления">
-          События {unread > 0 && <span className={styles.feedUnread} title="Новых после последней отметки">{unread}</span>}
+        <h2 title={t('Вопросы агентов, паузы и концы запусков — то же, о чём приходят уведомления')}>
+          {t('События')} {unread > 0 && <span className={styles.feedUnread} title={t('Новых после последней отметки')}>{unread}</span>}
         </h2>
         {unread > 0 && (
-          <button className="btn small ghost" title="Снять подсветку новых событий" onClick={() => list[0] && markSeen(list[0].at)}>
-            Отметить прочитанным
+          <button className="btn small ghost" title={t('Снять подсветку новых событий')} onClick={() => list[0] && markSeen(list[0].at)}>
+            {t('Отметить прочитанным')}
           </button>
         )}
       </div>
@@ -50,12 +51,12 @@ export function Feed({ now }: { now: number }) {
             {visible.map((x) => <FeedRow key={x.id} x={x} unread={isUnread(x, seen)} now={now} />)}
             {more > 0 && (
               <li>
-                <button type="button" className={`btn small ghost ${styles.feedMore}`} onClick={() => setAll(true)}>Ещё {more}</button>
+                <button type="button" className={`btn small ghost ${styles.feedMore}`} onClick={() => setAll(true)}>{t('Ещё {n}', { n: more })}</button>
               </li>
             )}
           </>
         ) : (
-          <li className={`${styles.feedEmpty} muted small`}>Пока пусто: здесь появятся вопросы агентов, паузы и концы запусков</li>
+          <li className={`${styles.feedEmpty} muted small`}>{t('Пока пусто: здесь появятся вопросы агентов, паузы и концы запусков')}</li>
         )}
       </ul>
     </aside>

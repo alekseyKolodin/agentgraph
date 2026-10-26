@@ -14,6 +14,7 @@ import {
   type Edge, type EdgeProps, type Node, type NodeProps,
 } from '@xyflow/react';
 import { plural } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import type { GraphEdge, GraphFrame, GraphModel, GraphNode } from '../../lib/graph/model';
 import { blockLoopNote, loopRunLabel, loopVerdict, nodeBadge, phaseNodeTitle, STATUSES, type GraphRunState } from '../../lib/graph/run-state';
 import { pathD } from '../../lib/graph/text';
@@ -122,7 +123,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
   const common = { tabIndex: 0, onClick: open, onKeyDown: onKeys(open) };
   if (n.kind === 'start') {
     return (
-      <div className={cx(styles.fgNode, styles.fgStart, g.selectedKey === n.key && styles.isSelected, 'nopan')} title={g.startSub || 'Задача, введённая при запуске'} {...common}>
+      <div className={cx(styles.fgNode, styles.fgStart, g.selectedKey === n.key && styles.isSelected, 'nopan')} title={g.startSub || t('Задача, введённая при запуске')} {...common}>
         {handles}
         <div className={styles.fgTitle}>{n.title}</div>
         <div className={styles.fgSub}>{g.startSub || n.sub}</div>
@@ -132,7 +133,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
   }
   if (n.kind === 'cond') {
     return (
-      <div className={cx(styles.fgNode, styles.fgCond, (g.selectedBlock === n.b || g.selectedKey === n.key) && styles.isSelected, status, 'nopan')} title={`Условие: ${n.sub}`} {...common}>
+      <div className={cx(styles.fgNode, styles.fgCond, (g.selectedBlock === n.b || g.selectedKey === n.key) && styles.isSelected, status, 'nopan')} title={t('Условие: {sub}', { sub: n.sub })} {...common}>
         {handles}
         <span className={styles.fgDiamond} />
         <span className={styles.fgCondLabel}>{n.sub}</span>
@@ -144,7 +145,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
     return (
       <div
         className={cx(styles.fgNode, styles.fgArtifact, g.artLocked?.(n.art!) && styles.isLocked, 'nopan')}
-        title={`${n.title} (${n.sub})${g.mode === 'run' ? ': открыть' : ''}`}
+        title={g.mode === 'run' ? t('{title} ({sub}): открыть', { title: n.title, sub: n.sub }) : `${n.title} (${n.sub})`}
         onMouseEnter={() => g.setHl(n.art!)}
         onMouseLeave={() => g.setHl('')}
         {...common}
@@ -157,7 +158,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
     );
   }
   const tools = g.toolsOf ? g.toolsOf(n) : '';
-  const base = `${n.num}. ${n.title}${tools ? `\nИнструменты: ${tools}` : ''}`;
+  const base = `${n.num}. ${n.title}${tools ? `\n${t('Инструменты: {tools}', { tools })}` : ''}`;
   return (
     <div
       className={cx(styles.fgNode, styles.fgPhase, g.changed?.has(n.name!) && styles.aiChanged, ((g.selectedName && g.selectedName === n.name) || g.selectedKey === n.key) && styles.isSelected, status, 'nopan')}
@@ -176,7 +177,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
         <span className={styles.fgTools}>{n.tools} {plural(n.tools ?? 0, 'инструмент', 'инструмента', 'инструментов')}</span>
         <span className={styles.fgBadge}>{s ? nodeBadge('phase', s) : ''}</span>
       </div>
-      {g.mode === 'edit' && <PlusButton title="Добавить этап после этого" hit={hitOf(n)} />}
+      {g.mode === 'edit' && <PlusButton title={t('Добавить этап после этого')} hit={hitOf(n)} />}
     </div>
   );
 });
@@ -194,7 +195,7 @@ const FrameView = memo(function FrameView({ data }: NodeProps<Node<{ f: GraphFra
         <div
           className={cx(styles.fgFrameHead, 'nopan')}
           tabIndex={0}
-          title={g.mode === 'edit' ? `${f.title}: настройки цикла блока` : f.title}
+          title={g.mode === 'edit' ? t('{title}: настройки цикла блока', { title: f.title }) : f.title}
           onClick={open}
           onKeyDown={onKeys(open)}
         >
@@ -208,10 +209,10 @@ const FrameView = memo(function FrameView({ data }: NodeProps<Node<{ f: GraphFra
   }
   if (f.kind === 'group') {
     return (
-      <div className={cx(styles.fgFrame, styles.fgGroup)} title={`Параллельная группа ${f.group}: этапы идут одновременно и видят один {{prev}}`}>
+      <div className={cx(styles.fgFrame, styles.fgGroup)} title={t('Параллельная группа {group}: этапы идут одновременно и видят один {{prev}}', { group: String(f.group) })}>
         {handles}
         <div className={cx(styles.fgFrameHead, styles.fgGroupHead)}>{f.title}</div>
-        {g.mode === 'edit' && <PlusButton title={`Добавить участника группы ${f.group}`} hit={hitOf(f)} />}
+        {g.mode === 'edit' && <PlusButton title={t('Добавить участника группы {group}', { group: String(f.group) })} hit={hitOf(f)} />}
       </div>
     );
   }
@@ -402,10 +403,10 @@ function Canvas(props: FlowGraphProps) {
     <GraphCtx.Provider value={ctx}>
       <div className={cx(styles.fg, styles[`fg${mode[0]!.toUpperCase()}${mode.slice(1)}`], styles[`fg${host[0]!.toUpperCase()}${host.slice(1)}Host`], hl && styles.fgHl)}>
         <div className={styles.fgBar}>
-          <button type="button" className={styles.fgBtn} title="Мельче" onClick={() => zoom(scale - 0.1)}>−</button>
+          <button type="button" className={styles.fgBtn} title={t('Мельче')} onClick={() => zoom(scale - 0.1)}>−</button>
           <span className={styles.fgZoom}>{Math.round(scale * 100)}%</span>
-          <button type="button" className={styles.fgBtn} title="Крупнее" onClick={() => zoom(scale + 0.1)}>+</button>
-          <button type="button" className={styles.fgBtn} title="Вписать граф в окно" onClick={fit}>Вписать</button>
+          <button type="button" className={styles.fgBtn} title={t('Крупнее')} onClick={() => zoom(scale + 0.1)}>+</button>
+          <button type="button" className={styles.fgBtn} title={t('Вписать граф в окно')} onClick={fit}>{t('Вписать')}</button>
         </div>
         <svg className={styles.fgDefs} aria-hidden="true">
           <defs>

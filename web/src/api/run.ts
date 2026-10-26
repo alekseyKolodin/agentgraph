@@ -3,6 +3,7 @@
 import type { ApiErrorBody, ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
 import type { Block, FlowSpec } from '@server/schema';
 import { api, ApiError } from './client';
+import { t } from '../lib/i18n';
 
 /** GET /api/runs/:id/flow: снимок flow.yaml, по которому идёт запуск. */
 export type RunFlowView = { name: string; blocks: Block[]; artifacts?: FlowSpec['artifacts'] };
@@ -18,7 +19,7 @@ export const runFileUrl = (id: string, file: string) => `${runUrl(id)}/file?path
 /** Текст файла запуска; не 2xx — «Не удалось прочитать: N». noStore — у идущего этапа транскрипт растёт, читаем заново. */
 export async function fetchRunFile(id: string, file: string, noStore = false): Promise<{ ok: boolean; text: string }> {
   const res = await fetch(runFileUrl(id, file), noStore ? { cache: 'no-store' } : {});
-  return res.ok ? { ok: true, text: await res.text() } : { ok: false, text: `Не удалось прочитать: ${res.status}` };
+  return res.ok ? { ok: true, text: await res.text() } : { ok: false, text: t('Не удалось прочитать: {status}', { status: res.status }) };
 }
 
 export const pauseRun = (id: string) => api<unknown>('POST', `${runUrl(id)}/pause`);

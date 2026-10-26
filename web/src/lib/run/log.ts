@@ -1,6 +1,8 @@
 // Буфер живого лога запуска (порт appendLog/flushLog из ui/app.js) — без DOM. Строки копятся и забираются раз в кадр
 // пачкой; в DOM держится хвост (не больше LOG_MAX_LINES строк, куски по LOG_CHUNK_LINES), весь лог этапа — в его транскрипте.
 
+import { t } from '../i18n';
+
 export const LOG_MAX_LINES = 3000;
 export const LOG_CHUNK_LINES = 200;
 export const LOG_LINE_MAX = 4000;
@@ -22,7 +24,7 @@ export class RunLogBuffer {
 
   append(line: string): void {
     const q = this.queue;
-    q.push(line.length > LOG_LINE_MAX ? `${line.slice(0, LOG_LINE_MAX)}… (ещё знаков: ${line.length - LOG_LINE_MAX}, полный текст в транскрипте этапа)` : line);
+    q.push(line.length > LOG_LINE_MAX ? `${line.slice(0, LOG_LINE_MAX)}… ${t('(ещё знаков: {n}, полный текст в транскрипте этапа)', { n: line.length - LOG_LINE_MAX })}` : line);
     // всё старше хвоста в DOM уже не попадёт
     if (q.length >= LOG_MAX_LINES + LOG_CHUNK_LINES) {
       q.splice(0, q.length - LOG_MAX_LINES);

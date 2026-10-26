@@ -7,6 +7,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
 import { useToast } from '../../components/Toast';
 import { phaseArtifactAccess } from '../../lib/graph/model';
+import { t } from '../../lib/i18n';
 import {
   advLabel, duplicatePhase, insertVar, isMulti, movePhase, phaseNum, phaseText, renamePhase, schemaText, slug, usesVar, variableList,
   type EditPhase,
@@ -23,7 +24,7 @@ const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boole
 
 /** Метка параллельной группы рядом с названием этапа. */
 export const PGroup = ({ group }: { group?: string }) =>
-  group ? <span className={styles.pgroup} title="Параллельная группа: соседние этапы с этой группой идут одновременно">∥ {group}</span> : null;
+  group ? <span className={styles.pgroup} title={t('Параллельная группа: соседние этапы с этой группой идут одновременно')}>∥ {group}</span> : null;
 
 export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane?: boolean }) {
   const st = useFlowStore();
@@ -64,10 +65,10 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
   const act = async (what: 'up' | 'down' | 'dup' | 'del') => {
     if (what === 'del') {
       if (block.phases.length === 1) {
-        await notify(isMulti(spec) ? 'В блоке нужен хотя бы один этап. Чтобы убрать блок целиком, удали его кнопкой ✕ в шапке блока.' : 'Нужен хотя бы один этап');
+        await notify(isMulti(spec) ? t('В блоке нужен хотя бы один этап. Чтобы убрать блок целиком, удали его кнопкой ✕ в шапке блока.') : t('Нужен хотя бы один этап'));
         return;
       }
-      if (!(await askConfirm(`Удалить этап «${p.title || p.name}»?`, { ok: 'Удалить', danger: true }))) return;
+      if (!(await askConfirm(t('Удалить этап «{name}»?', { name: p.title || p.name }), { ok: t('Удалить'), danger: true }))) return;
       // за время вопроса рабочую копию могла заменить правка ИИ или сохранение
       if (flowState.spec !== spec) return;
       block.phases.splice(i, 1);
@@ -106,15 +107,15 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
     >
       <div className={styles.pcardHead}>
         <span className={styles.pnum}>{phaseNum(spec, bi, i)}</span>
-        <input className={styles.pTitle} data-field="p-title" value={p.title || ''} placeholder="Название этапа" onChange={(e) => set({ title: e.target.value })} />
+        <input className={styles.pTitle} data-field="p-title" value={p.title || ''} placeholder={t('Название этапа')} onChange={(e) => set({ title: e.target.value })} />
         <PGroup group={p.group} />
-        <button className={styles.icon} title={i === 0 && bi > 0 ? 'В конец предыдущего блока' : 'Выше'} disabled={first} onClick={() => void act('up')}>↑</button>
-        <button className={styles.icon} title={i === block.phases.length - 1 && !last ? 'В начало следующего блока' : 'Ниже'} disabled={last} onClick={() => void act('down')}>↓</button>
-        <button className={styles.icon} title="Дублировать" onClick={() => void act('dup')}>⧉</button>
-        <button className={cx(styles.icon, styles.danger)} title="Удалить" onClick={() => void act('del')}>✕</button>
+        <button className={styles.icon} title={i === 0 && bi > 0 ? t('В конец предыдущего блока') : t('Выше')} disabled={first} onClick={() => void act('up')}>↑</button>
+        <button className={styles.icon} title={i === block.phases.length - 1 && !last ? t('В начало следующего блока') : t('Ниже')} disabled={last} onClick={() => void act('down')}>↓</button>
+        <button className={styles.icon} title={t('Дублировать')} onClick={() => void act('dup')}>⧉</button>
+        <button className={cx(styles.icon, styles.danger)} title={t('Удалить')} onClick={() => void act('del')}>✕</button>
       </div>
       <div className={cx(styles.pSection, styles.pVars)}>
-        <div className={styles.pLabel} title="Клик вставляет {{переменную}} в промпт. Уже использованные подсвечены">Переменные</div>
+        <div className={styles.pLabel} title={t('Клик вставляет {{переменную}} в промпт. Уже использованные подсвечены')}>{t('Переменные')}</div>
         <div className="chips">
           {vars.map((v) => (
             <button key={v.key} className={cx('chip', usesVar(text, v.key) && 'on')} title={`{{${v.key}}} — ${v.hint}`} onClick={() => insert(v.key)}>{v.label}</button>
@@ -122,16 +123,16 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
         </div>
       </div>
       <label>
-        <span title="Первое сообщение свежей сессии Claude Code">Промпт</span>
+        <span title={t('Первое сообщение свежей сессии Claude Code')}>{t('Промпт')}</span>
         <textarea ref={prompt} className={styles.pPrompt} data-field="p-prompt" rows={8} value={p.prompt || ''} onChange={(e) => set({ prompt: e.target.value })} />
       </label>
       <label>
-        <span title="Чем должен закончиться ответ, чтобы следующий этап мог им пользоваться">Что передать следующему этапу</span>
-        <input className={styles.pHandoff} value={p.handoff || ''} placeholder={'раздел "## Результат": что сделано, файлы, открытые вопросы'} onChange={(e) => set({ handoff: e.target.value })} />
+        <span title={t('Чем должен закончиться ответ, чтобы следующий этап мог им пользоваться')}>{t('Что передать следующему этапу')}</span>
+        <input className={styles.pHandoff} value={p.handoff || ''} placeholder={t('раздел "## Результат": что сделано, файлы, открытые вопросы')} onChange={(e) => set({ handoff: e.target.value })} />
       </label>
       <ArtifactAccess p={p} />
       <div className={styles.pSection}>
-        <div className={styles.pLabel} title="Всё выбранное разрешено без подтверждений">Инструменты</div>
+        <div className={styles.pLabel} title={t('Всё выбранное разрешено без подтверждений')}>{t('Инструменты')}</div>
         <div className={cx('chips', styles.tools)}>
           {config.tools.map((t) => (
             <button
@@ -155,7 +156,7 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
         <summary>{advLabel(p)}</summary>
         <div className="row">
           <label>
-            <span title={`Идентификатор этапа: на его вывод ссылаются как {{phases.${p.name}}}`}>id (для {'{{phases.id}}'})</span>
+            <span title={t('Идентификатор этапа: на его вывод ссылаются как {{phases.{name}}}', { name: p.name })}>{t('id (для {{phases.id}})')}</span>
             <DraftInput
               className={styles.pName}
               data-field="p-name"
@@ -169,25 +170,25 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
               }}
             />
           </label>
-          <label><span>Модель</span>
+          <label><span>{t('Модель')}</span>
             <select value={p.model || ''} onChange={(e) => set({ model: e.target.value })}>
               {modelOptions(p.model || '').map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
           </label>
           <label><span>Effort</span>
             <select value={p.effort || ''} onChange={(e) => set({ effort: e.target.value })}>
-              {EFFORTS.map((e) => <option key={e} value={e}>{e || 'по умолчанию'}</option>)}
+              {EFFORTS.map((e) => <option key={e} value={e}>{e || t('по умолчанию')}</option>)}
             </select>
           </label>
-          <label><span>Лимит ходов</span><input type="number" min={1} value={String(p.max_turns ?? '')} placeholder="∞" onChange={(e) => set({ max_turns: e.target.value })} /></label>
-          <label><span>Права</span>
+          <label><span>{t('Лимит ходов')}</span><input type="number" min={1} value={String(p.max_turns ?? '')} placeholder="∞" onChange={(e) => set({ max_turns: e.target.value })} /></label>
+          <label><span>{t('Права')}</span>
             <select value={p.permission_mode || ''} onChange={(e) => set({ permission_mode: e.target.value })}>
-              {PERMS.map((e) => <option key={e} value={e}>{e || 'по умолчанию'}</option>)}
+              {PERMS.map((e) => <option key={e} value={e}>{e || t('по умолчанию')}</option>)}
             </select>
           </label>
-          <label><span>Лимит стоимости, $</span><input type="number" min={0} step="any" value={String(p.max_budget_usd ?? '')} placeholder="—" onChange={(e) => set({ max_budget_usd: e.target.value })} /></label>
+          <label><span>{t('Лимит стоимости, $')}</span><input type="number" min={0} step="any" value={String(p.max_budget_usd ?? '')} placeholder="—" onChange={(e) => set({ max_budget_usd: e.target.value })} /></label>
           <label>
-            <span title="Соседние этапы блока с одинаковой группой идут одновременно и видят один {{prev}} — вывод до группы. Следующий этап получает склейку их выводов. В группе от двух этапов, с Edit или Write — не больше одного, без AskUserQuestion">Параллельная группа</span>
+            <span title={t('Соседние этапы блока с одинаковой группой идут одновременно и видят один {{prev}} — вывод до группы. Следующий этап получает склейку их выводов. В группе от двух этапов, с Edit или Write — не больше одного, без AskUserQuestion')}>{t('Параллельная группа')}</span>
             <DraftInput
               list={`b-groups-${bi}`}
               value={p.group || ''}
@@ -202,7 +203,7 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
           </label>
         </div>
         <label>
-          <span title="Куда этап может ходить, кроме директории проекта: по пути на строку. Например, проект с правилами QA: его CLAUDE.md и скиллы подхватятся">Дополнительные директории</span>
+          <span title={t('Куда этап может ходить, кроме директории проекта: по пути на строку. Например, проект с правилами QA: его CLAUDE.md и скиллы подхватятся')}>{t('Дополнительные директории')}</span>
           <div className="path-field">
             <DraftTextarea
               rows={2}
@@ -214,15 +215,15 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
               }}
             />
             <PickDirButton
-              prompt="Выбери дополнительную директорию этапа"
+              prompt={t('Выбери дополнительную директорию этапа')}
               start={() => p.add_dirs?.at(-1) ?? ''}
               onPick={(path) => set({ add_dirs: [...(p.add_dirs || []), path] })}
             />
           </div>
         </label>
-        <label><span>Системный промпт (пусто = стандартный промпт Claude Code)</span><textarea className={styles.pSystem} rows={2} value={p.system || ''} onChange={(e) => set({ system: e.target.value })} /></label>
+        <label><span>{t('Системный промпт (пусто = стандартный промпт Claude Code)')}</span><textarea className={styles.pSystem} rows={2} value={p.system || ''} onChange={(e) => set({ system: e.target.value })} /></label>
         <label>
-          <span>Схема вывода (JSON Schema): если задана, этап вернёт JSON по ней</span>
+          <span>{t('Схема вывода (JSON Schema): если задана, этап вернёт JSON по ней')}</span>
           <textarea className={styles.pSchema} data-field="p-schema" rows={3} value={schemaText(p)} onChange={(e) => set({ _schemaText: e.target.value })} />
         </label>
       </details>
@@ -237,11 +238,11 @@ function ArtifactAccess({ p }: { p: EditPhase }) {
   if (!on || !spec.artifacts || !Object.keys(spec.artifacts).length) return null;
   const { read, write } = phaseArtifactAccess(p);
   const list = (keys: string[]) => keys.map((k, n) => <span key={k}>{n > 0 && ', '}<code>{k}</code></span>);
-  const parts = [read.length ? <span key="r">читает {list(read)}</span> : null, write.length ? <span key="w">пишет {list(write)}</span> : null].filter(Boolean);
+  const parts = [read.length ? <span key="r">{t('читает')} {list(read)}</span> : null, write.length ? <span key="w">{t('пишет')} {list(write)}</span> : null].filter(Boolean);
   return (
-    <div className={styles.pArt} title="Чтение — reads и подстановки {{artifacts.KEY}} в промпте и «что передать»; запись — writes, она включает чтение. Без Read, Edit и Write в инструментах этап работает только со своими артефактами. Доступ правится во вкладке YAML">
-      <span className={styles.pLabel}>Артефакты</span>{' '}
-      {parts.length ? parts.map((x, n) => <span key={n}>{n > 0 && ' · '}{x}</span>) : <span className="muted">нет доступа</span>}
+    <div className={styles.pArt} title={t('Чтение — reads и подстановки {{artifacts.KEY}} в промпте и «что передать»; запись — writes, она включает чтение. Без Read, Edit и Write в инструментах этап работает только со своими артефактами. Доступ правится во вкладке YAML')}>
+      <span className={styles.pLabel}>{t('Артефакты')}</span>{' '}
+      {parts.length ? parts.map((x, n) => <span key={n}>{n > 0 && ' · '}{x}</span>) : <span className="muted">{t('нет доступа')}</span>}
     </div>
   );
 }
@@ -282,12 +283,12 @@ function ConnRow({ p }: { p: EditPhase }) {
 
   return (
     <>
-      <div className={styles.pLabel} title="Коннекторы аккаунта claude.ai приходят в этап, только если их инструменты перечислены здесь. Остальным этапам раннер их выключает: иначе их описания занимают около 45K токенов контекста">Коннекторы claude.ai</div>
+      <div className={styles.pLabel} title={t('Коннекторы аккаунта claude.ai приходят в этап, только если их инструменты перечислены здесь. Остальным этапам раннер их выключает: иначе их описания занимают около 45K токенов контекста')}>{t('Коннекторы claude.ai')}</div>
       <div className="chips">
         {connChips(p, builtin, view).map((c) => (
           <span key={c.name} className={cx('chip', styles.connTool, ...c.cls.split(' ').map((k) => k && styles[k]), c.cls.includes('on') && 'on')} title={c.title}>
             {c.text}
-            <button type="button" className="attach-x" title="Убрать" onClick={() => { p.tools = p.tools.filter((x) => x !== c.name); markDirty(); }}>×</button>
+            <button type="button" className="attach-x" title={t('Убрать')} onClick={() => { p.tools = p.tools.filter((x) => x !== c.name); markDirty(); }}>×</button>
           </span>
         ))}
         <button
@@ -304,10 +305,10 @@ function ConnRow({ p }: { p: EditPhase }) {
       <div className={cx(styles.connNote, tone === 'warn' && styles.warn)}>{note}</div>
       {open && (
         <div className={styles.connPick}>
-          {can && (q.isFetching || (!q.data && !q.error)) && <span className="muted small">Загружаю коннекторы аккаунта… (несколько секунд)</span>}
+          {can && (q.isFetching || (!q.data && !q.error)) && <span className="muted small">{t('Загружаю коннекторы аккаунта… (несколько секунд)')}</span>}
           {can && !q.isFetching && q.error && (
             <>
-              <span className="msg warn">Список коннекторов не загрузился: {q.error.message}</span>{' '}
+              <span className="msg warn">{t('Список коннекторов не загрузился: {error}', { error: q.error.message })}</span>{' '}
               <button type="button" className="btn small" onClick={() => load(true)}>↻</button>
             </>
           )}
@@ -315,7 +316,7 @@ function ConnRow({ p }: { p: EditPhase }) {
           <div className={styles.connManual}>
             <input
               className="conn-name"
-              placeholder={`${CONN_PREFIX}<Коннектор>__<инструмент> или ${CONN_PREFIX}<Коннектор> — весь`}
+              placeholder={t('{p}<Коннектор>__<инструмент> или {p}<Коннектор> — весь', { p: CONN_PREFIX })}
               spellCheck={false}
               value={manual}
               onChange={(e) => setManual(e.target.value)}
@@ -326,7 +327,7 @@ function ConnRow({ p }: { p: EditPhase }) {
                 }
               }}
             />
-            <button type="button" className="btn small" onClick={addManual}>Добавить</button>
+            <button type="button" className="btn small" onClick={addManual}>{t('Добавить')}</button>
           </div>
         </div>
       )}
@@ -345,16 +346,16 @@ function ConnPicker({ p, view, onAdd, onRefresh }: { p: EditPhase; view: NonNull
             if (e.target.value) onAdd(connPicked(e.target.value, view));
           }}
         >
-          <option value="">{ready ? '— инструмент коннектора —' : 'Подключённых коннекторов нет'}</option>
+          <option value="">{ready ? t('— инструмент коннектора —') : t('Подключённых коннекторов нет')}</option>
           {groups.map((g) => (
             <optgroup key={g.label} label={g.label}>
               {g.options.map((o) => <option key={o.value} value={o.value} title={o.title}>{o.label}</option>)}
             </optgroup>
           ))}
         </select>
-        <button type="button" className="btn small" title="Спросить список заново" onClick={onRefresh}>↻</button>
+        <button type="button" className="btn small" title={t('Спросить список заново')} onClick={onRefresh}>↻</button>
       </div>
-      {off.length > 0 && <span className="muted small">Не подключены в claude.ai: {off.join(', ')}. Их инструменты появятся после подключения.</span>}
+      {off.length > 0 && <span className="muted small">{t('Не подключены в claude.ai: {list}. Их инструменты появятся после подключения.', { list: off.join(', ') })}</span>}
     </>
   );
 }

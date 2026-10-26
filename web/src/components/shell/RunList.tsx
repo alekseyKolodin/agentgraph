@@ -9,6 +9,7 @@ import { deleteRun, errorText, keys, setRunHidden, useFeature, useRuns } from '.
 import { AdhocBadge, Badge, TagBadge } from '../Badge';
 import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { deleteRunText, projKey, runListView, runManageable, runRowSub, runRowTitle } from '../../lib/runs';
 import { LS } from '../../lib/storage';
 import { isOpen, reveal, setOpen, useFold } from './fold';
@@ -62,7 +63,7 @@ export function RunSectionActions() {
     <div className={styles.sideActions}>
       <button
         className={cx('chip', s.grouped && 'on')}
-        title="Группировать запуски по директории проекта"
+        title={t('Группировать запуски по директории проекта')}
         onClick={() => {
           side.grouped = !side.grouped;
           LS.set('agentgraph.groupRuns', side.grouped);
@@ -71,12 +72,12 @@ export function RunSectionActions() {
           changed();
         }}
       >
-        по проектам
+        {t('по проектам')}
       </button>
       {keysOf.length > 0 && (
         <button
           className={cx('btn small ghost icon-btn', styles.fold)}
-          title={anyOpen ? 'Свернуть все проекты' : 'Развернуть все проекты'}
+          title={anyOpen ? t('Свернуть все проекты') : t('Развернуть все проекты')}
           onClick={() => {
             for (const k of keysOf) setOpen(k, !anyOpen);
           }}
@@ -84,7 +85,7 @@ export function RunSectionActions() {
           {anyOpen ? ICON.foldAll : ICON.unfoldAll}
         </button>
       )}
-      <button className="btn small ghost" title="Обновить" onClick={() => void qc.invalidateQueries({ queryKey: keys.runs })}>↻</button>
+      <button className="btn small ghost" title={t('Обновить')} onClick={() => void qc.invalidateQueries({ queryKey: keys.runs })}>↻</button>
     </div>
   );
 }
@@ -119,7 +120,7 @@ export function RunList() {
     await refresh();
   };
   const remove = async (id: string) => {
-    if (!(await askConfirm(deleteRunText(id, all.find((x) => x.id === id)), { ok: 'Удалить', danger: true }))) return;
+    if (!(await askConfirm(deleteRunText(id, all.find((x) => x.id === id)), { ok: t('Удалить'), danger: true }))) return;
     try {
       await deleteRun(id);
     } catch (err) {
@@ -138,8 +139,8 @@ export function RunList() {
         <span className={styles.name}>
           {r.title || r.flow}
           {r.adhoc && <AdhocBadge />}
-          {(r.tags || []).map((t) => <TagBadge key={t} slug={t} />)}
-          {(r.knowledge || []).map((t) => <TagBadge key={`k:${t}`} slug={t} kind="knowledge" />)} <Badge status={r.status} />
+          {(r.tags || []).map((tag) => <TagBadge key={tag} slug={tag} />)}
+          {(r.knowledge || []).map((tag) => <TagBadge key={`k:${tag}`} slug={tag} kind="knowledge" />)} <Badge status={r.status} />
         </span>
         <span className={styles.sub}>
           {sub.flow && <span className={styles.subFlow}>{sub.flow}</span>}
@@ -149,7 +150,7 @@ export function RunList() {
           <span className={styles.liActs}>
             <button
               className="icon-btn"
-              title={r.hidden ? 'Вернуть в список' : 'Скрыть из списка (файлы останутся)'}
+              title={r.hidden ? t('Вернуть в список') : t('Скрыть из списка (файлы останутся)')}
               onClick={(e) => {
                 e.stopPropagation();
                 void hide(r.id, !r.hidden);
@@ -159,7 +160,7 @@ export function RunList() {
             </button>
             <button
               className="icon-btn danger"
-              title="Удалить запуск"
+              title={t('Удалить запуск')}
               onClick={(e) => {
                 e.stopPropagation();
                 void remove(r.id);
@@ -187,10 +188,10 @@ export function RunList() {
       <input
         className={styles.sideSearch}
         type="search"
-        placeholder="Найти запуск…"
+        placeholder={t('Найти запуск…')}
         autoComplete="off"
         spellCheck={false}
-        title="Все слова должны найтись в имени, flow, задаче, тегах, папке проекта или id запуска. Esc — очистить"
+        title={t('Все слова должны найтись в имени, flow, задаче, тегах, папке проекта или id запуска. Esc — очистить')}
         value={s.query}
         onChange={(e) => {
           side.query = e.target.value;
@@ -207,12 +208,12 @@ export function RunList() {
         {/* фильтр по статусу: несколько выбранных — объединение; «все» сбрасывает */}
         {view.chips.length > 0 && (
           <div className={styles.runFilter}>
-            <button className={cx('chip', !s.statuses.size && 'on')} title="Все статусы" onClick={() => setStatus('')}>все</button>
+            <button className={cx('chip', !s.statuses.size && 'on')} title={t('Все статусы')} onClick={() => setStatus('')}>{t('все')}</button>
             {view.chips.map((c) => (
               <button
                 key={c.status}
                 className={cx('chip', styles.st, c.status, c.on && 'on')}
-                title={c.on ? 'Убрать из фильтра' : 'Показать запуски с этим статусом'}
+                title={c.on ? t('Убрать из фильтра') : t('Показать запуски с этим статусом')}
                 onClick={() => setStatus(c.status)}
               >
                 {`${statusLabel(c.status)} `}<span className={styles.n}>{c.count}</span>
@@ -231,9 +232,9 @@ export function RunList() {
                 <span className={styles.caret}>{ICON.caret}</span>
                 <span className={styles.grpName}>{g.label}</span>
                 {/* идущие и ждущие ответа видны и у свёрнутого проекта */}
-                {g.live.waiting > 0 && <span className={cx(styles.grpLive, styles.waiting)} title={`ждут ответа: ${g.live.waiting}`}>{`● ${g.live.waiting}`}</span>}
-                {g.live.paused > 0 && <span className={cx(styles.grpLive, styles.paused)} title={`на паузе: ${g.live.paused}`}>{`❚❚ ${g.live.paused}`}</span>}
-                {g.live.running > 0 && <span className={cx(styles.grpLive, styles.running)} title={`выполняются: ${g.live.running}`}>{`● ${g.live.running}`}</span>}
+                {g.live.waiting > 0 && <span className={cx(styles.grpLive, styles.waiting)} title={t('ждут ответа: {n}', { n: g.live.waiting })}>{`● ${g.live.waiting}`}</span>}
+                {g.live.paused > 0 && <span className={cx(styles.grpLive, styles.paused)} title={t('на паузе: {n}', { n: g.live.paused })}>{`❚❚ ${g.live.paused}`}</span>}
+                {g.live.running > 0 && <span className={cx(styles.grpLive, styles.running)} title={t('выполняются: {n}', { n: g.live.running })}>{`● ${g.live.running}`}</span>}
                 <span className={styles.grpCount}>{g.count}</span>
               </button>
               <ul className={styles.list}>
@@ -246,7 +247,7 @@ export function RunList() {
                       changed();
                     }}
                   >
-                    {`ещё ${g.more}`}
+                    {t('ещё {n}', { n: g.more })}
                   </li>
                 )}
               </ul>
@@ -263,7 +264,7 @@ export function RunList() {
               changed();
             }}
           >
-            {`${s.showHidden ? 'не показывать скрытые' : 'показать скрытые'}: ${view.hiddenCount}`}
+            {`${s.showHidden ? t('не показывать скрытые') : t('показать скрытые')}: ${view.hiddenCount}`}
           </button>
         )}
       </div>

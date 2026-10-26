@@ -1,5 +1,6 @@
 // Статусы узлов графа запуска (порт ui/graph.js graphRunState) и подписи бейджей (порт graphApplyRun) — без DOM.
 import { usd } from '../format';
+import { t } from '../i18n';
 import type { GraphBlock } from './model';
 import { ctxBadge, ctxLabel, iterTo, loopLabel } from './text';
 
@@ -64,7 +65,7 @@ export type GraphRunState = {
   now: string;
 };
 
-const COND_KIND: Record<string, string> = { command: 'команда', judge: 'судья', marker: 'маркер', none: 'без условия' };
+const COND_KIND: Record<string, string> = { command: t('команда'), judge: t('судья'), marker: t('маркер'), none: t('без условия') };
 
 /**
  * Статусы узлов запуска. Ключ узла: блок + имя этапа (имена этапов во flow уникальны).
@@ -104,7 +105,7 @@ export function graphRunState(
     out.blocks[b.name] = { index: bi, status, skipped, iteration: iter, max, looped: Boolean(b.loop), untilType: b.loop?.until?.type };
     out.nodes[`b:${b.name}`] = {
       status: skipped ? 'skipped' : status === 'pending' ? 'pending' : active ? 'running' : status === 'done' ? 'done' : 'failed',
-      label: skipped ? 'пропущен' : b.loop && iter ? `итер. ${iter}/${max}` : '',
+      label: skipped ? t('пропущен') : b.loop && iter ? t('итер. {i}/{max}', { i: iter, max }) : '',
     };
     for (const p of b.phases) {
       const mine = phases.filter((x) => x.phase === p.name);
@@ -123,8 +124,8 @@ export function graphRunState(
       // контекст: у идущего этапа — последний снимок из потока, у готового — из отчёта; без данных поля нет
       const ctx = run ? run.ctx : rep?.tokens && { peak: rep.tokens.contextPeak ?? 0, window: rep.tokens.contextWindow };
       if (ctx && ctx.peak > 0) node.ctx = (ctx.window ?? 0) > 0 ? { peak: ctx.peak, window: ctx.window } : { peak: ctx.peak };
-      if (run && asking.some((q) => q.phase === p.name)) node.note = 'ждёт ответа';
-      else if (run && r.pause === 'requested') node.note = 'пауза после шага';
+      if (run && asking.some((q) => q.phase === p.name)) node.note = t('ждёт ответа');
+      else if (run && r.pause === 'requested') node.note = t('пауза после шага');
       out.nodes[`p:${b.name}:${p.name}`] = node;
     }
     if (b.loop) {
@@ -163,7 +164,7 @@ export function graphRunState(
     const node = out.nodes[`p:${bname}:${r.pauseReason.phase}`];
     if (node) {
       out.currentKeys = [`p:${bname}:${r.pauseReason.phase}`];
-      node.note = 'пауза';
+      node.note = t('пауза');
     }
   }
   if (!bname) bname = Object.keys(out.blocks).find((n) => out.blocks[n]!.status === 'running') || null;
@@ -172,26 +173,26 @@ export function graphRunState(
   const bs = out.blocks[bname]!;
   const b = blocks[bs.index]!;
   const parts: string[] = [];
-  if (blocks.length > 1) parts.push(`блок ${bs.index + 1} «${b.title || b.name}»`);
-  if (b.loop) parts.push(`итерация ${bs.iteration}/${bs.max}`);
+  if (blocks.length > 1) parts.push(t('блок {n} «{title}»', { n: bs.index + 1, title: b.title || b.name }));
+  if (b.loop) parts.push(t('итерация {i}/{max}', { i: bs.iteration, max: bs.max }));
   if (cur.length) {
-    const names = cur.map((x) => `«${x.title || x.phase}»`);
+    const names = cur.map((x) => t('«{name}»', { name: x.title || x.phase }));
     const since = cur.map((x) => x.at).filter((x): x is number => Boolean(x));
     let took = '';
     if (since.length && extra.now) {
       const min = Math.floor((extra.now - Math.min(...since)) / 60000);
-      took = min < 1 ? ' (идёт меньше минуты)' : ` (идёт ${min} мин)`;
+      took = ` ${min < 1 ? t('(идёт меньше минуты)') : t('(идёт {m} мин)', { m: min })}`;
     }
-    parts.push(`${names.length > 1 ? `этапы ${names.join(', ')}` : `этап ${names[0]}`}${took}`);
+    parts.push(`${names.length > 1 ? t('этапы {names}', { names: names.join(', ') }) : t('этап {name}', { name: names[0]! })}${took}`);
   } else if (condPending) {
-    parts.push(`проверка условия (${COND_KIND[condPending.kind ?? ''] || condPending.kind || 'условие'})`);
+    parts.push(t('проверка условия ({kind})', { kind: COND_KIND[condPending.kind ?? ''] || condPending.kind || t('условие') }));
   } else if (r.pause === 'paused' && r.pauseReason) {
-    parts.push(`этап «${r.pauseReason.phase}» попросил паузу`);
-  } else parts.push('между шагами');
-  if (asking.length && cur.length) parts.push('ждёт ответа');
-  if (r.pause === 'paused') parts.push('на паузе');
-  else if (r.pause === 'requested') parts.push('пауза после шага');
-  out.now = `Сейчас: ${parts.join(' · ')}`;
+    parts.push(t('этап «{phase}» попросил паузу', { phase: r.pauseReason.phase }));
+  } else parts.push(t('между шагами'));
+  if (asking.length && cur.length) parts.push(t('ждёт ответа'));
+  if (r.pause === 'paused') parts.push(t('на паузе'));
+  else if (r.pause === 'requested') parts.push(t('пауза после шага'));
+  out.now = t('Сейчас: {parts}', { parts: parts.join(' · ') });
   return out;
 }
 
@@ -200,17 +201,17 @@ export function nodeBadge(kind: 'phase' | 'cond' | 'block' | 'start' | 'artifact
   // контекст — сразу после иконки/цены: хвост (заметка, итерация) в узле 210 px обрезается первым
   const ctx = s.ctx ? ` ${ctxBadge(s.ctx.peak, s.ctx.window)}` : '';
   if (kind === 'block') return s.label || '';
-  if (s.status === 'running') return `⏳${ctx ? `${ctx} ·` : ''} ${s.note || 'идёт'}${s.iteration ? ` · итер. ${s.iteration}` : ''}`;
-  if (s.status === 'done') return kind === 'cond' ? `✓${s.iteration ? ` итер. ${s.iteration}` : ''}` : `✓ ${usd(s.costUsd)}${ctx ? ` ·${ctx}` : ''}${s.note ? ` · ${s.note}` : ''}`;
+  if (s.status === 'running') return `⏳${ctx ? `${ctx} ·` : ''} ${s.note || t('идёт')}${s.iteration ? ` · ${t('итер. {i}', { i: s.iteration })}` : ''}`;
+  if (s.status === 'done') return kind === 'cond' ? `✓${s.iteration ? ` ${t('итер. {i}', { i: s.iteration })}` : ''}` : `✓ ${usd(s.costUsd)}${ctx ? ` ·${ctx}` : ''}${s.note ? ` · ${s.note}` : ''}`;
   if (s.status === 'failed') return `✗ ${usd(s.costUsd)}`;
-  if (s.status === 'notmet') return `↻ не выполнено${s.iteration ? ` (итер. ${s.iteration})` : ''}`;
-  if (s.status === 'skipped') return 'пропущен';
+  if (s.status === 'notmet') return `↻ ${t('не выполнено')}${s.iteration ? ` (${t('итер. {i}', { i: s.iteration })})` : ''}`;
+  if (s.status === 'skipped') return t('пропущен');
   return '';
 }
 
 /** Подсказка узла этапа: статичная часть (номер, название, инструменты) и расшифровка контекста. */
 export const phaseNodeTitle = (base: string, s: NodeRunState | undefined): string =>
-  s?.ctx ? `${base}\nКонтекст: пик ${ctxLabel(s.ctx.peak, s.ctx.window)}${s.ctx.window ? '' : ' (окно модели неизвестно)'}` : base;
+  s?.ctx ? `${base}\n${t('Контекст: пик {v}', { v: ctxLabel(s.ctx.peak, s.ctx.window) })}${s.ctx.window ? '' : ` ${t('(окно модели неизвестно)')}`}` : base;
 
 /** Вердикт последней проверки условия блока: '' — проверок не было. */
 export const loopVerdict = (b: BlockRunState): '' | 'done' | 'notmet' => (b.lastCond ? (b.lastCond.done ? 'done' : 'notmet') : '');
@@ -219,9 +220,9 @@ export const loopVerdict = (b: BlockRunState): '' | 'done' | 'notmet' => (b.last
 export function loopRunLabel(mode: string, untilType: string | undefined, b: BlockRunState): string {
   const v = loopVerdict(b);
   return mode === 'run' && b.iteration
-    ? `↺ ${b.iteration} / ${b.max}${v === 'notmet' ? ` · ✕ итер. ${b.lastCond!.iteration}` : v === 'done' ? ' · ✓' : ''}`
+    ? `↺ ${b.iteration} / ${b.max}${v === 'notmet' ? ` · ✕ ${t('итер. {i}', { i: b.lastCond!.iteration })}` : v === 'done' ? ' · ✓' : ''}`
     : loopLabel(untilType, b.max);
 }
 
 /** «↺ до N итераций» в шапке рамки блока — тот же лимит, что на дуге. */
-export const blockLoopNote = (b: BlockRunState): string => `↺ до ${iterTo(b.max)}`;
+export const blockLoopNote = (b: BlockRunState): string => t('↺ до {n}', { n: iterTo(b.max) });

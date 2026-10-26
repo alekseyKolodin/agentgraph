@@ -2,6 +2,7 @@
 // тег задачи и тег знаний; «разовый» у черновика и разового запуска.
 import type { TagKind } from '@server/api-types';
 import { statusLabel } from '../lib/format';
+import { t } from '../lib/i18n';
 
 export function Badge({ status }: { status: string }) {
   return <span className={`badge ${status}`}>{statusLabel(status)}</span>;
@@ -9,10 +10,10 @@ export function Badge({ status }: { status: string }) {
 
 export function TagBadge({ slug, kind = 'task' }: { slug: string; kind?: TagKind }) {
   return kind === 'knowledge'
-    ? <span className="badge tag knowledge" title="Тег области знаний: заметки, пути и вложения для промптов этапов">#{slug}</span>
-    : <span className="badge tag" title="Тег задачи: саммари фичи между запусками">#{slug}</span>;
+    ? <span className="badge tag knowledge" title={t('Тег области знаний: заметки, пути и вложения для промптов этапов')}>#{slug}</span>
+    : <span className="badge tag" title={t('Тег задачи: саммари фичи между запусками')}>#{slug}</span>;
 }
 
 export function AdhocBadge() {
-  return <span className="badge adhoc" title="Разовый запуск: flow не сохранён в flows/, его копия — в папке запуска">разовый</span>;
+  return <span className="badge adhoc" title={t('Разовый запуск: flow не сохранён в flows/, его копия — в папке запуска')}>{t('разовый')}</span>;
 }
