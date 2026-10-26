@@ -2,11 +2,12 @@
 import type { FlowSummary } from '@server/api-types';
 import { plural } from '../format';
 import { iterTo } from '../graph/text';
+import { t } from '../i18n';
 
 /** «3 этапа · до 5 итераций, пока судья не скажет «готово»» или «2 блока · 4 этапа». */
 export function schemeSummary(summary: FlowSummary): string {
   const blocks = summary.blocks || [{ looped: true, maxIterations: summary.maxIterations ?? 1, condition: summary.condition ?? '', phases: summary.phases ?? [] }];
-  const loopText = (b: { looped: boolean; maxIterations: number; condition: string }) => (b.looped ? `до ${iterTo(b.maxIterations)}, ${b.condition.replace(/`/g, '')}` : 'один проход');
+  const loopText = (b: { looped: boolean; maxIterations: number; condition: string }) => (b.looped ? t('до {n}, {condition}', { n: iterTo(b.maxIterations), condition: b.condition.replace(/`/g, '') }) : t('один проход'));
   const phaseCount = blocks.reduce((n, b) => n + b.phases.length, 0);
   const phasesWord = plural(phaseCount, 'этап', 'этапа', 'этапов');
   return blocks.length === 1

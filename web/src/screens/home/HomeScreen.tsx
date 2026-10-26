@@ -8,6 +8,7 @@ import { keys, useFeature, useFlows, useHome, type IntakeTarget } from '../../ap
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
 import { QuestionCard } from '../../components/question/QuestionCard';
 import { homeMeta, inbox, withoutQuestion } from '../../lib/home';
+import { t } from '../../lib/i18n';
 import { Attention } from './Attention';
 import { Dash } from './Dash';
 import { DashSettings } from './DashSettings';
@@ -23,8 +24,8 @@ const TICK_MS = 30_000;
 function useNow(period: number): number {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), period);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), period);
+    return () => clearInterval(timer);
   }, [period]);
   return now;
 }
@@ -57,8 +58,8 @@ export function HomeScreen() {
     <>
       <header className="view-head">
         <div>
-          <h1>Главная</h1>
-          <p className="muted" title="Стоимость: оценка по прайсу API; с подписки не списывается">{homeMeta(runs, items.length)}</p>
+          <h1>{t('Главная')}</h1>
+          <p className="muted" title={t('Стоимость: оценка по прайсу API; с подписки не списывается')}>{homeMeta(runs, items.length)}</p>
         </div>
         {limits && <Limits />}
         <div className="row">
@@ -69,7 +70,7 @@ export function HomeScreen() {
         <div className={styles.homeMain}>
           {items.length > 0 && (
             <section className={styles.homeSec}>
-              <h2 title="Сначала те, что ждут дольше">Ждёт тебя</h2>
+              <h2 title={t('Сначала те, что ждут дольше')}>{t('Ждёт тебя')}</h2>
               <div>
                 {items.map(({ q, run }) => (
                   <QuestionCard
@@ -89,7 +90,7 @@ export function HomeScreen() {
           )}
           {runs.length > 0 && (
             <section className={styles.homeSec}>
-              <h2>Идут</h2>
+              <h2>{t('Идут')}</h2>
               <HomeRuns runs={runs} now={now} />
             </section>
           )}
@@ -97,17 +98,17 @@ export function HomeScreen() {
           {dashOn && <Dash onLaunch={onLaunch} onSettings={() => setSettings(true)} />}
           {down && (
             <p className={`run-paused ${styles.homeDown}`}>
-              Главная заработает после перезапуска UI-сервера: этот сервер запущен до её появления и не отдаёт вопросы и идущие запуски. Пока они видны в списке слева. Перезапуск остановит идущие запуски — дождись их конца.
+              {t('Главная заработает после перезапуска UI-сервера: этот сервер запущен до её появления и не отдаёт вопросы и идущие запуски. Пока они видны в списке слева. Перезапуск остановит идущие запуски — дождись их конца.')}
             </p>
           )}
           {/* дашборд сам объясняет, что делать: большая пустая заглушка под ним не нужна */}
           {!dashOn && !down && !items.length && !runs.length && (
             <div className={`empty ${styles.homeEmpty}`}>
-              <h1>Ничего не идёт, вопросов нет</h1>
-              <p title="Flow — цепочка этапов. Каждый этап идёт в отдельной сессии Claude Code со своим промптом и получает то, что ему передали предыдущие. После всех этапов проверяется условие, и цикл повторяется, пока оно не выполнится.">
-                Выбери flow слева или создай новый.
+              <h1>{t('Ничего не идёт, вопросов нет')}</h1>
+              <p title={t('Flow — цепочка этапов. Каждый этап идёт в отдельной сессии Claude Code со своим промптом и получает то, что ему передали предыдущие. После всех этапов проверяется условие, и цикл повторяется, пока оно не выполнится.')}>
+                {t('Выбери flow слева или создай новый.')}
               </p>
-              <p className="muted small">Вопросы агентов со всех flow появятся здесь — отвечать можно не открывая запуск.</p>
+              <p className="muted small">{t('Вопросы агентов со всех flow появятся здесь — отвечать можно не открывая запуск.')}</p>
             </div>
           )}
         </div>
@@ -123,12 +124,12 @@ export function HomeScreen() {
 function NotifyControl() {
   const perm = useNotifyPermission();
   if (perm === 'denied') {
-    return <span className="muted small" title="Заблокированы в настройках браузера для этого адреса. Включи их там">Уведомления выключены</span>;
+    return <span className="muted small" title={t('Заблокированы в настройках браузера для этого адреса. Включи их там')}>{t('Уведомления выключены')}</span>;
   }
   if (perm !== 'default') return null;
   return (
-    <button className="btn" title="Показывать системное уведомление, когда агент задаёт вопрос, а вкладка не на виду" onClick={() => void requestNotify()}>
-      Включить уведомления
+    <button className="btn" title={t('Показывать системное уведомление, когда агент задаёт вопрос, а вкладка не на виду')} onClick={() => void requestNotify()}>
+      {t('Включить уведомления')}
     </button>
   );
 }

@@ -1,5 +1,6 @@
 // «Задачи и код» и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски и выбор flow. Без React и DOM.
 import type { FlowListItem, RunSummary } from '@server/api-types';
+import { t } from './i18n';
 
 /** Сколько строк списка видно сразу; остальные — по «Ещё N». */
 export const DASH_SHOWN = 5;
@@ -8,7 +9,7 @@ export const DASH_STALE_MS = 5 * 60 * 1000;
 /** Связанных запусков у строки — не больше. */
 const RELATED_MAX = 6;
 
-export const PRESET_LABEL = { sprint: 'Мой спринт', mine: 'Все мои', jql: 'Своя JQL' } as const;
+export const PRESET_LABEL = { sprint: t('Мой спринт'), mine: t('Все мои'), jql: t('Своя JQL') };
 export type JiraPreset = keyof typeof PRESET_LABEL;
 
 /** Первые DASH_SHOWN строк, или все, если раскрыли «Ещё». */

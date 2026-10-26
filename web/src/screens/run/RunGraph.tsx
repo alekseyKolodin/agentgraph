@@ -8,6 +8,7 @@ import { flowGraphModel, type GraphSpec } from '../../lib/graph/model';
 import type { GraphRunState } from '../../lib/graph/run-state';
 import { dur, usd } from '../../lib/format';
 import { toolsLabel } from '../../lib/flow/tools';
+import { t } from '../../lib/i18n';
 import { linkifyText } from '../../lib/md';
 import type { LiveState } from '../../lib/run/events';
 import { gotoTarget, inspectView, nodeFromKey, type InspectSel } from '../../lib/run/view';
@@ -104,7 +105,7 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
         {rs.now && <span className={styles.runNow}>{rs.now}</span>}
         <span className="muted small" role="status" aria-live="polite">{msg}</span>
         <span className="row">
-          <label className={styles.followCheck} title="Холст сам держит в кадре идущий этап, а инспектор показывает его, пока ты не выбрал другой узел">
+          <label className={styles.followCheck} title={t('Холст сам держит в кадре идущий этап, а инспектор показывает его, пока ты не выбрал другой узел')}>
             <input
               type="checkbox"
               checked={runState.follow}
@@ -115,7 +116,7 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
                 bump();
               }}
             />{' '}
-            Следовать за текущим
+            {t('Следовать за текущим')}
           </label>
           {flowAction && <button type="button" className="btn small ghost" onClick={flowAction.run}>{flowAction.label}</button>}
         </span>
@@ -172,20 +173,20 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
         )}
         {v.running && (
           <div className={styles.inspSec}>
-            <div className={styles.runLabel}>Сейчас</div>
+            <div className={styles.runLabel}>{t('Сейчас')}</div>
             <PhaseTail phase={sel.name || ''} />
           </div>
         )}
         {v.last && (
           <div className={styles.inspSec}>
-            <div className={styles.runLabel}>{`Итерация ${v.last.iteration}`}</div>
+            <div className={styles.runLabel}>{t('Итерация {it}', { it: v.last.iteration })}</div>
             <div className={`${styles.inspText} mono`}>{v.last.text}</div>
             {v.last.errors && <div className="error">{v.last.errors}</div>}
           </div>
         )}
         {v.hist.length > 0 && (
           <div className={styles.inspSec}>
-            <div className={styles.runLabel}>Все итерации</div>
+            <div className={styles.runLabel}>{t('Все итерации')}</div>
             <ul className={styles.inspHist}>
               {v.hist.map((p) => (
                 <li key={p.iteration}><span>{p.iteration}</span><span className={p.ok ? 'ok' : 'err'}>{p.ok ? '✓' : '!'}</span><span>{dur(p.durationMs)}</span><span>{usd(p.costUsd)}</span></li>
@@ -200,7 +201,7 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
     const c = v.c;
     top = (
       <>
-        <div className={styles.inspTitle}>Условие</div>
+        <div className={styles.inspTitle}>{t('Условие')}</div>
         <span className={cx(styles.inspSt, styles[v.status.cls])}>{v.status.text}</span>
         <div className={styles.inspMeta}>{v.meta}</div>
       </>
@@ -210,15 +211,15 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
         {c.detail && <div className={styles.inspSec}><div className={styles.inspText}>{c.detail}</div></div>}
         {c.feedback && (
           <div className={styles.inspSec}>
-            <div className={styles.runLabel}>{c.done ? 'Вывод проверки' : 'Замечания для следующей итерации'}</div>
+            <div className={styles.runLabel}>{c.done ? t('Вывод проверки') : t('Замечания для следующей итерации')}</div>
             <div className={styles.inspFeedback}><Feedback c={c} /></div>
           </div>
         )}
-        <div className={styles.inspActions}>{c.logFile && fileBtn({ file: c.logFile, title: `Лог · условие, итерация ${c.iteration}` })}</div>
+        <div className={styles.inspActions}>{c.logFile && fileBtn({ file: c.logFile, title: t('Лог · условие, итерация {it}', { it: c.iteration }) })}</div>
       </>
     );
   } else if (v.kind === 'start') {
-    top = <div className={styles.inspTitle}>Задача</div>;
+    top = <div className={styles.inspTitle}>{t('Задача')}</div>;
     body = <div className={styles.inspSec}><div className={styles.inspText} dangerouslySetInnerHTML={{ __html: linkifyText(v.input) }} /></div>;
   } else {
     top = (
@@ -230,14 +231,14 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
     );
   }
   return (
-    <aside className={styles.runInspector} aria-label="Выбранный узел">
+    <aside className={styles.runInspector} aria-label={t('Выбранный узел')}>
       <div className={styles.inspHead}>
         <div className={styles.inspWhere}>{v.where}</div>
-        <button type="button" className="btn small ghost insp-close" aria-label="Закрыть инспектор" title="Закрыть (Esc)" onClick={() => inspectNode(null)}>×</button>
+        <button type="button" className="btn small ghost insp-close" aria-label={t('Закрыть инспектор')} title={t('Закрыть (Esc)')} onClick={() => inspectNode(null)}>×</button>
       </div>
       <div className={styles.inspTop}>{top}</div>
       {body}
-      <button type="button" className={cx('link-btn', styles.inspGoto)} onClick={onGoto}>Показать в «Обзоре» →</button>
+      <button type="button" className={cx('link-btn', styles.inspGoto)} onClick={onGoto}>{t('Показать в «Обзоре» →')}</button>
     </aside>
   );
 }

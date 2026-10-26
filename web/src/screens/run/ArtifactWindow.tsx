@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { fileRaw, setFileRaw } from '../../components/file/FileDialog';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
+import { t } from '../../lib/i18n';
 import { markdownFits, renderMarkdown } from '../../lib/md';
 import {
   artAuthor, artClock, artIsMd, tasksBadge, versionOptions, winEditable, winNote, winState, winStatus, type WinState,
@@ -120,7 +121,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
     const text = st === 'version' ? w.ver?.text ?? '' : ta.current?.value ?? '';
     try {
       await navigator.clipboard.writeText(text);
-      winMsg('Скопировано.', 'ok');
+      winMsg(t('Скопировано.'), 'ok');
     } catch {
       if (st === 'version') {
         const box = body.current?.querySelector('pre, .md');
@@ -134,7 +135,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
         ta.current?.focus();
         ta.current?.select();
       }
-      winMsg('Скопировать автоматически не вышло: текст выделен, нажми ⌘C или Ctrl+C.', 'warn');
+      winMsg(t('Скопировать автоматически не вышло: текст выделен, нажми ⌘C или Ctrl+C.'), 'warn');
     }
   };
 
@@ -143,10 +144,10 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
   if (w && !editing) {
     if (!view) {
       bodyNode = w.loading
-        ? <p className="muted small">Загружаю…</p>
-        : w.error ? <p className={styles.artLoadErr}>{w.error} <button type="button" className="btn small" onClick={() => void winLoad()}>Повторить</button></p> : null;
-    } else if (typeof view.text !== 'string') bodyNode = <p className="muted">{view.textMessage || 'Текст недоступен'}</p>;
-    else if (!view.text) bodyNode = <p className="muted">{`Пока пусто: ${st === 'version' ? 'в этой версии файл был пустым' : 'файл ещё не заполнялся'}.`}</p>;
+        ? <p className="muted small">{t('Загружаю…')}</p>
+        : w.error ? <p className={styles.artLoadErr}>{w.error} <button type="button" className="btn small" onClick={() => void winLoad()}>{t('Повторить')}</button></p> : null;
+    } else if (typeof view.text !== 'string') bodyNode = <p className="muted">{view.textMessage || t('Текст недоступен')}</p>;
+    else if (!view.text) bodyNode = <p className="muted">{st === 'version' ? t('Пока пусто: в этой версии файл был пустым.') : t('Пока пусто: файл ещё не заполнялся.')}</p>;
     else {
       const html = isMd && !fileRaw() && markdownFits(view.text) ? mdHtml(view.text) : null;
       bodyNode = html !== null ? <div className="md" dangerouslySetInnerHTML={{ __html: html }} /> : <pre>{view.text}</pre>;
@@ -171,7 +172,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
         <span className={styles.fileActions}>
           {versions.length >= 2 && (
             <label className={styles.artVer}>
-              <span className={styles.artSr}>Версия</span>
+              <span className={styles.artSr}>{t('Версия')}</span>
               <select value={w?.ver?.version ? String(w.ver.version.n) : ''} onChange={(e) => void winVersion(Number(e.target.value) || 0)}>
                 {versionOptions(cur, multi).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -181,16 +182,16 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
             <button
               type="button"
               className="btn ghost small"
-              title="Исходный текст файла — удобно копировать"
+              title={t('Исходный текст файла — удобно копировать')}
               onClick={() => {
                 setFileRaw(!fileRaw());
                 artBump();
               }}
             >
-              {fileRaw() ? 'форматировать' : 'как текст'}
+              {fileRaw() ? t('форматировать') : t('как текст')}
             </button>
           )}
-          <button type="button" ref={closeBtn} className="btn ghost" onClick={() => closeWin()}>Закрыть</button>
+          <button type="button" ref={closeBtn} className="btn ghost" onClick={() => closeWin()}>{t('Закрыть')}</button>
         </span>
       </header>
       <p className={cx('muted small', styles.artWinMeta)}>
@@ -198,8 +199,8 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
           <span key="f" className="mono">{cur.file}</span>,
           cur.tasks ? <span key="t" className={cx(styles.artMark, styles.tasks, tasksBadge(cur.tasks).done && styles.done)} title={tasksBadge(cur.tasks).title}>{tasksBadge(cur.tasks).text}</span> : null,
           fileSize(cur.size ?? 0),
-          `последний автор: ${artAuthor(cur.author, multi)}${cur.at ? `, ${artClock(cur.at)}` : ''}`,
-          cur.path ? <span key="p" className={cx('mono', styles.artPath)} title="Путь к файлу">{cur.path}</span> : null,
+          t('последний автор: {author}', { author: `${artAuthor(cur.author, multi)}${cur.at ? `, ${artClock(cur.at)}` : ''}` }),
+          cur.path ? <span key="p" className={cx('mono', styles.artPath)} title={t('Путь к файлу')}>{cur.path}</span> : null,
         ].filter(Boolean).reduce<ReactNode[]>((out, x, i) => {
           const last = out[out.length - 1];
           const sep = i ? ' · ' : '';
@@ -221,7 +222,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
       <div className={cx(styles.artWinEdit, showPreview && styles.split)} hidden={!editing}>
         {editing && d && (
           <>
-            <label htmlFor="art-win-text" className={styles.artSr}>Текст артефакта</label>
+            <label htmlFor="art-win-text" className={styles.artSr}>{t('Текст артефакта')}</label>
             <textarea
               key={d.id}
               ref={ta}
@@ -250,7 +251,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
               }}
             />
             {showPreview && (
-              <div className={styles.artWinPreview} aria-label="Превью">
+              <div className={styles.artWinPreview} aria-label={t('Превью')}>
                 {pv && (pvHtml !== null ? <div className="md" dangerouslySetInnerHTML={{ __html: pvHtml }} /> : <pre>{pv.text}</pre>)}
               </div>
             )}
@@ -271,13 +272,13 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
               winEdit();
             }}
           >
-            Править
+            {t('Править')}
           </button>
         )}
-        {(st === 'edit' || st === 'locked') && <button type="button" className="btn primary" {...disabled(st === 'locked')} onClick={() => void winSave({}, ui)}>Сохранить</button>}
-        {st === 'edit' && paused && <button type="button" className="btn" onClick={() => void winSave({ resume: true }, ui)}>Сохранить и возобновить</button>}
-        {st === 'conflict' && <button type="button" className="btn" onClick={() => void winReload(askConfirm).then(() => { focusText.current = true; artBump(); })}>Перечитать</button>}
-        {st === 'conflict' && <button type="button" className="btn danger" onClick={() => void winSave({ force: true }, ui)}>Сохранить поверх</button>}
+        {(st === 'edit' || st === 'locked') && <button type="button" className="btn primary" {...disabled(st === 'locked')} onClick={() => void winSave({}, ui)}>{t('Сохранить')}</button>}
+        {st === 'edit' && paused && <button type="button" className="btn" onClick={() => void winSave({ resume: true }, ui)}>{t('Сохранить и возобновить')}</button>}
+        {st === 'conflict' && <button type="button" className="btn" onClick={() => void winReload(askConfirm).then(() => { focusText.current = true; artBump(); })}>{t('Перечитать')}</button>}
+        {st === 'conflict' && <button type="button" className="btn danger" onClick={() => void winSave({ force: true }, ui)}>{t('Сохранить поверх')}</button>}
         {st === 'version' && typeof w?.ver?.text === 'string' && (
           <button
             type="button"
@@ -289,25 +290,25 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
                 artBump();
               })}
           >
-            Править на основе этой версии
+            {t('Править на основе этой версии')}
           </button>
         )}
-        {copy && <button type="button" className="btn" onClick={() => void doCopy()}>{st === 'conflict' ? 'Скопировать мой текст' : st === 'version' ? 'Скопировать' : 'Скопировать текст'}</button>}
+        {copy && <button type="button" className="btn" onClick={() => void doCopy()}>{st === 'conflict' ? t('Скопировать мой текст') : st === 'version' ? t('Скопировать') : t('Скопировать текст')}</button>}
         {st === 'view' && !run?.live && cur?.reason === 'continuable' && (
           <button
             type="button"
             className="btn"
-            title="Новый запуск текущей версией flow с этими артефактами"
+            title={t('Новый запуск текущей версией flow с этими артефактами')}
             onClick={() => {
               const id = art.win?.runId;
               closeWin();
               if (id) onContinue(id);
             }}
           >
-            Продолжить с места остановки
+            {t('Продолжить с места остановки')}
           </button>
         )}
-        {editing && <button type="button" className="btn ghost danger" onClick={() => void winDiscard(askConfirm)}>Отбросить</button>}
+        {editing && <button type="button" className="btn ghost danger" onClick={() => void winDiscard(askConfirm)}>{t('Отбросить')}</button>}
       </div>
     </dialog>
   );

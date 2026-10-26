@@ -7,6 +7,7 @@ import { useRuns } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
+import { locale, t } from '../../lib/i18n';
 import {
   artAsking, artAttention, artAuthor, artClock, artStepKey, draftDirty, hintLines, iterWarnCount, iterWarnText, lockText, rowMarks, stepLine, stepOf,
   summaryParts, tasksBadge, type ArtMark,
@@ -55,7 +56,7 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
     : [];
   const copyAnswer = () => {
     const text = art.lostAnswer;
-    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error())).then(() => toast('Ответ скопирован'), () => void notify(text));
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error())).then(() => toast(t('Ответ скопирован')), () => void notify(text));
   };
   return (
     <section id="run-artifacts" className={cx(styles.runArtifacts, artAttention(r) && styles.attn)}>
@@ -66,13 +67,13 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
           className="fold-head"
           aria-expanded={open}
           aria-controls="art-body"
-          title={open ? 'Свернуть' : 'Развернуть'}
+          title={open ? t('Свернуть') : t('Развернуть')}
           onClick={() => {
             runState.fold.over.set('art', !open);
             bump();
           }}
         >
-          <span className="caret">{ICON.caret}</span>Артефакты
+          <span className="caret">{ICON.caret}</span>{t('Артефакты')}
         </button>
         <span className={styles.artSummary}>
           {summary.map((p, i) => (
@@ -83,8 +84,8 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
           ))}
         </span>
         <span className={cx('row', styles.push)}>
-          {cli && art.loadedAt && <span className="muted small">{`данные на ${art.loadedAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`}</span>}
-          {cli && <button type="button" className="btn small ghost" title="Запуск идёт из CLI: этот сервер не получает его события" onClick={artReload}>Обновить</button>}
+          {cli && art.loadedAt && <span className="muted small">{t('данные на {time}', { time: art.loadedAt.toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' }) })}</span>}
+          {cli && <button type="button" className="btn small ghost" title={t('Запуск идёт из CLI: этот сервер не получает его события')} onClick={artReload}>{t('Обновить')}</button>}
         </span>
       </div>
       {open && (
@@ -96,15 +97,17 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
                   case 'from':
                     return (
                       <div key={i}>
-                        Артефакты взяты из запуска {h.known ? <Link to={`/run/${h.id}`}>{h.id}</Link> : <span className="mono">{h.id}</span>}: с правками после его остановки.
+                        {t('Артефакты взяты из запуска')} {h.known ? <Link to={`/run/${h.id}`}>{h.id}</Link> : <span className="mono">{h.id}</span>}
+                        {t(': с правками после его остановки.')}
                       </div>
                     );
                   case 'continue':
-                    return <div key={i}>{h.text} <button type="button" className="btn small" onClick={onContinue}>Продолжить с места остановки</button></div>;
+                    return <div key={i}>{h.text} <button type="button" className="btn small" onClick={onContinue}>{t('Продолжить с места остановки')}</button></div>;
                   case 'lost':
                     return (
                       <div key={i} className="warn">
-                        Запуск возобновлён не отсюда: ответ на паузу не записан. <button type="button" className="btn small" onClick={copyAnswer}>Скопировать ответ</button>
+                        {t('Запуск возобновлён не отсюда: ответ на паузу не записан.')}{' '}
+                        <button type="button" className="btn small" onClick={copyAnswer}>{t('Скопировать ответ')}</button>
                       </div>
                     );
                   default:
@@ -115,7 +118,7 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
           )}
           {art.error && (
             <div className={styles.artError} role="alert">
-              <span>{art.error}</span> <button type="button" className="btn small" onClick={artReload}>Повторить</button>
+              <span>{art.error}</span> <button type="button" className="btn small" onClick={artReload}>{t('Повторить')}</button>
             </div>
           )}
           <ul className={styles.artList}>
@@ -128,7 +131,7 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
                     type="button"
                     className={styles.artOpen}
                     data-art-key={a.key}
-                    title={`Открыть: просмотр, версии${lock.length ? '' : ', правка'}`}
+                    title={lock.length ? t('Открыть: просмотр, версии') : t('Открыть: просмотр, версии, правка')}
                     onClick={(e) => void openWin(a.key, e.currentTarget)}
                   >
                     {a.title}
@@ -143,7 +146,7 @@ export function ArtifactsPanel({ r, onContinue }: { r: RunView; onContinue: () =
           </ul>
           {warns.length > 0 && (
             <div className={styles.artWarnings}>
-              <div className={cx(styles.artWarnHead, 'warn')}>{`⚠ Предупреждения: ${warns.length}`}</div>
+              <div className={cx(styles.artWarnHead, 'warn')}>{t('⚠ Предупреждения: {n}', { n: warns.length })}</div>
               <ul>{warns.map((w, i) => <li key={i}><b>{`${w.where}:`}</b>{` ${w.text}`}</li>)}</ul>
             </div>
           )}
@@ -164,12 +167,12 @@ export function ArtStepLine({ rep, phase }: { rep: PhaseReport | ConditionReport
   if (!line) return null;
   const bits: ReactNode[] = [];
   if (line.changed.length) {
-    bits.push(<span key="c">изменил: {line.changed.map((k, i) => <Fragment key={k}>{i > 0 && ', '}<code>{k}</code></Fragment>)}</span>);
+    bits.push(<span key="c">{t('изменил:')} {line.changed.map((k, i) => <Fragment key={k}>{i > 0 && ', '}<code>{k}</code></Fragment>)}</span>);
   }
   if (line.denied) {
     bits.push(
-      <span key="d" className={styles.artDenials} title={`Проверка перед вызовом отклонила: ${line.why}. Файлы не изменены`}>
-        {`отказов записи: ${line.denied}`}<span className={styles.artSr}>{` (${line.why})`}</span>
+      <span key="d" className={styles.artDenials} title={t('Проверка перед вызовом отклонила: {why}. Файлы не изменены', { why: line.why })}>
+        {t('отказов записи: {n}', { n: line.denied })}<span className={styles.artSr}>{` (${line.why})`}</span>
       </span>,
     );
   }
@@ -187,7 +190,7 @@ export function ArtIterMark({ block, it }: { block?: string; it: number }) {
   const n = iterWarnCount(artWarnings(), block, it);
   if (!n) return null;
   return (
-    <span className={cx(styles.artIter, 'warn')} data-art-iter={`${block ?? ''}|${it}`} title="Предупреждения артефактов — в карточках этапов итерации">
+    <span className={cx(styles.artIter, 'warn')} data-art-iter={`${block ?? ''}|${it}`} title={t('Предупреждения артефактов — в карточках этапов итерации')}>
       {`⚠ ${n}`}<span className={styles.artSr}>{` ${iterWarnText(n)}`}</span>
     </span>
   );
@@ -199,7 +202,7 @@ export function ArtFinalLine() {
   if (!n) return null;
   return (
     <div className={styles.artFinal}>
-      <span className="warn">{`⚠ Предупреждения артефактов: ${n}`}</span> <button type="button" className="btn small" onClick={artReveal}>Открыть артефакты</button>
+      <span className="warn">{t('⚠ Предупреждения артефактов: {n}', { n })}</span> <button type="button" className="btn small" onClick={artReveal}>{t('Открыть артефакты')}</button>
     </div>
   );
 }
@@ -209,11 +212,11 @@ export function ArtGraphInfo({ artKey: key, r }: { artKey: string; r: RunView })
   const a = artItems().find((x) => x.key === key);
   if (!a) return null;
   const lock = a.lockedBy || [];
-  const t = a.tasks ? tasksBadge(a.tasks) : null;
+  const tb = a.tasks ? tasksBadge(a.tasks) : null;
   return (
     <>
       <div className={graphStyles.fgArtBy}>{artAuthor(a.author, multiOf(r))}</div>
-      {t && <span className={cx(styles.artMark, styles.tasks, t.done && styles.done)} title={t.title}>{t.text}</span>}
+      {tb && <span className={cx(styles.artMark, styles.tasks, tb.done && styles.done)} title={tb.title}>{tb.text}</span>}
       {lock.length > 0 && <span className={cx(styles.artMark, styles.lock)}>{`✎ ${lockText(artAsking(r), lock)}`}</span>}
     </>
   );

@@ -1,12 +1,13 @@
 // Подписи и геометрия графа flow (порт помощников FG из ui/graph.js): итерации, контекст этапа, ломаные рёбер.
 import { plural } from '../format';
+import { t } from '../i18n';
 import type { Point } from './model';
 
 export const iterWord = (n: number): string => `${n} ${plural(n, 'итерация', 'итерации', 'итераций')}`;
 export const iterTo = (n: number): string => `${n} ${plural(n, 'итерации', 'итераций', 'итераций')}`;
 
 /** Подпись обратной дуги: лимит N меняется на ходу, поэтому строится и в модели, и по статусам запуска. */
-export const loopLabel = (type: string | undefined, n: number): string => (type === 'none' ? `↺ ровно ${iterWord(n)}` : `не выполнено ↺ до ${n}`);
+export const loopLabel = (type: string | undefined, n: number): string => (type === 'none' ? t('↺ ровно {n}', { n: iterWord(n) }) : t('не выполнено ↺ до {n}', { n }));
 
 /** Токены коротко: 999, 1.5k, 90k, 172k, 1M, 1.5M; ноль и пусто — пустая строка. */
 export function tokensShort(n: number | null | undefined): string {

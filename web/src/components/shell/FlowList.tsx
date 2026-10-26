@@ -6,6 +6,7 @@ import type { FlowListItem } from '@server/api-types';
 import { useFlows } from '../../api';
 import { useMemoryState } from '../useMemoryState';
 import { flowMatches, searchWords } from '../../lib/search';
+import { t } from '../../lib/i18n';
 import { NewFlowDialog } from '../../screens/flow/NewFlowDialog';
 import { useMoveFlow, useOpenFlow } from '../../screens/flow/nav';
 import { useFlowStore } from '../../screens/flow/store';
@@ -74,11 +75,11 @@ export function FlowSectionActions() {
   return (
     <div className={styles.sideActions}>
       {keysOf.length > 0 && (
-        <button className={cx('btn small ghost icon-btn', styles.fold)} title={anyOpen ? 'Свернуть все папки' : 'Развернуть все папки'} onClick={foldAll}>
+        <button className={cx('btn small ghost icon-btn', styles.fold)} title={anyOpen ? t('Свернуть все папки') : t('Развернуть все папки')} onClick={foldAll}>
           {anyOpen ? ICON.foldAll : ICON.unfoldAll}
         </button>
       )}
-      <button className="btn small" title="Создать flow" onClick={() => setNewOpen(true)}>Новый flow</button>
+      <button className="btn small" title={t('Создать flow')} onClick={() => setNewOpen(true)}>{t('Новый flow')}</button>
       <NewFlowDialog open={newOpen} onClose={() => setNewOpen(false)} />
     </div>
   );
@@ -128,7 +129,7 @@ export function FlowList() {
       key={f.name}
       draggable
       className={cx(!f.valid && styles.invalid, activeName === f.name && styles.active)}
-      title={f.valid ? f.description || `${f.phases?.length ?? 0} этапов · ${f.condition}` : f.error}
+      title={f.valid ? f.description || t('{n} этапов · {condition}', { n: f.phases?.length ?? 0, condition: String(f.condition) }) : f.error}
       onClick={() => void openFlow(f.name)}
       onDragStart={(e) => {
         setDragged(f.name);
@@ -138,7 +139,7 @@ export function FlowList() {
       onDragEnd={stop}
     >
       <span className={styles.name}>{f.name}</span>
-      {!f.valid && <span className={styles.sub}>ошибка</span>}
+      {!f.valid && <span className={styles.sub}>{t('ошибка')}</span>}
     </li>
   );
 
@@ -148,10 +149,10 @@ export function FlowList() {
       <input
         className={styles.sideSearch}
         type="search"
-        placeholder="Найти flow…"
+        placeholder={t('Найти flow…')}
         autoComplete="off"
         spellCheck={false}
-        title="Все слова должны найтись в имени, папке или описании flow. Esc — очистить"
+        title={t('Все слова должны найтись в имени, папке или описании flow. Esc — очистить')}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -185,8 +186,8 @@ export function FlowList() {
           );
         })}
         <ul className={cx(styles.list, styles.root, dropOn === '' && dragged && styles.dropTarget)}>{(byFolder.get('') || []).map(item)}</ul>
-        {flowsQ.isSuccess && !flows.length && <p className={`${styles.sideEmpty} muted`}>flow пока нет</p>}
-        {flows.length > 0 && !found.length && <p className={`${styles.sideEmpty} muted`}>Ничего не нашлось</p>}
+        {flowsQ.isSuccess && !flows.length && <p className={`${styles.sideEmpty} muted`}>{t('flow пока нет')}</p>}
+        {flows.length > 0 && !found.length && <p className={`${styles.sideEmpty} muted`}>{t('Ничего не нашлось')}</p>}
       </div>
       <datalist id="folder-options">
         {allFolders.map((f) => <option key={f} value={f} />)}

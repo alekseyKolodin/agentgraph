@@ -2,6 +2,7 @@
 // Без React и DOM.
 import type { Tag, TagKind, TagListItem } from '@server/api-types';
 import { when } from './format';
+import { t } from './i18n';
 import { searchWords, textMatches } from './search';
 
 /** Поиск по слагу, заголовку и превью: каждое слово запроса должно найтись хоть где-то, без учёта регистра. */
@@ -12,19 +13,19 @@ export const tagMatches = (t: Pick<TagListItem, 'slug' | 'title' | 'preview'>, w
 export function filterTags<T extends Pick<TagListItem, 'slug' | 'title' | 'preview'>>(list: T[], query: string): { shown: T[]; count: string } {
   const words = searchWords(query);
   const shown = words.length ? list.filter((t) => tagMatches(t, words)) : list;
-  return { shown, count: words.length ? `${shown.length} из ${list.length}` : list.length ? String(list.length) : '' };
+  return { shown, count: words.length ? t('{shown} из {total}', { shown: shown.length, total: list.length }) : list.length ? String(list.length) : '' };
 }
 
 /** Первая строка превью; без неё — «саммари ещё нет» (у тега знаний — «заметок ещё нет»). */
-export const tagPreview = (t: Pick<TagListItem, 'kind' | 'preview'>): string =>
-  t.preview.split('\n')[0] || (t.kind === 'knowledge' ? 'заметок ещё нет' : 'саммари ещё нет');
+export const tagPreview = (tag: Pick<TagListItem, 'kind' | 'preview'>): string =>
+  tag.preview.split('\n')[0] || (tag.kind === 'knowledge' ? t('заметок ещё нет') : t('саммари ещё нет'));
 
 /** Строка под превью: вид, время правки и у тега задачи — число запусков. */
-export const tagMetaLine = (t: Pick<TagListItem, 'kind' | 'updatedAt' | 'runs'>): string =>
-  `${t.kind === 'knowledge' ? 'область знаний' : 'задача'} · ${when(t.updatedAt)}${t.kind === 'knowledge' ? '' : ` · запусков: ${t.runs}`}`;
+export const tagMetaLine = (tag: Pick<TagListItem, 'kind' | 'updatedAt' | 'runs'>): string =>
+  `${tag.kind === 'knowledge' ? t('область знаний') : t('задача')} · ${when(tag.updatedAt)}${tag.kind === 'knowledge' ? '' : ` · ${t('запусков: {n}', { n: tag.runs })}`}`;
 
 /** Пустой список: тегов нет совсем или поиск ничего не нашёл. */
-export const tagsNoneText = (total: number): string => (total ? 'Ничего не нашлось' : 'Тегов пока нет — заведи первый выше');
+export const tagsNoneText = (total: number): string => (total ? t('Ничего не нашлось') : t('Тегов пока нет — заведи первый выше'));
 
 // ---------- форма тега
 
@@ -79,25 +80,25 @@ export function newTagBody(slug: string, title: string, kind: TagKind, kinds: bo
   return { slug: s, ...(title.trim() ? { title: title.trim() } : {}), ...(kinds && kind === 'knowledge' ? { kind: 'knowledge' as const } : {}) };
 }
 
-export const TAG_DIRTY_TEXT = 'В теге есть несохранённые правки. Перейти без сохранения?';
-export const tagDeleteText = (slug: string): string => `Удалить тег ${slug}: саммари, заметки, пути и вложения? Запуски с ним останутся.`;
-export const tagNotesLabel = (kind: TagKind): string => (kind === 'knowledge' ? 'Знание (текст для этапов)' : 'Заметки (промпт тега)');
+export const TAG_DIRTY_TEXT = t('В теге есть несохранённые правки. Перейти без сохранения?');
+export const tagDeleteText = (slug: string): string => t('Удалить тег {slug}: саммари, заметки, пути и вложения? Запуски с ним останутся.', { slug });
+export const tagNotesLabel = (kind: TagKind): string => (kind === 'knowledge' ? t('Знание (текст для этапов)') : t('Заметки (промпт тега)'));
 
 /** Подсказка к полю заметок: у тега знаний — как текст попадает к этапам (по запросу или целиком), у тега задачи — как раньше. */
 export const tagNotesHint = (kind: TagKind, inline: boolean): string =>
   kind !== 'knowledge'
-    ? 'Твой текст к тегу: правила, договорённости, что важно помнить. Уходит в задачу каждого запуска с тегом; сессия саммари его не трогает'
+    ? t('Твой текст к тегу: правила, договорённости, что важно помнить. Уходит в задачу каждого запуска с тегом; сессия саммари его не трогает')
     : inline
-      ? 'Правила области знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими'
-      : 'Правила области знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда область ему понадобится';
+      ? t('Правила области знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими')
+      : t('Правила области знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда область ему понадобится');
 
-export const TAG_DESCRIPTION_LABEL = 'Описание — когда этот тег нужен';
-export const TAG_DESCRIPTION_HINT = 'Одна строка в промпт каждого этапа блока; полный текст этап запросит инструментом knowledge_read, когда понадобится';
-export const TAG_INLINE_LABEL = 'Всегда вставлять заметки в промпт целиком';
-export const TAG_INLINE_HINT = 'Для коротких правил, которые должны действовать всегда. По умолчанию заметки отдаются по запросу: в промпте — строка с описанием, полный текст — инструментом knowledge_read';
+export const TAG_DESCRIPTION_LABEL = t('Описание — когда этот тег нужен');
+export const TAG_DESCRIPTION_HINT = t('Одна строка в промпт каждого этапа блока; полный текст этап запросит инструментом knowledge_read, когда понадобится');
+export const TAG_INLINE_LABEL = t('Всегда вставлять заметки в промпт целиком');
+export const TAG_INLINE_HINT = t('Для коротких правил, которые должны действовать всегда. По умолчанию заметки отдаются по запросу: в промпте — строка с описанием, полный текст — инструментом knowledge_read');
 
 /** Режим тега знаний словами — для списка и страницы «Контекст». */
-export const tagModeText = (inline: boolean | undefined): string => (inline ? 'в промпте целиком' : 'по запросу');
+export const tagModeText = (inline: boolean | undefined): string => (inline ? t('в промпте целиком') : t('по запросу'));
 
 // ---------- крупный редактор справа: зеркало поля тега, в котором стоит фокус
 
@@ -106,9 +107,9 @@ export const TAG_FOCUS_MONO: readonly TagField[] = ['summary', 'dirs'];
 
 /** Подпись поля в шапке крупного редактора. */
 export const tagFocusLabel = (field: TagField, kind: TagKind): string =>
-  field === 'dirs' ? 'Пути' : field === 'summary' ? 'Саммари' : tagNotesLabel(kind);
+  field === 'dirs' ? t('Пути') : field === 'summary' ? t('Саммари') : tagNotesLabel(kind);
 
-export const tagFocusCount = (v: string): string => `строк: ${v ? v.split('\n').length : 0} · знаков: ${v.length}`;
+export const tagFocusCount = (v: string): string => t('строк: {lines} · знаков: {chars}', { lines: v ? v.split('\n').length : 0, chars: v.length });
 
 /**
  * Поле крупного редактора после открытия тега: после сохранения того же тега — то же поле, иначе саммари; у тега знаний

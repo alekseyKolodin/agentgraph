@@ -3,6 +3,7 @@
 // Рабочая копия всегда в полной форме (blocks) и правится на месте: короткую (loop + phases) сервер восстановит при сохранении.
 import type { FlowSpec } from '@server/schema';
 import { blockHeading, blockSteps, isGroupStep, stepSource, type GraphBlock } from '../graph/model';
+import { t } from '../i18n';
 
 export { blockHeading };
 
@@ -68,7 +69,7 @@ export function toEditable(spec: FlowSpec): EditSpec {
 
 export const allPhases = (spec: EditSpec): EditPhase[] => spec.blocks.flatMap((b) => b.phases);
 export const isMulti = (spec: EditSpec): boolean => spec.blocks.length > 1;
-export const blockLabel = (b: { name: string; title?: string }, bi: number): string => b.title || (b.name === 'main' ? `Блок ${bi + 1}` : b.name);
+export const blockLabel = (b: { name: string; title?: string }, bi: number): string => b.title || (b.name === 'main' ? t('Блок {n}', { n: bi + 1 }) : b.name);
 export const phaseNum = (spec: EditSpec, bi: number, i: number): string => (isMulti(spec) ? `${bi + 1}.${i + 1}` : `${i + 1}`);
 export const DEFAULT_JUDGE = 'Задача: {{input}}\n\nВыводы этапов текущей итерации:\n{{outputs}}\n\nРубрика: done=true только если задача выполнена целиком. Иначе перечисли в feedback конкретные пробелы.';
 
@@ -86,23 +87,23 @@ export function variableList(spec: EditSpec, bi: number, idx: number): Variable[
   const prevBlock = bi > 0 ? spec.blocks[bi - 1]! : null;
   const prevBlockEnd = prevBlock ? blockSteps(asGraph(prevBlock)).at(-1) : null;
   const ownLast = steps.at(-1);
-  const ownEnd = isGroupStep(ownLast) ? `склейка выводов группы ${ownLast!.group} этого блока` : 'последнего этапа этого блока';
+  const ownEnd = isGroupStep(ownLast) ? t('склейка выводов группы {g} этого блока', { g: ownLast!.group! }) : t('последнего этапа этого блока');
   let prev: { label: string; hint: string } = prevStep
     ? isGroupStep(prevStep)
-      ? { label: `Выводы группы ${prevStep.group}`, hint: 'склейка выводов участников группы в порядке объявления' }
-      : { label: `Вывод предыдущего (${block.phases[prevStep.from]!.name})`, hint: 'полный ответ предыдущего этапа' }
+      ? { label: t('Выводы группы {g}', { g: prevStep.group! }), hint: t('склейка выводов участников группы в порядке объявления') }
+      : { label: t('Вывод предыдущего ({name})', { name: block.phases[prevStep.from]!.name }), hint: t('полный ответ предыдущего этапа') }
     : prevBlock
       ? {
-          label: `Вывод блока «${blockLabel(prevBlock, bi - 1)}»`,
-          hint: `${isGroupStep(prevBlockEnd) ? `склейка выводов группы ${prevBlockEnd!.group}, которой кончается предыдущий блок` : 'ответ последнего этапа предыдущего блока'}${block.loop ? `; на итерации 2+ — ${ownEnd}` : ''}`,
+          label: t('Вывод блока «{block}»', { block: blockLabel(prevBlock, bi - 1) }),
+          hint: `${isGroupStep(prevBlockEnd) ? t('склейка выводов группы {g}, которой кончается предыдущий блок', { g: prevBlockEnd!.group! }) : t('ответ последнего этапа предыдущего блока')}${block.loop ? t('; на итерации 2+ — {end}', { end: ownEnd }) : ''}`,
         }
-      : { label: 'Вывод последнего этапа прошлой итерации', hint: `на первой итерации пусто${isGroupStep(ownLast) ? `; блок кончается группой — ${ownEnd}` : ''}` };
+      : { label: t('Вывод последнего этапа прошлой итерации'), hint: `${t('на первой итерации пусто')}${isGroupStep(ownLast) ? t('; блок кончается группой — {end}', { end: ownEnd }) : ''}` };
   // участники группы видят один {{prev}} — то, что было до группы
-  if (isGroupStep(step)) prev = { label: 'Вывод до группы', hint: `${prev.label.toLowerCase()}: ${prev.hint}; одинаковый у всех участников группы ${step!.group}` };
+  if (isGroupStep(step)) prev = { label: t('Вывод до группы'), hint: t('{label}: {hint}; одинаковый у всех участников группы {g}', { label: prev.label.toLowerCase(), hint: prev.hint, g: step!.group! }) };
   const list: Variable[] = [
-    { key: 'input', label: 'Задача', hint: 'задача, введённая при запуске' },
+    { key: 'input', label: t('Задача'), hint: t('задача, введённая при запуске') },
     { key: 'prev', ...prev },
-    { key: 'feedback', label: 'Замечания условия', hint: 'вывод команды или замечания судьи после прошлой итерации блока; пусто на первой' },
+    { key: 'feedback', label: t('Замечания условия'), hint: t('вывод команды или замечания судьи после прошлой итерации блока; пусто на первой') },
   ];
   // этапы этого и предыдущих блоков; этапы следующих блоков к этому моменту ещё не выполнялись
   spec.blocks.slice(0, bi + 1).forEach((b, j) => {
@@ -110,14 +111,14 @@ export function variableList(spec: EditSpec, bi: number, idx: number): Variable[
       if (p === block.phases[idx]) continue;
       // соседи по группе идут одновременно: на их вывод ссылаться нельзя
       if (j === bi && isGroupStep(step) && k >= step!.from && k <= step!.to) continue;
-      const from = j < bi ? ` (блок ${j + 1})` : '';
-      list.push({ key: `phases.${p.name}`, label: `Вывод этапа ${p.name}${from}`, hint: 'последний вывод этого этапа' });
+      const label = j < bi ? t('Вывод этапа {name} (блок {n})', { name: p.name, n: j + 1 }) : t('Вывод этапа {name}', { name: p.name });
+      list.push({ key: `phases.${p.name}`, label, hint: t('последний вывод этого этапа') });
     }
   });
   list.push(
-    { key: 'iteration', label: '№ итерации', hint: 'номер текущей итерации блока' },
-    { key: 'outputs', label: 'Все выводы итерации', hint: 'выводы всех этапов текущей итерации блока' },
-    { key: 'history', label: 'История', hint: 'все предыдущие выводы, большая' },
+    { key: 'iteration', label: t('№ итерации'), hint: t('номер текущей итерации блока') },
+    { key: 'outputs', label: t('Все выводы итерации'), hint: t('выводы всех этапов текущей итерации блока') },
+    { key: 'history', label: t('История'), hint: t('все предыдущие выводы, большая') },
   );
   return list;
 }
@@ -139,7 +140,7 @@ export function phaseInputs(spec: EditSpec, bi: number, i: number): string[] {
   const text = phaseText(p);
   return variableList(spec, bi, i)
     .filter((v) => usesVar(text, v.key))
-    .map((v) => (v.key === 'prev' ? (prevName ? `← ${prevName}` : '← прошлая итерация') : v.key.startsWith('phases.') ? `← ${v.key.slice(7)}` : v.label.toLowerCase()));
+    .map((v) => (v.key === 'prev' ? (prevName ? `← ${prevName}` : t('← прошлая итерация')) : v.key.startsWith('phases.') ? `← ${v.key.slice(7)}` : v.label.toLowerCase()));
 }
 
 /**
@@ -223,7 +224,7 @@ export function movePhase(spec: EditSpec, bi: number, i: number, up: boolean): s
   // с края блока этап переезжает в соседний блок
   const target = spec.blocks[up ? bi - 1 : bi + 1];
   if (!target) return null;
-  if (b.phases.length === 1) return 'В блоке должен остаться хотя бы один этап';
+  if (b.phases.length === 1) return t('В блоке должен остаться хотя бы один этап');
   b.phases.splice(i, 1);
   // группа живёт внутри блока: в соседнем блоке этап идёт сам по себе
   delete p.group;
@@ -252,7 +253,7 @@ export function moveBlock(spec: EditSpec, bi: number, up: boolean): void {
 /** Переименование id этапа: ссылки {{phases.X}} в промптах, handoff, рубриках судьи и marker.phase идут следом. Ошибка — текст. */
 export function renamePhase(spec: EditSpec, from: string, to: string): string | null {
   if (from === to) return null;
-  if (allPhases(spec).some((x) => x.name === to)) return `Этап ${to} уже есть`;
+  if (allPhases(spec).some((x) => x.name === to)) return t('Этап {name} уже есть', { name: to });
   const re = new RegExp(`\\{\\{\\s*phases\\.${from}\\s*\\}\\}`, 'g');
   for (const x of allPhases(spec)) {
     if (x.name === from) x.name = to;
@@ -289,7 +290,7 @@ export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** Подпись «Дополнительно» у этапа: группа и число доп. директорий. */
 export function advLabel(p: EditPhase): string {
   const n = (p.add_dirs || []).filter((x) => x.trim()).length;
-  return ['Дополнительно', p.group ? `параллельная группа ${p.group}` : '', n ? `директорий: ${n}` : ''].filter(Boolean).join(' · ');
+  return [t('Дополнительно'), p.group ? t('параллельная группа {g}', { g: p.group }) : '', n ? t('директорий: {n}', { n }) : ''].filter(Boolean).join(' · ');
 }
 
 /** Текст поля «Схема вывода»: правится строкой, пока не сохранят. */
@@ -310,8 +311,8 @@ function collectPhase(p: EditPhase, num: string, seen: Set<string>, at: { b: num
   const fail = (message: string, field: FieldRef['field']) => new SpecError(message, { ...at, field });
   const out: Record<string, unknown> = { name: slug(p.name), title: (p.title || '').trim(), prompt: p.prompt || '', tools: p.tools || [] };
   const name = out.name as string;
-  if (!name) throw fail(`Этап ${num}: пустой идентификатор`, 'p-name');
-  if (seen.has(name)) throw fail(`Этап ${num}: идентификатор ${name} повторяется (имена этапов уникальны в пределах flow)`, 'p-name');
+  if (!name) throw fail(t('Этап {num}: пустой идентификатор', { num }), 'p-name');
+  if (seen.has(name)) throw fail(t('Этап {num}: идентификатор {name} повторяется (имена этапов уникальны в пределах flow)', { num, name }), 'p-name');
   seen.add(name);
   if (!out.title) delete out.title;
   if ((p.handoff || '').trim()) out.handoff = p.handoff!.trim();
@@ -334,7 +335,7 @@ function collectPhase(p: EditPhase, num: string, seen: Set<string>, at: { b: num
     try {
       out.output_schema = JSON.parse(text);
     } catch {
-      throw fail(`Этап ${name}: схема вывода — невалидный JSON`, 'p-schema');
+      throw fail(t('Этап {name}: схема вывода — невалидный JSON', { name }), 'p-schema');
     }
   }
   return out;
@@ -349,8 +350,8 @@ export function collectSpec(spec: EditSpec): Record<string, unknown> {
   s.blocks = (s.blocks as EditBlock[]).map((b, bi) => {
     const out: Record<string, unknown> = { name: slug(b.name) };
     const name = out.name as string;
-    if (!name) throw new SpecError(`Блок ${bi + 1}: пустой идентификатор`);
-    if (seenBlocks.has(name)) throw new SpecError(`Блок ${bi + 1}: идентификатор ${name} повторяется`);
+    if (!name) throw new SpecError(t('Блок {n}: пустой идентификатор', { n: bi + 1 }));
+    if (seenBlocks.has(name)) throw new SpecError(t('Блок {n}: идентификатор {name} повторяется', { n: bi + 1, name }));
     seenBlocks.add(name);
     if ((b.title || '').trim()) out.title = b.title!.trim();
     if (b.loop) out.loop = b.loop;
@@ -393,7 +394,7 @@ export function specChanges(before: EditSpec | null, after: EditSpec): SpecChang
   const out: SpecChanges = { lines: [], phases: new Set(), blocks: new Set(), adv: new Set() };
   if (!before) return out;
   const top = ([['description', 'описание'], ['input', 'задача по умолчанию'], ['defaults', 'настройки по умолчанию'], ['artifacts', 'артефакты']] as const)
-    .filter(([k]) => !same(before[k], after[k])).map(([, label]) => label);
+    .filter(([k]) => !same(before[k], after[k])).map(([, label]) => t(label));
   if (top.length) out.lines.push({ text: `Flow: ${top.join(', ')}` });
 
   const where = (spec: EditSpec) => new Map(spec.blocks.flatMap((b, bi) => b.phases.map((p) => [p.name, { p, b, bi }] as const)));
@@ -402,43 +403,43 @@ export function specChanges(before: EditSpec | null, after: EditSpec): SpecChang
   const oldBlocks = new Map(before.blocks.map((b) => [b.name, b]));
   const names = (list: EditPhase[], other: EditPhase[]) => list.map((p) => p.name).filter((n) => other.some((q) => q.name === n));
   after.blocks.forEach((b, bi) => {
-    const label = `Блок «${blockLabel(b, bi)}»`;
+    const label = t('Блок «{block}»', { block: blockLabel(b, bi) });
     const old = oldBlocks.get(b.name);
     if (!old) {
-      out.lines.push({ text: `${label}: добавлен` });
+      out.lines.push({ text: t('{label}: добавлен', { label }) });
       out.blocks.add(b.name);
       return;
     }
     const f: string[] = [];
-    if (!same(old.title, b.title)) f.push('название');
-    if (!same(old.loop, b.loop)) f.push(old.loop && b.loop ? 'цикл и условие' : b.loop ? 'стал циклом' : 'стал одним проходом');
-    if (!same(old.on_fail, b.on_fail)) f.push('что делать, если условие не выполнено');
-    if (!same(old.knowledge, b.knowledge)) f.push('теги знаний');
-    if (!same(old.plugins, b.plugins)) f.push('плагины');
-    if (!same(names(old.phases, b.phases), names(b.phases, old.phases))) f.push('порядок этапов');
+    if (!same(old.title, b.title)) f.push(t('название'));
+    if (!same(old.loop, b.loop)) f.push(t(old.loop && b.loop ? 'цикл и условие' : b.loop ? 'стал циклом' : 'стал одним проходом'));
+    if (!same(old.on_fail, b.on_fail)) f.push(t('что делать, если условие не выполнено'));
+    if (!same(old.knowledge, b.knowledge)) f.push(t('теги знаний'));
+    if (!same(old.plugins, b.plugins)) f.push(t('плагины'));
+    if (!same(names(old.phases, b.phases), names(b.phases, old.phases))) f.push(t('порядок этапов'));
     if (f.length) {
       out.lines.push({ text: `${label}: ${f.join(', ')}` });
       out.blocks.add(b.name);
     }
   });
-  for (const b of before.blocks) if (!after.blocks.some((x) => x.name === b.name)) out.lines.push({ text: `Блок «${b.title || b.name}»: удалён` });
+  for (const b of before.blocks) if (!after.blocks.some((x) => x.name === b.name)) out.lines.push({ text: t('Блок «{block}»: удалён', { block: b.title || b.name }) });
 
   for (const [name, n] of now) {
-    const label = `Этап ${n.p.title ? `«${n.p.title}» (${name})` : name}`;
+    const label = t('Этап {name}', { name: n.p.title ? `«${n.p.title}» (${name})` : name });
     const o = was.get(name);
     if (ADV_FIELDS.some((k) => !same(field(o?.p, k), field(n.p, k)))) out.adv.add(name);
     if (!o) {
-      out.lines.push({ text: `${label}: добавлен`, phase: name });
+      out.lines.push({ text: t('{label}: добавлен', { label }), phase: name });
       out.phases.add(name);
       continue;
     }
-    const f = Object.entries(PHASE_FIELDS).filter(([k]) => !same(field(o.p, k), field(n.p, k))).map(([, l]) => l);
-    if (o.b.name !== n.b.name) f.push(`перенесён в блок «${blockLabel(n.b, n.bi)}»`);
+    const f = Object.entries(PHASE_FIELDS).filter(([k]) => !same(field(o.p, k), field(n.p, k))).map(([, l]) => t(l));
+    if (o.b.name !== n.b.name) f.push(t('перенесён в блок «{block}»', { block: blockLabel(n.b, n.bi) }));
     if (f.length) {
       out.lines.push({ text: `${label}: ${f.join(', ')}`, phase: name });
       out.phases.add(name);
     }
   }
-  for (const name of was.keys()) if (!now.has(name)) out.lines.push({ text: `Этап ${name}: удалён` });
+  for (const name of was.keys()) if (!now.has(name)) out.lines.push({ text: t('Этап {name}: удалён', { name }) });
   return out;
 }

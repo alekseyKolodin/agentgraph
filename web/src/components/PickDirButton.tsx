@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { api, errorText, useConfig, useFeature } from '../api';
 import { LS } from '../lib/storage';
+import { t } from '../lib/i18n';
 import { useToast } from './Toast';
 
 type Props = {
@@ -20,7 +21,7 @@ type Props = {
   children?: string;
 };
 
-export function PickDirButton({ start, onPick, prompt, onSettled, className = 'btn pick-dir', title = 'Выбрать папку в Finder', children = 'Выбрать…' }: Props) {
+export function PickDirButton({ start, onPick, prompt, onSettled, className = 'btn pick-dir', title = t('Выбрать папку в Finder'), children = t('Выбрать…') }: Props) {
   const can = useFeature('pick-dir');
   const defaultCwd = useConfig().data?.defaultCwd ?? '';
   const toast = useToast();

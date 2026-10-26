@@ -12,6 +12,7 @@ import { ICON } from '../../components/shell/FlowList';
 import { findPhase, toEditable } from '../../lib/flow/edit';
 import { schemeSummary } from '../../lib/flow/summary';
 import { flowGraphModel } from '../../lib/graph/model';
+import { t } from '../../lib/i18n';
 import { LS } from '../../lib/storage';
 import type { RunTabState } from '../home/FlowPicker';
 import { afterRender, openPhasePane } from './actions';
@@ -89,7 +90,7 @@ export function FlowScreen({ draft = false }: { draft?: boolean }) {
         void (async () => {
       const left = flowState.flow;
       if (!(await leaveDraft(askConfirm, false))) return blocker.reset();
-      if (!left?.draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: 'Перейти' }))) return blocker.reset();
+      if (!left?.draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: t('Перейти') }))) return blocker.reset();
       blocker.proceed();
       // «без сохранения»: черновик и несохранённые правки пропадают (в старом их при возврате всё равно перечитывал openFlow).
       // Уже после перехода: экран черновика без него увёл бы на главную. Если тем временем открылся другой flow — его не трогаем
@@ -105,16 +106,16 @@ export function FlowScreen({ draft = false }: { draft?: boolean }) {
   if (!flow || (!draft && (flow.draft || flow.name !== name))) return null;
 
   const setTab = async (tab: Tab) => {
-    if (tab === 'yaml' && flowState.dirty && !(await askConfirm('В конструкторе есть несохранённые изменения, во вкладке YAML их не будет. Перейти?', { ok: 'Перейти' }))) return;
+    if (tab === 'yaml' && flowState.dirty && !(await askConfirm(t('В конструкторе есть несохранённые изменения, во вкладке YAML их не будет. Перейти?'), { ok: t('Перейти') }))) return;
     set({ tab });
   };
 
   return (
     <div className={styles.viewFlow}>
       <FlowHead />
-      <nav className="tabs page-tabs" role="tablist" aria-label="Разделы flow">
-        {([['builder', 'Конструктор'], ['run', 'Запуск'], ['yaml', 'YAML']] as const).map(([t, label]) => (
-          <button key={t} type="button" className={cx('tab', st.tab === t && 'active')} role="tab" aria-selected={st.tab === t} onClick={() => void setTab(t)}>{label}</button>
+      <nav className="tabs page-tabs" role="tablist" aria-label={t('Разделы flow')}>
+        {([['builder', 'Конструктор'], ['run', 'Запуск'], ['yaml', 'YAML']] as const).map(([id, label]) => (
+          <button key={id} type="button" className={cx('tab', st.tab === id && 'active')} role="tab" aria-selected={st.tab === id} onClick={() => void setTab(id)}>{t(label)}</button>
         ))}
       </nav>
       <Builder hidden={st.tab !== 'builder'} />
@@ -209,7 +210,7 @@ function FlowHead() {
 
   const remove = async () => {
     if (flow.draft) return;
-    if (!(await askConfirm(`Удалить flow «${flow.name}»?\nФайл flows/${flow.name}.yaml будет удалён, прошлые запуски останутся.`, { ok: 'Удалить', danger: true }))) return;
+    if (!(await askConfirm(t('Удалить flow «{name}»?\nФайл flows/{name}.yaml будет удалён, прошлые запуски останутся.', { name: flow.name }), { ok: t('Удалить'), danger: true }))) return;
     try {
       await deleteFlow(flow.name);
     } catch (err) {
@@ -227,13 +228,13 @@ function FlowHead() {
       <div>
         <h1>{flow.name}{flow.draft && <AdhocBadge />}</h1>
         <p ref={desc} className={cx('muted', styles.flowDesc, descOpen && styles.open)}>{description}</p>
-        {descMore && <button type="button" className="link-btn" onClick={() => setDescOpen(!descOpen)}>{descOpen ? 'свернуть' : 'ещё'}</button>}
+        {descMore && <button type="button" className="link-btn" onClick={() => setDescOpen(!descOpen)}>{descOpen ? t('свернуть') : t('ещё')}</button>}
         {!flow.draft && (
-          <label className={styles.folderField} title="Папка в flows/. Пусто — корень. Можно перетащить flow на папку слева">
+          <label className={styles.folderField} title={t('Папка в flows/. Пусто — корень. Можно перетащить flow на папку слева')}>
             <span className={styles.folderIcon}>{ICON.folder}</span>
             <input
               list="folder-options"
-              placeholder="без папки"
+              placeholder={t('без папки')}
               autoComplete="off"
               spellCheck={false}
               value={folder}
@@ -261,7 +262,7 @@ function FlowHead() {
             className="btn ghost icon-more"
             aria-haspopup="menu"
             aria-expanded={menu}
-            title="Действия с flow"
+            title={t('Действия с flow')}
             onClick={(e) => {
               e.stopPropagation();
               setMenu(!menu);
@@ -274,13 +275,13 @@ function FlowHead() {
               type="button"
               className="menu-item danger"
               role="menuitem"
-              title="Удалить файл flow из flows/ — с подтверждением"
+              title={t('Удалить файл flow из flows/ — с подтверждением')}
               onClick={() => {
                 setMenu(false);
                 void remove();
               }}
             >
-              Удалить flow…
+              {t('Удалить flow…')}
             </button>
           </div>
         </div>
@@ -314,7 +315,7 @@ function RunTab({ hidden, intake, intakeKey }: { hidden: boolean; intake: RunTab
 
   return (
     <section className={styles.tabRun} hidden={hidden}>
-      <div className={styles.flowPlan}>{!flow.summary && <p className="error">Flow не проходит валидацию, поправь YAML.</p>}</div>
+      <div className={styles.flowPlan}>{!flow.summary && <p className="error">{t('Flow не проходит валидацию, поправь YAML.')}</p>}</div>
       {/* задача и проект — сверху, редкое — в «Дополнительно» (открытость запоминается), «Запустить» — в липкой панели */}
       <RunForm intake={intake} intakeKey={intakeKey} />
       {/* одна раскрывашка: в заголовке — состав flow, внутри — граф. Открытость запоминается */}
@@ -330,7 +331,7 @@ function RunTab({ hidden, intake, intakeKey }: { hidden: boolean; intake: RunTab
         >
           <summary>
             <span className="caret">{ICON.caret}</span>
-            <span className={styles.flowSchemeTitle}>Схема</span>
+            <span className={styles.flowSchemeTitle}>{t('Схема')}</span>
             <span className={styles.flowSchemeSum}>{schemeSummary(flow.summary)}</span>
           </summary>
           {open && (
@@ -357,7 +358,7 @@ function YamlTab({ hidden }: { hidden: boolean }) {
     try {
       const r = draft ? await checkFlow({ yaml: text }) : await saveFlowYaml(flowState.flow!.name, text);
       // пока сохранялось, открыли другой flow — ответ ему не нужен
-      if (applySaved(r, text, draft, start)) set({ yamlMsg: { text: draft ? 'Применено' : 'Сохранено', tone: 'ok' } });
+      if (applySaved(r, text, draft, start)) set({ yamlMsg: { text: draft ? t('Применено') : t('Сохранено'), tone: 'ok' } });
       if (!draft) await qc.invalidateQueries({ queryKey: keys.flows });
     } catch (err) {
       if (flowState.flow === start.flow) set({ yamlMsg: { text: errorText(err), tone: 'err' } });
@@ -367,7 +368,7 @@ function YamlTab({ hidden }: { hidden: boolean }) {
     <section hidden={hidden}>
       <YamlEditor ref={editor} className={styles.yamlEditor} value={flow.yaml} seq={st.yamlSeq} />
       <div className="row">
-        <button className="btn primary" onClick={() => void save()}>{flow.draft ? 'Применить' : 'Сохранить'}</button>
+        <button className="btn primary" onClick={() => void save()}>{flow.draft ? t('Применить') : t('Сохранить')}</button>
         <pre className={msgClass(st.yamlMsg)}>{st.yamlMsg.text}</pre>
       </div>
     </section>

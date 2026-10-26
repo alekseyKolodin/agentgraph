@@ -8,6 +8,7 @@ import type { IntegrationsInfo, ProjectInfo } from '@server/api-types';
 import { api, errorText, keys } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
+import { t } from '../../lib/i18n';
 import { useIntegrations } from './Dash';
 import styles from './Dash.module.css';
 
@@ -21,8 +22,8 @@ type TypeId = 'jira' | 'repo';
 
 /** Типы подключений в «Добавить». */
 const TYPES: { id: TypeId; title: string; sub: string }[] = [
-  { id: 'jira', title: 'Jira Cloud', sub: 'Задачи на главной и запуск flow по задаче' },
-  { id: 'repo', title: 'Git-репозиторий', sub: 'MR через glab (GitLab), PR через gh (GitHub) и ветки проекта' },
+  { id: 'jira', title: 'Jira Cloud', sub: t('Задачи на главной и запуск flow по задаче') },
+  { id: 'repo', title: t('Git-репозиторий'), sub: t('MR через glab (GitLab), PR через gh (GitHub) и ветки проекта') },
 ];
 
 type View = { at: 'list' } | { at: 'pick' } | { at: 'add'; type: TypeId } | { at: 'jira' } | { at: 'repo'; path: string };
@@ -37,12 +38,12 @@ function rows(info: IntegrationsInfo): Row[] {
       type: 'jira',
       title: 'Jira Cloud',
       sub: [info.jira.baseUrl, info.jira.email].filter(Boolean).join(' · '),
-      status: info.jira.hasToken ? { text: 'подключено', tone: 'ok' } : { text: 'нет токена', tone: 'err' },
+      status: info.jira.hasToken ? { text: t('подключено'), tone: 'ok' } : { text: t('нет токена'), tone: 'err' },
       open: { at: 'jira' },
     });
   }
   for (const p of info.projects) {
-    const cli = p.forge === 'gitlab' ? (info.glab ? '' : 'нет glab') : p.forge === 'github' ? (info.gh ? '' : 'нет gh') : 'нет origin';
+    const cli = p.forge === 'gitlab' ? (info.glab ? '' : t('нет glab')) : p.forge === 'github' ? (info.gh ? '' : t('нет gh')) : t('нет origin');
     out.push({
       key: `repo:${p.path}`,
       type: 'repo',
@@ -55,7 +56,7 @@ function rows(info: IntegrationsInfo): Row[] {
   return out;
 }
 
-const typeTitle = (t: TypeId) => TYPES.find((x) => x.id === t)!.title;
+const typeTitle = (id: TypeId) => TYPES.find((x) => x.id === id)!.title;
 
 export function DashSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
@@ -80,39 +81,39 @@ export function DashSettings({ open, onClose }: { open: boolean; onClose: () => 
   const back = () => setView({ at: 'list' });
   const project = view.at === 'repo' ? info.projects.find((p) => p.path === view.path) : undefined;
 
-  let title = 'Подключения';
-  if (view.at === 'pick') title = 'Новое подключение';
+  let title = t('Подключения');
+  if (view.at === 'pick') title = t('Новое подключение');
   else if (view.at === 'add') title = typeTitle(view.type);
   else if (view.at === 'jira') title = 'Jira Cloud';
-  else if (view.at === 'repo') title = project?.name ?? 'Репозиторий';
+  else if (view.at === 'repo') title = project?.name ?? t('Репозиторий');
 
   return (
     <dialog ref={dlg} className={styles.dlgDash} onClose={onClose}>
       <header className="dlg-head">
         <div className={styles.connHead}>
           {view.at !== 'list' && (
-            <button className="btn ghost small" onClick={() => setView(view.at === 'add' ? { at: 'pick' } : { at: 'list' })} title="Назад">←</button>
+            <button className="btn ghost small" onClick={() => setView(view.at === 'add' ? { at: 'pick' } : { at: 'list' })} title={t('Назад')}>←</button>
           )}
           <h2>{title}</h2>
         </div>
-        <button className="btn ghost" onClick={onClose}>Закрыть</button>
+        <button className="btn ghost" onClick={onClose}>{t('Закрыть')}</button>
       </header>
 
       {view.at === 'list' && <ConnList info={info} onOpen={setView} onAdd={() => setView({ at: 'pick' })} />}
 
       {view.at === 'pick' && (
         <ul className={styles.connList}>
-          {TYPES.map((t) => {
+          {TYPES.map((ty) => {
             // Jira одна: уже подключённая открывается на правку
-            const taken = t.id === 'jira' && !!info.jira;
+            const taken = ty.id === 'jira' && !!info.jira;
             return (
-              <li key={t.id}>
-                <button className={styles.connRow} onClick={() => setView(taken ? { at: 'jira' } : { at: 'add', type: t.id })}>
+              <li key={ty.id}>
+                <button className={styles.connRow} onClick={() => setView(taken ? { at: 'jira' } : { at: 'add', type: ty.id })}>
                   <span className={styles.connMain}>
-                    <b>{t.title}</b>
-                    <span className="muted small">{t.sub}</span>
+                    <b>{ty.title}</b>
+                    <span className="muted small">{ty.sub}</span>
                   </span>
-                  <span className="muted small">{taken ? 'уже подключена — открыть' : '→'}</span>
+                  <span className="muted small">{taken ? t('уже подключена — открыть') : '→'}</span>
                 </button>
               </li>
             );
@@ -138,7 +139,7 @@ export function DashSettings({ open, onClose }: { open: boolean; onClose: () => 
       {view.at === 'repo' && (project ? (
         <ProjectForm key={project.path} p={project} info={info} onChanged={reloadInfo} onRemoved={back} />
       ) : (
-        <p className="muted small">Репозитория уже нет в списке.</p>
+        <p className="muted small">{t('Репозитория уже нет в списке.')}</p>
       ))}
     </dialog>
   );
@@ -164,10 +165,10 @@ function ConnList({ info, onOpen, onAdd }: { info: IntegrationsInfo; onOpen: (v:
           ))}
         </ul>
       ) : (
-        <p className="muted small">Пока ничего не подключено. Репозитории подхватываются из директорий проектов запусков.</p>
+        <p className="muted small">{t('Пока ничего не подключено. Репозитории подхватываются из директорий проектов запусков.')}</p>
       )}
       <div className="row">
-        <button className="btn primary" onClick={onAdd}>Добавить подключение</button>
+        <button className="btn primary" onClick={onAdd}>{t('Добавить подключение')}</button>
       </div>
     </div>
   );
@@ -178,17 +179,17 @@ function JiraForm({ info, reloadInfo, onDisconnected }: { info: IntegrationsInfo
   const { askConfirm } = useConfirm();
   // форма перечитывается после сохранения: токен стирается, подсказка в поле — по факту
   const [version, setVersion] = useState(0);
-  const [msg, setMsg] = useState<Msg>(info.jira?.hasToken ? { text: 'подключено', tone: 'ok' } : NO_MSG);
+  const [msg, setMsg] = useState<Msg>(info.jira?.hasToken ? { text: t('подключено'), tone: 'ok' } : NO_MSG);
 
   const save = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const f = e.currentTarget.elements as unknown as Record<'baseUrl' | 'email' | 'token', HTMLInputElement>;
-    setMsg({ text: 'Проверяю…', tone: '' });
+    setMsg({ text: t('Проверяю…'), tone: '' });
     try {
       const r = await api<{ user: string }>('PUT', '/api/integrations/jira', { baseUrl: f.baseUrl.value, email: f.email.value, token: f.token.value || undefined });
       await reloadInfo();
       setVersion((v) => v + 1);
-      setMsg({ text: `подключено как ${r.user}`, tone: 'ok' });
+      setMsg({ text: t('подключено как {user}', { user: r.user }), tone: 'ok' });
       void qc.resetQueries({ queryKey: ['jira'] });
     } catch (err) {
       setMsg({ text: errorText(err), tone: 'err' });
@@ -196,7 +197,7 @@ function JiraForm({ info, reloadInfo, onDisconnected }: { info: IntegrationsInfo
   };
 
   const disconnect = async () => {
-    if (!(await askConfirm('Отключить Jira? Адрес, email и токен будут удалены.', { ok: 'Отключить', danger: true }))) return;
+    if (!(await askConfirm(t('Отключить Jira? Адрес, email и токен будут удалены.'), { ok: t('Отключить'), danger: true }))) return;
     await api('DELETE', '/api/integrations/jira');
     qc.removeQueries({ queryKey: ['jira'] });
     await reloadInfo();
@@ -206,17 +207,17 @@ function JiraForm({ info, reloadInfo, onDisconnected }: { info: IntegrationsInfo
   return (
     <form key={version} className="form" onSubmit={save}>
       <div className="row">
-        <label><span>Адрес</span><input name="baseUrl" defaultValue={info.jira?.baseUrl || ''} placeholder="https://company.atlassian.net" autoComplete="off" /></label>
-        <label><span>Email аккаунта Atlassian</span><input name="email" type="email" defaultValue={info.jira?.email || ''} autoComplete="off" /></label>
+        <label><span>{t('Адрес')}</span><input name="baseUrl" defaultValue={info.jira?.baseUrl || ''} placeholder="https://company.atlassian.net" autoComplete="off" /></label>
+        <label><span>{t('Email аккаунта Atlassian')}</span><input name="email" type="email" defaultValue={info.jira?.email || ''} autoComplete="off" /></label>
       </div>
       <label>
-        <span>API-токен (<a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">создать</a>)</span>
-        <input name="token" type="password" autoComplete="new-password" placeholder={info.jira?.hasToken ? 'сохранён; впиши новый, чтобы заменить' : ''} />
+        <span>{t('API-токен')} (<a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">{t('создать')}</a>)</span>
+        <input name="token" type="password" autoComplete="new-password" placeholder={info.jira?.hasToken ? t('сохранён; впиши новый, чтобы заменить') : ''} />
       </label>
-      <p className="muted small">Хранится в <code>~/.agentgraph/jira-token</code>, обратно в браузер не отдаётся</p>
+      <p className="muted small">{t('Хранится в')} <code>~/.agentgraph/jira-token</code>{t(', обратно в браузер не отдаётся')}</p>
       <div className="row">
-        <button type="submit" className="btn primary">Проверить и сохранить</button>
-        {info.jira && <button type="button" className="btn danger" onClick={() => void disconnect()}>Отключить</button>}
+        <button type="submit" className="btn primary">{t('Проверить и сохранить')}</button>
+        {info.jira && <button type="button" className="btn danger" onClick={() => void disconnect()}>{t('Отключить')}</button>}
         <span className={msgClass(msg)}>{msg.text}</span>
       </div>
     </form>
@@ -243,15 +244,15 @@ function RepoAdd({ reloadInfo, onAdded }: { reloadInfo: () => Promise<Integratio
   return (
     <form className="form" onSubmit={add}>
       <label>
-        <span>Путь к репозиторию</span>
+        <span>{t('Путь к репозиторию')}</span>
         <div className={`row ${styles.projAdd}`}>
-          <input ref={input} name="path" placeholder="/путь/к/репозиторию" autoComplete="off" spellCheck={false} />
-          <PickDirButton start={() => input.current?.value ?? ''} onPick={(path) => { input.current!.value = path; input.current!.focus(); }} prompt="Выбери директорию проекта" className="btn pick-dir" />
+          <input ref={input} name="path" placeholder={t('/путь/к/репозиторию')} autoComplete="off" spellCheck={false} />
+          <PickDirButton start={() => input.current?.value ?? ''} onPick={(path) => { input.current!.value = path; input.current!.focus(); }} prompt={t('Выбери директорию проекта')} className="btn pick-dir" />
         </div>
       </label>
-      <p className="muted small">По origin определяется, откуда брать MR: GitLab — через <code>glab</code>, GitHub — PR через <code>gh</code>.</p>
+      <p className="muted small">{t('По origin определяется, откуда брать MR: GitLab — через')} <code>glab</code>{t(', GitHub — PR через')} <code>gh</code>.</p>
       <div className="row">
-        <button type="submit" className="btn primary">Добавить</button>
+        <button type="submit" className="btn primary">{t('Добавить')}</button>
         <span className={msgClass(msg)}>{msg.text}</span>
       </div>
     </form>
@@ -268,14 +269,14 @@ function ProjectForm({ p, info, onChanged, onRemoved }: { p: ProjectInfo; info: 
     e.preventDefault();
     try {
       await api('PUT', '/api/projects', { path: p.path, name: field('name'), base: field('base'), copyFiles: field('copyFiles') });
-      setMsg({ text: 'сохранено', tone: 'ok' });
+      setMsg({ text: t('сохранено'), tone: 'ok' });
       await onChanged();
     } catch (err) {
       setMsg({ text: errorText(err), tone: 'err' });
     }
   };
   const remove = async () => {
-    if (!(await askConfirm(`Убрать проект ${p.name} с главной? Репозиторий не трогается; автоподхват его больше не вернёт, добавить можно руками.`, { ok: 'Убрать', danger: true }))) return;
+    if (!(await askConfirm(t('Убрать проект {name} с главной? Репозиторий не трогается; автоподхват его больше не вернёт, добавить можно руками.', { name: p.name }), { ok: t('Убрать'), danger: true }))) return;
     await api('DELETE', '/api/projects', { path: p.path });
     await onChanged();
     onRemoved();
@@ -285,19 +286,19 @@ function ProjectForm({ p, info, onChanged, onRemoved }: { p: ProjectInfo; info: 
     <form ref={form} className="form" onSubmit={save}>
       <div className={styles.connFacts}>
         <span className="muted small mono">{p.path}</span>
-        {p.remote ? <span className="muted small">{`${p.remote.host}/${p.remote.path}`}</span> : <span className="small warn">нет origin на GitLab или GitHub</span>}
+        {p.remote ? <span className="muted small">{`${p.remote.host}/${p.remote.path}`}</span> : <span className="small warn">{t('нет origin на GitLab или GitHub')}</span>}
       </div>
-      {info.glab === false && p.forge === 'gitlab' && <p className="msg err">glab не найден: MR не загрузятся. Установи glab и выполни <code>glab auth login</code>.</p>}
-      {info.gh === false && p.forge === 'github' && <p className="msg err">gh не найден: PR не загрузятся. Установи gh и выполни <code>gh auth login</code>.</p>}
+      {info.glab === false && p.forge === 'gitlab' && <p className="msg err">{t('glab не найден: MR не загрузятся. Установи glab и выполни')} <code>glab auth login</code>.</p>}
+      {info.gh === false && p.forge === 'github' && <p className="msg err">{t('gh не найден: PR не загрузятся. Установи gh и выполни')} <code>gh auth login</code>.</p>}
       <div className="row">
-        <label><span>Имя</span><input name="name" defaultValue={p.name} /></label>
-        <label><span>Базовая ветка для новых</span><input name="base" defaultValue={p.base || ''} placeholder="origin/HEAD" /></label>
+        <label><span>{t('Имя')}</span><input name="name" defaultValue={p.name} /></label>
+        <label><span>{t('Базовая ветка для новых')}</span><input name="base" defaultValue={p.base || ''} placeholder="origin/HEAD" /></label>
       </div>
-      <label><span>Копировать в worktree (через запятую)</span><input name="copyFiles" defaultValue={(p.copyFiles || []).join(', ')} placeholder="local.properties" /></label>
-      <p className="muted small">Worktree создаются в <code>{info.worktreesDir || ''}</code>.</p>
+      <label><span>{t('Копировать в worktree (через запятую)')}</span><input name="copyFiles" defaultValue={(p.copyFiles || []).join(', ')} placeholder="local.properties" /></label>
+      <p className="muted small">{t('Worktree создаются в')} <code>{info.worktreesDir || ''}</code>.</p>
       <div className="row">
-        <button type="submit" className="btn primary">Сохранить</button>
-        <button type="button" className="btn danger" onClick={() => void remove()}>Убрать</button>
+        <button type="submit" className="btn primary">{t('Сохранить')}</button>
+        <button type="button" className="btn danger" onClick={() => void remove()}>{t('Убрать')}</button>
         <span className={msgClass(msg)}>{msg.text}</span>
       </div>
     </form>
