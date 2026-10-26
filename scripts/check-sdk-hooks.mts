@@ -6,7 +6,7 @@
 // modes (отказ хука при каждом permission_mode — переключением в одной сессии), explicit (Edit/Write в tools:
 // папка запусков, чужой артефакт, правка по жёсткой ссылке), raw-throw (исключение в хуке без try/catch agent.ts),
 // adddir (что грузится из доп. директории — по канарейкам в ответе модели), tools (инструмент чтения по ключу:
-// карта файла 100 КБ, artifact_read у этапа с tools: [], сабагент, страница «Контекст»), example (пример из CLI, стоимость).
+// карта файла 100 КБ, artifact_read у этапа с tools: [], сабагент, страница «Контекст»), example (flow с артефактами из CLI, стоимость).
 // Каждая проверка засчитывается по двум доказательствам: попытка в логе хука (инструмент, путь, agent_id, режим) и
 // состояние файлов на диске. Нет попытки — «не воспроизведено», а не «прошло». Несколько проверок идут в одной
 // сессии: первые ходы Claude Code дорогие (запись кэша), последующие почти бесплатны.
@@ -37,7 +37,7 @@ const { values: args } = parseArgs({
   },
 });
 const BUDGET = Number(args.budget);
-/** Порог стоимости примера example-artifacts за прогон (AC-H6): пример на haiku 5.5, решение пользователя 2026-10-15. */
+/** Порог стоимости сценария example за прогон (AC-H6): flow на haiku 5.5, решение пользователя 2026-10-15. */
 const EXAMPLE_COST_MAX = 2;
 const only = args.only ? new Set(args.only.split(',')) : undefined;
 const OUT = path.resolve(args.out ?? path.join(os.tmpdir(), `agentgraph-check-${new Date().toISOString().replace(/[:.]/g, '-')}`));
@@ -465,13 +465,69 @@ await scenario('tools', async () => {
   return r.cost;
 });
 
-// ---------- example: пример из CLI — артефакт переживает итерацию, стоимость
+// ---------- example: flow с артефактами из CLI — артефакт переживает итерацию, стоимость
+
+/**
+ * Бывший пример flows/example/example-artifacts.yaml: файл идей переживает итерации, brainstorm дописывает
+ * в него идеи без инструментов проекта (writes), pick только читает. Лежит здесь, чтобы проверка не зависела от flows/.
+ */
+const EXAMPLE_FLOW = `name: example-artifacts
+input: Название для приложения заметок, которое работает без интернета.
+defaults:
+  model: claude-haiku-5-5
+artifacts:
+  ideas:
+    title: Идеи
+    initial: |
+      # Идеи
+  decisions:
+    title: Решения
+    decisions: true
+loop:
+  max_iterations: 2
+  until:
+    type: none
+phases:
+  - name: brainstorm
+    title: Ещё две идеи
+    tools: []
+    reads: [decisions]
+    writes: [ideas]
+    max_turns: 6
+    prompt: |
+      Задача: {{input}}
+      Итерация {{iteration}} из {{max_iterations}}.
+
+      Сейчас в файле идей:
+      {{artifacts.ideas}}
+
+      Решения пользователя (может быть пусто — тогда решений нет):
+      {{artifacts.decisions}}
+
+      Допиши в конец файла {{artifacts.ideas.path}} две новые идеи, которых там ещё нет, — каждую отдельной
+      строкой вида «- Название: почему подходит». Остальной текст файла не меняй.
+    handoff: одна строка — какие две идеи добавил
+  - name: pick
+    title: Выбор лучшей
+    tools: []
+    reads: [ideas]
+    max_turns: 5
+    prompt: |
+      Задача: {{input}}
+
+      Все идеи:
+      {{artifacts.ideas}}
+
+      Выбери одну лучшую идею. Ответь одной строкой: «Выбор: <название> — <почему>».
+`;
 
 await scenario('example', async () => {
   const home = path.join(box, 'home');
   fs.mkdirSync(path.join(home, 'runs'), { recursive: true });
   fs.mkdirSync(path.join(box, 'example-project'), { recursive: true });
-  const cli = spawnSync('npx', ['tsx', path.join(ROOT, 'src', 'cli.ts'), 'run', path.join(ROOT, 'flows', 'example', 'example-artifacts.yaml'), '--cwd', path.join(box, 'example-project')], {
+  const flowFile = path.join(box, 'example-artifacts.yaml');
+  fs.writeFileSync(flowFile, EXAMPLE_FLOW);
+  const cli = spawnSync('npx', ['tsx', path.join(ROOT, 'src', 'cli.ts'), 'run', flowFile, '--cwd', path.join(box, 'example-project')], {
     cwd: ROOT,
     encoding: 'utf8',
     env: { ...process.env, AGENTGRAPH_HOME: home, AGENTGRAPH_CONFIG_DIR: path.join(box, 'cfg') },
