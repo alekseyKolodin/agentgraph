@@ -49,6 +49,8 @@ test('лимит правится у живого цикла до конца б�
   assert.equal(continueVisible({ ...st({}, false).run, continuable: true }), true);
   assert.equal(continueVisible({ ...st({ status: 'failed', blocks: [block('a', { status: 'done' })] }, false).run }), true);
   assert.equal(continueVisible({ ...st({ status: 'done', blocks: [block('a', { status: 'done' })] }, false).run }), false);
+  assert.equal(continueVisible({ ...st({ status: 'max_iterations', blocks: [block('a', { status: 'max_iterations' })] }, false).run }), true);
+  assert.equal(continueVisible({ ...st({ status: 'failed', blocks: [block('a', { status: 'failed' })] }, false).run }), false);
 });
 
 test('подсказка паузы: без артефактов, с артефактом решений, с артефактами без решений', () => {

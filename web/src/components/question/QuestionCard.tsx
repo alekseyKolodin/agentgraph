@@ -7,6 +7,7 @@ import { api, errorText } from '../../api';
 import { useConfirm } from '../ConfirmDialog';
 import { MdText } from '../MdText';
 import { ago, excerpt } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { collectAnswers, ignoredConfirmText, optionView, OTHER, PREFACE_INLINE_MAX, questionLastCond, questionWhere } from '../../lib/home';
 import styles from './QuestionCard.module.css';
 
@@ -80,10 +81,10 @@ export function QuestionCard({ q, run, onHome = false, now = Date.now(), onOpenR
     const other = q.questions.map((_, qi) => f.querySelector<HTMLTextAreaElement>(`[name=other${qi}]`)?.value || '');
     const { answers, missing, ignored } = collectAnswers(q.questions, picked, other);
     if (missing) {
-      setMsg({ text: 'Ответь на все вопросы', err: true });
+      setMsg({ text: t('Ответь на все вопросы'), err: true });
       return;
     }
-    if (ignored.length && !(await askConfirm(ignoredConfirmText(ignored), { ok: 'Продолжить' }))) return;
+    if (ignored.length && !(await askConfirm(ignoredConfirmText(ignored), { ok: t('Продолжить') }))) return;
     try {
       setSending(true);
       await api('POST', `/api/runs/${run.id}/answer`, { questionId: q.id, answers });
@@ -129,13 +130,13 @@ export function QuestionCard({ q, run, onHome = false, now = Date.now(), onOpenR
         <div className={styles.qhead}>
           <span className={styles.qrun}>{run.title || run.flow}</span>
           <span className={styles.qwhere}>{where}</span>
-          <span className={styles.qwait}>{`ждёт ${ago(q.askedAt, now)}`}</span>
-          <button type="button" className="btn small ghost" onClick={onOpenRun}>Открыть запуск</button>
+          <span className={styles.qwait}>{t('ждёт {time}', { time: ago(q.askedAt, now) })}</span>
+          <button type="button" className="btn small ghost" onClick={onOpenRun}>{t('Открыть запуск')}</button>
         </div>
       ) : (
         <div className={styles.qhead}>
-          <span className={styles.qrun}>Вопрос агента</span>
-          <span className={styles.qwhere}>{where} · сессия ждёт ответа</span>
+          <span className={styles.qrun}>{t('Вопрос агента')}</span>
+          <span className={styles.qwhere}>{where} · {t('сессия ждёт ответа')}</span>
         </div>
       )}
       {/* на главной — то, что на странице запуска и так видно: задача, сводка «где мы» и итог прошлой итерации */}
@@ -143,21 +144,21 @@ export function QuestionCard({ q, run, onHome = false, now = Date.now(), onOpenR
         <div className={styles.qctx}>
           {run.input && (
             <div>
-              <span className={styles.qctxK}>Задача</span>
+              <span className={styles.qctxK}>{t('Задача')}</span>
               <span className={styles.qctxV} title={run.input}>{excerpt(run.input, 220)}</span>
             </div>
           )}
           {run.digest?.text && (
             <div>
-              <span className={styles.qctxK}>Где мы</span>
+              <span className={styles.qctxK}>{t('Где мы')}</span>
               <span className={styles.qctxV}>{run.digest.text}</span>
             </div>
           )}
           {last && (
             <div>
-              <span className={styles.qctxK}>Итерация {last.iteration}</span>
+              <span className={styles.qctxK}>{t('Итерация {n}', { n: last.iteration })}</span>
               <span className={styles.qctxV}>
-                <span className="err">✕</span> {last.summary || excerpt(last.text, 200) || 'условие не выполнено'}
+                <span className="err">✕</span> {last.summary || excerpt(last.text, 200) || t('условие не выполнено')}
               </span>
             </div>
           )}
@@ -177,7 +178,7 @@ export function QuestionCard({ q, run, onHome = false, now = Date.now(), onOpenR
                   <span>
                     <span className={styles.ol}>
                       {label}
-                      {rec && <span className={styles.qrec}>рекомендует агент</span>}
+                      {rec && <span className={styles.qrec}>{t('рекомендует агент')}</span>}
                     </span>
                     {o.description && <span className={styles.od}><MdText text={o.description} /></span>}
                   </span>
@@ -186,13 +187,13 @@ export function QuestionCard({ q, run, onHome = false, now = Date.now(), onOpenR
             })}
           </div>
           <div className={styles.qown}>
-            <input type={item.multiSelect ? 'checkbox' : 'radio'} name={`q${qi}`} value={OTHER} className={styles.qownPick} aria-label="Свой ответ" tabIndex={-1} />
-            <textarea name={`other${qi}`} rows={1} placeholder={item.options.length ? 'Или ответь своими словами' : 'Твой ответ'} />
+            <input type={item.multiSelect ? 'checkbox' : 'radio'} name={`q${qi}`} value={OTHER} className={styles.qownPick} aria-label={t('Свой ответ')} tabIndex={-1} />
+            <textarea name={`other${qi}`} rows={1} placeholder={item.options.length ? t('Или ответь своими словами') : t('Твой ответ')} />
           </div>
         </div>
       ))}
       <div className={`row ${styles.qsend}`}>
-        <button type="submit" className="btn primary" disabled={sending}>Ответить</button>
+        <button type="submit" className="btn primary" disabled={sending}>{t('Ответить')}</button>
         <span className="muted small">⌘↵</span>
         <span className={`msg${msg.err ? ' err' : ''}`}>{msg.text}</span>
       </div>
@@ -208,7 +209,7 @@ function Preface({ text }: { text: string | undefined }) {
   return (
     <details className={styles.qprefaceWrap}>
       <summary>
-        <span className={styles.qprefaceLead}>{excerpt(text, 180)}</span> <span className="muted">развернуть</span>
+        <span className={styles.qprefaceLead}>{excerpt(text, 180)}</span> <span className="muted">{t('развернуть')}</span>
       </summary>
       {body}
     </details>
@@ -219,10 +220,10 @@ function Preface({ text }: { text: string | undefined }) {
 export function AnsweredCard({ q }: { q: QuestionRecord }) {
   return (
     <div className={`${styles.qcard} ${styles.answered}`}>
-      <div className={styles.qhead}>{`💬 Вопрос от «${q.title || q.phase}» и ответ`}</div>
+      <div className={styles.qhead}>{t('💬 Вопрос от «{phase}» и ответ', { phase: q.title || q.phase })}</div>
       {q.preface && (
         <details className={styles.qprefaceWrap}>
-          <summary>Что агент написал перед вопросом</summary>
+          <summary>{t('Что агент написал перед вопросом')}</summary>
           <div className={styles.qpreface}><MdText text={q.preface} /></div>
         </details>
       )}
@@ -230,7 +231,7 @@ export function AnsweredCard({ q }: { q: QuestionRecord }) {
         <div key={i} className={styles.qa}>
           {item.header && <div className={styles.qhdr}>{item.header}</div>}
           <div className={styles.qaQ}><MdText text={item.question} /></div>
-          <div className={styles.qaA}><span className="muted">Ответ:</span> {q.answers?.[item.question] ?? ''}</div>
+          <div className={styles.qaA}><span className="muted">{t('Ответ:')}</span> {q.answers?.[item.question] ?? ''}</div>
         </div>
       ))}
     </div>

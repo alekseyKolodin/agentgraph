@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router';
 import { useFeature, useHome, useRuns } from '../../api';
 import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
+import { getLang, saveLang, t } from '../../lib/i18n';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
@@ -52,7 +53,7 @@ function LiveSection() {
   const open = (id: string) => void navigate(`/run/${id}`);
   return (
     <Section
-      title="Сейчас"
+      title={t('Сейчас')}
       secKey="sec:live"
       className={styles.sideLive}
       extra={<span className={`${styles.sideCount} ${count.wait ? styles.wait : ''}`}>{count.text}</span>}
@@ -74,11 +75,29 @@ function LiveSection() {
               <span className={styles.lrunTitle}>{row.r.title || row.r.flow}</span>
               <span className={styles.lrunSub}>{row.sub}</span>
             </span>
-            {row.it && <span className={styles.lrunIt} title="Итерация идущего блока / лимит">{row.it}</span>}
+            {row.it && <span className={styles.lrunIt} title={t('Итерация идущего блока / лимит')}>{row.it}</span>}
           </li>
         ))}
       </ul>
     </Section>
+  );
+}
+
+/** Переключатель языка: запоминает выбор и перезагружает страницу — тексты берутся при загрузке. */
+function LangSwitch() {
+  const next = getLang() === 'ru' ? 'en' : 'ru';
+  return (
+    <button
+      type="button"
+      className={styles.langSwitch}
+      title={next === 'en' ? 'Switch the interface to English' : 'Переключить интерфейс на русский'}
+      onClick={() => {
+        saveLang(next);
+        location.reload();
+      }}
+    >
+      {next === 'en' ? 'EN' : 'RU'}
+    </button>
   );
 }
 
@@ -88,27 +107,30 @@ export function Sidebar() {
   const questions = inboxCount(useHome().data?.runs ?? []);
   return (
     <aside className={styles.sidebar}>
-      <Link to="/" className={styles.brand} title="Главная: вопросы агентов и идущие запуски">agentgraph</Link>
+      <div className={styles.brandRow}>
+        <Link to="/" className={styles.brand} title={t('Главная: вопросы агентов и идущие запуски')}>agentgraph</Link>
+        <LangSwitch />
+      </div>
       {/* разделы — компактной строкой: главное в сайдбаре — запуски и flow */}
       <ul className={styles.sideNav}>
         <li>
-          <NavLink to="/" end title="Вопросы агентов и идущие запуски">
-            Главная
-            {questions > 0 && <span className={styles.brandCount} title="Вопросов ждут ответа">{questions}</span>}
+          <NavLink to="/" end title={t('Вопросы агентов и идущие запуски')}>
+            {t('Главная')}
+            {questions > 0 && <span className={styles.brandCount} title={t('Вопросов ждут ответа')}>{questions}</span>}
           </NavLink>
         </li>
         {tags && (
-          <li><NavLink to="/tags" title="Теги задач: саммари фичи, заметки, пути и вложения, которые подставляются в запуск">Теги</NavLink></li>
+          <li><NavLink to="/tags" title={t('Теги задач: саммари фичи, заметки, пути и вложения, которые подставляются в запуск')}>{t('Теги')}</NavLink></li>
         )}
         {context && (
-          <li><NavLink to="/context" title="Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены">Контекст</NavLink></li>
+          <li><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
         )}
       </ul>
       <LiveSection />
       <Section title="Flow" secKey="sec:flows" className={styles.secFlows} extra={<FlowSectionActions />}>
         <FlowList />
       </Section>
-      <Section title="Запуски" secKey="sec:runs" className={styles.secRuns} extra={<RunSectionActions />}>
+      <Section title={t('Запуски')} secKey="sec:runs" className={styles.secRuns} extra={<RunSectionActions />}>
         <RunList />
       </Section>
     </aside>

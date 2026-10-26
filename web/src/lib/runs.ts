@@ -2,6 +2,7 @@
 // группы по проектам с «ещё N» и живыми счётчиками, подписи строк.
 import type { RunSummary } from '@server/api-types';
 import { baseName, projectLabels, usd, when } from './format';
+import { t } from './i18n';
 import { LIVE_STATUSES } from './home';
 import { iterWord } from './graph/text';
 import { runMatches, searchWords } from './search';
@@ -76,7 +77,7 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
   const searching = words.length > 0;
   const runs = visible.filter((r) => r.id === o.activeId || ((!o.statuses.size || o.statuses.has(r.status)) && (!searching || runMatches(r, words))));
   const chips = statusChips(visible, searching ? visible.filter((r) => runMatches(r, words)) : visible, o.statuses);
-  const empty = runs.length ? '' : !visible.length ? (hiddenCount ? 'все запуски скрыты' : 'запусков ещё не было') : searching ? 'Ничего не нашлось' : 'нет запусков с таким статусом';
+  const empty = runs.length ? '' : !visible.length ? (hiddenCount ? t('все запуски скрыты') : t('запусков ещё не было')) : searching ? t('Ничего не нашлось') : t('нет запусков с таким статусом');
   if (!grouped) return { chips, runs: runs.slice(0, RUNS_FLAT_LIMIT), groups: [], searching, hiddenCount, empty };
   // запуски отсортированы от новых, поэтому и проекты идут по свежести последнего запуска
   const byProject = new Map<string, RunSummary[]>();
@@ -95,7 +96,7 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
       key,
       cwd,
       label: labels.get(cwd)!,
-      title: cwd || 'директория проекта не записана в run.json',
+      title: cwd || t('директория проекта не записана в run.json'),
       count: list.length,
       live: { waiting: n('waiting'), paused: n('paused'), running: n('running') },
       runs: shown,
@@ -116,4 +117,6 @@ export const runRowSub = (r: RunSummary, withProject: boolean): { flow: string; 
 
 /** Текст подтверждения удаления: «flow» от даты, если запуск известен. */
 export const deleteRunText = (id: string, r: Pick<RunSummary, 'flow' | 'startedAt'> | undefined): string =>
-  `Удалить запуск ${r ? `«${r.flow}» от ${when(r.startedAt)}` : id}?\nПапка runs/${id} с промптами, транскриптами и выводами этапов будет удалена насовсем.`;
+  t('Удалить запуск {what}?', { what: r ? t('«{flow}» от {date}', { flow: r.flow, date: when(r.startedAt) }) : id }) +
+  '\n' +
+  t('Папка runs/{id} с промптами, транскриптами и выводами этапов будет удалена насовсем.', { id });

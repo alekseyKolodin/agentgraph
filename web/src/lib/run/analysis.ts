@@ -2,28 +2,29 @@
 // строки таблицы фактов по этапам, строка «анализ от … · модель · $». Без React и DOM.
 import type { AnalysisFacts, AnalysisKind, AnalysisPhase, AnalysisSeverity, AnalysisSuggestion, AnalysisVerdict, RunAnalysis } from '@server/api-types';
 import { dur, usd, when } from '../format';
+import { t } from '../i18n';
 import { ctxBadge, ctxLabel, ctxLevel } from '../graph/text';
 
 /** Вердикт: подпись и класс бейджа (цвета статусов из base.css: зелёный, жёлтый, красный). */
 export const VERDICT: Record<AnalysisVerdict, { label: string; cls: string; title: string }> = {
-  keep: { label: 'оставить как есть', cls: 'done', title: 'Структура flow оправдана фактами запуска: правок не нужно' },
-  improve: { label: 'доработать', cls: 'max_iterations', title: 'Точечные правки: см. рекомендации' },
-  rework: { label: 'пересобрать', cls: 'failed', title: 'Структуру flow стоит собрать заново' },
+  keep: { label: t('оставить как есть'), cls: 'done', title: t('Структура flow оправдана фактами запуска: правок не нужно') },
+  improve: { label: t('доработать'), cls: 'max_iterations', title: t('Точечные правки: см. рекомендации') },
+  rework: { label: t('пересобрать'), cls: 'failed', title: t('Структуру flow стоит собрать заново') },
 };
 
 export const KIND_LABEL: Record<AnalysisKind, string> = {
-  merge: 'объединить',
-  split: 'разбить',
-  remove: 'убрать',
-  tools: 'инструменты',
-  condition: 'условие',
-  prompt: 'промпт',
-  context: 'контекст',
-  parallel: 'параллель',
-  other: 'прочее',
+  merge: t('объединить'),
+  split: t('разбить'),
+  remove: t('убрать'),
+  tools: t('инструменты'),
+  condition: t('условие'),
+  prompt: t('промпт'),
+  context: t('контекст'),
+  parallel: t('параллель'),
+  other: t('прочее'),
 };
 
-export const SEVERITY_LABEL: Record<AnalysisSeverity, string> = { high: 'Важно', medium: 'Стоит сделать', low: 'Мелочи' };
+export const SEVERITY_LABEL: Record<AnalysisSeverity, string> = { high: t('Важно'), medium: t('Стоит сделать'), low: t('Мелочи') };
 const SEVERITY_ORDER: AnalysisSeverity[] = ['high', 'medium', 'low'];
 
 export type SuggestionGroup = { severity: AnalysisSeverity; label: string; items: AnalysisSuggestion[] };
@@ -40,11 +41,11 @@ export type CtxCell = { text: string; title: string; level: '' | 'warn' | 'crit'
 
 /** Ячейка контекста: максимум пика по запускам как доля окна («45%»), без окна — пик в токенах, без данных — «—». */
 export function ctxCell(p: Pick<AnalysisPhase, 'contextPeak' | 'contextWindow' | 'runs'>): CtxCell {
-  if (!p.contextPeak) return { text: '—', title: p.runs ? 'SDK не прислал usage' : 'Этап не выполнялся', level: '' };
+  if (!p.contextPeak) return { text: '—', title: p.runs ? t('SDK не прислал usage') : t('Этап не выполнялся'), level: '' };
   const label = ctxLabel(p.contextPeak, p.contextWindow);
   return {
     text: ctxBadge(p.contextPeak, p.contextWindow),
-    title: `Пик контекста по запускам этапа: ${label}${p.contextWindow ? '' : ' (окно модели неизвестно)'}`,
+    title: p.contextWindow ? t('Пик контекста по запускам этапа: {label}', { label }) : t('Пик контекста по запускам этапа: {label} (окно модели неизвестно)', { label }),
     level: ctxLevel(p.contextPeak, p.contextWindow),
   };
 }
@@ -68,18 +69,18 @@ export type PhaseRow = {
 export function phaseRows(facts: AnalysisFacts): PhaseRow[] {
   return facts.phases.map((p) => {
     const notes: string[] = [];
-    if (!p.runs) notes.push('не выполнялся');
-    if (p.maxTurnsHits) notes.push(`упёрся в лимит ходов: ${p.maxTurnsHits}`);
-    if (p.denials) notes.push(`отказов инструментов: ${p.denials}`);
-    if (p.failed) notes.push(`с ошибкой: ${p.failed}`);
+    if (!p.runs) notes.push(t('не выполнялся'));
+    if (p.maxTurnsHits) notes.push(t('упёрся в лимит ходов: {n}', { n: p.maxTurnsHits }));
+    if (p.denials) notes.push(t('отказов инструментов: {n}', { n: p.denials }));
+    if (p.failed) notes.push(t('с ошибкой: {n}', { n: p.failed }));
     return {
       name: p.name,
       title: p.title,
       block: p.block,
-      tools: p.tools.join(', ') || 'без инструментов',
+      tools: p.tools.join(', ') || t('без инструментов'),
       writer: p.writer,
       runs: String(p.runs),
-      turns: p.runs ? `${p.turnsAvg} / ${p.turnsMax}${p.maxTurns !== undefined ? ` из ${p.maxTurns}` : ''}` : '—',
+      turns: p.runs ? `${p.turnsAvg} / ${p.turnsMax}${p.maxTurns !== undefined ? ` ${t('из {n}', { n: p.maxTurns })}` : ''}` : '—',
       ctx: ctxCell(p),
       cost: p.runs ? usd(p.costUsd) : '—',
       time: p.runs ? dur(p.durationMs) : '—',
@@ -90,4 +91,4 @@ export function phaseRows(facts: AnalysisFacts): PhaseRow[] {
 
 /** «анализ от 24.10.2026, 20:59 · claude-sonnet-5-5 · $0.03». */
 export const analysisMeta = (a: Pick<RunAnalysis, 'at' | 'model' | 'costUsd'>): string =>
-  [`анализ от ${when(a.at)}`, a.model, usd(a.costUsd)].filter(Boolean).join(' · ');
+  [t('анализ от {when}', { when: when(a.at) }), a.model, usd(a.costUsd)].filter(Boolean).join(' · ');

@@ -58,6 +58,12 @@ export const PhaseSchema = z.object({
     .describe(
       'Дополнительные директории, куда этап может ходить кроме директории проекта (как --add-dir), например отдельный проект с правилами QA. Пути абсолютные, от ~ или относительно директории проекта. Из них подхватываются CLAUDE.md и скиллы (.claude/skills); список директорий дописывается в конец промпта этапа.',
     ),
+  plugins: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Локальные плагины Claude Code, которые получает только этот этап (как --plugin-dir): папки плагинов, абсолютные, от ~ или относительно директории проекта. Плагин приносит свои скиллы, агентов, команды, хуки и MCP-серверы; в остальных этапах и у судьи его нет. Несуществующая папка — ошибка до старта.',
+    ),
   model: z.string().optional().describe('Модель, например claude-opus-5-5. По умолчанию модель CLI.'),
   effort: EffortSchema.optional(),
   max_turns: z.number().int().positive().optional().describe('Лимит ходов (user->assistant) в сессии.'),
@@ -135,6 +141,10 @@ export const BlockSchema = z.object({
     .array(z.string().regex(TAG_SLUG_RE))
     .optional()
     .describe('Теги области знаний блока: слаги тегов вида knowledge со страницы «Теги»; их заметки, пути и вложения получают все этапы блока. Несуществующий тег или тег задачи — ошибка до старта.'),
+  plugins: z
+    .array(z.string())
+    .optional()
+    .describe('Локальные плагины Claude Code для всех этапов блока (складываются с plugins этапа): папки плагинов, абсолютные, от ~ или относительно директории проекта. Несуществующая папка — ошибка до старта.'),
   phases: z.array(PhaseSchema).min(1),
 });
 export type Block = z.output<typeof BlockSchema>;
@@ -229,7 +239,7 @@ export function phaseSteps(block: Block): PhaseStep[] {
 /** Один блок без названия, on_fail и тегов знаний записываем короткой формой (у неё этих полей нет). */
 export function compactSpec(spec: FlowSpec): FlowSpec {
   const only = spec.blocks?.length === 1 ? spec.blocks[0] : undefined;
-  if (!only || only.title || only.on_fail || only.knowledge?.length) return spec;
+  if (!only || only.title || only.on_fail || only.knowledge?.length || only.plugins?.length) return spec;
   const { blocks: _, ...rest } = spec;
   return { ...rest, ...(only.loop ? { loop: only.loop } : {}), phases: only.phases };
 }

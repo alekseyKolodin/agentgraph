@@ -8,6 +8,7 @@ import { errorText, fetchAttention, fetchSuggestions, keys, useRuns } from '../.
 import { useMemoryState } from '../../components/useMemoryState';
 import { DASH_STALE_MS, dashCap, dashMore, mrSign, runsForBranch } from '../../lib/dash';
 import { plural } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { LaunchButton, RelatedRuns, type OnLaunch } from './Dash';
 import { useToFlow } from './FlowPicker';
 import homeStyles from './Home.module.css';
@@ -54,8 +55,8 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
   ));
   let list;
   if (att.error) list = <p className="msg err">{errorText(att.error)}</p>;
-  else if (!items) list = <p className="muted small">Загружаю…</p>;
-  else if (!items.length) list = errs.length ? null : <p className="muted small">Твоим MR сейчас ничего не нужно: CI не падал, ответов никто не ждёт, конфликтов нет.</p>;
+  else if (!items) list = <p className="muted small">{t('Загружаю…')}</p>;
+  else if (!items.length) list = errs.length ? null : <p className="muted small">{t('Твоим MR сейчас ничего не нужно: CI не падал, ответов никто не ждёт, конфликтов нет.')}</p>;
   else {
     list = (
       <>
@@ -78,7 +79,7 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
                       <button
                         type="button"
                         className={`chip on ${styles.attFlow}`}
-                        title={`${s.why || 'Подсказка haiku'}: откроет «Запуск» с причинами во входе`}
+                        title={t('{why}: откроет «Запуск» с причинами во входе', { why: s.why || t('Подсказка haiku') })}
                         onClick={(e) => {
                           e.stopPropagation();
                           void toFlow(s.flow!, { type: 'mr', key: m.ref, project: m.project, attention: true });
@@ -96,7 +97,7 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
           })}
         </ul>
         {dashMore(items, more) > 0 && (
-          <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={() => setMore(true)}>Ещё {dashMore(items, more)}</button>
+          <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={() => setMore(true)}>{t('Ещё {n}', { n: dashMore(items, more) })}</button>
         )}
       </>
     );
@@ -105,10 +106,10 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
   return (
     <section className={homeStyles.homeSec}>
       <div className={styles.dashHead}>
-        <h2 title="Твои открытые MR из проектов «Подключений», где упал CI, ждут ответа обсуждения или есть конфликты. «Запустить…» и подсказка flow заполнят форму запуска, запустишь сам">
-          MR · нужно внимание <span className="muted small">{items?.length ? String(items.length) : ''}</span>
+        <h2 title={t('Твои открытые MR из проектов «Подключений», где упал CI, ждут ответа обсуждения или есть конфликты. «Запустить…» и подсказка flow заполнят форму запуска, запустишь сам')}>
+          {t('MR · нужно внимание')} <span className="muted small">{items?.length ? String(items.length) : ''}</span>
         </h2>
-        <button className="btn small ghost" title="Обновить" onClick={reload}>↻</button>
+        <button className="btn small ghost" title={t('Обновить')} onClick={reload}>↻</button>
       </div>
       <div className={styles.dashBox}>
         {list}
@@ -122,13 +123,13 @@ function Reasons({ m }: { m: AttentionItem }) {
   const r = m.reasons;
   return (
     <span className={styles.attReasons}>
-      {r.ci && <a className="badge failed" href={r.ci.url || m.url} target="_blank" rel="noopener" title="Последний пайплайн ветки упал">CI упал</a>}
+      {r.ci && <a className="badge failed" href={r.ci.url || m.url} target="_blank" rel="noopener" title={t('Последний пайплайн ветки упал')}>{t('CI упал')}</a>}
       {r.replies > 0 && (
-        <a className="badge waiting" href={m.url} target="_blank" rel="noopener" title="Неразрешённые обсуждения, где последнее слово не твоё">
-          {`${r.replies} ${plural(r.replies, 'ждёт', 'ждут', 'ждут')} ответа`}
+        <a className="badge waiting" href={m.url} target="_blank" rel="noopener" title={t('Неразрешённые обсуждения, где последнее слово не твоё')}>
+          {t('{n} {verb} ответа', { n: r.replies, verb: plural(r.replies, 'ждёт', 'ждут', 'ждут') })}
         </a>
       )}
-      {r.conflicts && <a className="badge failed" href={m.url} target="_blank" rel="noopener" title={`Конфликты с ${m.targetBranch}`}>конфликты</a>}
+      {r.conflicts && <a className="badge failed" href={m.url} target="_blank" rel="noopener" title={t('Конфликты с {branch}', { branch: m.targetBranch })}>{t('конфликты')}</a>}
     </span>
   );
 }

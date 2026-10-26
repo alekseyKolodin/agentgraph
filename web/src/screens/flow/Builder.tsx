@@ -14,6 +14,7 @@ import { toolsLabel } from '../../lib/flow/tools';
 import { flowGraphModel, type GraphNode } from '../../lib/graph/model';
 import { LS } from '../../lib/storage';
 import { plural } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { afterRender, bindField, clearSel, flash, openBlockPane, openPhasePane, paneShown, revealField, sameField } from './actions';
 import { BlockPane, BlockSection, blockPaneTitles, KnowledgeBadge, phaseKey } from './BlockEditor';
 import { PhaseCard } from './PhaseCard';
@@ -109,7 +110,7 @@ export function Builder({ hidden }: { hidden: boolean }) {
           )}
           {/* резерв: все поля flow лентой; основной путь — клик по узлу → инспектор справа */}
           <div className={styles.builderMain}>
-            {spec ? <BuilderList spec={spec} /> : <p className="error">Flow не проходит валидацию: поправь его во вкладке YAML или опиши ИИ выше, что починить.</p>}
+            {spec ? <BuilderList spec={spec} /> : <p className="error">{t('Flow не проходит валидацию: поправь его во вкладке YAML или опиши ИИ выше, что починить.')}</p>}
           </div>
         </div>
         <Inspector paneRef={paneRef} />
@@ -157,25 +158,25 @@ function BuilderBar() {
     const flow = flowState.flow;
     const instruction = flowState.aiText.trim();
     if (!flow || flowState.aiAbort) return;
-    if (!instruction) return set({ aiMsg: { text: 'Опиши, что поменять', tone: '' } });
+    if (!instruction) return set({ aiMsg: { text: t('Опиши, что поменять'), tone: '' } });
     // база — то, что сейчас в конструкторе, вместе с несохранёнными правками; сломанный flow — текст YAML
     let base: { spec: Record<string, unknown> } | { yaml: string };
     try {
       base = flowState.spec ? { spec: collectSpec(flowState.spec) } : { yaml: flow.yaml };
     } catch (err) {
-      return set({ aiMsg: { text: `Сначала поправь конструктор: ${errorText(err)}`, tone: 'err' } });
+      return set({ aiMsg: { text: t('Сначала поправь конструктор: {error}', { error: errorText(err) }), tone: 'err' } });
     }
     const seq = flowState.editSeq;
     const ctl = new AbortController();
     // правка, которая идёт сейчас: чтение через функцию — после await она может быть уже другой
     const current = () => flowState.aiAbort;
-    set({ aiAbort: ctl, aiMsg: { text: 'ИИ правит flow… обычно 20–90 секунд', tone: '' } });
+    set({ aiAbort: ctl, aiMsg: { text: t('ИИ правит flow… обычно 20–90 секунд'), tone: '' } });
     try {
       const cwd = LS.raw('agentgraph.cwd') || defaultCwd;
       const r = await editFlow(flow.name, { instruction, ...base, cwd }, ctl.signal);
       if (current() !== ctl) return;
       if (!r.changed) {
-        set({ aiMsg: { text: `ИИ ничего не поменял${r.summary ? `:\n${r.summary}` : ''}`, tone: '' } });
+        set({ aiMsg: { text: `${t('ИИ ничего не поменял')}${r.summary ? `:\n${r.summary}` : ''}`, tone: '' } });
         return;
       }
       const after = toEditable(r.spec);
@@ -192,7 +193,7 @@ function BuilderBar() {
       ai.seq = flowState.editSeq;
     } catch (err) {
       if (current() !== ctl) return;
-      set({ aiMsg: ctl.signal.aborted ? { text: 'Правка прервана', tone: '' } : { text: errorText(err), tone: 'err' } });
+      set({ aiMsg: ctl.signal.aborted ? { text: t('Правка прервана'), tone: '' } : { text: errorText(err), tone: 'err' } });
     } finally {
       if (current() === ctl) set({ aiAbort: null });
     }
@@ -212,7 +213,7 @@ function BuilderBar() {
         if (!flow.draft) await qc.invalidateQueries({ queryKey: keys.flows });
         return;
       }
-      const done = flow.draft ? 'Применено' : 'Сохранено';
+      const done = flow.draft ? t('Применено') : t('Сохранено');
       set({ bMsg: { text: done, tone: 'ok' } });
       setTimeout(() => {
         if (!flowState.dirty && flowState.bMsg.text === done) set({ bMsg: NO_MSG });
@@ -228,12 +229,12 @@ function BuilderBar() {
   return (
     <div className={styles.builderBar}>
       <form className={styles.aiEdit} onSubmit={(e) => void aiEdit(e)}>
-        <span className={styles.aiEditLabel} aria-hidden="true">ИИ</span>
+        <span className={styles.aiEditLabel} aria-hidden="true">{t('ИИ')}</span>
         <textarea
           name="instruction"
           rows={1}
-          aria-label="Правка с ИИ"
-          placeholder="Правка с ИИ: что поменять? Например, добавь этап ревью после реализации"
+          aria-label={t('Правка с ИИ')}
+          placeholder={t('Правка с ИИ: что поменять? Например, добавь этап ревью после реализации')}
           readOnly={busy}
           value={st.aiText}
           onChange={(e) => set({ aiText: e.target.value })}
@@ -241,19 +242,19 @@ function BuilderBar() {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void aiEdit(e);
           }}
         />
-        <button type="submit" className="btn" disabled={busy} title="Правки лягут в конструктор несохранёнными. ⌘/Ctrl+Enter">Изменить</button>
-        {busy && <button type="button" className="btn ghost" onClick={() => flowState.aiAbort?.abort()}>Прервать</button>}
+        <button type="submit" className="btn" disabled={busy} title={t('Правки лягут в конструктор несохранёнными. ⌘/Ctrl+Enter')}>{t('Изменить')}</button>
+        {busy && <button type="button" className="btn ghost" onClick={() => flowState.aiAbort?.abort()}>{t('Прервать')}</button>}
       </form>
       <div className={styles.builderSave} hidden={!st.spec}>
-        <span className={styles.dirty}>{st.dirty ? (draft ? 'есть неприменённые изменения' : 'есть несохранённые изменения') : ''}</span>
+        <span className={styles.dirty}>{st.dirty ? (draft ? t('есть неприменённые изменения') : t('есть несохранённые изменения')) : ''}</span>
         <button
           type="button"
           className="btn primary"
           disabled={!st.dirty}
-          title={draft ? 'Проверить и применить к черновику; в flows/ ничего не пишется' : 'Записать flow в flows/'}
+          title={draft ? t('Проверить и применить к черновику; в flows/ ничего не пишется') : t('Записать flow в flows/')}
           onClick={() => void save()}
         >
-          {draft ? 'Применить' : 'Сохранить'}
+          {draft ? t('Применить') : t('Сохранить')}
         </button>
       </div>
     </div>
@@ -267,7 +268,7 @@ function AiResult() {
   const ai = st.ai;
   if (!ai) return null;
   const undo = async () => {
-    if (flowState.editSeq !== ai.seq && !(await askConfirm('После правки ИИ ты менял конструктор. Отменить правку ИИ вместе с этими изменениями?', { ok: 'Отменить' }))) return;
+    if (flowState.editSeq !== ai.seq && !(await askConfirm(t('После правки ИИ ты менял конструктор. Отменить правку ИИ вместе с этими изменениями?'), { ok: t('Отменить', undefined, 'undo') }))) return;
     Object.assign(flowState, { spec: ai.undo.spec, dirty: ai.undo.dirty, ai: null, sel: null, graphSel: null });
     emit();
   };
@@ -286,17 +287,17 @@ function AiResult() {
   return (
     <div className={styles.aiResult}>
       <div>
-        <b>ИИ поменял flow</b>{' '}
+        <b>{t('ИИ поменял flow')}</b>{' '}
         <span className="muted small">
           · ≈{usd(ai.cost)} · {st.flow?.draft
-            ? 'не применено: проверь изменения (подсвечены зелёным на графе) и нажми «Применить» или сразу «Запустить»'
-            : 'не сохранено: проверь изменения (подсвечены зелёным на графе) и нажми «Сохранить»'}
+            ? t('не применено: проверь изменения (подсвечены зелёным на графе) и нажми «Применить» или сразу «Запустить»')
+            : t('не сохранено: проверь изменения (подсвечены зелёным на графе) и нажми «Сохранить»')}
         </span>
       </div>
       {ai.summary && <div className={styles.aiSummary}>{ai.summary}</div>}
       {ai.diff.lines.length > 0 && (
         <div className={styles.aiDiff}>
-          <div className={styles.pLabel}>Что изменилось в полях</div>
+          <div className={styles.pLabel}>{t('Что изменилось в полях')}</div>
           <ul>
             {ai.diff.lines.map((l, k) => (
               <li key={k} data-phase={l.phase} onClick={l.phase ? () => toPhase(l.phase!) : undefined}>{l.text}</li>
@@ -304,8 +305,8 @@ function AiResult() {
           </ul>
         </div>
       )}
-      {ai.stale && <p className="msg err">Правки в конструкторе, сделанные пока ИИ работал, в результат не вошли: «Отменить правку» вернёт их.</p>}
-      <div className="row"><button type="button" className="btn" onClick={() => void undo()}>Отменить правку</button></div>
+      {ai.stale && <p className="msg err">{t('Правки в конструкторе, сделанные пока ИИ работал, в результат не вошли: «Отменить правку» вернёт их.')}</p>}
+      <div className="row"><button type="button" className="btn" onClick={() => void undo()}>{t('Отменить правку')}</button></div>
     </div>
   );
 }
@@ -319,14 +320,14 @@ function BuilderList({ spec }: { spec: EditSpec }) {
   };
   return (
     <div className={styles.builder}>
-      <div className={styles.builderListHead}><span className={styles.runLabel}>Все поля списком</span><span className="muted small">клик по узлу на графе открывает его справа</span></div>
+      <div className={styles.builderListHead}><span className={styles.runLabel}>{t('Все поля списком')}</span><span className="muted small">{t('клик по узлу на графе открывает его справа')}</span></div>
       <div className="panel">
         <label>
-          <span>Описание flow</span>
-          <input id="b-description" {...flowField('description')} value={spec.description || ''} placeholder="Что делает этот flow" onChange={(e) => { spec.description = e.target.value; markDirty(); }} />
+          <span>{t('Описание flow')}</span>
+          <input id="b-description" {...flowField('description')} value={spec.description || ''} placeholder={t('Что делает этот flow')} onChange={(e) => { spec.description = e.target.value; markDirty(); }} />
         </label>
         <label>
-          <span title="Подставится в {{input}}; при запуске можно переписать">Задача по умолчанию</span>
+          <span title={t('Подставится в {{input}}; при запуске можно переписать')}>{t('Задача по умолчанию')}</span>
           <textarea id="b-input" {...flowField('input')} rows={3} value={spec.input || ''} onChange={(e) => { spec.input = e.target.value; markDirty(); }} />
         </label>
       </div>
@@ -341,9 +342,9 @@ function BuilderList({ spec }: { spec: EditSpec }) {
             afterRender(() => document.getElementById(`bblock-${spec.blocks.length - 1}`)?.scrollIntoView({ behavior: 'smooth' }));
           }}
         >
-          Добавить блок
+          {t('Добавить блок')}
         </button>
-        <span className="muted small" title="Например, ещё один цикл со своим условием">начнётся, когда закончится предыдущий блок</span>
+        <span className="muted small" title={t('Например, ещё один цикл со своим условием')}>{t('начнётся, когда закончится предыдущий блок')}</span>
       </div>
     </div>
   );
@@ -356,11 +357,11 @@ function ArtifactsDecl({ spec }: { spec: EditSpec }) {
   if (!on || !entries.length) return null;
   return (
     <div className={cx('panel', styles.artDecl)} id="b-art-decl">
-      <div className={styles.artDeclHead}><h3>Артефакты</h3><span className="muted small">только просмотр: правка — во вкладке YAML</span></div>
+      <div className={styles.artDeclHead}><h3>{t('Артефакты')}</h3><span className="muted small">{t('только просмотр: правка — во вкладке YAML')}</span></div>
       <ul>
         {entries.map(([key, a]) => {
           const lines = a.initial ? String(a.initial).split('\n').filter((x, i, all) => i < all.length - 1 || x).length : 0;
-          const notes = [a.file || `${key}.md`, a.initial !== undefined ? `заготовка: ${lines} ${plural(lines, 'строка', 'строки', 'строк')}` : 'создаётся пустым', a.decisions ? 'сюда пишутся ответы на паузы' : ''].filter(Boolean);
+          const notes = [a.file || `${key}.md`, a.initial !== undefined ? t('заготовка: {n} {word}', { n: lines, word: plural(lines, 'строка', 'строки', 'строк') }) : t('создаётся пустым'), a.decisions ? t('сюда пишутся ответы на паузы') : ''].filter(Boolean);
           return <li key={key}><b>{a.title || key}</b> <code>{key}</code> <span className="muted small">{notes.join(' · ')}</span></li>;
         })}
       </ul>
@@ -374,25 +375,25 @@ type FieldInfo = { get: () => string; set: (v: string) => void; label: string; c
 function fieldInfo(spec: EditSpec, f: FieldKey): FieldInfo | null {
   if (f.scope === 'flow') {
     return f.key === 'description'
-      ? { get: () => spec.description || '', set: (v) => { spec.description = v; markDirty(); }, label: 'Описание flow', ctx: 'Flow', mono: false, input: true, placeholder: 'Что делает этот flow' }
-      : { get: () => spec.input || '', set: (v) => { spec.input = v; markDirty(); }, label: 'Задача по умолчанию', ctx: 'Flow', mono: false, input: false, placeholder: '' };
+      ? { get: () => spec.description || '', set: (v) => { spec.description = v; markDirty(); }, label: t('Описание flow'), ctx: 'Flow', mono: false, input: true, placeholder: t('Что делает этот flow') }
+      : { get: () => spec.input || '', set: (v) => { spec.input = v; markDirty(); }, label: t('Задача по умолчанию'), ctx: 'Flow', mono: false, input: false, placeholder: '' };
   }
   const bi = spec.blocks.indexOf(f.block);
   if (bi < 0) return null;
   const b = f.block;
   const u = b.loop?.until;
-  const ctx = isMulti(spec) ? blockHeading(b, bi) : 'Цикл';
+  const ctx = isMulti(spec) ? blockHeading(b, bi) : t('Цикл');
   switch (f.key) {
     case 'title':
-      return { get: () => b.title || '', set: (v) => { b.title = v; markDirty(); }, label: 'Название блока', ctx, mono: false, input: true, placeholder: 'Название блока' };
+      return { get: () => b.title || '', set: (v) => { b.title = v; markDirty(); }, label: t('Название блока'), ctx, mono: false, input: true, placeholder: t('Название блока') };
     case 'until-run':
-      return u ? { get: () => u.run || '', set: (v) => { u.run = v; markDirty(); }, label: 'Команда (её вывод уйдёт в {{feedback}})', ctx, mono: false, input: true, placeholder: 'npm test' } : null;
+      return u ? { get: () => u.run || '', set: (v) => { u.run = v; markDirty(); }, label: t('Команда (её вывод уйдёт в {{feedback}})'), ctx, mono: false, input: true, placeholder: 'npm test' } : null;
     case 'until-prompt':
-      return u ? { get: () => u.prompt || '', set: (v) => { u.prompt = v; markDirty(); }, label: 'Рубрика судьи', ctx, mono: true, input: false, placeholder: '' } : null;
+      return u ? { get: () => u.prompt || '', set: (v) => { u.prompt = v; markDirty(); }, label: t('Рубрика судьи'), ctx, mono: true, input: false, placeholder: '' } : null;
     case 'until-marker':
-      return u ? { get: () => u.marker || '', set: (v) => { u.marker = v; markDirty(); }, label: 'Маркер', ctx, mono: false, input: true, placeholder: '<DONE>' } : null;
+      return u ? { get: () => u.marker || '', set: (v) => { u.marker = v; markDirty(); }, label: t('Маркер'), ctx, mono: false, input: true, placeholder: '<DONE>' } : null;
     case 'knowledge':
-      return { get: () => knowledgeDraft.get(b) || '', set: (v) => { knowledgeDraft.set(b, v); emit(); }, label: 'Теги знаний', ctx, mono: false, input: true, placeholder: 'выбери из списка или впиши слаг и нажми Enter: qa' };
+      return { get: () => knowledgeDraft.get(b) || '', set: (v) => { knowledgeDraft.set(b, v); emit(); }, label: t('Теги знаний'), ctx, mono: false, input: true, placeholder: t('выбери из списка или впиши слаг и нажми Enter: qa') };
   }
 }
 
@@ -431,20 +432,20 @@ function Inspector({ paneRef }: { paneRef: RefObject<HTMLElement | null> }) {
   if (phaseAt) {
     const p = spec.blocks[phaseAt.b]!.phases[phaseAt.i]!;
     ctx = isMulti(spec) ? blockHeading(spec.blocks[phaseAt.b]!, phaseAt.b) : 'Flow';
-    label = `Этап ${phaseNum(spec, phaseAt.b, phaseAt.i)} · ${p.title || p.name}`;
+    label = t('Этап {num} · {title}', { num: phaseNum(spec, phaseAt.b, phaseAt.i), title: p.title || p.name });
   } else if (blockAt >= 0) ({ ctx, label } = blockPaneTitles(spec, blockAt));
   else if (field) ({ ctx, label } = field);
   const v = field?.get() ?? '';
 
   return (
-    <aside ref={paneRef} className={cx('big-editor', styles.focusPane)} aria-label="Выбранное в конструкторе">
+    <aside ref={paneRef} className={cx('big-editor', styles.focusPane)} aria-label={t('Выбранное в конструкторе')}>
       <div className="focus-head">
         <div className="focus-titles">
           <div className="focus-ctx">{ctx}</div>
           <div className="focus-label">{label}</div>
         </div>
-        {field && <span className="muted small">строк: {v ? v.split('\n').length : 0} · знаков: {v.length}</span>}
-        <button type="button" className="btn ghost small insp-close" title="Закрыть (Esc)" aria-label="Закрыть" onClick={clearSel}>×</button>
+        {field && <span className="muted small">{t('строк: {lines} · знаков: {chars}', { lines: v ? v.split('\n').length : 0, chars: v.length })}</span>}
+        <button type="button" className="btn ghost small insp-close" title={t('Закрыть (Esc)')} aria-label={t('Закрыть')} onClick={clearSel}>×</button>
       </div>
       {field && (
         <textarea

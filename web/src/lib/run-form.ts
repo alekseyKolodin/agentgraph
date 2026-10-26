@@ -3,6 +3,7 @@
 // «Дополнительно», привязка к задаче, MR/PR или ветке и worktree, тело POST /api/runs.
 import type { FlowSummary, PhaseSummary, ProjectInfo, RecentDir, RunSource, RunWorktree, TagDetail, TagKind, TagListItem } from '@server/api-types';
 import { plural } from './format';
+import { t } from './i18n';
 import { mrSign } from './dash';
 import { CONN_PREFIX } from './flow/tools';
 import { iterTo } from './graph/text';
@@ -17,7 +18,7 @@ export const ATTACH_ACCEPT = ATTACH_EXTS.map((e) => '.' + e).join(',');
 
 export type Attach = { id: number; name: string; size: number; data: string };
 
-export const fileSize = (n: number): string => (n < 1024 ? `${n} Б` : n < 1024 * 1024 ? `${Math.round(n / 1024)} КБ` : `${(n / 1024 / 1024).toFixed(1)} МБ`);
+export const fileSize = (n: number): string => (n < 1024 ? t('{n} Б', { n }) : n < 1024 * 1024 ? t('{n} КБ', { n: Math.round(n / 1024) }) : t('{n} МБ', { n: (n / 1024 / 1024).toFixed(1) }));
 
 /** У скриншота из буфера имя всегда image.png: даём своё, сервер всё равно разведёт дубли. */
 export const attachName = (name: string, now: Date = new Date()): string =>
@@ -27,15 +28,15 @@ export const attachName = (name: string, now: Date = new Date()): string =>
 export function attachTypeError(name: string, size: number): string | undefined {
   const bare = name.trim().replace(/^\.+/, '');
   const ext = bare.split('.').pop()!.toLowerCase();
-  if (!bare.includes('.') || !ATTACH_EXTS.includes(ext)) return `${name}: такой тип не поддерживается`;
-  if (size > ATTACH_FILE_MAX) return `${name}: больше 10 МБ`;
+  if (!bare.includes('.') || !ATTACH_EXTS.includes(ext)) return t('{name}: такой тип не поддерживается', { name });
+  if (size > ATTACH_FILE_MAX) return t('{name}: больше 10 МБ', { name });
   return undefined;
 }
 
 /** Отказ по сумме и числу: проверяется до чтения и ещё раз после — пока файл читался, другое перетаскивание могло добавить свои. */
 export function attachOverLimit(list: { size: number }[], name: string, size: number): string | undefined {
-  if (list.reduce((n, a) => n + a.size, 0) + size > ATTACH_TOTAL_MAX) return `${name}: вложения вместе больше 25 МБ`;
-  if (list.length >= ATTACH_COUNT_MAX) return `${name}: больше ${ATTACH_COUNT_MAX} файлов нельзя`;
+  if (list.reduce((n, a) => n + a.size, 0) + size > ATTACH_TOTAL_MAX) return t('{name}: вложения вместе больше 25 МБ', { name });
+  if (list.length >= ATTACH_COUNT_MAX) return t('{name}: больше {max} файлов нельзя', { name, max: ATTACH_COUNT_MAX });
   return undefined;
 }
 
@@ -46,12 +47,15 @@ export const summaryPhases = (summary: FlowSummary | undefined): PhaseSummary[] 
 /** Пути вложений получают все этапы, но открыть их может только этап с Read: «Этапы a, b без Read вложений не увидят». */
 export function attachWarn(summary: FlowSummary | undefined): string {
   const blind = summaryPhases(summary).filter((p) => !(p.tools || []).includes('Read')).map((p) => p.title || p.name);
-  return blind.length ? `${plural(blind.length, 'Этап', 'Этапы', 'Этапы')} ${blind.join(', ')} без Read вложений ${blind.length === 1 ? 'не увидит' : 'не увидят'}` : '';
+  if (!blind.length) return '';
+  return blind.length === 1
+    ? t('Этап {names} без Read вложений не увидит', { names: blind.join(', ') })
+    : t('{phases} {names} без Read вложений не увидят', { phases: plural(blind.length, 'Этап', 'Этапы', 'Этапы'), names: blind.join(', ') });
 }
 
 // ---------- ссылка на Jira, Confluence или Slack во входе
 
-export const CONN_WARN_TEXT = 'Во входе ссылка на Jira, Confluence или Slack, но коннекторы claude.ai не получит ни один этап этого flow: открыть её агент не сможет. Выдай инструменты коннектора нужному этапу в конструкторе (строка «Коннекторы claude.ai») или вставь текст задачи вместо ссылки.';
+export const CONN_WARN_TEXT = t('Во входе ссылка на Jira, Confluence или Slack, но коннекторы claude.ai не получит ни один этап этого flow: открыть её агент не сможет. Выдай инструменты коннектора нужному этапу в конструкторе (строка «Коннекторы claude.ai») или вставь текст задачи вместо ссылки.');
 const CONN_OPEN_MODES = ['bypassPermissions', 'auto'];
 
 /**
@@ -68,31 +72,31 @@ export function connWarn(input: string, summary: FlowSummary | undefined): boole
 // ---------- теги
 
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const TAG_SLUG_ERROR = 'Слаг тега: строчные латинские буквы, цифры и дефис';
-export const KIND_LABEL: Record<TagKind, string> = { task: 'задача', knowledge: 'знание' };
+export const TAG_SLUG_ERROR = t('Слаг тега: строчные латинские буквы, цифры и дефис');
+export const KIND_LABEL: Record<TagKind, string> = { task: t('задача'), knowledge: t('знание') };
 
 /** Выбранный тег с сервера; у нового (404) записи нет — он заведётся тегом задачи. */
 export type TagInfo = { kind: TagKind; title: string; input: string };
 
 /** Подсказка в datalist поля «Теги»: «задача · заголовок». */
-export const tagOptionLabel = (t: TagListItem): string =>
-  `${KIND_LABEL[t.kind] || 'задача'} · ${t.title || t.preview.split('\n')[0] || (t.kind === 'knowledge' ? 'заметок ещё нет' : 'саммари ещё нет')}`;
+export const tagOptionLabel = (tag: TagListItem): string =>
+  `${KIND_LABEL[tag.kind] || t('задача')} · ${tag.title || tag.preview.split('\n')[0] || (tag.kind === 'knowledge' ? t('заметок ещё нет') : t('саммари ещё нет'))}`;
 
 /** Сообщение под тегами после добавления. */
 export const tagAddedMsg = (slug: string, r: TagDetail): string =>
   r.kind === 'knowledge'
-    ? `${slug}: тег знаний — ${r.notes.trim() || r.attachments.length || (r.dirs || []).length ? 'этапы получат его знание' : 'тег пуст'}`
-    : `${slug}: ${r.summary.trim() || r.notes.trim() ? 'встанет в задачу' : 'саммари ещё нет'} · запусков: ${r.runs.length}`;
+    ? t('{slug}: тег знаний — {state}', { slug, state: r.notes.trim() || r.attachments.length || (r.dirs || []).length ? t('этапы получат его знание') : t('тег пуст') })
+    : t('{slug}: {state} · запусков: {n}', { slug, state: r.summary.trim() || r.notes.trim() ? t('встанет в задачу') : t('саммари ещё нет'), n: r.runs.length });
 
-export const tagNewMsg = (slug: string): string => `${slug}: новый тег — заведётся при запуске`;
+export const tagNewMsg = (slug: string): string => t('{slug}: новый тег — заведётся при запуске', { slug });
 
 /** Панель «что сервер вставит» по тегу: текст блока без маркеров и куда он уйдёт. */
 export function tagContext(info: TagInfo | undefined): { text: string; where: string; kind: TagKind } {
   const kind = info?.kind || 'task';
   return {
     kind,
-    text: info ? info.input.replace(/<!-- \/?tag(?::[a-z0-9-]+)? -->\n?/g, '') : 'Новый тег: заведётся при запуске как тег задачи, саммари ещё нет.',
-    where: kind === 'knowledge' ? 'уйдёт в конец промптов этапов каждого блока' : 'встанет в начало задачи',
+    text: info ? info.input.replace(/<!-- \/?tag(?::[a-z0-9-]+)? -->\n?/g, '') : t('Новый тег: заведётся при запуске как тег задачи, саммари ещё нет.'),
+    where: kind === 'knowledge' ? t('уйдёт в конец промптов этапов каждого блока') : t('встанет в начало задачи'),
   };
 }
 
@@ -118,7 +122,7 @@ export function appendDir(text: string, dir: string): string {
 export type RunLink = { source?: RunSource; branch?: string; project?: string; worktree?: RunWorktree };
 
 /** «Задача», «MR» или «PR» (по ключу: owner/repo#N — GitHub), «Ветка». */
-export const sourceLabel = (s: RunSource): string => (s.type === 'jira' ? 'Задача' : s.type === 'mr' ? (mrSign(s.key) === '#' ? 'PR' : 'MR') : 'Ветка');
+export const sourceLabel = (s: RunSource): string => (s.type === 'jira' ? t('Задача') : s.type === 'mr' ? (mrSign(s.key) === '#' ? 'PR' : 'MR') : t('Ветка'));
 
 /** Проект в выборе worktree: из привязки, по директории проекта, иначе первый. */
 export function worktreeProject(projects: Pick<ProjectInfo, 'path'>[], link: RunLink | null, cwd: string): string {
@@ -166,15 +170,15 @@ export type MoreSumInput = {
 /** Заголовок свёрнутого «Дополнительно»: что там задано не по умолчанию, чтобы скрытое не забылось. */
 export function runMoreSum(f: MoreSumInput): { text: string; set: boolean } {
   const parts: string[] = [];
-  if (f.tags.length) parts.push(f.tags.map((t) => `#${t}`).join(' '));
+  if (f.tags.length) parts.push(f.tags.map((tag) => `#${tag}`).join(' '));
   if (f.attach) parts.push(`${f.attach} ${plural(f.attach, 'файл', 'файла', 'файлов')}`);
   const dirs = f.addDirs.split('\n').filter((x) => x.trim()).length;
-  if (dirs) parts.push(`доп. директорий: ${dirs}`);
+  if (dirs) parts.push(t('доп. директорий: {n}', { n: dirs }));
   if (f.worktree) parts.push('worktree');
-  if (f.maxIterations && f.maxIterations !== String(f.flowMaxIterations ?? '')) parts.push(`до ${iterTo(Number(f.maxIterations))}`);
-  if (f.budget) parts.push(`до $${f.budget}`);
+  if (f.maxIterations && f.maxIterations !== String(f.flowMaxIterations ?? '')) parts.push(t('до {n}', { n: iterTo(Number(f.maxIterations)) }));
+  if (f.budget) parts.push(t('до {n}', { n: `$${f.budget}` }));
   if (f.modelLabel) parts.push(f.modelLabel);
-  return parts.length ? { text: parts.join(' · '), set: true } : { text: 'теги, вложения, директории, worktree, лимиты, модель', set: false };
+  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('теги, вложения, директории, worktree, лимиты, модель'), set: false };
 }
 
 export type RunBodyInput = {

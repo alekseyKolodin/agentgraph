@@ -2,6 +2,7 @@
 // запусков, «Сейчас» в сайдбаре и сбор ответа на вопрос агента. Без React и DOM.
 import type { AskAnswers, AskQuestion, HomeCond, HomeRun, QuestionRecord } from '@server/api-types';
 import { ago, excerpt, usd } from './format';
+import { t } from './i18n';
 
 /** Подряд одинаковых провалов в конце, после которых запуск «буксует» (как в ленте страницы запуска). */
 export const STUCK_MIN = 5;
@@ -22,7 +23,7 @@ export const docTitle = (questions: number, run = ''): string => `${questions ? 
 
 /** Подпись под «Главная»: «идут 2 · вопросов 1 · ≈$0.42»; без запусков — пусто. */
 export const homeMeta = (runs: HomeRun[], questions: number): string =>
-  runs.length ? `идут ${runs.length} · вопросов ${questions} · ≈${usd(runs.reduce((n, r) => n + r.totalCostUsd, 0))}` : '';
+  runs.length ? t('идут {n} · вопросов {q} · ≈{cost}', { n: runs.length, q: questions, cost: usd(runs.reduce((n, r) => n + r.totalCostUsd, 0)) }) : '';
 
 /** Подряд одинаковые провалы в конце: «буксует», если их STUCK_MIN и больше. */
 export function homeStuck(conds: HomeCond[]): { from: number; to: number; text: string } | null {
@@ -41,8 +42,8 @@ export function homeStuck(conds: HomeCond[]): { from: number; to: number; text: 
 
 /** «этапы «a», «b»» у параллельной группы, «этап «a»» у одного, пусто между шагами. */
 function nowText(r: Pick<Partial<HomeRun>, 'running' | 'current'>): string {
-  if (r.running && r.running.length > 1) return `этапы ${r.running.map((x) => `«${x.title}»`).join(', ')}`;
-  return r.current ? `этап «${r.current.title}»` : '';
+  if (r.running && r.running.length > 1) return t('этапы {list}', { list: r.running.map((x) => t('«{title}»', { title: x.title })).join(', ') });
+  return r.current ? t('этап «{title}»', { title: r.current.title }) : '';
 }
 
 export type HomeRunView = {
@@ -69,7 +70,7 @@ export function homeRunView(r: HomeRun, project: string, artifacts: boolean, now
   const conds = r.conds || [];
   const last = conds.at(-1);
   const current = nowText(r);
-  const where = [multi && cur ? `блок ${blocks.indexOf(cur) + 1}/${blocks.length}` : '', cur?.looped ? `итер. ${cur.iterations}/${cur.maxIterations}` : '']
+  const where = [multi && cur ? t('блок {i}/{n}', { i: blocks.indexOf(cur) + 1, n: blocks.length }) : '', cur?.looped ? t('итер. {i}/{n}', { i: cur.iterations, n: cur.maxIterations }) : '']
     .filter(Boolean)
     .join(' · ');
   const stuck = cur?.looped ? homeStuck(conds) : null;
@@ -77,19 +78,19 @@ export function homeRunView(r: HomeRun, project: string, artifacts: boolean, now
   let sum: string;
   if (r.status === 'waiting') {
     tone = 'wait';
-    sum = `Ждёт ответа${current ? `: ${current}` : ''} — вопрос выше`;
+    sum = current ? t('Ждёт ответа: {current} — вопрос выше', { current }) : t('Ждёт ответа — вопрос выше');
   } else if (r.pause === 'paused') {
     tone = 'wait';
-    sum = `На паузе${r.pauseReason ? `: этап «${r.pauseReason.phase}» попросил остановиться` : ''}`;
+    sum = r.pauseReason ? t('На паузе: этап «{phase}» попросил остановиться', { phase: r.pauseReason.phase }) : t('На паузе');
   } else if (stuck) {
     tone = 'wait';
-    sum = `Буксует: итерации ${stuck.from}–${stuck.to} падают с одним и тем же — «${stuck.text}»`;
+    sum = t('Буксует: итерации {from}–{to} падают с одним и тем же — «{text}»', { from: stuck.from, to: stuck.to, text: stuck.text });
   } else {
     // сводка модели «где мы» важнее вердикта: в ней он уже пересказан; без неё — итог или начало замечаний
-    const why = last && !last.done && cur?.looped ? `итерация ${last.iteration} не прошла: «${last.summary || excerpt(last.text, 120)}»` : '';
-    sum = [current ? `Сейчас ${current}` : 'Между шагами', r.digest?.text || why].filter(Boolean).join(' · ');
+    const why = last && !last.done && cur?.looped ? t('итерация {n} не прошла: «{text}»', { n: last.iteration, text: last.summary || excerpt(last.text, 120) }) : '';
+    sum = [current ? t('Сейчас {current}', { current }) : t('Между шагами'), r.digest?.text || why].filter(Boolean).join(' · ');
   }
-  if (r.pause === 'requested') sum += ' · пауза после шага';
+  if (r.pause === 'requested') sum += ` · ${t('пауза после шага')}`;
   // мини-лента: вердикты итераций идущего блока и текущая; длинная — последние 16
   const ticks: HomeRunView['ticks'] = cur?.looped ? [...conds.map((c): 'ok' | 'fail' => (c.done ? 'ok' : 'fail')), 'live' as const].slice(-16) : [];
   const since = ago(r.startedAt, now);
@@ -100,7 +101,7 @@ export function homeRunView(r: HomeRun, project: string, artifacts: boolean, now
     sum,
     ticks,
     cost: `${since} · ${usd(r.totalCostUsd)}`,
-    costTitle: `Идёт ${since} · оценка по прайсу API`,
+    costTitle: t('Идёт {since} · оценка по прайсу API', { since }),
     answer: artifacts && r.pause === 'paused' && Boolean(r.pauseReason) && Boolean(r.decisions),
   };
 }
@@ -115,11 +116,11 @@ export function sideLiveInfo(r: LiveSource): Omit<LiveRow, 'r'> {
   const cur = (r.blocks || []).find((b) => b.status === 'running');
   const it = cur?.looped ? `${cur.iterations}/${cur.maxIterations}` : '';
   const current = nowText(r);
-  if (r.status === 'waiting') return { tone: 'wait', sub: `ждёт ответа${current ? ` · ${current}` : ''}`, it };
-  if (r.pause === 'paused' || r.status === 'paused') return { tone: 'wait', sub: 'на паузе', it };
+  if (r.status === 'waiting') return { tone: 'wait', sub: `${t('ждёт ответа')}${current ? ` · ${current}` : ''}`, it };
+  if (r.pause === 'paused' || r.status === 'paused') return { tone: 'wait', sub: t('на паузе'), it };
   const stuck = cur?.looped ? homeStuck(r.conds || []) : null;
-  if (stuck) return { tone: 'wait', sub: `буксует: итерации ${stuck.from}–${stuck.to}`, it };
-  return { tone: 'live', sub: current || 'между шагами', it };
+  if (stuck) return { tone: 'wait', sub: t('буксует: итерации {from}–{to}', { from: stuck.from, to: stuck.to }), it };
+  return { tone: 'live', sub: current || t('между шагами'), it };
 }
 
 /** Строки «Сейчас»: ждущие тебя — первыми. */
@@ -131,7 +132,7 @@ export function liveRows(src: LiveSource[]): LiveRow[] {
 export function liveCount(rows: LiveRow[]): { text: string; wait: boolean } {
   const waits = rows.filter((x) => x.tone === 'wait').length;
   return {
-    text: [waits ? `ждут ${waits}` : '', rows.length > waits ? `идут ${rows.length - waits}` : ''].filter(Boolean).join(' · '),
+    text: [waits ? t('ждут {n}', { n: waits }) : '', rows.length > waits ? t('идут {n}', { n: rows.length - waits }) : ''].filter(Boolean).join(' · '),
     wait: waits > 0,
   };
 }
@@ -143,7 +144,7 @@ export const liveRowTitle = ({ r, sub }: LiveRow): string => `${r.title || r.flo
 
 /** Где спросил агент: «блок b · этап «Ревью» · итерация 2». Блок — только у многоблочного flow. */
 export const questionWhere = (q: QuestionRecord, run: Partial<Pick<HomeRun, 'blocks'>>): string =>
-  [(run.blocks?.length ?? 0) > 1 ? `блок ${q.block}` : '', `этап «${q.title || q.phase}»`, `итерация ${q.iteration}`].filter(Boolean).join(' · ');
+  [(run.blocks?.length ?? 0) > 1 ? t('блок {b}', { b: q.block }) : '', t('этап «{title}»', { title: q.title || q.phase }), t('итерация {n}', { n: q.iteration })].filter(Boolean).join(' · ');
 
 /** Итог прошлой итерации для контекста вопроса на главной: только если условие не выполнено. */
 export function questionLastCond(q: QuestionRecord, run: Partial<Pick<HomeRun, 'conds'>>): HomeCond | null {
@@ -183,7 +184,7 @@ export function collectAnswers(questions: AskQuestion[], picked: string[][], oth
 
 /** Текст подтверждения, когда свой ответ написан, но не выбран. */
 export const ignoredConfirmText = (ignored: string[]): string =>
-  `Свой ответ написан, но не выбран — он не уйдёт агенту:\n${ignored.map((x) => `• ${x}`).join('\n')}\nОтправить без него?`;
+  t('Свой ответ написан, но не выбран — он не уйдёт агенту:\n{list}\nОтправить без него?', { list: ignored.map((x) => `• ${x}`).join('\n') });
 
 /** Ответ ушёл: убираем вопрос из входящих сразу, не дожидаясь события. */
 export const withoutQuestion = (runs: HomeRun[], runId: string, qid: string): HomeRun[] =>

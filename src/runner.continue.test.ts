@@ -68,8 +68,17 @@ test('done после незавершённого блока не пропус�
 test('живой, завершённый целиком или без единого done-блока запуск не продолжается', () => {
   assert.throws(() => continuationFrom(report({ status: 'running' }), spec, files), /ещё идёт/);
   assert.throws(() => continuationFrom(report({ status: 'done' }), spec, files), /продолжать нечего/);
-  const none = report({ blocks: [{ name: 'plan', status: 'max_iterations' }] as RunReport['blocks'] });
+  const none = report({ status: 'failed', blocks: [{ name: 'plan', status: 'failed' }] as RunReport['blocks'] });
   assert.throws(() => continuationFrom(none, spec, files), /не завершён/);
+});
+
+test('первый блок упёрся в лимит итераций — продолжение идёт с него, без выводов и {{prev}}', () => {
+  const r = report({ blocks: [{ name: 'plan', status: 'max_iterations' }] as RunReport['blocks'] });
+  const c = continuationFrom(r, spec, files);
+  assert.deepEqual(c.skipBlocks, []);
+  assert.deepEqual(c.phases, {});
+  assert.equal(c.prev, '');
+  assert.deepEqual(c.history, []);
 });
 
 test('нет файла вывода пропускаемого этапа — ошибка, а не пустой {{phases.*}}', () => {
@@ -136,7 +145,10 @@ test('canContinue — тот же ответ, что continuationFrom, без ч
   for (const status of ['aborted', 'failed', 'budget_exceeded'] as const) assert.deepEqual(skip(report({ status })), ['plan', 'setup'], status);
   assert.match(String(skip(report({ status: 'running' }))), /ещё идёт/);
   assert.match(String(skip(report({ status: 'done' }))), /продолжать нечего/);
-  assert.match(String(skip(report({ blocks: [{ name: 'plan', status: 'max_iterations' }] as RunReport['blocks'] }))), /Первый блок «plan» не завершён/);
+  assert.deepEqual(skip(report({ blocks: [{ name: 'plan', status: 'max_iterations' }] as RunReport['blocks'] })), []);
+  for (const status of ['failed', 'aborted', 'budget_exceeded', 'interrupted'] as const) {
+    assert.match(String(skip(report({ status, blocks: [{ name: 'plan', status }] as RunReport['blocks'] }))), /Первый блок «plan» не завершён/, status);
+  }
   const all = report({ blocks: spec.blocks!.map((b) => ({ name: b.name, status: 'done' })) as RunReport['blocks'] });
   assert.match(String(skip(all)), /Все блоки flow уже завершены/);
   // файлы выводов canContinue не нужны: continuationFrom падает на них позже, а canContinue — нет
@@ -155,11 +167,11 @@ test('разовый многоблочный запуск продолжает�
   assert.deepEqual(continuationFrom(prev, snap, files).skipBlocks, ['plan', 'setup']);
 });
 
-test('разовый одноблочный запуск не продолжается — с той же причиной, что обычный', () => {
+test('одноблочный запуск продолжается, только если блок упёрся в лимит итераций — у разового так же', () => {
   const one = { name: 'one', phases: [{ name: 'a', tools: [], prompt: '' }] } as unknown as FlowSpec;
-  const blocks = [{ name: 'main', status: 'max_iterations' }];
-  const adhoc = canContinue({ status: 'max_iterations', blocks } as unknown as RunReport, one);
-  const plain = canContinue({ status: 'max_iterations', blocks } as unknown as RunReport, one);
-  assert.equal(adhoc.ok, false);
-  assert.deepEqual(adhoc, plain);
+  const at = (status: string, adhoc?: true) => canContinue({ status, blocks: [{ name: 'main', status }], ...(adhoc ? { adhoc } : {}) } as unknown as RunReport, one);
+  assert.deepEqual(at('max_iterations', true), { ok: true, skip: [] });
+  assert.deepEqual(at('max_iterations', true), at('max_iterations'));
+  assert.equal(at('failed').ok, false);
+  assert.equal(at('aborted', true).ok, false);
 });
