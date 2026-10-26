@@ -1,6 +1,8 @@
 // Поля конструктора, которые в старом UI жили своим DOM: правка пишется в этап на ввод или по change (blur, Enter),
 // а значение поля не перерисовывается, пока в нём фокус (иначе id-слаг, «Лимит итераций» → 1 и пустые строки путей сбивали бы ввод).
 import { useEffect, useRef, useState, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { PickDirButton } from '../../components/PickDirButton';
+import { t } from '../../lib/i18n';
 
 type Common = {
   value: string;
@@ -78,5 +80,26 @@ export function DraftTextarea({ value, onInput, onFocus, onBlur, ...rest }: Omit
         onBlur?.(e);
       }}
     />
+  );
+}
+
+/** «Плагины» блока или этапа: папки локальных плагинов Claude Code по одной на строку, как --plugin-dir. */
+export function PluginsField({ value, onChange, hint }: { value: string[] | undefined; onChange: (dirs: string[] | undefined) => void; hint: string }) {
+  return (
+    <label>
+      <span title={hint}>{t('Плагины Claude Code')}</span>
+      <div className="path-field">
+        <DraftTextarea
+          rows={2}
+          placeholder="~/plugins/qa-tools"
+          value={(value || []).join('\n')}
+          onInput={(v) => {
+            const dirs = v.split('\n').map((x) => x.trim()).filter(Boolean);
+            onChange(dirs.length ? dirs : undefined);
+          }}
+        />
+        <PickDirButton prompt={t('Выбери папку плагина Claude Code')} start={() => value?.at(-1) ?? ''} onPick={(path) => onChange([...(value || []), path])} />
+      </div>
+    </label>
   );
 }

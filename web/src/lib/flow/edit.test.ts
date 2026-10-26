@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSpec } from '@server/schema';
 import {
-  addPhaseAfter, collectSpec, duplicatePhase, insertVar, movePhase, newBlock, newPhase, phaseInputs, renamePhase, setBlockMode, specChanges,
+  addPhaseAfter, advLabel, collectSpec, duplicatePhase, insertVar, movePhase, newBlock, newPhase, phaseInputs, renamePhase, setBlockMode, specChanges,
   SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
 import { schemeSummary } from './summary';
@@ -220,4 +220,11 @@ test('specChanges: правка плагинов этапа и блока вид
   const before = spec([{ name: 'a', phases: [ph('x')] }]);
   const after = spec([{ name: 'a', plugins: ['~/qa'], phases: [ph('x', { plugins: ['/p'] })] }]);
   assert.deepEqual(specChanges(before, after).lines.map((l) => l.text), ['Блок «a»: плагины', 'Этап x: плагины']);
+});
+
+test('collectSpec: плагины из конструктора — без пустых строк и пробелов; advLabel считает плагины', () => {
+  const out = collectSpec(spec([{ name: 'm', plugins: [' ~/qa ', ''], phases: [ph('x', { plugins: ['/p', '  '] })] }])) as { blocks: Record<string, unknown>[] };
+  assert.deepEqual(out.blocks[0]!.plugins, ['~/qa']);
+  assert.deepEqual((out.blocks[0]!.phases as Record<string, unknown>[])[0]!.plugins, ['/p']);
+  assert.equal(advLabel(ph('x', { plugins: ['/p'], add_dirs: ['/d'] })), 'Дополнительно · директорий: 1 · плагинов: 1');
 });

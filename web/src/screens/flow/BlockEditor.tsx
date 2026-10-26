@@ -9,7 +9,7 @@ import {
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { bindField, dropStaleSel, openPhasePane, sameField } from './actions';
-import { DraftInput } from './fields';
+import { DraftInput, PluginsField } from './fields';
 import { PhaseCard } from './PhaseCard';
 import { emit, flowState, knowledgeDraft, markDirty, useFlowStore, type BlockField, type FieldKey } from './store';
 import styles from './Flow.module.css';
@@ -313,6 +313,15 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
           </div>
         </div>
       )}
+      <PluginsField
+        value={b.plugins}
+        hint={t('Плагины для всех этапов блока, по папке на строку (как --plugin-dir): скиллы, агенты, хуки и MCP плагина будут только в сессиях этого блока. Несуществующая папка роняет запуск до старта')}
+        onChange={(plugins) => {
+          if (plugins) b.plugins = plugins;
+          else delete b.plugins;
+          dirty();
+        }}
+      />
     </div>
   );
 }
