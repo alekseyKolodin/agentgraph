@@ -7,6 +7,7 @@ import { api, errorText, useFeature } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { projectLabels } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { homeRunView } from '../../lib/home';
 import { artResume } from '../run/artStore';
 import styles from './Home.module.css';
@@ -29,7 +30,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
     }
   };
   const abort = async (id: string) => {
-    if (!(await askConfirm('Остановить запуск? Текущая сессия будет прервана.', { ok: 'Остановить запуск', danger: true }))) return;
+    if (!(await askConfirm(t('Остановить запуск? Текущая сессия будет прервана.'), { ok: t('Остановить запуск'), danger: true }))) return;
     try {
       await api('POST', `/api/runs/${id}/abort`);
     } catch (err) {
@@ -51,7 +52,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
             key={r.id}
             className={`${styles.hrun} ${v.tone === 'wait' ? styles.wait : 'live'}`}
             tabIndex={0}
-            title="Открыть запуск"
+            title={t('Открыть запуск')}
             onClick={() => open(r.id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && e.target === e.currentTarget) open(r.id);
@@ -66,7 +67,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
               <div className={styles.hrunSum} title={v.sum}>{v.sum}</div>
             </div>
             {v.ticks.length > 0 && (
-              <span className={styles.hrunTicks} title="Итерации: ✓ прошла, ✕ не прошла, синяя — идёт">
+              <span className={styles.hrunTicks} title={t('Итерации: ✓ прошла, ✕ не прошла, синяя — идёт')}>
                 {v.ticks.map((st, i) => <span key={i} className={`${styles.rbTick} ${styles[st]}`} />)}
               </span>
             )}
@@ -76,18 +77,18 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
               {v.answer && (
                 <button
                   className="btn small primary"
-                  title={`Этап «${r.pauseReason!.phase}» ждёт решения: ответ допишется в артефакт решений`}
+                  title={t('Этап «{phase}» ждёт решения: ответ допишется в артефакт решений', { phase: r.pauseReason!.phase })}
                   onClick={act(() => void navigate(`/run/${r.id}`, { state: { focusAnswer: true } }))}
                 >
-                  Ответить
+                  {t('Ответить')}
                 </button>
               )}
               {r.pause ? (
-                <button className={`btn small ${v.answer ? '' : 'primary'}`} onClick={act(() => void pause(r.id, false))}>Возобновить</button>
+                <button className={`btn small ${v.answer ? '' : 'primary'}`} onClick={act(() => void pause(r.id, false))}>{t('Возобновить')}</button>
               ) : (
-                <button className="btn small ghost" title="Текущий этап доработает, следующий не начнётся" onClick={act(() => void pause(r.id, true))}>Пауза</button>
+                <button className="btn small ghost" title={t('Текущий этап доработает, следующий не начнётся')} onClick={act(() => void pause(r.id, true))}>{t('Пауза')}</button>
               )}
-              <button className="btn small ghost danger" title="Остановить запуск" onClick={act(() => void abort(r.id))}>Стоп</button>
+              <button className="btn small ghost danger" title={t('Остановить запуск')} onClick={act(() => void abort(r.id))}>{t('Стоп')}</button>
             </span>
           </li>
         );

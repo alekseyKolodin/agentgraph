@@ -7,6 +7,7 @@ import { errorText, postIntake, useFlows, type IntakeTarget } from '../../api';
 import { useToast } from '../../components/Toast';
 import { pickerFlows, pickerPosition } from '../../lib/dash';
 import { LS } from '../../lib/storage';
+import { t } from '../../lib/i18n';
 import styles from './Dash.module.css';
 
 /** Открытый выбор: у какой кнопки и для какого источника; seq — каждое открытие заново (пустой фильтр). */
@@ -31,7 +32,7 @@ export function useToFlow() {
       try {
         intake = await postIntake(name, target);
       } catch (err) {
-        toast(`Не удалось собрать вход: ${errorText(err)}`);
+        toast(t('Не удалось собрать вход: {error}', { error: errorText(err) }));
         return;
       }
       LS.setRaw(LAST_FLOW_KEY, name);
@@ -81,7 +82,7 @@ function PickerBox({ state, onClose }: { state: NonNullable<PickerState>; onClos
     <div ref={box} className={styles.flowPicker} data-flow-picker="">
       <input
         ref={input}
-        placeholder="Найти flow"
+        placeholder={t('Найти flow')}
         autoComplete="off"
         spellCheck={false}
         value={query}
@@ -100,7 +101,7 @@ function PickerBox({ state, onClose }: { state: NonNullable<PickerState>; onClos
             </li>
           ))
         ) : (
-          <li className="muted small">Ничего не нашлось</li>
+          <li className="muted small">{t('Ничего не нашлось')}</li>
         )}
       </ul>
     </div>

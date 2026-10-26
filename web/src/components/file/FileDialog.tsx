@@ -6,6 +6,7 @@ import { errorText, fetchRunFile, fetchTag } from '../../api';
 import { renderMarkdown } from '../../lib/md';
 import { fileIsMarkdown } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
+import { t } from '../../lib/i18n';
 import styles from './FileDialog.module.css';
 
 /** n — номер открытия: окно, закрытое Esc мимо состояния, открывается снова и при том же open. */
@@ -37,7 +38,7 @@ const useView = () =>
 /** Файл папки запуска. session — у транскрипта готового этапа: строка «claude --resume <session>». */
 export async function openRunFile(runId: string, file: string, title: string, session = ''): Promise<void> {
   const my = ++seq;
-  set({ open: true, n: view.n + 1, title: title || file, session, text: 'Загружаю…', md: false });
+  set({ open: true, n: view.n + 1, title: title || file, session, text: t('Загружаю…'), md: false });
   try {
     // no-store: у идущего этапа транскрипт растёт, при каждом открытии читаем заново
     const res = await fetchRunFile(runId, file, true);
@@ -50,10 +51,10 @@ export async function openRunFile(runId: string, file: string, title: string, se
 /** Саммари тега из карточки «Итог». */
 export async function openTagSummary(slug: string): Promise<void> {
   const my = ++seq;
-  set({ open: true, n: view.n + 1, title: `Саммари тега · ${slug}`, session: '', text: 'Загружаю…', md: false });
+  set({ open: true, n: view.n + 1, title: t('Саммари тега · {slug}', { slug }), session: '', text: t('Загружаю…'), md: false });
   try {
     const r = await fetchTag(slug);
-    if (my === seq) set({ text: r.summary || 'Саммари пока нет', md: true });
+    if (my === seq) set({ text: r.summary || t('Саммари пока нет'), md: true });
   } catch (err) {
     if (my === seq) set({ text: errorText(err), md: false });
   }
@@ -90,16 +91,16 @@ export function FileDialog() {
           {v.md && (
             <button
               className="btn ghost small"
-              title="Исходный текст файла — удобно копировать"
+              title={t('Исходный текст файла — удобно копировать')}
               onClick={() => setFileRaw(!raw)}
             >
-              {raw ? 'форматировать' : 'как текст'}
+              {raw ? t('форматировать') : t('как текст')}
             </button>
           )}
-          <button className="btn ghost" onClick={() => set({ open: false })}>Закрыть</button>
+          <button className="btn ghost" onClick={() => set({ open: false })}>{t('Закрыть')}</button>
         </span>
       </header>
-      {v.session && <p className={`${styles.fileSession} mono small`} title="Продолжить эту сессию в терминале из директории проекта запуска">{`claude --resume ${v.session}`}</p>}
+      {v.session && <p className={`${styles.fileSession} mono small`} title={t('Продолжить эту сессию в терминале из директории проекта запуска')}>{`claude --resume ${v.session}`}</p>}
       <div className={styles.fileBody}>
         <Body text={v.text} md={formatted} />
       </div>

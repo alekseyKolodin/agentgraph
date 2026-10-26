@@ -15,6 +15,7 @@ import { PickDirButton } from '../../components/PickDirButton';
 import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
 import { collectSpec } from '../../lib/flow/edit';
+import { t } from '../../lib/i18n';
 import { modelOptions } from '../../lib/flow/tools';
 import {
   appendDir, ATTACH_ACCEPT, attachName, attachOverLimit, attachTypeError, attachWarn, CONN_WARN_TEXT, connWarn, dirLines, fileSize,
@@ -146,7 +147,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           if (!err) setForm({ attach: [...runForm.attach, { id: nextAttachId(), name, size: file.size, data }] });
         } catch (e) {
           if (gen !== runForm.extrasSeq) break;
-          err = `${name}: не прочитался (${e instanceof Error ? e.message : String(e)})`;
+          err = t('{name}: не прочитался ({err})', { name, err: e instanceof Error ? e.message : String(e) });
         }
       }
       if (err) errors.push(err);
@@ -162,8 +163,8 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const [drop, setDrop] = useState(false);
 
   // ---------- теги
-  const kindOf = (t: string) => f.tagInfo.get(t)?.kind || 'task';
-  const hasTask = f.tags.some((t) => kindOf(t) === 'task');
+  const kindOf = (tag: string) => f.tagInfo.get(tag)?.kind || 'task';
+  const hasTask = f.tags.some((tag) => kindOf(tag) === 'task');
   const addTag = async () => {
     const slug = runForm.tagText.trim();
     setForm({ tagMsg: NO_MSG });
@@ -189,26 +190,26 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const removeTag = (slug: string) => {
     const tagInfo = new Map(runForm.tagInfo);
     tagInfo.delete(slug);
-    setForm({ tags: runForm.tags.filter((t) => t !== slug), tagInfo, tagMsg: NO_MSG });
+    setForm({ tags: runForm.tags.filter((tag) => tag !== slug), tagInfo, tagMsg: NO_MSG });
   };
 
   // ---------- worktree
   const wtProject = f.wtProject || worktreeProject(projects, f.link, f.cwd);
   const makeWorktree = async () => {
-    setForm({ wtBusy: true, wtMsg: { text: 'Готовлю worktree…', tone: '' } });
+    setForm({ wtBusy: true, wtMsg: { text: t('Готовлю worktree…'), tone: '' } });
     const link = runForm.link;
     const name = flowState.flow?.name;
     try {
       const r = await prepareWorktree(worktreeRequest(link, wtProject, runForm.wtBranch));
       // пока git работал, пользователь мог уйти на другой flow или сменить источник: чужую форму не трогаем
       if (flowState.flow?.name !== name || runForm.link !== link || !alive.current) {
-        toast(`Worktree готов: ${r.path}`);
+        toast(t('Worktree готов: {path}', { path: r.path }));
         return;
       }
       // заметку видно в задаче до запуска: сервер сам ничего не дописывает
       setForm({ cwd: r.path, input: withWorktreeNote(runForm.input, r.note) });
       showLink({ ...(link || {}), project: wtProject, worktree: { path: r.path, branch: r.branch } });
-      setForm({ wtMsg: { text: r.created ? 'создан' : 'уже был — переиспользую', tone: 'ok' } });
+      setForm({ wtMsg: { text: r.created ? t('создан') : t('уже был — переиспользую'), tone: 'ok' } });
     } catch (err) {
       setForm({ wtMsg: { text: errorText(err), tone: 'err' } });
     } finally {
@@ -234,16 +235,16 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       try {
         spec = collectSpec(flowState.spec!);
       } catch (err) {
-        setForm({ msg: { text: `Сначала поправь конструктор: ${errorText(err)}`, tone: 'err' } });
+        setForm({ msg: { text: t('Сначала поправь конструктор: {err}', { err: errorText(err) }), tone: 'err' } });
         return;
       }
-    } else if (flowState.dirty && !(await askConfirm('В конструкторе есть несохранённые изменения, запуск пойдёт по сохранённой версии. Продолжить?', { ok: 'Запустить' }))) return;
-    setForm({ busy: true, msg: { text: 'Запускаю…', tone: '' } });
+    } else if (flowState.dirty && !(await askConfirm(t('В конструкторе есть несохранённые изменения, запуск пойдёт по сохранённой версии. Продолжить?'), { ok: t('Запустить') }))) return;
+    setForm({ busy: true, msg: { text: t('Запускаю…'), tone: '' } });
     // форма, с которой нажали «Запустить»: если пока дочитывались вложения открыли другой flow, запуск не отправляем
     const gen = runForm.extrasSeq;
     try {
       // файл, который ещё читается, иначе не попал бы в запрос, а после сброса пропал бы молча
-      if (attachReads.size) setForm({ msg: { text: 'Дочитываю вложения…', tone: '' } });
+      if (attachReads.size) setForm({ msg: { text: t('Дочитываю вложения…'), tone: '' } });
       while (attachReads.size) await Promise.allSettled([...attachReads]);
       if (gen !== runForm.extrasSeq || flowState.flow !== flowRef) {
         setForm({ msg: NO_MSG });
@@ -251,7 +252,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       }
       // автотег: без выбранного тега задачи (новый слаг — тоже тег задачи) сервер сначала спросит модель, это секунды
       const autoTag = can.autoTag && wantsAutoTag(runForm.autoTag, runForm.tags, runForm.tagInfo);
-      setForm({ msg: { text: autoTag ? 'Завожу тег и запускаю…' : 'Запускаю…', tone: '' } });
+      setForm({ msg: { text: autoTag ? t('Завожу тег и запускаю…') : t('Запускаю…'), tone: '' } });
       // путь worktree — разовый, рабочей директорией по умолчанию для следующих запусков он не становится
       if (!(can.integrations && runForm.link?.worktree)) LS.setRaw('agentgraph.cwd', runForm.cwd.trim());
       LS.setRaw('agentgraph.budget', runForm.budget);
@@ -274,7 +275,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       }));
       setForm({ msg: NO_MSG });
       // запуск уже идёт: окно ошибки не ждём, новый тег — сразу в список поля «Теги»
-      if (r.autoTag && 'error' in r.autoTag && r.autoTag.error) void notify(`Тег не заведён: ${r.autoTag.error}. Запуск идёт без тега.`);
+      if (r.autoTag && 'error' in r.autoTag && r.autoTag.error) void notify(t('Тег не заведён: {err}. Запуск идёт без тега.', { err: r.autoTag.error }));
       else if (r.autoTag && 'slug' in r.autoTag) void qc.invalidateQueries({ queryKey: keys.tags });
       // вложения ушли в этот запуск: «Открыть flow» не должно молча приложить их к следующему
       if (gen === runForm.extrasSeq) resetExtras();
@@ -342,15 +343,15 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       }}
     >
       <datalist id="run-tag-list">
-        {tagList.map((t) => <option key={t.slug} value={t.slug}>{tagOptionLabel(t)}</option>)}
+        {tagList.map((tag) => <option key={tag.slug} value={tag.slug}>{tagOptionLabel(tag)}</option>)}
       </datalist>
       <label>
-        <span title="Подставится в {{input}}">Задача</span>
+        <span title={t('Подставится в {{input}}')}>{t('Задача')}</span>
         <textarea
           ref={taskRef}
           name="input"
           rows={5}
-          placeholder="Что нужно сделать"
+          placeholder={t('Что нужно сделать')}
           value={f.input}
           onChange={(e) => setForm({ input: e.target.value })}
           // вставка скриншота; обычную вставку текста не трогаем. Excel, Numbers и Word кладут в буфер рядом с текстом
@@ -372,11 +373,11 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           {f.link?.worktree && (
             <span className="chip on" title={f.link.worktree.path}>{`worktree${f.link.worktree.branch ? ` · ${f.link.worktree.branch}` : ''}`}</span>
           )}
-          <button type="button" className="btn small ghost" title="Запуск не будет привязан к источнику (текст задачи останется)" onClick={unlink}>Отвязать</button>
+          <button type="button" className="btn small ghost" title={t('Запуск не будет привязан к источнику (текст задачи останется)')} onClick={unlink}>{t('Отвязать')}</button>
         </div>
       )}
       <label>
-        <span>Директория проекта</span>
+        <span>{t('Директория проекта')}</span>
         <div className="path-field">
           <input
             name="cwd"
@@ -393,25 +394,25 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
               cwdChanged();
             }}
           />
-          <PickDirButton prompt="Выбери директорию проекта" start={() => runForm.cwd} onPick={pickCwd} />
+          <PickDirButton prompt={t('Выбери директорию проекта')} start={() => runForm.cwd} onPick={pickCwd} />
         </div>
       </label>
       {recentRow(pickCwd)}
       <details className={styles.runMore} open={f.more} onToggle={(e) => e.currentTarget.open !== runForm.more && setMore(e.currentTarget.open)}>
         <summary>
           <span className="caret">{ICON.caret}</span>
-          <span className={styles.runMoreTitle}>Дополнительно</span>
+          <span className={styles.runMoreTitle}>{t('Дополнительно')}</span>
           <span className={cx(styles.runMoreSum, sum.set && styles.set)}>{sum.text}</span>
         </summary>
         <div className={styles.runMoreBody}>
           {can.tags && (
             <div className={styles.runTag}>
               <label>
-                <span title="Тег задачи — саммари фичи из прошлых запусков: встанет в начало задачи, описывать фичу заново не нужно. Тег знаний — что должны знать этапы (фронтенд, бэкенд, QA): уйдёт в промпты этапов каждого блока. Тегов может быть несколько. Новый слаг — новый тег задачи. Править теги — на странице «Теги»">Теги</span>
+                <span title={t('Тег задачи — саммари фичи из прошлых запусков: встанет в начало задачи, описывать фичу заново не нужно. Тег знаний — что должны знать этапы (фронтенд, бэкенд, QA): уйдёт в промпты этапов каждого блока. Тегов может быть несколько. Новый слаг — новый тег задачи. Править теги — на странице «Теги»')}>{t('Теги')}</span>
                 <input
                   name="tag"
                   list="run-tag-list"
-                  placeholder="без тегов — или выбери из списка, или впиши новый и нажми Enter: loyalty-card"
+                  placeholder={t('без тегов — или выбери из списка, или впиши новый и нажми Enter: loyalty-card')}
                   autoComplete="off"
                   spellCheck={false}
                   value={f.tagText}
@@ -430,22 +431,22 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
                 />
               </label>
               <div className="chips">
-                {f.tags.map((t) => (
-                  <span key={t} className="chip attach-chip">
-                    <TagBadge slug={t} kind={kindOf(t)} />
-                    <span className="muted small">{KIND_LABEL[kindOf(t)]}</span>
-                    <button type="button" className="attach-x" title="Убрать тег из запуска" onClick={() => removeTag(t)}>×</button>
+                {f.tags.map((tag) => (
+                  <span key={tag} className="chip attach-chip">
+                    <TagBadge slug={tag} kind={kindOf(tag)} />
+                    <span className="muted small">{KIND_LABEL[kindOf(tag)]}</span>
+                    <button type="button" className="attach-x" title={t('Убрать тег из запуска')} onClick={() => removeTag(tag)}>×</button>
                   </span>
                 ))}
               </div>
               {f.tags.length > 0 && (
-                <div className={styles.runTagContext} title="Что сервер вставит от выбранных тегов: тег задачи — в начало задачи, тег знаний — в конец промптов этапов. Поле «Задача» остаётся только задачей">
-                  {f.tags.map((t) => {
-                    const c = tagContext(f.tagInfo.get(t));
+                <div className={styles.runTagContext} title={t('Что сервер вставит от выбранных тегов: тег задачи — в начало задачи, тег знаний — в конец промптов этапов. Поле «Задача» остаётся только задачей')}>
+                  {f.tags.map((tag) => {
+                    const c = tagContext(f.tagInfo.get(tag));
                     return (
-                      <details key={t}>
+                      <details key={tag}>
                         <summary>
-                          <TagBadge slug={t} kind={c.kind} />{` ${f.tagInfo.get(t)?.title || ''} `}<span className="muted small">{`${KIND_LABEL[c.kind]} · ${c.where}`}</span>
+                          <TagBadge slug={tag} kind={c.kind} />{` ${f.tagInfo.get(tag)?.title || ''} `}<span className="muted small">{`${KIND_LABEL[c.kind]} · ${c.where}`}</span>
                         </summary>
                         <pre className={styles.tagContextText}>{c.text}</pre>
                       </details>
@@ -456,7 +457,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
               {can.autoTag && (
                 <label
                   className={styles.inlineCheck}
-                  title={hasTask ? 'Тег задачи уже выбран: новый не заведётся' : 'ИИ по тексту задачи заведёт новый тег задачи (слаг занят — с суффиксом -2…), после «готово» запишет его саммари. Существующие теги не переиспользуются: чтобы продолжить фичу, выберите её тег в поле «Теги»'}
+                  title={hasTask ? t('Тег задачи уже выбран: новый не заведётся') : t('ИИ по тексту задачи заведёт новый тег задачи (слаг занят — с суффиксом -2…), после «готово» запишет его саммари. Существующие теги не переиспользуются: чтобы продолжить фичу, выберите её тег в поле «Теги»')}
                 >
                   <input
                     type="checkbox"
@@ -468,13 +469,13 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
                       setForm({ autoTag: e.target.checked });
                     }}
                   />
-                  <span>Завести тег задачи автоматически</span>
+                  <span>{t('Завести тег задачи автоматически')}</span>
                 </label>
               )}
               {hasTask && (
-                <label className={styles.inlineCheck} title="После запуска со статусом «готово» короткая сессия по каждому тегу перепишет его саммари: суть, где код, решения, где читать подробнее">
+                <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия по каждому тегу перепишет его саммари: суть, где код, решения, где читать подробнее')}>
                   <input type="checkbox" name="saveTag" checked={f.saveTag} onChange={(e) => setForm({ saveTag: e.target.checked })} />
-                  <span>Обновить саммари тегов после запуска</span>
+                  <span>{t('Обновить саммари тегов после запуска')}</span>
                 </label>
               )}
               <span className={msgClass(f.tagMsg)}>{f.tagMsg.text}</span>
@@ -483,8 +484,8 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           {can.attachments && (
             <div className={styles.runAttach}>
               <div className="row">
-                <span className="field-label">Вложения</span>
-                <button type="button" className="btn small" title="Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе" onClick={() => fileRef.current?.click()}>Добавить файлы…</button>
+                <span className="field-label">{t('Вложения')}</span>
+                <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе')} onClick={() => fileRef.current?.click()}>{t('Добавить файлы…')}</button>
                 <input
                   ref={fileRef}
                   type="file"
@@ -496,13 +497,13 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
                     e.target.value = '';
                   }}
                 />
-                <span className="muted small">или перетащи файлы на форму, скриншот — вставь в поле задачи</span>
+                <span className="muted small">{t('или перетащи файлы на форму, скриншот — вставь в поле задачи')}</span>
               </div>
               <div className="chips">
                 {f.attach.map((a) => (
                   <span key={a.id} className="chip attach-chip">
                     {`${a.name} · ${fileSize(a.size)}`}
-                    <button type="button" className="attach-x" title="Убрать" onClick={() => setForm({ attach: runForm.attach.filter((x) => x.id !== a.id) })}>×</button>
+                    <button type="button" className="attach-x" title={t('Убрать')} onClick={() => setForm({ attach: runForm.attach.filter((x) => x.id !== a.id) })}>×</button>
                   </span>
                 ))}
               </div>
@@ -512,11 +513,11 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           {can.addDirs && (
             <div className={styles.runAdddirs}>
               <label>
-                <span title="Куда агенты всех этапов могут ходить, кроме директории проекта: по пути на строку. Например, соседний репозиторий с правилами">Дополнительные директории</span>
+                <span title={t('Куда агенты всех этапов могут ходить, кроме директории проекта: по пути на строку. Например, соседний репозиторий с правилами')}>{t('Дополнительные директории')}</span>
                 <div className="path-field">
                   <textarea name="addDirs" rows={2} placeholder="~/projects/qa-rules" value={f.addDirs} onChange={(e) => setForm({ addDirs: e.target.value })} />
                   <PickDirButton
-                    prompt="Выбери дополнительную директорию"
+                    prompt={t('Выбери дополнительную директорию')}
                     start={() => dirLines(runForm.addDirs).at(-1) ?? ''}
                     onPick={(path) => setForm({ addDirs: appendDir(runForm.addDirs, path) })}
                   />
@@ -528,34 +529,34 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           {can.integrations && projects.length > 0 && (
             <div className={styles.runLink}>
               <div className="row">
-                <span className="field-label">Отдельный git worktree:</span>
-                <select title="Проект" value={wtProject} onChange={(e) => setForm({ wtProject: e.target.value })}>
+                <span className="field-label">{t('Отдельный git worktree:')}</span>
+                <select title={t('Проект')} value={wtProject} onChange={(e) => setForm({ wtProject: e.target.value })}>
                   {projects.map((p) => <option key={p.path} value={p.path}>{p.name}</option>)}
                 </select>
                 <input
                   className={styles.wtBranch}
-                  placeholder="ветка (пусто — от базовой)"
+                  placeholder={t('ветка (пусто — от базовой)')}
                   autoComplete="off"
                   spellCheck={false}
                   value={f.wtBranch}
                   onChange={(e) => setForm({ wtBranch: e.target.value })}
                 />
-                <button type="button" className="btn small" title="Создать worktree и подставить в директорию" disabled={f.wtBusy} onClick={() => void makeWorktree()}>Подготовить worktree</button>
+                <button type="button" className="btn small" title={t('Создать worktree и подставить в директорию')} disabled={f.wtBusy} onClick={() => void makeWorktree()}>{t('Подготовить worktree')}</button>
                 <span className={msgClass(f.wtMsg)}>{f.wtMsg.text}</span>
               </div>
             </div>
           )}
           <div className={cx('row', styles.runLimits)}>
             <label>
-              <span>{multiBlock ? 'Лимит итераций каждого цикла' : 'Лимит итераций'}</span>
-              <input name="maxIterations" type="number" min={1} max={50} placeholder={multiBlock ? 'как в блоках' : ''} value={f.maxIterations} onChange={(e) => setForm({ maxIterations: e.target.value })} />
+              <span>{multiBlock ? t('Лимит итераций каждого цикла') : t('Лимит итераций')}</span>
+              <input name="maxIterations" type="number" min={1} max={50} placeholder={multiBlock ? t('как в блоках') : ''} value={f.maxIterations} onChange={(e) => setForm({ maxIterations: e.target.value })} />
             </label>
             <label>
-              <span>Лимит стоимости, $</span>
-              <input name="maxBudgetUsd" type="number" min={0} step="any" placeholder="без лимита" value={f.budget} onChange={(e) => setForm({ budget: e.target.value })} />
+              <span>{t('Лимит стоимости, $')}</span>
+              <input name="maxBudgetUsd" type="number" min={0} step="any" placeholder={t('без лимита')} value={f.budget} onChange={(e) => setForm({ budget: e.target.value })} />
             </label>
             <label>
-              <span>Модель</span>
+              <span>{t('Модель')}</span>
               <select name="model" value={f.model} onChange={(e) => setForm({ model: e.target.value })}>
                 {models.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
               </select>
@@ -564,7 +565,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         </div>
       </details>
       <div className={styles.runBar}>
-        <button type="submit" className="btn primary" disabled={!summary || f.busy}>Запустить</button>
+        <button type="submit" className="btn primary" disabled={!summary || f.busy}>{t('Запустить')}</button>
         <span className={msgClass(f.msg)}>{f.msg.text}</span>
       </div>
     </form>
@@ -579,7 +580,7 @@ function HideRecent({ path }: { path: string }) {
     <button
       type="button"
       className="attach-x"
-      title="Убрать из недавних: путь вернётся, если с ним будет новый запуск"
+      title={t('Убрать из недавних: путь вернётся, если с ним будет новый запуск')}
       onClick={async (e) => {
         e.stopPropagation();
         const b = e.currentTarget;

@@ -7,6 +7,7 @@ import {
   blockHeading, blockLabel, isMulti, moveBlock, newPhase, phaseNum, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
 } from '../../lib/flow/edit';
 import { plural } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { bindField, dropStaleSel, openPhasePane, sameField } from './actions';
 import { DraftInput } from './fields';
 import { PhaseCard } from './PhaseCard';
@@ -43,10 +44,10 @@ export function BlockHead({ bi, inPane = false }: { bi: number; inPane?: boolean
   const act = async (what: 'up' | 'down' | 'del') => {
     if (what === 'del') {
       if (spec.blocks.length === 1) {
-        await notify('Нужен хотя бы один блок');
+        await notify(t('Нужен хотя бы один блок'));
         return;
       }
-      if (!(await askConfirm(`Удалить блок «${blockLabel(b, bi)}» вместе с этапами (${b.phases.length})?`, { ok: 'Удалить', danger: true }))) return;
+      if (!(await askConfirm(t('Удалить блок «{block}» вместе с этапами ({n})?', { block: blockLabel(b, bi), n: b.phases.length }), { ok: t('Удалить'), danger: true }))) return;
       // за время вопроса рабочую копию могла заменить правка ИИ или сохранение
       if (flowState.spec !== spec) return;
       spec.blocks.splice(bi, 1);
@@ -56,20 +57,20 @@ export function BlockHead({ bi, inPane = false }: { bi: number; inPane?: boolean
   };
   return (
     <div className={styles.bblockHead}>
-      <span className={styles.bnum}>Блок {bi + 1}</span>
+      <span className={styles.bnum}>{t('Блок {n}', { n: bi + 1 })}</span>
       <input
         className={cx(styles.bTitle, field.className)}
         value={b.title || ''}
-        placeholder="Название блока"
+        placeholder={t('Название блока')}
         onFocus={field.onFocus}
         onChange={(e) => {
           b.title = e.target.value;
           markDirty();
         }}
       />
-      <button className={styles.icon} title="Блок выше" disabled={bi === 0} onClick={() => void act('up')}>↑</button>
-      <button className={styles.icon} title="Блок ниже" disabled={bi === spec.blocks.length - 1} onClick={() => void act('down')}>↓</button>
-      <button className={cx(styles.icon, styles.danger)} title="Удалить блок" onClick={() => void act('del')}>✕</button>
+      <button className={styles.icon} title={t('Блок выше')} disabled={bi === 0} onClick={() => void act('up')}>↑</button>
+      <button className={styles.icon} title={t('Блок ниже')} disabled={bi === spec.blocks.length - 1} onClick={() => void act('down')}>↓</button>
+      <button className={cx(styles.icon, styles.danger)} title={t('Удалить блок')} onClick={() => void act('del')}>✕</button>
     </div>
   );
 }
@@ -88,29 +89,29 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
   const dirty = () => markDirty();
 
   const addKnowledge = () => {
-    const t = (knowledgeDraft.get(b) || '').trim();
-    if (!t) return;
-    if (!TAG_SLUG_RE.test(t)) {
-      void notify('Слаг тега: строчные латинские буквы, цифры и дефис');
+    const tag = (knowledgeDraft.get(b) || '').trim();
+    if (!tag) return;
+    if (!TAG_SLUG_RE.test(tag)) {
+      void notify(t('Слаг тега: строчные латинские буквы, цифры и дефис'));
       return;
     }
     knowledgeDraft.set(b, '');
-    if ((b.knowledge || []).includes(t)) {
+    if ((b.knowledge || []).includes(tag)) {
       emit();
       return;
     }
-    b.knowledge = [...(b.knowledge || []), t];
+    b.knowledge = [...(b.knowledge || []), tag];
     markDirty();
   };
   const fk = field('knowledge');
 
   return (
     <div className={cx('panel', styles.bpanel)} data-bpanel={bi}>
-      <h3>{multi ? 'Как выполнять блок' : 'Цикл'}</h3>
+      <h3>{multi ? t('Как выполнять блок') : t('Цикл')}</h3>
       <div className="row">
         {multi && (
           <label style={{ maxWidth: 200 }}>
-            <span title="Идентификатор блока: ключ в YAML и в отчётах запуска">id блока</span>
+            <span title={t('Идентификатор блока: ключ в YAML и в отчётах запуска')}>{t('id блока')}</span>
             <DraftInput
               className={styles.bName}
               value={b.name}
@@ -118,7 +119,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               onCommit={(raw) => {
                 const v = slug(raw) || b.name;
                 if (v !== b.name && spec.blocks.some((x) => x.name === v)) {
-                  void notify(`Блок ${v} уже есть`);
+                  void notify(t('Блок {name} уже есть', { name: v }));
                   return;
                 }
                 b.name = v;
@@ -128,7 +129,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
           </label>
         )}
         <label style={{ maxWidth: 200 }}>
-          <span>Режим</span>
+          <span>{t('Режим')}</span>
           <select
             value={loop ? 'loop' : 'once'}
             onChange={(e) => {
@@ -136,14 +137,14 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               dirty();
             }}
           >
-            <option value="loop">цикл до условия</option>
-            <option value="once">один проход</option>
+            <option value="loop">{t('цикл до условия')}</option>
+            <option value="once">{t('один проход')}</option>
           </select>
         </label>
         {loop && u && (
           <>
             <label style={{ maxWidth: 140 }}>
-              <span>Лимит итераций</span>
+              <span>{t('Лимит итераций')}</span>
               <DraftInput
                 type="number"
                 min={1}
@@ -156,7 +157,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               />
             </label>
             <label>
-              <span title="Проверяется после всех этапов блока">Условие остановки</span>
+              <span title={t('Проверяется после всех этапов блока')}>{t('Условие остановки')}</span>
               <select
                 value={u.type}
                 onChange={(e) => {
@@ -164,10 +165,10 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
                   dirty();
                 }}
               >
-                <option value="command">команда завершилась с кодом 0</option>
-                <option value="judge">LLM-судья сказал «готово»</option>
-                <option value="marker">в выводе этапа есть маркер</option>
-                <option value="none">без условия, ровно N итераций</option>
+                <option value="command">{t('команда завершилась с кодом 0')}</option>
+                <option value="judge">{t('LLM-судья сказал «готово»')}</option>
+                <option value="marker">{t('в выводе этапа есть маркер')}</option>
+                <option value="none">{t('без условия, ровно N итераций')}</option>
               </select>
             </label>
           </>
@@ -176,7 +177,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       {u?.type === 'command' && (
         <div className="row">
           <label>
-            <span>Команда (её вывод уйдёт в {'{{feedback}}'})</span>
+            <span>{t('Команда (её вывод уйдёт в {{feedback}})')}</span>
             <input
               {...field('until-run')}
               value={u.run || ''}
@@ -188,7 +189,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
             />
           </label>
           <label style={{ maxWidth: 160 }}>
-            <span>Таймаут, с</span>
+            <span>{t('Таймаут, с')}</span>
             <DraftInput
               type="number"
               min={1}
@@ -206,7 +207,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       )}
       {u?.type === 'judge' && (
         <label>
-          <span title="Судья видит {{input}} и {{outputs}} и отвечает: готово или нет, и замечания">Рубрика судьи</span>
+          <span title={t('Судья видит {{input}} и {{outputs}} и отвечает: готово или нет, и замечания')}>{t('Рубрика судьи')}</span>
           <textarea
             {...field('until-prompt')}
             className={cx(styles.bUntilPrompt, field('until-prompt').className)}
@@ -222,7 +223,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       {u?.type === 'marker' && (
         <div className="row">
           <label>
-            <span>Маркер</span>
+            <span>{t('Маркер')}</span>
             <input
               {...field('until-marker')}
               value={u.marker || ''}
@@ -234,7 +235,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
             />
           </label>
           <label>
-            <span>В выводе какого этапа</span>
+            <span>{t('В выводе какого этапа')}</span>
             <select
               value={u.phase || ''}
               onChange={(e) => {
@@ -243,7 +244,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
                 dirty();
               }}
             >
-              <option value="">последний этап блока</option>
+              <option value="">{t('последний этап блока')}</option>
               {b.phases.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
             </select>
           </label>
@@ -251,7 +252,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       )}
       {multi && loop && u && u.type !== 'none' && (
         <label>
-          <span>Если условие не выполнено за {iterWordFor(loop.max_iterations)}</span>
+          <span>{t('Если условие не выполнено за {n}', { n: iterWordFor(loop.max_iterations) })}</span>
           <select
             value={b.on_fail === 'continue' ? 'continue' : 'stop'}
             onChange={(e) => {
@@ -260,20 +261,20 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               dirty();
             }}
           >
-            <option value="stop">остановить запуск</option>
-            <option value="continue">всё равно перейти к следующему блоку</option>
+            <option value="stop">{t('остановить запуск')}</option>
+            <option value="continue">{t('всё равно перейти к следующему блоку')}</option>
           </select>
         </label>
       )}
       {kinds && (
         <div className={styles.bKnowledgeBox}>
           <label>
-            <span title="Теги вида «знание» со страницы «Теги»: их заметки, пути и вложения получат все этапы блока. Несуществующий тег роняет запуск до старта">Теги знаний</span>
+            <span title={t('Теги вида «знание» со страницы «Теги»: их заметки, пути и вложения получат все этапы блока. Несуществующий тег роняет запуск до старта')}>{t('Теги знаний')}</span>
             <input
               className={fk.className}
               onFocus={fk.onFocus}
               list="knowledge-tag-list"
-              placeholder="выбери из списка или впиши слаг и нажми Enter: qa"
+              placeholder={t('выбери из списка или впиши слаг и нажми Enter: qa')}
               autoComplete="off"
               spellCheck={false}
               value={knowledgeDraft.get(b) || ''}
@@ -291,15 +292,15 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
             />
           </label>
           <div className="chips">
-            {(b.knowledge || []).map((t) => (
-              <span key={t} className="chip attach-chip">
-                <KnowledgeBadge slug={t} />
+            {(b.knowledge || []).map((tag) => (
+              <span key={tag} className="chip attach-chip">
+                <KnowledgeBadge slug={tag} />
                 <button
                   type="button"
                   className="attach-x"
-                  title="Убрать тег у блока"
+                  title={t('Убрать тег у блока')}
                   onClick={() => {
-                    const rest = (b.knowledge || []).filter((x) => x !== t);
+                    const rest = (b.knowledge || []).filter((x) => x !== tag);
                     if (rest.length) b.knowledge = rest;
                     else delete b.knowledge;
                     dirty();
@@ -327,7 +328,7 @@ export function BlockSection({ bi }: { bi: number }) {
     <section className={cx(styles.bblock, multi && styles.multi, st.ai?.diff.blocks.has(b.name) && styles.aiChanged)} data-b={bi} id={`bblock-${bi}`}>
       <BlockHead bi={bi} />
       <BlockPanel bi={bi} />
-      <h3>Этапы{multi ? ` блока ${bi + 1}` : ''}</h3>
+      <h3>{multi ? t('Этапы блока {n}', { n: bi + 1 }) : t('Этапы')}</h3>
       <datalist id={`b-groups-${bi}`}>
         {groups.map((g) => <option key={g} value={g} />)}
       </datalist>
@@ -342,7 +343,7 @@ export function BlockSection({ bi }: { bi: number }) {
           openPhasePane(bi, b.phases.length - 1, styles.flash!);
         }}
       >
-        Добавить этап
+        {t('Добавить этап')}
       </button>
     </section>
   );
@@ -358,7 +359,7 @@ export function BlockPane({ bi }: { bi: number }) {
       <BlockHead bi={bi} inPane />
       <BlockPanel bi={bi} inPane />
       <div className={styles.panePhases}>
-        <div className={styles.pLabel}>Этапы блока</div>
+        <div className={styles.pLabel}>{t('Этапы блока')}</div>
         <div className="chips">
           {b.phases.map((p, i) => (
             <button key={phaseKey(p)} type="button" className="chip" onClick={() => openPhasePane(bi, i, styles.flash!)}>
@@ -374,7 +375,7 @@ export function BlockPane({ bi }: { bi: number }) {
 /** Заголовки инспектора для блока: контекст и что открыто. */
 export const blockPaneTitles = (spec: NonNullable<ReturnType<typeof useFlowStore>['spec']>, bi: number) => {
   const b = spec.blocks[bi]!;
-  return { ctx: isMulti(spec) ? blockHeading(b, bi) : 'Flow', label: b.loop ? 'Цикл и условие остановки' : 'Блок: один проход' };
+  return { ctx: isMulti(spec) ? blockHeading(b, bi) : 'Flow', label: b.loop ? t('Цикл и условие остановки') : t('Блок: один проход') };
 };
 
 // ключ карточки — сам объект этапа: после ↑/↓ React переставляет карточки, а не переписывает поля чужих этапов

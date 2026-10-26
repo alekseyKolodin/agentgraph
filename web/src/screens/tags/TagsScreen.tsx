@@ -15,6 +15,7 @@ import { PickDirButton } from '../../components/PickDirButton';
 import { readBase64 } from '../../components/readBase64';
 import { useMemoryState } from '../../components/useMemoryState';
 import { when } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import {
   filterTags, newTagBody, TAG_DESCRIPTION_HINT, TAG_DESCRIPTION_LABEL, TAG_DESCRIPTION_MAX, tagDirLines, TAG_DIRTY_TEXT, TAG_FOCUS_MONO, TAG_INLINE_HINT, TAG_INLINE_LABEL,
   tagDeleteText, tagFocusCount, tagFocusField, tagFocusLabel, tagFormOf, tagMetaLine, tagNotesHint, tagNotesLabel, tagPatch, tagPreview, tagsNoneText, tagSnapshot,
@@ -80,7 +81,7 @@ export function TagsScreen() {
   });
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
-    void askConfirm(TAG_DIRTY_TEXT, { ok: 'Перейти' }).then((ok) => (ok ? blocker.proceed() : blocker.reset()));
+    void askConfirm(TAG_DIRTY_TEXT, { ok: t('Перейти') }).then((ok) => (ok ? blocker.proceed() : blocker.reset()));
   }, [blocker.state]);
 
   useEffect(() => {
@@ -130,7 +131,7 @@ export function TagsScreen() {
       (err) => {
         if (my !== seq.current) return;
         closeEditor();
-        setEditorErr(err instanceof ApiError && err.status === 404 ? `Тега ${slug} нет` : errorText(err));
+        setEditorErr(err instanceof ApiError && err.status === 404 ? t('Тега {slug} нет', { slug }) : errorText(err));
       },
     );
   }, [location.key]);
@@ -176,16 +177,16 @@ export function TagsScreen() {
 
   const save = async (ev: FormEvent) => {
     ev.preventDefault();
-    const t = cur.current.tag;
-    if (!t) return;
-    setMsg({ cls: 'msg', text: 'Сохраняю…' });
+    const tg = cur.current.tag;
+    if (!tg) return;
+    setMsg({ cls: 'msg', text: t('Сохраняю…') });
     // пока шёл запрос, могли перейти к другому тегу: его форму ответом не перетираем
     const my = seq.current;
     try {
-      const next = await saveTag(t.slug, tagPatch(cur.current.form, t));
+      const next = await saveTag(tg.slug, tagPatch(cur.current.form, tg));
       if (my === seq.current) {
         fill(next);
-        setMsg({ cls: 'msg', text: 'Сохранено' });
+        setMsg({ cls: 'msg', text: t('Сохранено') });
       }
       await qc.invalidateQueries({ queryKey: keys.tags });
     } catch (err) {
@@ -194,11 +195,11 @@ export function TagsScreen() {
   };
 
   const remove = async () => {
-    const t = cur.current.tag;
-    if (!t) return;
-    if (!(await askConfirm(tagDeleteText(t.slug), { ok: 'Удалить', danger: true }))) return;
+    const tg = cur.current.tag;
+    if (!tg) return;
+    if (!(await askConfirm(tagDeleteText(tg.slug), { ok: t('Удалить'), danger: true }))) return;
     try {
-      await deleteTag(t.slug);
+      await deleteTag(tg.slug);
       closeEditor();
       void qc.invalidateQueries({ queryKey: keys.tags });
       go();
@@ -209,28 +210,28 @@ export function TagsScreen() {
 
   /** Вложения тега грузятся сразу на сервер по одному: лимиты и типы проверяет он же, что и у вложений запуска. */
   const upload = async (list: File[]) => {
-    const t = cur.current.tag;
-    if (!t || !list.length) return;
+    const tg = cur.current.tag;
+    if (!tg || !list.length) return;
     const errors: string[] = [];
     let names: string[] | null = null;
     for (const file of list) {
-      setMsg({ cls: 'msg', text: `Загружаю ${file.name}…` });
+      setMsg({ cls: 'msg', text: t('Загружаю {name}…', { name: file.name }) });
       try {
-        names = (await addTagAttachment(t.slug, file.name, await readBase64(file))).attachments;
+        names = (await addTagAttachment(tg.slug, file.name, await readBase64(file))).attachments;
       } catch (err) {
         errors.push(errorText(err));
       }
     }
-    if (names && cur.current.tag === t) setFiles(names);
-    setMsg(errors.length ? { cls: 'msg err', text: errors.join('; ') } : { cls: 'msg', text: 'Вложения добавлены' });
+    if (names && cur.current.tag === tg) setFiles(names);
+    setMsg(errors.length ? { cls: 'msg err', text: errors.join('; ') } : { cls: 'msg', text: t('Вложения добавлены') });
   };
 
   const detach = async (name: string) => {
-    const t = cur.current.tag;
-    if (!t) return;
+    const tg = cur.current.tag;
+    if (!tg) return;
     try {
-      const r = await deleteTagAttachment(t.slug, name);
-      if (cur.current.tag === t) setFiles(r.attachments);
+      const r = await deleteTagAttachment(tg.slug, name);
+      if (cur.current.tag === tg) setFiles(r.attachments);
     } catch (err) {
       setMsg({ cls: 'msg err', text: errorText(err) });
     }
@@ -246,22 +247,22 @@ export function TagsScreen() {
     <div className={styles.viewTags}>
       <header className="view-head">
         <div>
-          <h1>Теги</h1>
-          <p className="muted">Тег — фича, над которой идут несколько запусков. Его саммари, заметки, пути и вложения подставляются в задачу каждого запуска с этим тегом</p>
+          <h1>{t('Теги')}</h1>
+          <p className="muted">{t('Тег — фича, над которой идут несколько запусков. Его саммари, заметки, пути и вложения подставляются в задачу каждого запуска с этим тегом')}</p>
         </div>
       </header>
       <div className={styles.tagsLayout}>
         {/* список тегов — главное на странице; новый тег — компактной формой над списком по кнопке */}
         <aside className={styles.tagsSide}>
           <div className={styles.tagsHead}>
-            <h3>Все теги <span className={styles.tagsCount}>{loaded ? count : ''}</span></h3>
+            <h3>{t('Все теги')} <span className={styles.tagsCount}>{loaded ? count : ''}</span></h3>
             <button
               type="button"
               className={cx('btn small', styles.btnTagNew, nt.open && styles.on)}
               aria-expanded={nt.open}
               aria-controls="tag-new"
               onClick={() => setNewOpen(!nt.open)}
-            >+ Новый тег</button>
+            >{t('+ Новый тег')}</button>
           </div>
           <form
             id="tag-new"
@@ -272,7 +273,7 @@ export function TagsScreen() {
           >
             <div className={styles.tagNewRow}>
               <label>
-                <span>Слаг</span>
+                <span>{t('Слаг')}</span>
                 <input
                   ref={slugInput}
                   name="slug"
@@ -280,29 +281,29 @@ export function TagsScreen() {
                   autoComplete="off"
                   spellCheck={false}
                   pattern="[a-z0-9][a-z0-9\-]{0,63}"
-                  title="Строчные латинские буквы, цифры и дефис"
+                  title={t('Строчные латинские буквы, цифры и дефис')}
                   required
                   value={nt.slug}
                   onChange={(e) => setNt((v) => ({ ...v, slug: e.target.value }))}
                 />
               </label>
               <label>
-                <span>Заголовок</span>
-                <input name="title" placeholder="Карта лояльности" autoComplete="off" value={nt.title} onChange={(e) => setNt((v) => ({ ...v, title: e.target.value }))} />
+                <span>{t('Заголовок')}</span>
+                <input name="title" placeholder={t('Карта лояльности')} autoComplete="off" value={nt.title} onChange={(e) => setNt((v) => ({ ...v, title: e.target.value }))} />
               </label>
             </div>
             {kinds && (
               <div className={styles.tagKind}>
-                <span className={styles.tagKindLabel} title="Тег задачи — саммари фичи между запусками, встаёт в начало задачи. Тег знаний — что должны знать этапы блока (фронтенд, бэкенд, QA): в промпт этапов блоков с полем knowledge идёт строка с описанием, а заметки, пути и вложения этап запрашивает инструментом knowledge_read (или получает целиком, если включить «всегда вставлять»). Вид после создания не меняется">Вид</span>
+                <span className={styles.tagKindLabel} title={t('Тег задачи — саммари фичи между запусками, встаёт в начало задачи. Тег знаний — что должны знать этапы блока (фронтенд, бэкенд, QA): в промпт этапов блоков с полем knowledge идёт строка с описанием, а заметки, пути и вложения этап запрашивает инструментом knowledge_read (или получает целиком, если включить «всегда вставлять»). Вид после создания не меняется')}>{t('Вид')}</span>
                 <div className={styles.seg}>
-                  <label><input type="radio" name="kind" value="task" checked={nt.kind === 'task'} onChange={() => setNt((v) => ({ ...v, kind: 'task' }))} /><span>Задача</span></label>
-                  <label><input type="radio" name="kind" value="knowledge" checked={nt.kind === 'knowledge'} onChange={() => setNt((v) => ({ ...v, kind: 'knowledge' }))} /><span>Область знаний</span></label>
+                  <label><input type="radio" name="kind" value="task" checked={nt.kind === 'task'} onChange={() => setNt((v) => ({ ...v, kind: 'task' }))} /><span>{t('Задача')}</span></label>
+                  <label><input type="radio" name="kind" value="knowledge" checked={nt.kind === 'knowledge'} onChange={() => setNt((v) => ({ ...v, kind: 'knowledge' }))} /><span>{t('Область знаний')}</span></label>
                 </div>
               </div>
             )}
             <div className="row">
-              <button type="submit" className="btn">Завести тег</button>
-              <button type="button" className="btn ghost" onClick={() => setNewOpen(false)}>Отмена</button>
+              <button type="submit" className="btn">{t('Завести тег')}</button>
+              <button type="button" className="btn ghost" onClick={() => setNewOpen(false)}>{t('Отмена')}</button>
               <span className={newMsg.cls}>{newMsg.text}</span>
             </div>
           </form>
@@ -310,10 +311,10 @@ export function TagsScreen() {
           <input
             className={styles.tagsSearch}
             type="search"
-            placeholder="Поиск: слаг, заголовок, саммари"
+            placeholder={t('Поиск: слаг, заголовок, саммари')}
             autoComplete="off"
             spellCheck={false}
-            title="Все слова должны найтись в слаге, заголовке или превью саммари/заметок. Esc — очистить"
+            title={t('Все слова должны найтись в слаге, заголовке или превью саммари/заметок. Esc — очистить')}
             hidden={loaded && !list.length}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -336,14 +337,14 @@ export function TagsScreen() {
             <section className={cx('panel', styles.tagEditor)}>
               <form className={cx('form', styles.tagForm)} onSubmit={(e) => void save(e)}>
                 <div className={styles.tagEditorHead}>
-                  <h2 className="mono"><TagBadge slug={tag.slug} kind={tag.kind} />{' '}<span className="muted small">{knows ? 'область знаний' : 'тег задачи'}</span></h2>
+                  <h2 className="mono"><TagBadge slug={tag.slug} kind={tag.kind} />{' '}<span className="muted small">{knows ? t('область знаний') : t('тег задачи')}</span></h2>
                   <span className="row push">
                     <span className={msg.cls}>{msg.text}</span>
-                    <button type="button" className="btn small ghost danger" onClick={() => void remove()}>Удалить тег</button>
-                    <button type="submit" className="btn primary">Сохранить</button>
+                    <button type="button" className="btn small ghost danger" onClick={() => void remove()}>{t('Удалить тег')}</button>
+                    <button type="submit" className="btn primary">{t('Сохранить')}</button>
                   </span>
                 </div>
-                <label><span>Заголовок</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
+                <label><span>{t('Заголовок')}</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
                 {/* у тега знаний: описание — строка в промпте каждого этапа блока, полный текст этап берёт инструментом knowledge_read;
                     чекбокс inline возвращает старое поведение — заметки целиком в каждом промпте */}
                 {knows && (
@@ -354,7 +355,7 @@ export function TagsScreen() {
                         name="description"
                         autoComplete="off"
                         maxLength={TAG_DESCRIPTION_MAX}
-                        placeholder="Правила проверки и тест-кейсы: открывай перед тестированием"
+                        placeholder={t('Правила проверки и тест-кейсы: открывай перед тестированием')}
                         title={TAG_DESCRIPTION_HINT}
                         value={form.description}
                         onChange={(e) => edit('description', e.target.value)}
@@ -369,7 +370,7 @@ export function TagsScreen() {
                 {/* у тега знаний нет саммари и запусков: его знание — заметки, пути и вложения */}
                 {!knows && (
                   <label>
-                    <span title="Текущее состояние фичи. Его переписывает короткая сессия после каждого запуска «готово» с галочкой — правка руками доживёт до следующего такого запуска">Саммари</span>
+                    <span title={t('Текущее состояние фичи. Его переписывает короткая сессия после каждого запуска «готово» с галочкой — правка руками доживёт до следующего такого запуска')}>{t('Саммари')}</span>
                     <textarea name="summary" rows={10} spellCheck={false} className={src('summary')} value={form.summary} onFocus={() => setFocus('summary')} onChange={(e) => edit('summary', e.target.value)} />
                   </label>
                 )}
@@ -378,18 +379,18 @@ export function TagsScreen() {
                   <textarea name="notes" rows={4} className={src('notes')} value={form.notes} onFocus={() => setFocus('notes')} onChange={(e) => edit('notes', e.target.value)} />
                 </label>
                 <div className={styles.tagPaths}>
-                  <label htmlFor="tag-dirs" className="field-label" title="Абсолютные пути к папкам или файлам, по одному на строку: этапы запусков с тегом получат их доп. директориями. У файла этапам открывается вся его папка, а этапы с Edit и Write могут в неё писать — указывай узкие папки. Несуществующие пути пропускаются">Пути</label>
+                  <label htmlFor="tag-dirs" className="field-label" title={t('Абсолютные пути к папкам или файлам, по одному на строку: этапы запусков с тегом получат их доп. директориями. У файла этапам открывается вся его папка, а этапы с Edit и Write могут в неё писать — указывай узкие папки. Несуществующие пути пропускаются')}>{t('Пути')}</label>
                   <PickDirButton
                     className="btn small pick-dir"
-                    prompt="Выбери папку для тега"
-                    title="Выбрать папку в Finder — путь добавится новой строкой"
+                    prompt={t('Выбери папку для тега')}
+                    title={t('Выбрать папку в Finder — путь добавится новой строкой')}
                     start={() => tagDirLines(cur.current.form.dirs).at(-1) ?? ''}
                     onPick={(p) => {
                       const lines = tagDirLines(cur.current.form.dirs);
                       if (!lines.includes(p)) edit('dirs', [...lines, p].join('\n'));
                     }}
                     onSettled={() => dirsRef.current?.focus()}
-                  >+ Добавить папку…</PickDirButton>
+                  >{t('+ Добавить папку…')}</PickDirButton>
                   <textarea
                     ref={dirsRef}
                     id="tag-dirs"
@@ -405,8 +406,8 @@ export function TagsScreen() {
                 </div>
                 <div className={styles.tagAttach}>
                   <div className={styles.tagAttachHead}>
-                    <span className="field-label">Вложения</span>
-                    <button type="button" className="btn small" title="Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе" onClick={() => fileInput.current?.click()}>+ Добавить файлы…</button>
+                    <span className="field-label">{t('Вложения')}</span>
+                    <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе')} onClick={() => fileInput.current?.click()}>{t('+ Добавить файлы…')}</button>
                     <input
                       ref={fileInput}
                       type="file"
@@ -420,7 +421,7 @@ export function TagsScreen() {
                   </div>
                   <div className="chips">
                     {files.map((name) => (
-                      <span key={name} className="chip attach-chip">{name}<button type="button" className="attach-x" title="Удалить вложение тега" onClick={() => void detach(name)}>×</button></span>
+                      <span key={name} className="chip attach-chip">{name}<button type="button" className="attach-x" title={t('Удалить вложение тега')} onClick={() => void detach(name)}>×</button></span>
                     ))}
                   </div>
                 </div>
@@ -428,18 +429,18 @@ export function TagsScreen() {
                   <div className={styles.tagRuns}>
                     {tag.runs.length
                       ? <>
-                        <span className="muted">Запуски с обновлением саммари:</span>
+                        <span className="muted">{t('Запуски с обновлением саммари:')}</span>
                         {tag.runs.map((r) => (
                           <Link key={r.id} to={`/run/${r.id}`} title={when(r.finishedAt)}>{`${r.flow} `}<Badge status={r.status} /></Link>
                         ))}
                       </>
-                      : <span className="muted">Саммари ещё ни разу не обновлялось запуском</span>}
+                      : <span className="muted">{t('Саммари ещё ни разу не обновлялось запуском')}</span>}
                   </div>
                 )}
               </form>
             </section>
           ) : (
-            <p className={cx(styles.tagEmpty, 'muted')}>Выбери тег в списке — откроются его саммари, заметки, пути и вложения. Новый тег — кнопкой «+ Новый тег»; тег можно указать и прямо в форме запуска.</p>
+            <p className={cx(styles.tagEmpty, 'muted')}>{t('Выбери тег в списке — откроются его саммари, заметки, пути и вложения. Новый тег — кнопкой «+ Новый тег»; тег можно указать и прямо в форме запуска.')}</p>
           )}
         </div>
         {/* крупный редактор поля тега, в котором стоит фокус; виден только при широком контейнере (Tags.module.css) */}
@@ -447,7 +448,7 @@ export function TagsScreen() {
           <div className="focus-head">
             <div className="focus-titles">
               <div className="focus-ctx">{focus && tag ? `#${tag.slug}` : ''}</div>
-              <div className="focus-label">{focus && tag ? tagFocusLabel(focus, tag.kind) : 'Крупный редактор'}</div>
+              <div className="focus-label">{focus && tag ? tagFocusLabel(focus, tag.kind) : t('Крупный редактор')}</div>
             </div>
             <span className="muted small">{focus ? tagFocusCount(focusValue) : ''}</span>
           </div>
@@ -459,7 +460,7 @@ export function TagsScreen() {
             value={focusValue}
             onChange={(e) => { if (focus) edit(focus, e.target.value); }}
           />
-          <p className={cx(styles.bigEditorEmpty, 'muted small')}>Выбери тег слева</p>
+          <p className={cx(styles.bigEditorEmpty, 'muted small')}>{t('Выбери тег слева')}</p>
         </aside>
       </div>
     </div>

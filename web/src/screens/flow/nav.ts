@@ -6,11 +6,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { errorText, fetchFlow, keys, moveFlow, type FlowGenerated } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { reveal, setOpen } from '../../components/shell/fold';
+import { t } from '../../lib/i18n';
 import { closeFlow, flowState, openLoaded, set, type Tab } from './store';
 
 type Ask = ReturnType<typeof useConfirm>['askConfirm'];
 
-export const DIRTY_TEXT = 'Есть несохранённые изменения в конструкторе. Перейти без сохранения?';
+export const DIRTY_TEXT = t('Есть несохранённые изменения в конструкторе. Перейти без сохранения?');
 
 /**
  * Уход с черновика разового запуска: он пропадёт, спрашиваем. false — остаёмся. close: false — черновик закроет сам вызывающий
@@ -18,7 +19,7 @@ export const DIRTY_TEXT = 'Есть несохранённые изменени�
  */
 export async function leaveDraft(ask: Ask, close = true): Promise<boolean> {
   if (!flowState.flow?.draft) return true;
-  if (!(await ask('Черновик разового запуска не запущен и не сохранён: он пропадёт. Уйти?', { ok: 'Уйти', danger: true }))) return false;
+  if (!(await ask(t('Черновик разового запуска не запущен и не сохранён: он пропадёт. Уйти?'), { ok: t('Уйти'), danger: true }))) return false;
   if (close) closeFlow();
   return true;
 }
@@ -34,8 +35,8 @@ export function useOpenFlow() {
     // черновик закрывает openLoaded новым flow: закрытый раньше увёл бы экран черновика на главную, пока грузится flow
     if (!(await leaveDraft(askConfirm, false))) return false;
     const draft = Boolean(flowState.flow?.draft);
-    if (flowState.aiAbort && !(await askConfirm('ИИ ещё правит flow. Прервать правку и перейти?', { ok: 'Прервать' }))) return false;
-    if (!draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: 'Перейти' }))) return false;
+    if (flowState.aiAbort && !(await askConfirm(t('ИИ ещё правит flow. Прервать правку и перейти?'), { ok: t('Прервать') }))) return false;
+    if (!draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: t('Перейти') }))) return false;
     let doc;
     try {
       doc = await fetchFlow(name);
@@ -60,7 +61,7 @@ export function useOpenDraft() {
   const { askConfirm } = useConfirm();
   return useCallback(async (r: FlowGenerated): Promise<boolean> => {
     if (!(await leaveDraft(askConfirm, false))) return false;
-    if (!flowState.flow?.draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: 'Перейти' }))) return false;
+    if (!flowState.flow?.draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: t('Перейти') }))) return false;
     flowState.approved = true;
     openLoaded({ name: r.name, yaml: r.yaml, summary: r.summary, spec: r.spec, folder: '', draft: true }, 'builder');
     void navigate('/draft');

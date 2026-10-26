@@ -9,6 +9,7 @@ import { Badge } from '../../components/Badge';
 import { useMemoryState } from '../../components/useMemoryState';
 import { DASH_STALE_MS, dashCap, dashMore, PRESET_LABEL, runsForBranch, runsForJira, type JiraPreset } from '../../lib/dash';
 import { when } from '../../lib/format';
+import { t } from '../../lib/i18n';
 import { LS } from '../../lib/storage';
 import homeStyles from './Home.module.css';
 import styles from './Dash.module.css';
@@ -25,8 +26,8 @@ export function Dash({ onLaunch, onSettings }: { onLaunch: OnLaunch; onSettings:
   return (
     <section className={`${homeStyles.homeSec} ${homeStyles.homeDash}`}>
       <div className={styles.dashHead}>
-        <h2 title="«Запустить…» заполнит форму запуска, запустишь сам">Задачи и код</h2>
-        <button className="btn small" onClick={onSettings}>Подключения</button>
+        <h2 title={t('«Запустить…» заполнит форму запуска, запустишь сам')}>{t('Задачи и код')}</h2>
+        <button className="btn small" onClick={onSettings}>{t('Подключения')}</button>
       </div>
       {/* Jira без токена не показываем: подключить её можно в «Подключениях» */}
       {(info.error || info.data?.jira?.hasToken) && (
@@ -41,7 +42,7 @@ export function Dash({ onLaunch, onSettings }: { onLaunch: OnLaunch; onSettings:
             info.data.projects.map((p) => <Project key={p.path} p={p} onLaunch={onLaunch} />)
           ) : (
             <div className={styles.dashBox}>
-              <p className="muted small">Проектов пока нет. Они появятся из директорий проектов запусков или их можно добавить в «Подключениях».</p>
+              <p className="muted small">{t('Проектов пока нет. Они появятся из директорий проектов запусков или их можно добавить в «Подключениях».')}</p>
             </div>
           )}
         </div>
@@ -61,7 +62,7 @@ export function LaunchButton({ target, onLaunch }: { target: IntakeTarget; onLau
         onLaunch(target, e.currentTarget);
       }}
     >
-      Запустить…
+      {t('Запустить…')}
     </button>
   );
 }
@@ -75,10 +76,10 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
       {runs.map((r) => (
         <button key={r.id} className="chip" title={when(r.startedAt)} onClick={() => void navigate(`/run/${r.id}`)}>
           {r.flow}
-          {(r.tags || []).map((t) => (
-            <span key={t}>
+          {(r.tags || []).map((tag) => (
+            <span key={tag}>
               {' '}
-              <span className="muted">#{t}</span>
+              <span className="muted">#{tag}</span>
             </span>
           ))}
           <Badge status={r.status} />
@@ -91,7 +92,7 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
 /** «Ещё N» под списком. */
 function More({ n, onClick }: { n: number; onClick: () => void }) {
   if (!n) return null;
-  return <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={onClick}>Ещё {n}</button>;
+  return <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={onClick}>{t('Ещё {n}', { n })}</button>;
 }
 
 function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }) {
@@ -137,7 +138,7 @@ function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }
           ))}
         </span>
         <span className="muted small">{list ? `${list.length}` : ''}</span>
-        <button className={`btn small ghost ${styles.push}`} title="Обновить" onClick={() => reload(key)}>↻</button>
+        <button className={`btn small ghost ${styles.push}`} title={t('Обновить')} onClick={() => reload(key)}>↻</button>
       </div>
       {preset === 'jql' && (
         <form
@@ -149,15 +150,15 @@ function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }
           }}
         >
           <input name="jql" value={jql} onChange={(e) => setJql(e.target.value)} placeholder='project = ABC AND status = "In Progress"' spellCheck={false} />
-          <button className="btn small">Найти</button>
+          <button className="btn small">{t('Найти')}</button>
         </form>
       )}
       {issues.error ? (
         <p className="msg err">{errorText(issues.error)}</p>
       ) : !enabled ? null : !list ? (
-        <p className="muted small">Загружаю…</p>
+        <p className="muted small">{t('Загружаю…')}</p>
       ) : !list.length ? (
-        <p className="muted small">Задач нет.</p>
+        <p className="muted small">{t('Задач нет.')}</p>
       ) : (
         <>
           <ul className={styles.dashList}>
@@ -205,11 +206,11 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
   else if (tab === 'mr') {
     const items = mrs.data?.mrs;
     list = !p.remote ? (
-      <p className="muted small">У репозитория нет origin на GitLab или GitHub.</p>
+      <p className="muted small">{t('У репозитория нет origin на GitLab или GitHub.')}</p>
     ) : !items ? (
-      <p className="muted small">Загружаю…</p>
+      <p className="muted small">{t('Загружаю…')}</p>
     ) : !items.length ? (
-      <p className="muted small">{`Открытых ${mrWord} нет.`}</p>
+      <p className="muted small">{t('Открытых {mr} нет.', { mr: mrWord })}</p>
     ) : (
       <>
         <ul className={styles.dashList}>
@@ -223,7 +224,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
                 </span>
                 <span className={styles.dashMeta} title={`${m.sourceBranch} → ${m.targetBranch}`}>
                   {`${m.sourceBranch} → ${m.targetBranch} · ${m.author}`}
-                  {m.hasConflicts && <> · <span className="err">конфликты</span></>}
+                  {m.hasConflicts && <> · <span className="err">{t('конфликты')}</span></>}
                 </span>
                 <LaunchButton target={{ type: 'mr', key: m.ref, project: path }} onLaunch={onLaunch} />
               </div>
@@ -237,7 +238,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
   } else {
     const items = branches.data?.branches;
     list = !items ? (
-      <p className="muted small">Загружаю…</p>
+      <p className="muted small">{t('Загружаю…')}</p>
     ) : (
       <>
         <ul className={styles.dashList}>
@@ -247,8 +248,8 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
                 <span className={`${styles.dashKey} mono`}>{b.name}</span>
                 <span className={`${styles.dashName} muted`} title={b.subject}>{b.subject}</span>
                 <span className={styles.dashMeta}>
-                  {b.current ? 'текущая · ' : ''}
-                  {b.worktree && <span title={b.worktree}>в worktree · </span>}
+                  {b.current ? `${t('текущая')} · ` : ''}
+                  {b.worktree && <span title={b.worktree}>{t('в worktree')} · </span>}
                   {when(b.updated)}
                 </span>
                 <LaunchButton target={{ type: 'branch', key: b.name, project: path }} onLaunch={onLaunch} />
@@ -268,23 +269,23 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
         <b title={path}>{p.webUrl ? <a href={p.webUrl} target="_blank" rel="noopener">{p.name}</a> : p.name}</b>
         <span className="chips">
           <button className={`chip ${tab === 'mr' ? 'on' : ''}`} onClick={() => { setTab('mr'); setMore(false); }}>{mrWord}</button>
-          <button className={`chip ${tab === 'branches' ? 'on' : ''}`} onClick={() => { setTab('branches'); setMore(false); }}>Ветки</button>
+          <button className={`chip ${tab === 'branches' ? 'on' : ''}`} onClick={() => { setTab('branches'); setMore(false); }}>{t('Ветки')}</button>
           {tab === 'mr' && (
             <button
               className={`chip ${mine ? 'on' : ''}`}
-              title={`Только ${mrWord}, где автор — ты (по ${gh ? 'gh' : 'glab'})`}
+              title={t('Только {mr}, где автор — ты (по {cli})', { mr: mrWord, cli: gh ? 'gh' : 'glab' })}
               onClick={() => {
                 setMine(!mine);
                 LS.setRaw(MR_MINE_KEY, !mine ? '1' : '0');
                 reload(keys.mrs(path, !mine));
               }}
             >
-              Мои
+              {t('Мои')}
             </button>
           )}
         </span>
         <span className="muted small">{count ?? ''}</span>
-        <button className={`btn small ghost ${styles.push}`} title="Обновить" onClick={() => reload(tab === 'mr' ? keys.mrs(path, mine) : keys.branches(path))}>↻</button>
+        <button className={`btn small ghost ${styles.push}`} title={t('Обновить')} onClick={() => reload(tab === 'mr' ? keys.mrs(path, mine) : keys.branches(path))}>↻</button>
       </div>
       {list}
     </div>

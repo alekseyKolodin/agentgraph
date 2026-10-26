@@ -17,6 +17,7 @@ import { setDocRunTitle } from '../../components/shell/docTitle';
 import { useToast } from '../../components/Toast';
 import { when } from '../../lib/format';
 import { graphRunState } from '../../lib/graph/run-state';
+import { t } from '../../lib/i18n';
 import type { GraphBlock } from '../../lib/graph/model';
 import { LIVE_STATUSES, withoutQuestion } from '../../lib/home';
 import { sourceLabel } from '../../lib/run-form';
@@ -42,7 +43,7 @@ import { bump, closeRun, loadContinuable, markAnswered, openRun, RUN_TABS, runEv
 import styles from './Run.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
-const TAB_LABEL: Record<RunTab, string> = { overview: 'Обзор', graph: 'Граф', log: 'Лог', artifacts: 'Артефакты' };
+const TAB_LABEL: Record<RunTab, string> = { overview: t('Обзор'), graph: t('Граф'), log: t('Лог'), artifacts: t('Артефакты') };
 /** Переигранные вопросы и паузы не должны дёргать список запусков по разу на событие. */
 const RUNS_SOON_MS = 300;
 /** «идёт N мин» на графе стареет между событиями: у живого запуска освежаем раз в 30 секунд. */
@@ -186,7 +187,9 @@ function RunPage({ id }: { id: string }) {
   const pause = runPause(r);
   const flow = runState.flow?.id === id ? runState.flow.spec : null;
   const rs = flow ? graphRunState(flow.blocks as GraphBlock[], r, st.pending, { condPending: st.condPending, now: Date.now() }) : null;
-  const graphNow = rs?.now.replace(/^Сейчас: /, '') ?? '';
+  // строка «Сейчас: …» из графа — без переведённой приставки (ключ тот же, что в lib/graph/run-state.ts)
+  const nowPre = t('Сейчас: {parts}', { parts: '' });
+  const graphNow = rs ? (rs.now.startsWith(nowPre) ? rs.now.slice(nowPre.length) : rs.now) : '';
   const available = new Set<RunTab>(['overview', 'log', ...(flow ? ['graph' as const] : []), ...(artPanel ? ['artifacts' as const] : [])]);
   const tab = shownTab(available);
   const manage = canManage && !r.live && !LIVE_STATUSES.includes(r.status);
@@ -201,7 +204,7 @@ function RunPage({ id }: { id: string }) {
     }
   };
   const abort = async () => {
-    if (!(await askConfirm('Остановить запуск? Текущая сессия будет прервана.', { ok: 'Остановить запуск', danger: true }))) return;
+    if (!(await askConfirm(t('Остановить запуск? Текущая сессия будет прервана.'), { ok: t('Остановить запуск'), danger: true }))) return;
     await act(() => abortRun(id));
   };
   const resume = () => (artOn ? artResume(id, undefined, { notify, toast }) : act(() => resumeRun(id)));
@@ -222,7 +225,7 @@ function RunPage({ id }: { id: string }) {
   };
   const remove = async () => {
     const known = runs?.find((x) => x.id === id) ?? r;
-    if (!(await askConfirm(deleteRunText(id, known), { ok: 'Удалить', danger: true }))) return;
+    if (!(await askConfirm(deleteRunText(id, known), { ok: t('Удалить'), danger: true }))) return;
     try {
       await deleteRun(id);
     } catch (err) {
@@ -246,26 +249,26 @@ function RunPage({ id }: { id: string }) {
     void navigate(`/run/${res.id}`);
   };
   const flowAction = r.adhoc
-    ? canAdhoc ? { label: 'Сохранить как flow', run: () => setSaveOpen(true) } : null
-    : { label: 'Открыть flow в конструкторе', run: () => void openFlow(r.flow, 'builder') };
+    ? canAdhoc ? { label: t('Сохранить как flow'), run: () => setSaveOpen(true) } : null
+    : { label: t('Открыть flow в конструкторе'), run: () => void openFlow(r.flow, 'builder') };
 
   // ---------- ответ на паузу: поле под карточкой паузы у flow с артефактом решений
   const dec = artPanel && r.live && pause && r.pauseReason ? artDecisions() : undefined;
   const answerMsg = art.answerMsg.key === aKey ? art.answerMsg : { text: '', kind: '' as const };
-  const resumeLabel = dec && pause === 'paused' && answer.trim() ? 'Возобновить с ответом' : 'Возобновить';
+  const resumeLabel = dec && pause === 'paused' && answer.trim() ? t('Возобновить с ответом') : t('Возобновить');
 
   const from = r.continuedFrom;
   const fromKnown = from && runs?.some((x) => x.id === from);
   const sub = [
     <span key="when">{when(r.startedAt)}</span>,
     r.cwd && <span key="cwd" className={styles.subPath} title={r.cwd}>{r.cwd}</span>,
-    r.hidden && <span key="hidden">скрыт из списка</span>,
-    from && (fromKnown ? <Link key="from" to={`/run/${from}`} title={from}>продолжение запуска</Link> : <span key="from" title={from}>продолжение запуска</span>),
+    r.hidden && <span key="hidden">{t('скрыт из списка')}</span>,
+    from && (fromKnown ? <Link key="from" to={`/run/${from}`} title={from}>{t('продолжение запуска')}</Link> : <span key="from" title={from}>{t('продолжение запуска')}</span>),
   ].filter(Boolean);
   const extras = [
     r.attachments?.length ? (
       <span key="att">
-        Вложения:{' '}
+        {t('Вложения:')}{' '}
         {r.attachments.map((f, i) => (
           <span key={f}>{i > 0 && ', '}<a href={runFileUrl(r.id, f)} target="_blank" rel="noopener">{f.split('/').pop()}</a></span>
         ))}
@@ -273,7 +276,7 @@ function RunPage({ id }: { id: string }) {
     ) : null,
     r.addDirs?.length ? (
       <span key="dirs">
-        Доп. директории:{' '}
+        {t('Доп. директории:')}{' '}
         {r.addDirs.map((d, i) => <span key={d}>{i > 0 && ', '}<span className={styles.subPath} title={d}>{d}</span></span>)}
       </span>
     ) : null,
@@ -310,23 +313,23 @@ function RunPage({ id }: { id: string }) {
           </h1>
           {r.title && (
             <p className={cx('muted small', styles.runFlow)}>
-              {r.adhoc ? <>{`flow ${r.flow} `}<span className="muted">(разовый)</span></> : <>flow <Link to={`/flow/${r.flow}`} title="Открыть flow">{r.flow}</Link></>}
+              {r.adhoc ? <>{`flow ${r.flow} `}<span className="muted">{t('(разовый)')}</span></> : <>flow <Link to={`/flow/${r.flow}`} title={t('Открыть flow')}>{r.flow}</Link></>}
             </p>
           )}
-          <p title="Стоимость: оценка по прайсу API; с подписки не списывается">{runMeta(r, st.tagPending)}</p>
+          <p title={t('Стоимость: оценка по прайсу API; с подписки не списывается')}>{runMeta(r, st.tagPending)}</p>
           <p className={cx('muted small', styles.runSub)}>{sub.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}</p>
           {extras.length > 0 && <p className={cx('muted small', styles.runExtras)}>{extras.flatMap((x, i) => (i ? [<span key={`e${i}`}>·</span>, x] : [x]))}</p>}
-          {!multi && limitEditable(r, blocks[0]!) && <p className={cx('muted', styles.runLimit)}>Лимит итераций: <LimitCtl block={blocks[0]!} /></p>}
+          {!multi && limitEditable(r, blocks[0]!) && <p className={cx('muted', styles.runLimit)}>{t('Лимит итераций:')} <LimitCtl block={blocks[0]!} /></p>}
         </div>
         <div className="row">
-          {!r.adhoc && <button className="btn ghost" onClick={() => void openFlow(r.flow)}>К flow</button>}
-          {r.adhoc && canAdhoc && <button className="btn" title="Разовый запуск: сохранить его flow в flows/, чтобы запускать снова" onClick={() => setSaveOpen(true)}>Сохранить как flow</button>}
-          {r.live && !pause && <button className="btn" title="Текущий этап доработает, следующий не начнётся" onClick={() => void act(() => pauseRun(id))}>Пауза</button>}
+          {!r.adhoc && <button className="btn ghost" onClick={() => void openFlow(r.flow)}>{t('К flow')}</button>}
+          {r.adhoc && canAdhoc && <button className="btn" title={t('Разовый запуск: сохранить его flow в flows/, чтобы запускать снова')} onClick={() => setSaveOpen(true)}>{t('Сохранить как flow')}</button>}
+          {r.live && !pause && <button className="btn" title={t('Текущий этап доработает, следующий не начнётся')} onClick={() => void act(() => pauseRun(id))}>{t('Пауза')}</button>}
           {pause && <button className="btn primary" onClick={() => void resume()}>{resumeLabel}</button>}
-          {continueVisible(r) && <button className="btn primary" title="Новый запуск текущей версией flow: пройденные блоки не повторяются" onClick={() => void cont()}>Продолжить с места остановки</button>}
-          {r.live && <button className="btn danger" onClick={() => void abort()}>Остановить запуск</button>}
-          {manage && <button className="btn ghost" title="Убрать из списка запусков слева; файлы останутся" onClick={() => void hide()}>{r.hidden ? 'Вернуть в список' : 'Скрыть'}</button>}
-          {manage && <button className="btn danger" title="Удалить папку запуска из runs/" onClick={() => void remove()}>Удалить</button>}
+          {continueVisible(r) && <button className="btn primary" title={t('Новый запуск текущей версией flow: пройденные блоки не повторяются')} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
+          {r.live && <button className="btn danger" onClick={() => void abort()}>{t('Остановить запуск')}</button>}
+          {manage && <button className="btn ghost" title={t('Убрать из списка запусков слева; файлы останутся')} onClick={() => void hide()}>{r.hidden ? t('Вернуть в список') : t('Скрыть')}</button>}
+          {manage && <button className="btn danger" title={t('Удалить папку запуска из runs/')} onClick={() => void remove()}>{t('Удалить')}</button>}
         </div>
       </header>
       {/* то, что ждёт человека, — над вкладками: видно с любой из них */}
@@ -339,7 +342,7 @@ function RunPage({ id }: { id: string }) {
               <>
                 <div>
                   {hint.text}
-                  {hint.openArtifacts && <>{' '}<button type="button" className="btn small" onClick={artReveal}>Открыть артефакты</button></>}
+                  {hint.openArtifacts && <>{' '}<button type="button" className="btn small" onClick={artReveal}>{t('Открыть артефакты')}</button></>}
                 </div>
                 <MdText text={r.pauseReason!.text} />
               </>
@@ -374,7 +377,7 @@ function RunPage({ id }: { id: string }) {
         )}
       </div>
       {/* вкладки страницы запуска; выбранная запоминается (agentgraph.runTab) */}
-      <nav className={cx('tabs', styles.runTabs)} role="tablist" aria-label="Разделы запуска" onKeyDown={onTabKey}>
+      <nav className={cx('tabs', styles.runTabs)} role="tablist" aria-label={t('Разделы запуска')} onKeyDown={onTabKey}>
         {shownTabs.map((t) => (
           <button
             key={t}
@@ -412,7 +415,7 @@ function RunPage({ id }: { id: string }) {
       </section>
       <section id="run-pane-log" className={cx(styles.runPane, styles.logPane)} role="tabpanel" hidden={tab !== 'log'}>
         <div className={styles.log}>
-          <p className="muted small">Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.</p>
+          <p className="muted small">{t('Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.')}</p>
           <LogBody shown={tab === 'log'} />
         </div>
       </section>
@@ -441,17 +444,17 @@ function PauseAnswer({ answerKey: key, title, waiting, msg, focus }: {
     ta.current.scrollIntoView({ block: 'center', behavior: 'smooth' });
     ta.current.focus({ preventScroll: true });
   }, [focus, waiting]);
-  const shownMsg = waiting ? { text: 'Жду конца шага: поле ответа появится, когда запуск встанет на паузу.', kind: '' as const } : msg;
+  const shownMsg = waiting ? { text: t('Жду конца шага: поле ответа появится, когда запуск встанет на паузу.'), kind: '' as const } : msg;
   return (
     <div className={styles.runAnswer}>
-      {!waiting && <label htmlFor="run-answer-text">{`Ответ — допишется в артефакт «${title}»`}</label>}
+      {!waiting && <label htmlFor="run-answer-text">{t('Ответ — допишется в артефакт «{title}»', { title })}</label>}
       {!waiting && (
         <textarea
           ref={ta}
           id="run-answer-text"
           rows={3}
           aria-describedby="run-answer-msg"
-          placeholder="Решение для агента: допишется в артефакт решений, затем запуск пойдёт дальше"
+          placeholder={t('Решение для агента: допишется в артефакт решений, затем запуск пойдёт дальше')}
           value={value}
           onChange={(e) => {
             setPauseAnswer(key, e.target.value);

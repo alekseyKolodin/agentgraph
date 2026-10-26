@@ -10,6 +10,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { ICON } from '../../components/shell/FlowList';
 import { when, usd } from '../../lib/format';
 import { modelOptions } from '../../lib/flow/tools';
+import { t } from '../../lib/i18n';
 import { chatMeta, chatText } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
 import styles from './Run.module.css';
@@ -85,7 +86,7 @@ function MsgView({ m, onOpenRun }: { m: ChatMessage; onOpenRun: (id: string) => 
     <div className={[styles.cmsg, styles[m.role], m.error && styles.error].filter(Boolean).join(' ')}>
       {/* chatText экранирует текст сам и добавляет только pre, code, b */}
       <div className={styles.ctext} dangerouslySetInnerHTML={{ __html: chatText(m.text) }} />
-      {m.openRun && <button type="button" className="btn small" onClick={() => onOpenRun(m.openRun!)}>Открыть новый запуск</button>}
+      {m.openRun && <button type="button" className="btn small" onClick={() => onOpenRun(m.openRun!)}>{t('Открыть новый запуск')}</button>}
       {m.role === 'assistant' && <span className={styles.cmeta}>{`${when(m.at)}${m.costUsd ? ` · ${usd(m.costUsd)}` : ''}`}</span>}
     </div>
   );
@@ -127,8 +128,8 @@ export function RunChat({ runId, onAfterTurn }: { runId: string; onAfterTurn: ()
   const clearContext = async (confirm: boolean) => {
     const id = chat.runId;
     if (!id) return;
-    if (chat.busy) return setMsg('Агент ещё отвечает: прерви ответ или дождись его');
-    if (confirm && chat.data?.messages.length && !(await askConfirm('Очистить контекст чата? Агент забудет разговор, сообщения пропадут с экрана.', { ok: 'Очистить' }))) return;
+    if (chat.busy) return setMsg(t('Агент ещё отвечает: прерви ответ или дождись его'));
+    if (confirm && chat.data?.messages.length && !(await askConfirm(t('Очистить контекст чата? Агент забудет разговор, сообщения пропадут с экрана.'), { ok: t('Очистить') }))) return;
     try {
       const data = await clearChat(id);
       if (chat.runId === id) {
@@ -199,14 +200,14 @@ export function RunChat({ runId, onAfterTurn }: { runId: string; onAfterTurn: ()
             render(true);
           }}
         >
-          <span className="caret">{ICON.caret}</span>Чат с агентом об этом запуске
+          <span className="caret">{ICON.caret}</span>{t('Чат с агентом об этом запуске')}
         </button>
-        <span className="muted small" title={chat.data?.sessionId ? `Сессия чата: claude --resume ${chat.data.sessionId} (в директории проекта запуска)` : ''}>
+        <span className="muted small" title={chat.data?.sessionId ? t('Сессия чата: claude --resume {id} (в директории проекта запуска)', { id: chat.data.sessionId }) : ''}>
           {chatMeta(msgs, chat.data?.totalCostUsd, busy)}
         </span>
         <span className={`row ${styles.push}`}>
           <select
-            title="Модель чата"
+            title={t('Модель чата')}
             value={chat.model}
             onChange={(e) => {
               chat.model = e.target.value;
@@ -215,8 +216,8 @@ export function RunChat({ runId, onAfterTurn }: { runId: string; onAfterTurn: ()
           >
             {modelOptions(chat.model).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
-          <button type="button" className="btn small ghost" title="Как /clear: агент забудет разговор, следующее сообщение начнёт новый" disabled={busy || !msgs.length} onClick={() => void clearContext(true)}>
-            Очистить контекст
+          <button type="button" className="btn small ghost" title={t('Как /clear: агент забудет разговор, следующее сообщение начнёт новый')} disabled={busy || !msgs.length} onClick={() => void clearContext(true)}>
+            {t('Очистить контекст')}
           </button>
         </span>
       </div>
@@ -235,13 +236,13 @@ export function RunChat({ runId, onAfterTurn }: { runId: string; onAfterTurn: ()
               {chat.runId === runId && chat.pendingText && <MsgView m={{ role: 'user', text: chat.pendingText, at: '' }} onOpenRun={() => {}} />}
               {busy && (
                 <div className={`${styles.cmsg} ${styles.assistant} ${styles.busy}`}>
-                  ⏳ думает…{chat.activity.length > 0 && <div className={styles.activity}>{chat.activity.join('\n')}</div>}
+                  {t('⏳ думает…')}{chat.activity.length > 0 && <div className={styles.activity}>{chat.activity.join('\n')}</div>}
                 </div>
               )}
             </>
           ) : (
             <div className={styles.chatHint}>
-              Агент видит этот запуск: статус, блоки и итерации, выводы и транскрипты этапов, живой лог, репозиторий. Может поставить на паузу, возобновить, остановить запуск, поменять лимит итераций, ответить на вопрос агента, продолжить завершённый запуск.
+              {t('Агент видит этот запуск: статус, блоки и итерации, выводы и транскрипты этапов, живой лог, репозиторий. Может поставить на паузу, возобновить, остановить запуск, поменять лимит итераций, ответить на вопрос агента, продолжить завершённый запуск.')}
             </div>
           )}
         </div>
@@ -250,16 +251,16 @@ export function RunChat({ runId, onAfterTurn }: { runId: string; onAfterTurn: ()
             ref={field}
             name="message"
             rows={2}
-            placeholder="Спроси про запуск или попроси что-то сделать. Enter — отправить, Shift+Enter — перенос"
-            title="Например: «что сейчас происходит?», «почему упало?», «подними лимит итераций до 40», «поставь на паузу после этапа». /clear — очистить контекст"
+            placeholder={t('Спроси про запуск или попроси что-то сделать. Enter — отправить, Shift+Enter — перенос')}
+            title={t('Например: «что сейчас происходит?», «почему упало?», «подними лимит итераций до 40», «поставь на паузу после этапа». /clear — очистить контекст')}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) void send(e);
             }}
           />
           <div className="row">
-            <button type="submit" className="btn primary" disabled={busy}>Отправить</button>
+            <button type="submit" className="btn primary" disabled={busy}>{t('Отправить')}</button>
             {busy && (
-              <button type="button" className="btn ghost" onClick={() => void stopChat(runId).catch((err) => notify(errorText(err)))}>Прервать</button>
+              <button type="button" className="btn ghost" onClick={() => void stopChat(runId).catch((err) => notify(errorText(err)))}>{t('Прервать')}</button>
             )}
             <span className={`msg${chat.msg ? ' err' : ''}`}>{chat.msg}</span>
           </div>

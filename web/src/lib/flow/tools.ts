@@ -1,11 +1,12 @@
 // Поля этапа в конструкторе: модели, effort, права, подсказки инструментов и коннекторы claude.ai (порт ui/app.js). Без React и DOM.
 import type { ConnectorsView } from '@server/api-types';
 import { plural } from '../format';
+import { t } from '../i18n';
 import type { EditPhase } from './edit';
 
 export const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 export const MODELS: [string, string][] = [
-  ['', 'по умолчанию'],
+  ['', t('по умолчанию')],
   ['claude-fable-5-1', 'Fable 5.1'],
   ['claude-opus-5-5', 'Opus 5.5'],
   ['claude-sonnet-5-5', 'Sonnet 5.5'],
@@ -15,10 +16,10 @@ export const MODELS: [string, string][] = [
 export const modelOptions = (current = ''): [string, string][] => (MODELS.some(([id]) => id === current) ? MODELS : [...MODELS, [current, current]]);
 export const PERMS = ['', 'default', 'acceptEdits', 'dontAsk', 'bypassPermissions', 'plan', 'auto'];
 export const TOOL_HINT: Record<string, string> = {
-  Read: 'читать файлы', Grep: 'искать по содержимому', Glob: 'искать файлы по маске', Edit: 'править файлы',
-  Write: 'создавать файлы', Bash: 'запускать команды', WebSearch: 'искать в вебе', WebFetch: 'читать страницы',
-  AskUserQuestion: 'задать вопрос пользователю и дождаться ответа',
-  Agent: 'сабагенты: включены в каждом этапе всегда', Skill: 'скиллы: включены в каждом этапе всегда',
+  Read: t('читать файлы'), Grep: t('искать по содержимому'), Glob: t('искать файлы по маске'), Edit: t('править файлы'),
+  Write: t('создавать файлы'), Bash: t('запускать команды'), WebSearch: t('искать в вебе'), WebFetch: t('читать страницы'),
+  AskUserQuestion: t('задать вопрос пользователю и дождаться ответа'),
+  Agent: t('сабагенты: включены в каждом этапе всегда'), Skill: t('скиллы: включены в каждом этапе всегда'),
 };
 
 /** Инструменты этапа для подсказки узла: свои и те, что движок добавляет в каждую сессию (Agent, Skill). */
@@ -63,11 +64,11 @@ export function addConnTools(tools: string[], names: string[]): string[] {
 }
 
 /** Ручной ввод имени: ошибка — текст для всплывашки, '' — имя подходит. */
-export function connManualError(t: string): string {
-  if (CONN_NAME_RE.test(t)) return '';
-  return t.startsWith('mcp__')
-    ? `В этапе имя коннектора — ${CONN_PREFIX}<Коннектор>__<инструмент> или ${CONN_PREFIX}<Коннектор>; имя вида mcp__<uuid>__… из desktop-сессии не подойдёт`
-    : `Нужно имя вида ${CONN_PREFIX}<Коннектор>__<инструмент> или ${CONN_PREFIX}<Коннектор> (весь коннектор)`;
+export function connManualError(name: string): string {
+  if (CONN_NAME_RE.test(name)) return '';
+  return name.startsWith('mcp__')
+    ? t('В этапе имя коннектора — {p}<Коннектор>__<инструмент> или {p}<Коннектор>; имя вида mcp__<uuid>__… из desktop-сессии не подойдёт', { p: CONN_PREFIX })
+    : t('Нужно имя вида {p}<Коннектор>__<инструмент> или {p}<Коннектор> (весь коннектор)', { p: CONN_PREFIX });
 }
 
 export type ConnChip = { name: string; text: string; title: string; cls: '' | 'on' | 'on write' | 'on unknown' | 'other' };
@@ -78,18 +79,22 @@ export function connChips(p: EditPhase, builtin: Set<string>, view: ConnectorsVi
   const live = new Map((view?.connectors || []).flatMap((c) => c.tools.map((x) => [x.name, x] as const)));
   const wholes = new Map((view?.connectors || []).map((c) => [c.name, c] as const));
   const writes = (c: ConnectorsView['connectors'][number]) => c.tools.filter((x) => !x.readOnly).length;
-  return extra.map((t): ConnChip => {
-    if (!t.startsWith(CONN_PREFIX)) return { name: t, text: t, title: `${t}: MCP-инструмент не из коннекторов claude.ai, выдача этапу не проверена`, cls: 'other' };
-    const [server, tool] = connParts(t);
+  return extra.map((id): ConnChip => {
+    if (!id.startsWith(CONN_PREFIX)) return { name: id, text: id, title: t('{name}: MCP-инструмент не из коннекторов claude.ai, выдача этапу не проверена', { name: id }), cls: 'other' };
+    const [server, tool] = connParts(id);
     if (!tool) {
-      const c = wholes.get(t);
-      const why = view && !c ? 'нет такого подключённого коннектора: проверь имя' : `все инструменты коннектора${c ? ` (${c.tools.length}, из них меняют данные — ${writes(c)})` : ', в том числе меняющие данные,'} разрешены без подтверждения; новые инструменты коннектора этап тоже получит`;
-      return { name: t, text: `${server} · весь коннектор`, title: `${t} — ${why}`, cls: view && !c ? 'on unknown' : 'on write' };
+      const c = wholes.get(id);
+      const why = view && !c
+        ? t('нет такого подключённого коннектора: проверь имя')
+        : c
+          ? t('все инструменты коннектора ({n}, из них меняют данные — {w}) разрешены без подтверждения; новые инструменты коннектора этап тоже получит', { n: c.tools.length, w: writes(c) })
+          : t('все инструменты коннектора, в том числе меняющие данные, разрешены без подтверждения; новые инструменты коннектора этап тоже получит');
+      return { name: id, text: t('{server} · весь коннектор', { server }), title: `${id} — ${why}`, cls: view && !c ? 'on unknown' : 'on write' };
     }
-    const x = live.get(t);
+    const x = live.get(id);
     const cls = view && !x ? 'on unknown' : x && !x.readOnly ? 'on write' : 'on';
-    const why = view && !x ? 'нет у подключённых коннекторов: проверь имя' : x && !x.readOnly ? 'меняет данные снаружи, и этап сделает это без подтверждения' : x?.description || '';
-    return { name: t, text: `${server} · ${tool}`, title: `${t}${why ? ` — ${why}` : ''}`, cls };
+    const why = view && !x ? t('нет у подключённых коннекторов: проверь имя') : x && !x.readOnly ? t('меняет данные снаружи, и этап сделает это без подтверждения') : x?.description || '';
+    return { name: id, text: `${server} · ${tool}`, title: `${id}${why ? ` — ${why}` : ''}`, cls };
   });
 }
 
@@ -97,21 +102,21 @@ export function connChips(p: EditPhase, builtin: Set<string>, view: ConnectorsVi
 export function connNote(p: EditPhase, builtin: Set<string>, view: ConnectorsView | null): ['' | 'warn', string] {
   const conn = (p.tools || []).filter((t) => !builtin.has(t) && t.startsWith(CONN_PREFIX));
   const live = new Map((view?.connectors || []).flatMap((c) => c.tools.map((x) => [x.name, x] as const)));
-  const write = conn.map((t) => {
-    const [server, tool] = connParts(t);
-    if (!tool) return `весь ${server}`;
-    return live.get(t) && !live.get(t)!.readOnly ? tool : '';
+  const write = conn.map((id) => {
+    const [server, tool] = connParts(id);
+    if (!tool) return t('весь {server}', { server });
+    return live.get(id) && !live.get(id)!.readOnly ? tool : '';
   }).filter(Boolean);
   const mentions = CONN_MENTION_RE.test(`${p.prompt || ''}\n${p.handoff || ''}`);
-  if (p.permission_mode && CONN_OPEN_MODES.includes(p.permission_mode)) return ['', `Права «${p.permission_mode}»: коннекторы этапу доступны и без списка.`];
+  if (p.permission_mode && CONN_OPEN_MODES.includes(p.permission_mode)) return ['', t('Права «{mode}»: коннекторы этапу доступны и без списка.', { mode: p.permission_mode })];
   if (conn.length) {
     return write.length
-      ? ['warn', `Этап получит коннекторы. Без подтверждения он сможет и менять данные: ${write.join(', ')}.`]
-      : ['', 'Этап получит коннекторы. Перечисленные инструменты разрешены без подтверждения.'];
+      ? ['warn', t('Этап получит коннекторы. Без подтверждения он сможет и менять данные: {tools}.', { tools: write.join(', ') })]
+      : ['', t('Этап получит коннекторы. Перечисленные инструменты разрешены без подтверждения.')];
   }
   return mentions
-    ? ['warn', 'Промпт обращается к Jira, Confluence или Slack, а коннекторов у этапа нет: вызвать их он не сможет. Добавь нужные инструменты.']
-    : ['', 'Выключены: этап не получит Jira, Confluence и Slack и не потратит на них контекст. Нужны — добавь инструменты, которые он вызывает.'];
+    ? ['warn', t('Промпт обращается к Jira, Confluence или Slack, а коннекторов у этапа нет: вызвать их он не сможет. Добавь нужные инструменты.')]
+    : ['', t('Выключены: этап не получит Jira, Confluence и Slack и не потратит на них контекст. Нужны — добавь инструменты, которые он вызывает.')];
 }
 
 export type ConnOption = { value: string; label: string; title?: string };
@@ -129,9 +134,9 @@ export function connPick(p: EditPhase, view: ConnectorsView): { groups: ConnGrou
     const left = c.tools.filter((x) => !p.tools.includes(x.name));
     const read = left.filter((x) => x.readOnly);
     const w = c.tools.filter((x) => !x.readOnly).length;
-    const options: ConnOption[] = [{ value: `whole:${c.name}`, label: `★ весь коннектор — ${tw(c.tools.length)}${w ? `, из них меняют данные — ${w}` : ''}` }];
-    if (read.length > 1 && read.length < left.length) options.push({ value: `read:${c.name}`, label: `★ всё на чтение — ${tw(read.length)}` });
-    for (const x of left) options.push({ value: x.name, label: `${x.tool}${x.readOnly ? '' : ' — меняет данные'}`, title: x.description || '' });
+    const options: ConnOption[] = [{ value: `whole:${c.name}`, label: w ? t('★ весь коннектор — {tools}, из них меняют данные — {w}', { tools: tw(c.tools.length), w }) : t('★ весь коннектор — {tools}', { tools: tw(c.tools.length) }) }];
+    if (read.length > 1 && read.length < left.length) options.push({ value: `read:${c.name}`, label: t('★ всё на чтение — {tools}', { tools: tw(read.length) }) });
+    for (const x of left) options.push({ value: x.name, label: x.readOnly ? x.tool : t('{tool} — меняет данные', { tool: x.tool }), title: x.description || '' });
     return [{ label: c.server.replace(/^claude\.ai /, ''), options }];
   });
   return { groups, ready: ready.length, off };

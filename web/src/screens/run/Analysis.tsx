@@ -5,13 +5,14 @@ import { useEffect, useState } from 'react';
 import type { AnalysisSuggestion, RunAnalysis } from '@server/api-types';
 import { ApiError, errorText, fetchAnalysis, runAnalysis, useFeature } from '../../api';
 import { useToast } from '../../components/Toast';
+import { t } from '../../lib/i18n';
 import { analysisMeta, groupSuggestions, KIND_LABEL, phaseRows, VERDICT } from '../../lib/run/analysis';
 import runStyles from './Run.module.css';
 import styles from './Analysis.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 
-const HINT = 'Модель по фактам запуска предложит, какие этапы объединить, какие разбить, что поменять в условиях и инструментах.';
+const HINT = t('Модель по фактам запуска предложит, какие этапы объединить, какие разбить, что поменять в условиях и инструментах.');
 
 type Entry = { analysis: RunAnalysis | null; busy: boolean; loaded: boolean };
 const entries = new Map<string, Entry>();
@@ -78,11 +79,11 @@ export function Analysis({ runId }: { runId: string }) {
     try {
       const a = await runAnalysis(runId);
       patch(runId, { analysis: a, busy: false, loaded: true });
-      if (a.error) toast(`Анализ не удался: ${a.error}`);
+      if (a.error) toast(t('Анализ не удался: {error}', { error: a.error }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 409 && err.code === 'busy') {
         // анализ запущен из другой вкладки: ждём его результат опросом, кнопка остаётся занятой
-        toast('Анализ этого запуска уже идёт: покажу результат, когда он будет готов');
+        toast(t('Анализ этого запуска уже идёт: покажу результат, когда он будет готов'));
         void waitForAnalysis(runId);
         return;
       }
@@ -96,16 +97,16 @@ export function Analysis({ runId }: { runId: string }) {
   return (
     <section className={cx(runStyles.card, styles.box)}>
       <div className={runStyles.head}>
-        <span className={runStyles.title}>Анализ flow</span>
+        <span className={runStyles.title}>{t('Анализ flow')}</span>
         {a?.verdict && <span className={`badge ${VERDICT[a.verdict].cls}`} title={VERDICT[a.verdict].title}>{VERDICT[a.verdict].label}</span>}
         {a && <span className={runStyles.stats}>{analysisMeta(a)}</span>}
         <button type="button" className={cx('btn small', styles.headBtn, !a && !e.busy && 'primary')} disabled={e.busy} title={HINT} onClick={() => void start()}>
-          {e.busy ? 'Анализирую…' : a ? 'Повторить' : 'Анализ flow'}
+          {e.busy ? t('Анализирую…') : a ? t('Повторить') : t('Анализ flow')}
         </button>
       </div>
       {!a && !e.busy && <p className={styles.hint}>{HINT}</p>}
-      {e.busy && <div className={styles.wait}><span className={styles.dot} />Анализирую… модель читает факты запуска и flow, обычно это полминуты.</div>}
-      {a?.error && <div className="error">{`Модель не ответила: ${a.error}. Факты по этапам ниже посчитаны без неё.`}</div>}
+      {e.busy && <div className={styles.wait}><span className={styles.dot} />{t('Анализирую… модель читает факты запуска и flow, обычно это полминуты.')}</div>}
+      {a?.error && <div className="error">{t('Модель не ответила: {error}. Факты по этапам ниже посчитаны без неё.', { error: a.error })}</div>}
       {a?.summary && <div className={styles.summary}>{a.summary}</div>}
       {groups.map((g) => (
         <div key={g.severity} className={styles.group}>
@@ -113,7 +114,7 @@ export function Analysis({ runId }: { runId: string }) {
           {g.items.map((s, i) => <Suggestion key={i} s={s} />)}
         </div>
       ))}
-      {a?.verdict === 'keep' && !a.suggestions.length && <div className="muted small">Правок не нужно: границы между этапами оправданы фактами запуска.</div>}
+      {a?.verdict === 'keep' && !a.suggestions.length && <div className="muted small">{t('Правок не нужно: границы между этапами оправданы фактами запуска.')}</div>}
       {a && <Facts a={a} />}
     </section>
   );
@@ -127,8 +128,8 @@ function Suggestion({ s }: { s: AnalysisSuggestion }) {
         <span className={styles.sugTitle}>{s.title}</span>
         {s.phases.length > 0 && <span className={styles.phases}>{s.phases.map((p) => <code key={p}>{p}</code>)}</span>}
       </div>
-      {s.why && <div className={styles.text}><b>Почему: </b>{s.why}</div>}
-      {s.how && <div className={styles.text}><b>Как: </b>{s.how}</div>}
+      {s.why && <div className={styles.text}><b>{`${t('Почему:')} `}</b>{s.why}</div>}
+      {s.how && <div className={styles.text}><b>{`${t('Как:')} `}</b>{s.how}</div>}
     </div>
   );
 }
@@ -138,17 +139,17 @@ function Facts({ a }: { a: RunAnalysis }) {
   const multi = a.facts.blockCount > 1;
   return (
     <details className={styles.facts}>
-      <summary>{`Факты по этапам · ${rows.length}`}</summary>
+      <summary>{t('Факты по этапам · {n}', { n: rows.length })}</summary>
       <table>
         <thead>
           <tr>
-            <th>Этап</th>
-            <th>Инструменты</th>
-            <th className={styles.num} title="Сколько раз этап выполнялся за запуск (по итерациям)">Запусков</th>
-            <th className={styles.num} title="Ходов в среднем / максимум, из лимита max_turns">Ходов</th>
-            <th className={styles.num} title="Максимум пика контекста по запускам этапа, доля окна модели">Контекст</th>
-            <th className={styles.num}>Стоимость</th>
-            <th className={styles.num}>Время</th>
+            <th>{t('Этап')}</th>
+            <th>{t('Инструменты')}</th>
+            <th className={styles.num} title={t('Сколько раз этап выполнялся за запуск (по итерациям)')}>{t('Запусков')}</th>
+            <th className={styles.num} title={t('Ходов в среднем / максимум, из лимита max_turns')}>{t('Ходов')}</th>
+            <th className={styles.num} title={t('Максимум пика контекста по запускам этапа, доля окна модели')}>{t('Контекст')}</th>
+            <th className={styles.num}>{t('Стоимость')}</th>
+            <th className={styles.num}>{t('Время')}</th>
           </tr>
         </thead>
         <tbody>
@@ -160,7 +161,7 @@ function Facts({ a }: { a: RunAnalysis }) {
                 {multi && <span className={styles.notes}>{` · ${r.block}`}</span>}
                 {r.notes.length > 0 && <div className={styles.notes}>{r.notes.join(' · ')}</div>}
               </td>
-              <td className={styles.tools}>{r.tools}{r.writer && <span title="Пишущий этап: Edit, Write или writes"> ✎</span>}</td>
+              <td className={styles.tools}>{r.tools}{r.writer && <span title={t('Пишущий этап: Edit, Write или writes')}> ✎</span>}</td>
               <td className={styles.num}>{r.runs}</td>
               <td className={styles.num}>{r.turns}</td>
               <td className={cx(styles.num, r.ctx.level && styles[r.ctx.level])} title={r.ctx.title}>{r.ctx.text}</td>

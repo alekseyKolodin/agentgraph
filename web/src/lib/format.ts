@@ -1,14 +1,15 @@
 // Форматирование дат, денег и длительностей для интерфейса: как хелперы старого ui/app.js и ui/feed.js. Без React и DOM.
+import { locale, plural as pluralForm, t } from './i18n';
 
 /** Дата и время коротко: «24.10.2026, 20:59». Пустая строка, если даты нет (ui/app.js when). */
 export const when = (iso: string | null | undefined): string =>
-  iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '';
+  iso ? new Date(iso).toLocaleString(locale(), { dateStyle: 'short', timeStyle: 'short' }) : '';
 
 /** Сегодня — «20:59», не сегодня — «24.10, 20:59» (ui/feed.js clock). */
 export function clock(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(locale(), { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
 /** Стоимость: «$1.23»; нет числа — «$0.00». */
@@ -16,17 +17,16 @@ export const usd = (n: number | null | undefined): string => `$${Number(n || 0).
 
 /** Длительность: до минуты — «42с», дальше — «3м 5с». */
 export const dur = (ms: number): string =>
-  ms < 60000 ? `${Math.round(ms / 1000)}с` : `${Math.floor(ms / 60000)}м ${Math.round((ms % 60000) / 1000)}с`;
+  ms < 60000 ? t('{s}с', { s: Math.round(ms / 1000) }) : t('{m}м {s}с', { m: Math.floor(ms / 60000), s: Math.round((ms % 60000) / 1000) });
 
 /** Сколько прошло: «меньше минуты», «12 мин», «2 ч 5 мин». */
 export function ago(iso: string, now: number = Date.now()): string {
   const m = Math.floor((now - new Date(iso).getTime()) / 60000);
-  return m < 1 ? 'меньше минуты' : m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60} мин`;
+  return m < 1 ? t('меньше минуты') : m < 60 ? t('{m} мин', { m }) : t('{h} ч {m} мин', { h: Math.floor(m / 60), m: m % 60 });
 }
 
 /** Форма слова по числу: plural(3, 'вопрос', 'вопроса', 'вопросов') → «вопроса». */
-export const plural = (n: number, one: string, few: string, many: string): string =>
-  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many;
+export const plural = pluralForm;
 
 /** Первые слова текста агента или вывода команды без разметки — для одной строки. */
 export function excerpt(text: string | null | undefined, max = 160): string {
@@ -42,8 +42,8 @@ export function excerpt(text: string | null | undefined, max = 160): string {
 /** Время события в ленте: недавнее — «N мин назад», старше часа — clock (ui/feed.js feedTime). */
 export function feedTime(iso: string, now: Date = new Date()): string {
   const min = Math.floor((now.getTime() - new Date(iso).getTime()) / 60000);
-  if (min < 1) return 'только что';
-  if (min < 60) return `${min} мин назад`;
+  if (min < 1) return t('только что');
+  if (min < 60) return t('{m} мин назад', { m: min });
   return clock(iso, now);
 }
 
@@ -54,7 +54,7 @@ export const STATUS: Record<string, string> = {
   interrupted: 'оборвался',
 };
 
-export const statusLabel = (status: string): string => STATUS[status] || status;
+export const statusLabel = (status: string): string => (STATUS[status] ? t(STATUS[status]) : status);
 
 /** Имя папки: «/a/b/» → «b». */
 export const baseName = (p: string): string => (p || '').replace(/\/+$/, '').split('/').pop() || p;
@@ -68,7 +68,7 @@ export function projectLabels(cwds: string[]): Map<string, string> {
   return new Map(
     cwds.map((c) => [
       c,
-      !c ? 'без проекта' : (byName.get(baseName(c)) ?? 0) > 1 ? c.split('/').filter(Boolean).slice(-2).join('/') : baseName(c),
+      !c ? t('без проекта') : (byName.get(baseName(c)) ?? 0) > 1 ? c.split('/').filter(Boolean).slice(-2).join('/') : baseName(c),
     ]),
   );
 }
