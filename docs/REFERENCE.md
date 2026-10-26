@@ -277,7 +277,7 @@ If a phase has an `output_schema`, its result is JSON matching that schema, and 
 - A plugin with MCP tools: server `<server>` of plugin `<plugin>` is called `plugin:<plugin>:<server>` in the session, its tools are `mcp__plugin_<plugin>_<server>__<tool>`, the whole server is `mcp__plugin_<plugin>_<server>`. For a phase to call them without confirmation, add the names to `tools` in the YAML: the Builder accepts only claude.ai connectors manually. An MCP server with OAuth must first be authorized once in a regular `claude --plugin-dir <folder>` session via `/mcp`; until then its status is `needs-auth` and it has no tools.
 - A plugin is trusted code: its hooks run shell commands, and the artifact guard doesn't see MCP tools and hooks, just as it doesn't see Bash. Connect only plugins you trust as much as your own `~/.claude`.
 - The plugin path is a path on your machine: a colleague with the same flow may have the folder somewhere else.
-- The field can't be edited in the Builder, but it's saved as is.
+- In the Builder the field is "Claude Code plugins": in the block panel (for every phase of the block) and under "More options" on a phase card, one folder per line; the folder button picks a path.
 
 ### Run artifacts
 

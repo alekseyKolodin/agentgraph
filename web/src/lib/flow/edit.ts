@@ -19,8 +19,8 @@ export type EditPhase = {
   reads?: string[];
   writes?: string[];
   add_dirs?: string[] | undefined;
-  /** Плагины этапа в конструкторе не правятся, но сохраняются как есть. */
-  plugins?: string[];
+  /** Папки плагинов Claude Code этапа. */
+  plugins?: string[] | undefined;
   model?: string;
   effort?: string;
   /** Поля чисел — как в поле ввода: строка, пока не сохранили. */
@@ -38,7 +38,7 @@ export type EditBlock = {
   loop?: EditLoop;
   on_fail?: 'stop' | 'continue';
   knowledge?: string[];
-  /** Плагины блока в конструкторе не правятся, но сохраняются как есть. */
+  /** Папки плагинов Claude Code для всех этапов блока. */
   plugins?: string[];
   phases: EditPhase[];
   /** Цикл, снятый переключением «один проход»: вернётся при обратном переключении. */
@@ -287,10 +287,11 @@ export function untilFor(type: string, old: EditUntil): EditUntil {
 
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Подпись «Дополнительно» у этапа: группа и число доп. директорий. */
+/** Подпись «Дополнительно» у этапа: группа, число доп. директорий и плагинов. */
 export function advLabel(p: EditPhase): string {
   const n = (p.add_dirs || []).filter((x) => x.trim()).length;
-  return [t('Дополнительно'), p.group ? t('параллельная группа {g}', { g: p.group }) : '', n ? t('директорий: {n}', { n }) : ''].filter(Boolean).join(' · ');
+  const np = (p.plugins || []).filter((x) => x.trim()).length;
+  return [t('Дополнительно'), p.group ? t('параллельная группа {g}', { g: p.group }) : '', n ? t('директорий: {n}', { n }) : '', np ? t('плагинов: {n}', { n: np }) : ''].filter(Boolean).join(' · ');
 }
 
 /** Текст поля «Схема вывода»: правится строкой, пока не сохранят. */
@@ -328,8 +329,8 @@ function collectPhase(p: EditPhase, num: string, seen: Set<string>, at: { b: num
   // доступ к артефактам в конструкторе не правится, но сохраняется как есть: иначе сохранение выбросило бы контракт
   if (Array.isArray(p.reads) && p.reads.length) out.reads = [...p.reads];
   if (Array.isArray(p.writes) && p.writes.length) out.writes = [...p.writes];
-  // плагины тоже не правятся в конструкторе: сохранение их не теряет
-  if (Array.isArray(p.plugins) && p.plugins.length) out.plugins = [...p.plugins];
+  const plugins = (p.plugins || []).map((x) => x.trim()).filter(Boolean);
+  if (plugins.length) out.plugins = plugins;
   const text = p._schemaText !== undefined ? p._schemaText : p.output_schema ? JSON.stringify(p.output_schema) : '';
   if (text.trim()) {
     try {
@@ -358,7 +359,8 @@ export function collectSpec(spec: EditSpec): Record<string, unknown> {
     // у одиночного блока on_fail не показывается в конструкторе, поэтому и не сохраняется
     if (multi && b.loop && b.on_fail === 'continue') out.on_fail = 'continue';
     if (Array.isArray(b.knowledge) && b.knowledge.length) out.knowledge = [...b.knowledge];
-    if (Array.isArray(b.plugins) && b.plugins.length) out.plugins = [...b.plugins];
+    const plugins = (b.plugins || []).map((x) => x.trim()).filter(Boolean);
+    if (plugins.length) out.plugins = plugins;
     out.phases = b.phases.map((p, i) => collectPhase(p, `${bi + 1}.${i + 1}`, seenPhases, { b: bi, i }));
     return out;
   });
@@ -376,7 +378,7 @@ const PHASE_FIELDS: Record<string, string> = {
   model: 'модель', effort: 'effort', max_turns: 'лимит ходов', permission_mode: 'права', max_budget_usd: 'лимит стоимости',
   output_schema: 'схема вывода', group: 'параллельная группа', reads: 'читает артефакты', writes: 'пишет артефакты', plugins: 'плагины',
 };
-const ADV_FIELDS = ['name', 'add_dirs', 'system', 'model', 'effort', 'max_turns', 'permission_mode', 'max_budget_usd', 'output_schema', 'group'];
+const ADV_FIELDS = ['name', 'add_dirs', 'plugins', 'system', 'model', 'effort', 'max_turns', 'permission_mode', 'max_budget_usd', 'output_schema', 'group'];
 const norm = (v: unknown) => (v === '' || v === undefined ? null : v);
 const same = (a: unknown, b: unknown) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 const field = (o: object | undefined, k: string): unknown => (o as Record<string, unknown> | undefined)?.[k];
