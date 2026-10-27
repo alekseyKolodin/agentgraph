@@ -4,7 +4,7 @@ runs/
 .DS_Store
 release/
 
-# личное: в git идёт только общий набор (scripts/share.sh, функция keep)
+# личное: своя .claude/, свои флоу (кроме flows/example/), заметки редизайна
 .claude/*
 !.claude/launch.json
 !.claude/skills/

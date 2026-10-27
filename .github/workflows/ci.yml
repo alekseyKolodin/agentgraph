@@ -1,0 +1,57 @@
+# CI agentgraph: typecheck, тесты и сборка web/ на каждый PR и на main.
+# На main, если версии из package.json ещё нет среди GitHub-релизов, — релиз v<версия> с разделом из CHANGELOG.md
+# (версию и раздел поднимает npm run release, docs/GETTING_STARTED.md, «Releases and CI»).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Electron нужен только для desktop:build; бинарник в CI не качаем
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      # UI (web/): сборка Vite в dist/web, ловит то, чего не видит tsc (CSS, импорты, рантайм-импорт из src/)
+      - run: npm run build:web
+
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: GitHub release for a new version
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "Release v$v already exists"
+            exit 0
+          fi
+          # раздел «## <версия> — <дата>» без заголовка, до следующего «## »
+          awk -v v="$v" '/^## / { if (f) exit; f = ($2 == v); next } f' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $v"; exit 1; }
+          # тег v<версия> уже есть — релиз встанет на него, иначе gh создаст тег на этом коммите
+          gh release create "v$v" --target "$GITHUB_SHA" --title "agentgraph v$v" --notes-file notes.md

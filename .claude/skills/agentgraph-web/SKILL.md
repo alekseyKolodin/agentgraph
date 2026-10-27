@@ -5,7 +5,7 @@ description: Правила правок веб-интерфейса agentgraph 
 
 # Веб-интерфейс agentgraph: правила правок в `web/`
 
-UI — React 19 + TypeScript strict + Vite в `web/`. Скилл загружается, когда правка касается `web/`; раньше это был сабагент ui-engineer, теперь работа идёт в основной сессии. Его потом обернут в Electron поверх того же сервера, поэтому UI общается с сервером только по HTTP и SSE. UI перенесён со старого ванильного `ui/` один в один: правила переноса, решения и то, что не проверено, — в `docs/redesign/react-migration.md` («Статус»). Комментарии вида «порт `ui/app.js` …» ссылаются на старый UI, он есть в git до коммита этапа 7.
+UI — React 19 + TypeScript strict + Vite в `web/`. Скилл загружается, когда правка касается `web/`; раньше это был сабагент ui-engineer, теперь работа идёт в основной сессии. Его потом обернут в Electron поверх того же сервера, поэтому UI общается с сервером только по HTTP и SSE. UI перенесён со старого ванильного `ui/` один в один; комментарии вида «порт `ui/app.js` …» ссылаются на тот UI, в этом репозитории его нет.
 
 ## Где что
 - `web/` — UI. Сборка `npm run build:web` → `dist/web`, сервер раздаёт её на `/` (`src/web-static.ts`). Маршруты — пути (`/flow/<имя>`, `/run/<id>`, `/tags/<slug>`, `/context`, `/draft`), сервер отдаёт на них `index.html`. Старые адреса: хеши `/#run/<id>` и подобные `main.tsx` переводит на пути (`lib/legacy-url.ts`), `/next/…` сервер отправляет на `/…` ответом 308. Экраны, кроме главной, грузятся лениво (`React.lazy` в `App.tsx`); React, граф (`@xyflow/react`) и CodeMirror — отдельные файлы сборки (`codeSplitting` в `web/vite.config.ts`).
@@ -25,7 +25,7 @@ UI — React 19 + TypeScript strict + Vite в `web/`. Скилл загружа�
 - Зависимости — `react`, `react-dom`, `react-router`, `@tanstack/react-query`, `@xyflow/react`, пакеты CodeMirror 6, Vite. Новая — только с обоснованием (в ответе и в сообщении коммита). Без Tailwind и UI-китов.
 - Тексты интерфейса на русском, коротко, с подсказками в `title`, как в соседних элементах. Каждый новый текст — через `t('…')` из `lib/i18n.ts` (переменные — `{name}`, числа — `plural`), английский перевод — в `web/src/i18n/en/<область>.ts`; ключ — русский текст как есть. Текст, который уходит на сервер или в модель, и сообщения сервера не оборачиваются. `web/src/lib/i18n.test.ts` проверяет словарь.
 - Если меняется API, сделай минимальную правку сервера по правилам скилла `agentgraph-core`, с тестом в `src/*.test.ts`; скилл `/agentgraph` (`.claude/skills/agentgraph/agentgraph.mjs`) ходит в тот же API и не должен сломаться. `src/server-guard.ts` не ослаблять.
-- Для решений по визуалу можно звать скиллы `interface-design`, `design-review`, `design-deslop`. Контекст редизайна — в `docs/redesign/`, система — `.interface-design/system.md`.
+- Решения по визуалу сверяй с системой «Пульт» — `.interface-design/system.md`.
 
 ## Проверка
 - `npm run typecheck` (сервер, `web/` и Node-часть `web/`), `npm test`, `npm run build:web` — все зелёные.
