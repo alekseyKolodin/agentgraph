@@ -75,3 +75,11 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .end-card .hint { font-size: var(--fs-meta); }
 
 .foot { padding: 0 20px 10px; font-size: var(--fs-meta); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* саммари тегов задач — справа в строке тегов; записано — зелёная точка, приложение закрыли — «ждёт тебя», ошибка — сбой */
+.summary { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-2); }
+.summary.warn { color: var(--st-wait); }
+.summary.err { color: var(--st-fail); }
+.ok-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-ok); flex: none; }
+.hint { font-size: var(--fs-meta); color: var(--ink-3); }
+.actions :global(.menu-wrap) { position: relative; }

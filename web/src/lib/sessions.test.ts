@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chipHint, fileUris, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath } from './sessions';
+import { canSummarize, chipHint, fileUris, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, summaryNote } from './sessions';
 
 test('статус сессии: подписи и тон точки; выход без SessionStart — отдельный исход', () => {
   assert.deepEqual([sessionStatusLabel({ status: 'working' }), sessionTone({ status: 'working' })], ['Работает', 'live']);
@@ -37,4 +37,26 @@ test('перетащенный файл: путь экранируется ка�
   assert.equal(shellPath("/Users/me/Снимок экрана (1)'s.png"), "/Users/me/Снимок\\ экрана\\ \\(1\\)\\'s.png");
   assert.equal(shellPath('/a/b-c_d.txt'), '/a/b-c_d.txt');
   assert.deepEqual(fileUris('# comment\r\nfile:///Users/me/a%20b.png\r\nhttps://x.y/z\nfile://other-host/c'), ['/Users/me/a b.png']);
+});
+
+const task = [{ slug: 'checkout', kind: 'task' as const, state: 'on' as const }];
+const know = [{ slug: 'api', kind: 'knowledge' as const, state: 'on' as const }];
+
+test('«Обновить саммари»: только с тегом задачи, только когда есть новые ходы и саммари не пишется', () => {
+  assert.equal(canSummarize({ chips: know, newTurns: 3 }).show, false);
+  assert.deepEqual(canSummarize({ chips: task, newTurns: 0 }), { show: true, ok: false, why: 'Новых ходов с прошлого саммари нет' });
+  assert.equal(canSummarize({ chips: task, newTurns: 2, summarizing: true }).ok, false);
+  assert.equal(canSummarize({ chips: task, newTurns: 2 }).ok, true);
+});
+
+test('состояние саммари: пишется, приложение закрыли, записано, ошибки по тегам; без тегов задач — ничего', () => {
+  const now = new Date('2026-10-27T14:55:00');
+  const at = new Date('2026-10-27T14:52:00').toISOString();
+  assert.equal(summaryNote({ chips: know }), null);
+  assert.equal(summaryNote({ chips: task })?.text, 'Саммари тегов задач: не обновлялось');
+  assert.equal(summaryNote({ chips: task, summarizing: true })?.text, 'Саммари тегов задач: пишу…');
+  assert.deepEqual(summaryNote({ chips: task, summaryPending: 'app-closed' })?.tone, 'warn');
+  assert.deepEqual(summaryNote({ chips: task, summary: { at, tags: ['checkout', 'billing'], costUsd: 0.01 } }, now), { text: 'Саммари записано в checkout и billing · 14:52', tone: 'ok', title: '$0.010' });
+  const err = summaryNote({ chips: task, summary: { at, tags: ['a'], errors: { b: 'таймаут' }, costUsd: 0 } }, now);
+  assert.deepEqual([err?.text, err?.tone, err?.title], ['Саммари записано в a, ошибка в b', 'err', 'b: таймаут']);
 });

@@ -268,6 +268,9 @@ export type SessionPermissionMode = 'acceptEdits' | 'auto' | 'manual' | 'plan';
 /** Тег в строке тегов сессии: on — модель его видела; pending — добавлен, придёт со следующим шагом; removed — снят, снятие ещё не дошло. */
 export type SessionTagChip = { slug: string; kind: TagKind; state: 'on' | 'pending' | 'removed' };
 
+/** Последнее обновление саммари тегов задач по сессии: когда, в какие теги записано, ошибки по тегам, стоимость. */
+export type SessionSummary = { at: string; tags: string[]; errors?: Record<string, string>; costUsd: number };
+
 /** Сессия в списке, в шапке и в потоке WebSocket. */
 export type SessionView = {
   id: string;
@@ -297,6 +300,15 @@ export type SessionView = {
   claudeVersion?: string;
   /** Транскрипт Claude Code последнего разговора (из хука). */
   transcriptPath?: string;
+  /** Ходов после прошлого саммари тегов задач: им есть что обновлять. */
+  newTurns: number;
+  summary?: SessionSummary;
+  /** Саммари тегов задач пишется прямо сейчас. */
+  summarizing?: true;
+  /** Саммари при выходе не записано: приложение закрыли (или сервер остановился), пока сессия шла. */
+  summaryPending?: 'app-closed';
+  /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
+  resumable?: boolean;
 };
 
 /** GET /api/sessions. */

@@ -167,6 +167,9 @@ The **Run** tab:
 - Open **Sessions** on the left (there's no tab if the server couldn't load the terminal, `node-pty`), click **New session**, pick a folder and tags, and click **Open terminal**. It's an ordinary Claude Code session — slash commands, permission prompts, `/resume` — in a terminal inside agentgraph; the task tags' notes and summaries and the knowledge tag lines arrive in its context at the start.
 - Add or remove a tag in the tag row while the session runs: the model sees the change with its next step or your next message (until then the chip is dashed). Reading the new tag's folders doesn't ask for permission.
 - Reloading the page doesn't stop the session: the screen comes back. Live sessions are listed under "Now" in the sidebar. "End" stops claude; in the desktop app Cmd+Q asks first if sessions are running.
+- When claude exits, the task tags get a new summary from the session's turns (a short haiku session per tag; the checkbox in "Advanced" of the form, on by default). "Update summary" does it at any time; after Cmd+Q the session is marked and waits for the button.
+- "Continue" on an ended session opens the same conversation (`claude --resume`) in the same folder with the current tags; "Restart with tags" in the `⋯` menu does it for a running session, so the folders of tags added on the fly open without asking. Sessions stay in the list after a restart of agentgraph.
+- On a tag's page, "Open a session with this tag" starts the form with the tag; sessions that updated the tag's summary are listed next to its runs.
 - Shift+Enter is a new line, a file dragged onto the terminal is inserted as a path.
 
 ### Run from a Jira issue, MR or branch
@@ -397,8 +400,8 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/sessions.ts` | "Sessions" tab, pure logic: finding `claude`, its arguments, hooks and `permissions.deny` in `--settings`, the `agentgraph` MCP config, the environment, the tag context (full on SessionStart, the change on UserPromptSubmit/PostToolBatch) with the hook budget, hook handling, PermissionRequest for tag folders, "resume or start anew"; tests `sessions.test.ts` |
 | `src/sessions-mcp.ts` | the session's HTTP MCP server (JSON-RPC without state): `knowledge_read` and `tag_read` over the session's current tags; tests `sessions-mcp.test.ts` |
 | `src/sessions-pty.ts` | `node-pty` loaded on demand (optional dependency; no package — no feature), the headless screen mirror and the snapshot for a new client, stopping claude with SIGHUP and a timeout |
-| `src/sessions-server.ts` | session registry, the `/api/sessions*` routes, hooks and MCP by the session token, the WebSocket upgrade with `Host`/`Origin` checks, stopping on server stop, `session.json`; tests `sessions-server.test.ts` (fake pty, real HTTP and WebSocket) |
-| `src/tag-summary.ts` | the tag summary session after a `done` run: prompt, request (read-only, haiku), response parsing, cleanup of inaccessible paths (`dropRunPaths`) |
+| `src/sessions-server.ts` | session registry, the `/api/sessions*` routes, hooks and MCP by the session token, the WebSocket upgrade with `Host`/`Origin` checks, stopping on server stop; on disk — `session.json`, the turn log `turns.jsonl`, the last screen; task tag summaries on exit and by the button, "Continue" (`--resume`), "Restart with tags", deleting; tests `sessions-server.test.ts` (fake pty and summary session, real HTTP and WebSocket) |
+| `src/tag-summary.ts` | the tag summary session after a `done` run: prompt, request (read-only, haiku), response parsing, cleanup of inaccessible paths (`dropRunPaths`); the same for a terminal session from its turn log (`sessionTagSummaryRequest`, `turnsDigest`); tests `tag-summary.session.test.ts` |
 | `src/attachments.ts` | task attachments: type and size checks, writing to `runs/<id>/attachments/`, copying on continuation |
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
 | `src/template.ts` | substituting `{{variables}}` into prompts |

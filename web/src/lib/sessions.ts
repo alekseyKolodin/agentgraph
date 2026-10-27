@@ -1,7 +1,7 @@
 // Логика экранов «Сессии» без React и DOM: подписи статуса, строка сессии в «Сейчас», чипы тегов на ходу, адрес
 // WebSocket, путь перетащенного файла для командной строки claude.
 import type { SessionTagChip, SessionView } from '@server/api-types';
-import { baseName } from './format';
+import { baseName, clock } from './format';
 import { t } from './i18n';
 
 /** Тон точки и подписи: live — работает, wait — ход за тобой, off — завершена или запускается, fail — не запустилась. */
@@ -82,3 +82,35 @@ export function fileUris(list: string): string[] {
 
 /** Перевод строки в поле ввода claude без отправки: Shift+Enter шлёт то же, что Option+Enter (ESC CR). */
 export const NEWLINE_SEQ = '\x1b\r';
+
+const hasTaskTag = (s: Pick<SessionView, 'chips'>) => s.chips.some((c) => c.kind === 'task' && c.state !== 'removed');
+
+/** Кнопка «Обновить саммари»: есть ли она (нужен тег задачи), можно ли нажать и почему нет. */
+export function canSummarize(s: Pick<SessionView, 'chips' | 'summarizing' | 'newTurns'>): { show: boolean; ok: boolean; why: string } {
+  if (!hasTaskTag(s)) return { show: false, ok: false, why: '' };
+  if (s.summarizing) return { show: true, ok: false, why: t('Саммари уже пишется') };
+  if (!s.newTurns) return { show: true, ok: false, why: t('Новых ходов с прошлого саммари нет') };
+  return { show: true, ok: true, why: t('Сессия haiku на каждый тег задачи: перепишет саммари по ходам после прошлого') };
+}
+
+/** «a и b», «a, b и c». */
+const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(', ')}${t(' и ')}${items.at(-1)}` : items[0] ?? '');
+
+/** Состояние саммари тегов задач для строки тегов и карточки завершённой сессии; без тегов задач — null. */
+export function summaryNote(
+  s: Pick<SessionView, 'chips' | 'summarizing' | 'summary' | 'summaryPending'>,
+  now: Date = new Date(),
+): { text: string; tone: '' | 'ok' | 'warn' | 'err'; title?: string } | null {
+  if (s.summarizing) return { text: t('Саммари тегов задач: пишу…'), tone: '' };
+  if (s.summaryPending === 'app-closed') return { text: t('Саммари не обновлено: приложение закрыли'), tone: 'warn', title: t('При выходе из приложения саммари не пишется: обнови его кнопкой') };
+  const sum = s.summary;
+  const errors = Object.keys(sum?.errors ?? {});
+  if (sum && errors.length) {
+    const title = Object.entries(sum.errors ?? {}).map(([tag, e]) => `${tag}: ${e}`).join('\n');
+    return sum.tags.length
+      ? { text: t('Саммари записано в {ok}, ошибка в {bad}', { ok: list(sum.tags), bad: list(errors) }), tone: 'err', title }
+      : { text: t('Саммари не записано: ошибка в {bad}', { bad: list(errors) }), tone: 'err', title };
+  }
+  if (sum?.tags.length) return { text: t('Саммари записано в {tags} · {time}', { tags: list(sum.tags), time: clock(sum.at, now) }), tone: 'ok', title: `$${sum.costUsd.toFixed(3)}` };
+  return hasTaskTag(s) ? { text: t('Саммари тегов задач: не обновлялось'), tone: '' } : null;
+}

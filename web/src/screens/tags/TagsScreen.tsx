@@ -40,6 +40,7 @@ export function TagsScreen() {
   const qc = useQueryClient();
   const { askConfirm } = useConfirm();
   const kinds = useFeature('tag-kinds');
+  const sessions = useFeature('sessions');
   const tagsQuery = useTags(true);
 
   // как DOM старой страницы: поиск и форма нового тега переживают уход с экрана и возврат
@@ -340,6 +341,9 @@ export function TagsScreen() {
                   <h2 className="mono"><TagBadge slug={tag.slug} kind={tag.kind} />{' '}<span className="muted small">{knows ? t('область знаний') : t('тег задачи')}</span></h2>
                   <span className="row push">
                     <span className={msg.cls}>{msg.text}</span>
+                    {sessions && (
+                      <Link className="btn small" to={`/sessions?tags=${encodeURIComponent(tag.slug)}`} title={t('Новая сессия Claude Code в терминале с этим тегом')}>{t('Открыть сессию с тегом')}</Link>
+                    )}
                     <button type="button" className="btn small ghost danger" onClick={() => void remove()}>{t('Удалить тег')}</button>
                     <button type="submit" className="btn primary">{t('Сохранить')}</button>
                   </span>
@@ -430,9 +434,12 @@ export function TagsScreen() {
                     {tag.runs.length
                       ? <>
                         <span className="muted">{t('Запуски с обновлением саммари:')}</span>
-                        {tag.runs.map((r) => (
-                          <Link key={r.id} to={`/run/${r.id}`} title={when(r.finishedAt)}>{`${r.flow} `}<Badge status={r.status} /></Link>
-                        ))}
+                        {tag.runs.map((r) =>
+                          // сессия терминала тоже обновляет саммари: ведёт на свою страницу, а не на запуск
+                          r.kind === 'session'
+                            ? <Link key={r.id} to={`/sessions/${r.id}`} title={when(r.finishedAt)}>{t('сессия · {name}', { name: r.title || r.id.slice(0, 8) })}</Link>
+                            : <Link key={r.id} to={`/run/${r.id}`} title={when(r.finishedAt)}>{`${r.flow} `}<Badge status={r.status} /></Link>,
+                        )}
                       </>
                       : <span className="muted">{t('Саммари ещё ни разу не обновлялось запуском')}</span>}
                   </div>

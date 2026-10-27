@@ -29,6 +29,13 @@ export const fetchSession = (id: string) => api<SessionView>('GET', `/api/sessio
 export const setSessionTags = (id: string, tags: string[]) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/tags`, { tags });
 export const renameSession = (id: string, name: string) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/name`, { name });
 export const endSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/end`);
+/** «Продолжить»: тот же разговор (--resume), если есть транскрипт, иначе новый — в той же папке с текущими тегами. */
+export const continueSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, {});
+/** «Перезапустить с тегами»: claude заново тем же разговором, папки тегов пересчитаны. */
+export const restartSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/restart`);
+/** «Обновить саммари»: ответ сразу, саммари пишется в фоне (summarizing). */
+export const summarizeSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/summary`);
+export const deleteSession = (id: string) => api<{ ok: true }>('DELETE', `/api/sessions/${enc(id)}`);
 /** Файл, перетащенный в терминал: сервер кладёт копию в папку сессии и отдаёт её путь. data — base64. */
 export const uploadSessionFile = (id: string, name: string, data: string) => api<{ path: string }>('POST', `/api/sessions/${enc(id)}/files`, { name, data });
 

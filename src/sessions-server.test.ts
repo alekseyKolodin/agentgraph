@@ -11,7 +11,8 @@ import { startServer, stopServer } from './server.js';
 import { SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
-import { createTag, updateTag } from './tags.js';
+import { createTag, readTag, updateTag } from './tags.js';
+import type { SessionRequest, SessionResult } from './agent.js';
 
 class FakePty implements PtyProcess {
   pid = 4242;
@@ -51,6 +52,12 @@ class FakePty implements PtyProcess {
 }
 
 const spawned: FakePty[] = [];
+/** Сессии саммари тегов: настоящий Agent SDK не вызывается, ответ — готовое саммари. */
+const summaries: SessionRequest[] = [];
+const fakeSummary = async (req: SessionRequest): Promise<SessionResult> => {
+  summaries.push(req);
+  return { ok: true, subtype: 'success', text: '', structured: { summary: `саммари №${summaries.length}` }, costUsd: 0.01, turns: 1, durationMs: 1, errors: [] };
+};
 const kit: PtyKit = {
   spawn: (file, args, opts) => {
     const p = new FakePty(file, args, opts);
@@ -88,6 +95,7 @@ before(async () => {
     runsDir: path.join(root, 'runs'),
     env: () => ({ PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_OAUTH_TOKEN: 'keep' }),
     deliveryAfterMs: 60_000,
+    summarize: fakeSummary,
   });
   port = await freePort();
   await startServer({ port, host: '127.0.0.1', defaultCwd: path.join(root, 'proj'), notify: false });
@@ -259,6 +267,112 @@ test('WebSocket: чужой Origin, без Origin и чужой Host — отк�
   assert.ok(!p.written.includes('в пустоту'));
 });
 
+const uuid = (n: number) => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`;
+
+test('журнал ходов и саммари при выходе: сессия haiku на каждый тег задачи, запись в тег как сессия, ходы учтены', async () => {
+  createTag('sum-task');
+  createTag('sum-know', undefined, 'knowledge');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['sum-task', 'sum-know'], name: 'корзина' });
+  const p = spawned.at(-1)!;
+  const token = tokenOf(p);
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: uuid(1), transcript_path: path.join(root, `${uuid(1)}.jsonl`) });
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(1), prompt: 'почини пустую корзину' });
+  await hook(s.id, token, { hook_event_name: 'Stop', session_id: uuid(1), last_assistant_message: 'Поправил validate.ts' });
+  assert.equal((await view(s.id)).newTurns, 1);
+  const before = summaries.length;
+  p.exit(0);
+  await until(async () => Boolean((await view(s.id)).summary));
+  const v = await view(s.id);
+  assert.deepEqual([v.summary?.tags, v.summary?.errors, v.newTurns, v.summarizing], [['sum-task'], undefined, 0, undefined]);
+  // тег знаний саммари не получает; в промпте — ход сессии, без транскрипта
+  assert.equal(summaries.length, before + 1);
+  const req = summaries.at(-1)!;
+  assert.ok(req.prompt.includes('почини пустую корзину') && req.prompt.includes('Поправил validate.ts') && !req.prompt.includes(`${uuid(1)}.jsonl`));
+  assert.equal(req.model, 'haiku');
+  const tag = readTag('sum-task')!;
+  assert.equal(tag.summary.trim(), `саммари №${summaries.length}`);
+  assert.deepEqual({ ...tag.runs[0], finishedAt: '' }, { id: s.id, flow: 'session', finishedAt: '', status: 'done', kind: 'session', title: 'корзина' });
+  // новых ходов нет — кнопке нечего делать
+  assert.equal((await call('POST', `/api/sessions/${s.id}/summary`)).status, 409);
+});
+
+test('«Продолжить»: транскрипта нет — новый разговор, есть — --resume последнего; открытый экран переходит к новому процессу', async () => {
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+  let p = spawned.at(-1)!;
+  // ни одного сообщения: транскрипта нет
+  await hook(s.id, tokenOf(p), { hook_event_name: 'SessionStart', session_id: s.id, transcript_path: path.join(root, `${s.id}.jsonl`) });
+  p.exit(0);
+  await until(async () => !(await view(s.id)).live);
+  assert.equal((await view(s.id)).resumable, false);
+  assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, {})).status, 200);
+  p = spawned.at(-1)!;
+  assert.match(p.args[0], /^--session-id=/);
+  assert.notEqual(p.args[0], `--session-id=${s.id}`);
+  assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, {})).status, 409);
+
+  // разговор с сообщением: транскрипт есть — --resume, адрес тот же, экран переподключается сам
+  const tp = path.join(root, `${uuid(2)}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, tokenOf(p), { hook_event_name: 'SessionStart', session_id: uuid(2), transcript_path: tp });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/sessions/${s.id}/ws`, { origin: `http://127.0.0.1:${port}` });
+  const got: SessionWsServer[] = [];
+  ws.on('message', (m) => got.push(JSON.parse(String(m)) as SessionWsServer));
+  await new Promise((r) => ws.once('open', r));
+  ws.send(JSON.stringify({ t: 'r', cols: 80, rows: 24 }));
+  await until(() => got.some((m) => m.t === 'snap'));
+  p.exit(0);
+  await until(async () => (await view(s.id)).resumable === true);
+  const snaps = got.filter((m) => m.t === 'snap').length;
+  assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, {})).status, 200);
+  p = spawned.at(-1)!;
+  assert.equal(p.args[0], `--resume=${uuid(2)}`);
+  p.emit('новый процесс');
+  await until(() => got.filter((m) => m.t === 'snap').length > snaps && got.some((m) => m.t === 'o' && m.d === 'новый процесс'));
+  ws.send(JSON.stringify({ t: 'i', d: 'дальше' }));
+  await until(() => p.written.includes('дальше'));
+  ws.close();
+  await call('POST', `/api/sessions/${s.id}/end`);
+});
+
+test('«Перезапустить с тегами»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками, саммари не пишется', async () => {
+  createTag('rs-task');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['rs-task'] });
+  const old = spawned.at(-1)!;
+  const tp = path.join(root, `${uuid(3)}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, tokenOf(old), { hook_event_name: 'SessionStart', session_id: uuid(3), transcript_path: tp });
+  await hook(s.id, tokenOf(old), { hook_event_name: 'UserPromptSubmit', session_id: uuid(3), prompt: 'шаг' });
+  const specs = path.join(root, 'rs-specs');
+  fs.mkdirSync(specs, { recursive: true });
+  createTag('rs-know', undefined, 'knowledge');
+  updateTag('rs-know', { dirs: [specs] });
+  await call('PUT', `/api/sessions/${s.id}/tags`, { tags: ['rs-task', 'rs-know'] });
+  const before = summaries.length;
+  const r = await call<SessionView>('POST', `/api/sessions/${s.id}/restart`);
+  assert.deepEqual([r.status, r.body.live], [200, true]);
+  const fresh = spawned.at(-1)!;
+  assert.deepEqual([old.killed, fresh.args[0]], [['SIGHUP'], `--resume=${uuid(3)}`]);
+  assert.ok(fresh.args.includes(specs));
+  assert.notEqual(tokenOf(fresh), tokenOf(old));
+  // старый токен больше не открывает хуки
+  assert.equal((await hook(s.id, tokenOf(old), { hook_event_name: 'Stop' })).status, 404);
+  await new Promise((res) => setTimeout(res, 50));
+  assert.equal(summaries.length, before);
+  assert.equal((await view(s.id)).newTurns, 1);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => (await view(s.id)).summary !== undefined);
+  assert.equal(summaries.length, before + 1);
+});
+
+test('удаление: живую — нельзя, завершённую — папка с журналом и файлами удаляется', async () => {
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+  assert.equal((await call('DELETE', `/api/sessions/${s.id}`)).status, 409);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  assert.equal((await call('DELETE', `/api/sessions/${s.id}`)).status, 200);
+  assert.equal(fs.existsSync(path.join(root, 'sessions', s.id)), false);
+  assert.equal((await call('GET', `/api/sessions/${s.id}`)).status, 404);
+});
+
 test(`лимит: живых сессий не больше ${LIVE_SESSIONS_MAX} — дальше 409`, async () => {
   const live = async () => (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live).length;
   while ((await live()) < LIVE_SESSIONS_MAX) assert.equal((await call('POST', '/api/sessions', {})).status, 201);
@@ -278,12 +392,45 @@ test('stopServer: открытый WebSocket и живые claude не держ�
   await closed;
   // все вышли; кого гасила остановка — сначала SIGHUP (SessionEnd успевает дойти), без SIGKILL
   assert.deepEqual(spawned.filter((p) => !p.exited), []);
-  assert.equal(spawned.filter((p) => p.killed.length).length, LIVE_SESSIONS_MAX + 1);
+  assert.ok(spawned.filter((p) => p.killed.includes('SIGHUP')).length >= LIVE_SESSIONS_MAX);
   assert.ok(spawned.every((p) => !p.killed.includes('SIGKILL')));
 });
 
 test('остановка сервера: новые сессии после stopAll не создаются — их claude никто бы не погасил', async () => {
-  const mgr = new SessionManager({ ...sessionManager().deps });
+  const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-stop') });
   await mgr.stopAll(100);
   await assert.rejects(mgr.create({ cwd: path.join(root, 'proj') }, port, root), (err: unknown) => err instanceof SessionError && err.status === 503);
+});
+
+test('выход приложения: саммари не пишется, у сессии пометка; после перезапуска сервера сессии с диска — завершённые', async () => {
+  const dir = path.join(root, 'sessions-restart');
+  const deps = { ...sessionManager().deps, dir };
+  const mgr = new SessionManager(deps);
+  await mgr.available();
+  createTag('app-task');
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), tags: ['app-task'] }, port, root);
+  const live = mgr.sessions.get(v.id)!;
+  const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
+  mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(4), prompt: 'шаг' }, res);
+  const before = summaries.length;
+  await mgr.stopAll(1000);
+  assert.equal(summaries.length, before);
+  assert.equal(mgr.view(live).summaryPending, 'app-closed');
+  // сервер упал, пока шла другая сессия: в session.json нет endedAt
+  const crashed = uuid(5);
+  fs.mkdirSync(path.join(dir, crashed));
+  fs.writeFileSync(path.join(dir, crashed, 'session.json'), JSON.stringify({ id: crashed, name: 'упавшая', cwd: root, tags: ['app-task'], saveTag: true, claudeSessionIds: [], createdAt: '2026-10-27T10:00:00.000Z', lastActivityAt: '2026-10-27T11:00:00.000Z', turns: 2 }));
+  fs.mkdirSync(path.join(dir, 'not-a-session'));
+  fs.writeFileSync(path.join(dir, uuid(6) + '.json'), '{}');
+
+  const next = new SessionManager(deps);
+  assert.equal(await next.available(), true);
+  const list = next.list().sessions;
+  assert.deepEqual(list.map((x) => [x.id, x.live, x.status, x.summaryPending]).sort(), [[crashed, false, 'ended', 'app-closed'], [v.id, false, 'ended', 'app-closed']].sort());
+  assert.equal(list.find((x) => x.id === crashed)?.endedAt, '2026-10-27T11:00:00.000Z');
+  // «Обновить саммари» по завершённой — по журналу ходов
+  next.startSummary(v.id);
+  await until(() => next.view(next.get(v.id)).summary !== undefined);
+  assert.equal(next.view(next.get(v.id)).summaryPending, undefined);
+  assert.ok(summaries.at(-1)!.prompt.includes('шаг'));
 });

@@ -11,18 +11,22 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { SessionList, SessionPermissionMode, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, TagKind } from './api-types.js';
+import type {
+  SessionList, SessionPermissionMode, SessionStatus, SessionSummary, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, TagKind,
+} from './api-types.js';
+import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
-import { createTag, readTag, runTagSlugs } from './tags.js';
+import { createTag, queueTagSummary, readTag, runTagSlugs, writeTagSummary } from './tags.js';
+import { dropRunPaths, parseTagSummary, sessionTagSummaryRequest, type SessionTurn } from './tag-summary.js';
 import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import {
-  findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionTags, safeRealpath, sessionArgs, sessionEnv,
+  findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionTags, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
   sessionFlags, sessionName, sessionReadTargets, sessionTagDirs, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type HookState,
 } from './sessions.js';
 import { mcpReply } from './sessions-mcp.js';
-import { loadPtyKit, PtySession, ptyKitError, type PtyKit } from './sessions-pty.js';
+import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
 export type SessionRecord = {
@@ -43,7 +47,15 @@ export type SessionRecord = {
   outcome?: 'untrusted' | 'failed';
   turns: number;
   claudeVersion?: string;
+  /** Ходов (из turns), уже ушедших в саммари тегов задач. */
+  summarizedTurns?: number;
+  summary?: SessionSummary;
+  /** Саммари при выходе не записано: приложение закрыли (Cmd+Q) или сервер остановился, пока сессия шла. */
+  summaryPending?: 'app-closed';
 };
+
+/** Подключённый экран: сокет, к какому процессу он подцеплен и его размер (с ним же — к новому процессу). */
+type Conn = { client: ScreenClient; attached: PtySession | null; size?: { cols: number; rows: number }; snapSent: boolean };
 
 /** Сессия в памяти сервера. */
 type Live = {
@@ -60,8 +72,13 @@ type Live = {
   sawTrust: boolean;
   spawnedAt: number;
   lastHookAt: number;
-  sockets: Set<WebSocket>;
+  sockets: Map<WebSocket, Conn>;
   watch?: ReturnType<typeof setInterval>;
+  summarizing: boolean;
+  /** Процесс гасит остановка сервера: саммари не пишем, ставим пометку. */
+  appClosed?: boolean;
+  /** «Перезапустить с тегами»: выход старого процесса — не конец сессии, саммари не нужно. */
+  restarting?: boolean;
 };
 
 export type SessionDeps = {
@@ -76,6 +93,8 @@ export type SessionDeps = {
   env: () => NodeJS.ProcessEnv;
   /** Через сколько без SessionStart показывать «теги не доставлены». */
   deliveryAfterMs: number;
+  /** Сессия саммари тега (Agent SDK). */
+  summarize: (req: SessionRequest) => Promise<SessionResult>;
 };
 
 const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -90,6 +109,7 @@ export const defaultSessionDeps = (): SessionDeps => ({
   runsDir: RUNS_DIR,
   env: () => process.env,
   deliveryAfterMs: 15_000,
+  summarize: (req) => runSession(req, () => {}),
 });
 
 /** Ошибка с HTTP-кодом для ответа маршрута. */
@@ -118,13 +138,42 @@ export class SessionManager {
   private poller: ReturnType<typeof setInterval> | null = null;
   /** Сервер останавливается: новых сессий и подключений не принимаем — их claude никто бы не погасил. */
   private stopping = false;
-  private readonly versions = new Map<string, Promise<string | undefined>>();
+  private loaded = false;
 
   constructor(readonly deps: SessionDeps) {}
 
-  /** Фича есть, если node-pty и зеркало загрузились. */
+  /** Фича есть, если node-pty и зеркало загрузились. Заодно — сессии прошлых запусков сервера с диска. */
   async available(): Promise<boolean> {
-    return (await this.deps.kit()) !== null;
+    const ok = (await this.deps.kit()) !== null;
+    if (ok) this.load();
+    return ok;
+  }
+
+  /**
+   * Сессии с диска: после перезапуска сервера они завершены. Шедшая в момент остановки (session.json без endedAt —
+   * сервер упал или его погасили) — завершена сейчас, а её ходы без саммари — с пометкой «приложение закрыли».
+   */
+  private load(): void {
+    if (this.loaded) return;
+    this.loaded = true;
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.deps.dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!ID_RE.test(name) || this.sessions.has(name)) continue;
+      const rec = readRecord(path.join(this.deps.dir, name, 'session.json'), name);
+      if (!rec) continue;
+      const s = newLive(rec, 'ended');
+      if (!rec.endedAt) {
+        rec.endedAt = rec.lastActivityAt;
+        if (this.wantsSummary(s)) rec.summaryPending = 'app-closed';
+        this.save(s);
+      }
+      this.sessions.set(name, s);
+    }
   }
 
   liveCount(): number {
@@ -175,6 +224,11 @@ export class SessionManager {
       ...(delivery ? { delivery } : {}),
       ...(r.claudeVersion ? { claudeVersion: r.claudeVersion } : {}),
       ...(r.transcriptPath ? { transcriptPath: r.transcriptPath } : {}),
+      newTurns: newTurns(r),
+      ...(r.summary ? { summary: r.summary } : {}),
+      ...(s.summarizing ? { summarizing: true as const } : {}),
+      ...(r.summaryPending ? { summaryPending: r.summaryPending } : {}),
+      ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
     };
   }
 
@@ -222,7 +276,7 @@ export class SessionManager {
       lastActivityAt: now,
       turns: 0,
     };
-    const s: Live = { rec, token: '', pty: null, status: 'starting', injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Set() };
+    const s = newLive(rec, 'starting');
     this.sessions.set(id, s);
     try {
       this.spawn(s, kit, bin, port, { claudeSessionId: id, resume: false }, sizeOf(body));
@@ -251,12 +305,20 @@ export class SessionManager {
     delete r.exitCode;
     delete r.outcome;
     this.save(s);
+    // «Продолжить» и перезапуск: открытые экраны переходят к новому процессу сами
+    for (const conn of s.sockets.values()) {
+      if (!conn.size) continue;
+      conn.attached?.detach(conn.client);
+      conn.attached = pty;
+      pty.attach(conn.client, conn.size);
+    }
     // пока нет SessionStart: следим за диалогом доверия на экране и за «теги не доставлены»
     s.watch = setInterval(() => this.watchStart(s), 2000);
     s.watch.unref();
     // сбой записи на диск (папку удалили, нет места) не должен уронить сервер с идущими запусками
     void pty.done.then((e) => this.exited(s, pty, e.exitCode)).catch((err: unknown) => console.error('сессия: выход claude —', errMsg(err)));
-    void this.version(bin)
+    // версию — на каждом запуске: claude обновляется сам, пока сервер живёт
+    void this.deps.version(bin)
       .then((v) => {
         if (v && s.rec.claudeVersion !== v) {
           s.rec.claudeVersion = v;
@@ -266,12 +328,6 @@ export class SessionManager {
       })
       .catch((err: unknown) => console.error('сессия: версия claude —', errMsg(err)));
     this.pollAgents(bin);
-  }
-
-  private version(bin: string): Promise<string | undefined> {
-    let v = this.versions.get(bin);
-    if (!v) this.versions.set(bin, (v = this.deps.version(bin)));
-    return v;
   }
 
   private watchStart(s: Live): void {
@@ -303,9 +359,15 @@ export class SessionManager {
       const outcome = s.sawTrust ? 'untrusted' : code !== 0 ? 'failed' : undefined;
       if (outcome) s.rec.outcome = outcome;
     }
+    if (!s.restarting && this.wantsSummary(s)) {
+      // при остановке сервера сессия саммари не успела бы и тратила бы деньги без спроса: пометка и кнопка
+      if (s.appClosed) s.rec.summaryPending = 'app-closed';
+      else void this.summarize(s).catch((err: unknown) => console.error('сессия: саммари —', errMsg(err)));
+    }
     pty.broadcast({ t: 'x', code });
     this.changed(s);
     this.save(s);
+    this.saveScreen(s);
   }
 
   // --- правки
@@ -340,6 +402,126 @@ export class SessionManager {
     const s = this.get(id);
     await s.pty?.stop();
     return this.view(s);
+  }
+
+  /**
+   * «Продолжить»: новый процесс claude в той же папке с текущими тегами (папки и запреты — заново). Транскрипт последнего
+   * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же.
+   */
+  async resume(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
+    const s = this.get(id);
+    if (s.pty?.alive) throw new SessionError(409, 'Сессия ещё идёт');
+    const kit = await this.deps.kit();
+    if (!kit) throw new SessionError(501, `Терминал недоступен: node-pty не загрузился (${ptyKitError()})`, 'no_pty');
+    if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
+    if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
+    if (!fs.statSync(s.rec.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Папки сессии больше нет: ${s.rec.cwd}`);
+    const bin = this.deps.findClaude();
+    if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
+    const target = resumeTarget(s.rec);
+    try {
+      this.spawn(s, kit, bin, port, target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false }, size ?? s.screen ?? DEFAULT_SIZE);
+    } catch (err) {
+      throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
+    }
+    return this.view(s);
+  }
+
+  /**
+   * «Перезапустить с тегами»: --add-dir в живом claude не меняется, а папки тегов, добавленных на ходу, нужны ему без
+   * вопросов. Процесс гасится и поднимается заново тем же разговором (--resume) с пересчитанными папками; экран
+   * переходит к новому процессу, саммари на этом выходе не пишется.
+   */
+  async restart(id: string, port: number): Promise<SessionView> {
+    const s = this.get(id);
+    if (!s.pty?.alive) throw new SessionError(409, 'Сессия не идёт: её можно продолжить');
+    const size = { cols: s.pty.cols, rows: s.pty.rows };
+    s.restarting = true;
+    try {
+      await s.pty.stop();
+    } finally {
+      s.restarting = false;
+    }
+    return this.resume(id, port, size);
+  }
+
+  /** Удалить запись сессии agentgraph (папку с журналом и файлами); транскрипт Claude остаётся. Живую — нельзя. */
+  remove(id: string): void {
+    const s = this.get(id);
+    if (s.pty?.alive || s.summarizing) throw new SessionError(409, s.summarizing ? 'Пишется саммари: дождись его' : 'Сессия ещё идёт: сначала заверши её');
+    for (const ws of s.sockets.keys()) ws.terminate();
+    fs.rmSync(path.join(this.deps.dir, s.rec.id), { recursive: true, force: true });
+    this.sessions.delete(s.rec.id);
+  }
+
+  // --- саммари тегов задач
+
+  /** Есть что записать: галочка, ходы после прошлого саммари и хоть один тег задачи. */
+  private wantsSummary(s: Live): boolean {
+    return s.rec.saveTag && newTurns(s.rec) > 0 && readSessionTags(s.rec.tags, readTag).task.length > 0;
+  }
+
+  /** «Обновить саммари»: в любой момент, только ходы после прошлого саммари. Ответ — сразу, саммари пишется в фоне. */
+  startSummary(id: string): SessionView {
+    const s = this.get(id);
+    if (s.summarizing) throw new SessionError(409, 'Саммари уже пишется');
+    if (!newTurns(s.rec)) throw new SessionError(409, 'Новых ходов с прошлого саммари нет');
+    if (!readSessionTags(s.rec.tags, readTag).task.length) throw new SessionError(409, 'У сессии нет тегов задач: саммари есть только у них');
+    void this.summarize(s).catch((err: unknown) => console.error('сессия: саммари —', errMsg(err)));
+    return this.view(s);
+  }
+
+  /**
+   * Сессия haiku на каждый тег задачи, по очереди: прошлое саммари тега и ходы с прошлого саммари → новое саммари.
+   * Записи тега идут через queueTagSummary: две сессии одного тега не затрут друг друга. Ошибка одного тега не мешает
+   * остальным; ходы считаются учтёнными, только если записались все теги.
+   */
+  private async summarize(s: Live): Promise<void> {
+    if (s.summarizing) return;
+    const all = readTurns(this.turnsFile(s.rec.id));
+    const from = Math.min(s.rec.summarizedTurns ?? 0, all.length);
+    const turns = all.slice(from);
+    const task = readSessionTags(s.rec.tags, readTag).task;
+    if (!turns.length || !task.length) return;
+    s.summarizing = true;
+    this.changed(s);
+    const summary: SessionSummary = { at: '', tags: [], costUsd: 0 };
+    const errors: Record<string, string> = {};
+    try {
+      for (const tag of task) {
+        try {
+          summary.costUsd += await queueTagSummary(tag.slug, () => this.summarizeTag(s, tag.slug, turns));
+          summary.tags.push(tag.slug);
+        } catch (err) {
+          errors[tag.slug] = errMsg(err);
+        }
+      }
+    } finally {
+      s.summarizing = false;
+      summary.at = new Date().toISOString();
+      if (Object.keys(errors).length) summary.errors = errors;
+      else {
+        s.rec.summarizedTurns = from + turns.length;
+        delete s.rec.summaryPending;
+      }
+      s.rec.summary = summary;
+      this.save(s);
+      this.changed(s);
+    }
+  }
+
+  /** Одно саммари тега; пока шла сессия, саммари переписал запуск — считаем ещё раз от нового. Возвращает стоимость. */
+  private async summarizeTag(s: Live, slug: string, turns: SessionTurn[]): Promise<number> {
+    let cost = 0;
+    for (let attempt = 0; ; attempt++) {
+      const prev = readTag(slug)?.summary ?? '';
+      const res = await this.deps.summarize(sessionTagSummaryRequest(s.rec, slug, prev, turns, { model: 'haiku' }));
+      cost += res.costUsd;
+      const text = dropRunPaths(parseTagSummary(res), this.deps.runsDir);
+      if (attempt === 0 && (readTag(slug)?.summary ?? '') !== prev) continue;
+      writeTagSummary(slug, text, { id: s.rec.id, flow: 'session', finishedAt: new Date().toISOString(), status: 'done', kind: 'session', title: s.rec.name });
+      return cost;
+    }
   }
 
   /** Файл, перетащенный в терминал: копия в папку файлов сессии (она в --add-dir), в ответ — абсолютный путь. */
@@ -402,6 +584,7 @@ export class SessionManager {
         this.changed(s);
       });
     }
+    if (r.turn) this.appendTurn(s, r.turn);
     if (p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
     this.changed(s);
     return r.reply;
@@ -437,27 +620,27 @@ export class SessionManager {
   }
 
   private connect(s: Live, ws: WebSocket): void {
-    s.sockets.add(ws);
-    const client = { send: (msg: string) => ws.readyState === ws.OPEN && ws.send(msg) };
-    let attached: PtySession | null = null;
-    client.send(JSON.stringify({ t: 's', session: this.view(s) } satisfies SessionWsServer));
-    let snapSent = false;
+    const conn: Conn = { client: { send: (msg: string) => void (ws.readyState === ws.OPEN && ws.send(msg)) }, attached: null, snapSent: false };
+    s.sockets.set(ws, conn);
+    const { client } = conn;
+    conn.client.send(JSON.stringify({ t: 's', session: this.view(s) } satisfies SessionWsServer));
     // ws зовёт обработчик синхронно из разбора кадра: исключение здесь уронило бы весь сервер
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(String(raw)) as SessionWsClient | null;
         if (!msg || typeof msg !== 'object') return;
         if (msg.t === 'r' && Number.isFinite(msg.cols) && Number.isFinite(msg.rows)) {
-          // «Продолжить» поднимает новый pty: первый же resize подключает к нему
-          if (s.pty && attached !== s.pty) {
-            attached?.detach(client);
-            attached = s.pty;
-            s.pty.attach(client, { cols: msg.cols, rows: msg.rows });
+          conn.size = { cols: msg.cols, rows: msg.rows };
+          if (s.pty && conn.attached !== s.pty) {
+            conn.attached?.detach(client);
+            conn.attached = s.pty;
+            s.pty.attach(client, conn.size);
           } else if (s.pty) s.pty.resize(msg.cols, msg.rows);
-          else if (!attached && !snapSent && s.screen) {
-            // процесса нет: последний экран завершённой сессии
-            snapSent = true;
-            client.send(JSON.stringify({ t: 'snap', ...s.screen } satisfies SessionWsServer));
+          else if (!conn.attached && !conn.snapSent) {
+            // процесса нет: последний экран завершённой сессии (после перезапуска сервера — с диска)
+            conn.snapSent = true;
+            const screen = (s.screen ??= this.readScreen(s.rec.id));
+            if (screen) client.send(JSON.stringify({ t: 'snap', ...screen } satisfies SessionWsServer));
           }
         } else if (msg.t === 'i' && typeof msg.d === 'string') s.pty?.write(msg.d);
       } catch {
@@ -466,7 +649,7 @@ export class SessionManager {
     });
     ws.on('close', () => {
       s.sockets.delete(ws);
-      attached?.detach(client);
+      conn.attached?.detach(client);
     });
     ws.on('error', () => ws.terminate());
   }
@@ -474,7 +657,7 @@ export class SessionManager {
   /** Состояние сессии — подключённым экранам. */
   private changed(s: Live): void {
     const msg = JSON.stringify({ t: 's', session: this.view(s) } satisfies SessionWsServer);
-    for (const ws of s.sockets) if (ws.readyState === ws.OPEN) ws.send(msg);
+    for (const ws of s.sockets.keys()) if (ws.readyState === ws.OPEN) ws.send(msg);
   }
 
   // --- запасной статус
@@ -513,6 +696,38 @@ export class SessionManager {
     return path.join(this.deps.dir, id, 'files');
   }
 
+  private turnsFile(id: string): string {
+    return path.join(this.deps.dir, id, 'turns.jsonl');
+  }
+
+  /** Журнал ходов: сообщение пользователя (UserPromptSubmit) и итоговый ответ (Stop) — источник саммари. */
+  private appendTurn(s: Live, turn: { prompt: string } | { answer: string }): void {
+    try {
+      fs.appendFileSync(this.turnsFile(s.rec.id), JSON.stringify({ at: new Date().toISOString(), ...turn }) + '\n');
+    } catch (err) {
+      console.error('сессия: журнал ходов —', errMsg(err));
+    }
+  }
+
+  /** Последний экран завершённой сессии на диске: после перезапуска сервера его покажет и новое подключение. */
+  private saveScreen(s: Live): void {
+    if (!s.screen) return;
+    try {
+      fs.writeFileSync(path.join(this.deps.dir, s.rec.id, 'screen.json'), JSON.stringify(s.screen));
+    } catch {
+      /* без снимка — пустой экран под карточкой */
+    }
+  }
+
+  private readScreen(id: string): Live['screen'] {
+    try {
+      const v = JSON.parse(fs.readFileSync(path.join(this.deps.dir, id, 'screen.json'), 'utf8')) as Live['screen'];
+      return v && typeof v.d === 'string' && Number.isFinite(v.cols) && Number.isFinite(v.rows) ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private save(s: Live): void {
     const dir = path.join(this.deps.dir, s.rec.id);
     fs.mkdirSync(dir, { recursive: true });
@@ -529,8 +744,9 @@ export class SessionManager {
   async stopAll(timeoutMs = STOP_WAIT_MS): Promise<void> {
     this.stopping = true;
     for (const s of this.sessions.values()) {
-      for (const ws of s.sockets) ws.terminate();
+      for (const ws of s.sockets.keys()) ws.terminate();
       s.sockets.clear();
+      if (s.pty?.alive) s.appClosed = true;
     }
     await Promise.all([...this.sessions.values()].map((s) => s.pty?.stop(timeoutMs)));
     if (this.poller) clearInterval(this.poller);
@@ -538,6 +754,60 @@ export class SessionManager {
     this.wss?.close();
     this.wss = null;
   }
+}
+
+function newLive(rec: SessionRecord, status: SessionStatus): Live {
+  return { rec, token: '', pty: null, status, injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Map(), summarizing: false };
+}
+
+/** Ходов после прошлого саммари. */
+const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+
+/** session.json с диска: битый или чужой (id не совпадает с папкой) — undefined, сессия не показывается. */
+function readRecord(file: string, id: string): SessionRecord | undefined {
+  let raw: Partial<SessionRecord>;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<SessionRecord>;
+  } catch {
+    return undefined;
+  }
+  if (!raw || raw.id !== id || typeof raw.cwd !== 'string' || typeof raw.createdAt !== 'string') return undefined;
+  return {
+    ...raw,
+    id,
+    name: typeof raw.name === 'string' ? raw.name : id.slice(0, 8),
+    cwd: raw.cwd,
+    tags: strings(raw.tags),
+    saveTag: raw.saveTag !== false,
+    claudeSessionIds: strings(raw.claudeSessionIds),
+    createdAt: raw.createdAt,
+    lastActivityAt: typeof raw.lastActivityAt === 'string' ? raw.lastActivityAt : raw.createdAt,
+    turns: Number.isFinite(raw.turns) ? Number(raw.turns) : 0,
+  };
+}
+
+/** Ходы из журнала: сообщение открывает ход, ответ — последний к нему (Stop бывает и без нового сообщения). */
+export function readTurns(file: string): SessionTurn[] {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const out: SessionTurn[] = [];
+  for (const line of text.split('\n')) {
+    let e: { prompt?: unknown; answer?: unknown };
+    try {
+      e = JSON.parse(line) as typeof e;
+    } catch {
+      continue;
+    }
+    if (typeof e.prompt === 'string') out.push({ prompt: e.prompt });
+    else if (typeof e.answer === 'string' && out.length) out[out.length - 1].answer = e.answer;
+  }
+  return out;
 }
 
 /** Вид тега по слагу, с кэшем на один ответ; нет тега — задача. */
@@ -626,6 +896,16 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/name$/)) && method === 'PUT') return done(200, mgr.rename(m[1], asObject(await ctx.readJson())) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/end$/)) && method === 'POST') return done(200, (await mgr.end(m[1])) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/files$/)) && method === 'POST') return done(201, mgr.saveFile(m[1], await ctx.readJson(FILE_BODY_MAX)));
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/summary$/)) && method === 'POST') return done(202, mgr.startSummary(m[1]) satisfies SessionView);
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/continue$/)) && method === 'POST') {
+      const body = asObject(await ctx.readJson());
+      return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
+    }
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/restart$/)) && method === 'POST') return done(200, (await mgr.restart(m[1], req.socket.localPort ?? 0)) satisfies SessionView);
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'DELETE') {
+      mgr.remove(m[1]);
+      return done(200, { ok: true });
+    }
     return false;
   } catch (err) {
     if (!(err instanceof SessionError)) throw err;

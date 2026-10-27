@@ -1,17 +1,22 @@
 // Экран сессии терминала /sessions/:id (макеты Main и Ended): шапка — назад, название с правкой, статус, папка,
-// «Завершить»; строка тегов — чипы со снятием и «+ тег», тег на ходу помечен «придёт со следующим шагом»; терминал на
-// всю оставшуюся высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
-import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+// «Обновить саммари», «Завершить» или «Продолжить», меню (перезапуск с тегами, удаление); строка тегов — чипы со
+// снятием и «+ тег», тег на ходу помечен «придёт со следующим шагом», справа — состояние саммари тегов задач; терминал
+// на всю оставшуюся высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionTagChip, SessionView } from '@server/api-types';
 import { api, ApiError, errorText, keys, useConfig, useFeature, useTags } from '../../api';
-import { endSession, fetchSession, putSession, renameSession, sessionKeys, setSessionTags } from '../../api/sessions';
+import {
+  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionTags, summarizeSession,
+} from '../../api/sessions';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { TagField } from '../../components/TagInput';
 import { useToast } from '../../components/Toast';
+import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { chipHint, pendingNote, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { canSummarize, chipHint, pendingNote, sessionStatusLabel, sessionTone, summaryNote } from '../../lib/sessions';
 import { SessionTerminal } from './SessionTerminal';
 import { ICON, tildePath } from './icons';
 import styles from './Session.module.css';
@@ -35,24 +40,55 @@ export function SessionScreen() {
   return <Session key={q.data.id} s={q.data} />;
 }
 
-function Session({ s }: { s: SessionView }) {
+/** Действия сессии: каждое отдаёт свежее состояние сессии; пока идёт одно, остальные кнопки ждут. */
+function useActions(s: SessionView, setS: (v: SessionView) => void) {
   const qc = useQueryClient();
-  const setS = (v: SessionView) => putSession(qc, v);
   const toast = useToast();
-  const home = useConfig().data?.home;
-  const [ending, setEnding] = useState(false);
-  const [screenOnly, setScreenOnly] = useState(false);
-  const end = async () => {
-    setEnding(true);
+  const navigate = useNavigate();
+  const { askConfirm } = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const run = async (fn: () => Promise<SessionView>) => {
+    setBusy(true);
     try {
-      setS(await endSession(s.id));
+      setS(await fn());
     } catch (err) {
       toast(errorText(err));
     } finally {
-      setEnding(false);
+      setBusy(false);
     }
   };
+  return {
+    busy,
+    end: () => run(() => endSession(s.id)),
+    resume: () => run(() => continueSession(s.id)),
+    restart: () => run(() => restartSession(s.id)),
+    summary: () => run(() => summarizeSession(s.id)),
+    remove: async () => {
+      if (!(await askConfirm(t('Удалить сессию «{name}» из agentgraph? Журнал ходов и перетащенные файлы удалятся; транскрипт Claude останется.', { name: s.name }), { ok: t('Удалить'), danger: true }))) return;
+      try {
+        await deleteSession(s.id);
+        qc.removeQueries({ queryKey: sessionKeys.one(s.id) });
+        void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
+        void navigate('/sessions');
+      } catch (err) {
+        toast(errorText(err));
+      }
+    },
+  };
+}
+
+function Session({ s }: { s: SessionView }) {
+  const qc = useQueryClient();
+  const setS = (v: SessionView) => putSession(qc, v);
+  const home = useConfig().data?.home;
+  const act = useActions(s, setS);
+  const [screenOnly, setScreenOnly] = useState(false);
+  // сессию продолжили — следующее завершение снова покажет карточку
+  useEffect(() => {
+    if (s.live) setScreenOnly(false);
+  }, [s.live]);
   const tone = sessionTone(s);
+  const summarize = canSummarize(s);
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
@@ -65,11 +101,22 @@ function Session({ s }: { s: SessionView }) {
         <Cwd path={s.cwd} />
         <span className={styles.spacer} />
         <div className={styles.actions}>
+          {!s.live && (
+            <button type="button" className="btn primary" disabled={act.busy} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими тегами и пересчитанными папками') : t('Новый разговор в той же папке: в прошлом не было ни одного сообщения')} onClick={() => void act.resume()}>
+              {t('Продолжить')}
+            </button>
+          )}
+          {summarize.show && (
+            <button type="button" className="btn" disabled={act.busy || !summarize.ok} title={summarize.why} onClick={() => void act.summary()}>
+              {ICON.refresh}{t('Обновить саммари')}
+            </button>
+          )}
           {s.live && (
-            <button type="button" className="btn" disabled={ending} title={t('Завершить claude (SIGHUP): разговор сохранится в транскрипте')} onClick={() => void end()}>
+            <button type="button" className="btn" disabled={act.busy} title={t('Завершить claude (SIGHUP): разговор сохранится в транскрипте')} onClick={() => void act.end()}>
               {ICON.stop}{t('Завершить')}
             </button>
           )}
+          <Menu s={s} act={act} />
         </div>
       </header>
       <TagRow s={s} onSaved={setS} />
@@ -78,7 +125,7 @@ function Session({ s }: { s: SessionView }) {
           id={s.id}
           live={s.live}
           onState={setS}
-          overlay={!s.live && !screenOnly && <Ended s={s} onHide={() => setScreenOnly(true)} />}
+          overlay={!s.live && !screenOnly && <Ended s={s} act={act} onHide={() => setScreenOnly(true)} />}
         />
       </section>
       <footer className={styles.foot}>
@@ -193,6 +240,8 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
           placeholder={t('+ тег')}
         />
       )}
+      <span className={styles.spacer} />
+      <SummaryState s={s} />
       {note && <p className={styles.note}>{ICON.clock}{note}</p>}
       {s.delivery === 'trust' && <p className={cx(styles.note, styles.warn)}>{t('Claude спрашивает в терминале, доверяешь ли ты этой папке: пока не ответишь, теги не придут.')}</p>}
       {s.delivery === 'missing' && (
@@ -201,6 +250,18 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
         </p>
       )}
     </div>
+  );
+}
+
+/** Справа в строке тегов: когда саммари тегов задач обновлялось, идёт ли сейчас, ошибки. */
+function SummaryState({ s }: { s: SessionView }) {
+  const note = summaryNote(s);
+  if (!note) return null;
+  return (
+    <span className={cx(styles.summary, note.tone && styles[note.tone])} title={note.title}>
+      {note.tone === 'ok' && <span className={styles.okDot} aria-hidden="true" />}
+      {note.text}
+    </span>
   );
 }
 
@@ -219,8 +280,58 @@ function Chip({ c, onRemove }: { c: SessionTagChip; onRemove?: () => void }) {
   );
 }
 
-/** Карточка поверх последнего экрана завершённой сессии. */
-function Ended({ s, onHide }: { s: SessionView; onHide: () => void }) {
+type Actions = ReturnType<typeof useActions>;
+
+/** «⋯»: редкие действия — перезапуск живой сессии с пересчитанными папками тегов, удаление завершённой. */
+function Menu({ s, act }: { s: SessionView; act: Actions }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // клик мимо и Esc закрывают, фокус — на первый пункт (как меню flow)
+  useEffect(() => {
+    if (!open) return;
+    box.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus();
+    const onClick = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      btn.current?.focus();
+    };
+    document.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const pick = (fn: () => unknown) => () => {
+    setOpen(false);
+    void fn();
+  };
+  return (
+    <div className="menu-wrap">
+      <button ref={btn} type="button" className="btn icon-more" aria-haspopup="menu" aria-expanded={open} aria-label={t('Ещё действия с сессией')} title={t('Ещё действия с сессией')} onClick={() => setOpen(!open)}>
+        ⋯
+      </button>
+      <div ref={box} className="menu" role="menu" hidden={!open}>
+        {s.live ? (
+          <button type="button" className="menu-item" role="menuitem" disabled={act.busy} title={t('claude перезапустится тем же разговором (--resume): папки тегов, добавленных на ходу, станут доступны без вопросов')} onClick={pick(act.restart)}>
+            {t('Перезапустить с тегами')}
+          </button>
+        ) : (
+          <button type="button" className="menu-item danger" role="menuitem" title={t('Удалить запись сессии: журнал ходов и перетащенные файлы; транскрипт Claude останется')} onClick={pick(act.remove)}>
+            {t('Удалить сессию…')}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Карточка поверх последнего экрана завершённой сессии: что случилось, что с саммари, «Продолжить». */
+function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () => void }) {
   const code = s.exitCode ?? '?';
   const text =
     s.outcome === 'untrusted'
@@ -228,14 +339,23 @@ function Ended({ s, onHide }: { s: SessionView; onHide: () => void }) {
       : s.outcome === 'failed'
         ? t('claude завершился с кодом {code}, не начав сессию: причина — в выводе терминала.', { code })
         : t('Claude вышел, код {code}.', { code });
+  const note = summaryNote(s);
+  const summarize = canSummarize(s);
   return (
     <div className={styles.overlay}>
       <div className={styles.endCard} role="status">
         <h2>{s.outcome === 'untrusted' ? t('Папка не доверена') : t('Сессия завершена')}</h2>
-        <p className="muted">{text}</p>
+        <p className="muted">{text}{note ? ` ${note.text}` : ''}</p>
         <div className="row">
-          <button type="button" className="btn" onClick={onHide}>{t('Посмотреть экран')}</button>
+          <button type="button" className="btn primary" disabled={act.busy} onClick={() => void act.resume()}>{t('Продолжить')}</button>
+          {summarize.show && <button type="button" className="btn" disabled={act.busy || !summarize.ok} title={summarize.why} onClick={() => void act.summary()}>{t('Обновить саммари')}</button>}
+          <button type="button" className="btn ghost" onClick={onHide}>{t('Посмотреть экран')}</button>
         </div>
+        <p className={styles.hint}>
+          {s.resumable
+            ? t('«Продолжить» откроет тот же разговор (claude --resume) с текущими тегами и пересчитанными папками.')
+            : t('«Продолжить» откроет новый разговор в той же папке: в этом не было ни одного сообщения.')}
+        </p>
       </div>
     </div>
   );

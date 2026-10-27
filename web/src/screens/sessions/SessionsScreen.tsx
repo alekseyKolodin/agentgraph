@@ -6,7 +6,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView, TagKind } from '@server/api-types';
 import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useTags } from '../../api';
-import { createSession, sessionKeys, useSessions } from '../../api/sessions';
+import { continueSession, createSession, putSession, sessionKeys, summarizeSession, useSessions } from '../../api/sessions';
+import { useToast } from '../../components/Toast';
 import { TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
 import { TagInput } from '../../components/TagInput';
@@ -14,7 +15,7 @@ import { baseName, feedTime } from '../../lib/format';
 import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { canSummarize, sessionStatusLabel, sessionTone } from '../../lib/sessions';
 import { LS } from '../../lib/storage';
 import { tildePath } from './icons';
 import styles from './Sessions.module.css';
@@ -207,6 +208,21 @@ function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCance
 
 function SessionTable({ sessions }: { sessions: SessionView[] }) {
   const home = useConfig().data?.home;
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [busy, setBusy] = useState('');
+  const run = async (id: string, fn: () => Promise<SessionView>, open: boolean) => {
+    setBusy(id);
+    try {
+      putSession(qc, await fn());
+      if (open) void navigate(`/sessions/${id}`);
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setBusy('');
+    }
+  };
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table}>
@@ -225,12 +241,28 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
           {sessions.map((s) => (
             <tr key={s.id} className={s.live ? '' : styles.ended}>
               <td><span className={cx(styles.status, styles[sessionTone(s)])}><span className={styles.dot} aria-hidden="true" />{sessionStatusLabel(s)}</span></td>
-              <td className={styles.name}><Link to={`/sessions/${s.id}`} title={s.name}>{s.name}</Link></td>
+              <td className={styles.name}>
+                <Link to={`/sessions/${s.id}`} title={s.name}>{s.name}</Link>
+                {s.summaryPending && <span className={styles.pending}>{t('саммари не обновлено: приложение закрыли')}</span>}
+              </td>
               <td><span className={styles.tagList}>{s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind={c.kind} />)}</span></td>
               <td className={styles.dir} title={tildePath(s.cwd, home)}>{baseName(s.cwd)}</td>
               <td className={styles.num}>{s.turns}</td>
               <td className={styles.when}>{s.status === 'working' ? t('сейчас') : feedTime(s.lastActivityAt)}</td>
-              <td className={styles.act}><Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link></td>
+              <td className={styles.act}>
+                {s.live ? (
+                  <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
+                ) : (
+                  <span className={styles.acts}>
+                    {s.summaryPending && canSummarize(s).ok && (
+                      <button type="button" className="btn small" disabled={busy === s.id} onClick={() => void run(s.id, () => summarizeSession(s.id), false)}>{t('Обновить саммари')}</button>
+                    )}
+                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
+                      {t('Продолжить')}
+                    </button>
+                  </span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

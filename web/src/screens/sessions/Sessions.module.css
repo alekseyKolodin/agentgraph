@@ -47,3 +47,5 @@
 .status.wait .dot { background: var(--st-wait); border-color: var(--st-wait); }
 .status.fail { color: var(--st-fail); }
 .status.fail .dot { border-color: var(--st-fail); }
+.pending { display: block; font-size: var(--fs-meta); color: var(--st-wait); white-space: nowrap; }
+.acts { display: inline-flex; gap: 6px; justify-content: flex-end; }
