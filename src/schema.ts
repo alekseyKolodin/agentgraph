@@ -88,24 +88,28 @@ export function isWriter(phase: Phase): boolean {
   return phase.tools.includes('Edit') || phase.tools.includes('Write');
 }
 
+const JudgeCondition = z.object({
+  type: z.literal('judge'),
+  prompt: z
+    .string()
+    .describe('Рубрика для LLM-судьи (читает файлы через Read/Grep/Glob, может звать сабагентов). Переменные: {{input}}, {{outputs}} (все выводы текущей итерации блока), {{prev}}, {{phases.NAME}}, {{artifacts.KEY}}, {{artifacts.KEY.path}}. Судья читает все артефакты запуска.'),
+  model: z.string().optional(),
+});
+const CommandCondition = z.object({
+  type: z.literal('command'),
+  run: z.string().describe('Shell-команда; код выхода 0 = условие выполнено. Её вывод попадает в {{feedback}}.'),
+  timeout_sec: z.number().int().positive().optional(),
+});
+const MarkerCondition = z.object({
+  type: z.literal('marker'),
+  marker: z.string().describe('Литерал, например <DONE>. Условие выполнено, когда этап закончил им вывод: последняя непустая строка ровно маркер.'),
+  phase: z.string().optional().describe('Имя этапа блока, чей вывод проверяем. По умолчанию последний этап блока.'),
+});
+
 export const UntilSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('judge'),
-    prompt: z
-      .string()
-      .describe('Рубрика для LLM-судьи (читает файлы через Read/Grep/Glob, может звать сабагентов). Переменные: {{input}}, {{outputs}} (все выводы текущей итерации блока), {{prev}}, {{phases.NAME}}, {{artifacts.KEY}}, {{artifacts.KEY.path}}. Судья читает все артефакты запуска.'),
-    model: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal('command'),
-    run: z.string().describe('Shell-команда; код выхода 0 = условие выполнено. Её вывод попадает в {{feedback}}.'),
-    timeout_sec: z.number().int().positive().optional(),
-  }),
-  z.object({
-    type: z.literal('marker'),
-    marker: z.string().describe('Литерал, например <DONE>. Условие выполнено, когда этап закончил им вывод: последняя непустая строка ровно маркер.'),
-    phase: z.string().optional().describe('Имя этапа блока, чей вывод проверяем. По умолчанию последний этап блока.'),
-  }),
+  JudgeCondition,
+  CommandCondition,
+  MarkerCondition,
   z.object({ type: z.literal('none') }).describe('Без условия: выполнить ровно max_iterations итераций.'),
 ]);
 export type Until = z.output<typeof UntilSchema>;
@@ -147,7 +151,52 @@ export const BlockSchema = z.object({
     .describe('Локальные плагины Claude Code для всех этапов блока (складываются с plugins этапа): папки плагинов, абсолютные, от ~ или относительно директории проекта. Несуществующая папка — ошибка до старта.'),
   phases: z.array(PhaseSchema).min(1),
 });
-export type Block = z.output<typeof BlockSchema>;
+
+/** Конец запуска как цель перехода в next. */
+export const NEXT_END = 'end';
+
+export const NextRuleSchema = z.object({
+  if: z
+    .discriminatedUnion('type', [JudgeCondition, CommandCondition, MarkerCondition])
+    .optional()
+    .describe('Когда переходить: judge, command или marker, как в until. Без if — переход всегда; такое правило последнее.'),
+  goto: z
+    .string()
+    .regex(/^[a-z0-9_-]+$/)
+    .describe('Имя блока ниже по списку (переход только вперёд) или end — завершить запуск.'),
+});
+export type NextRule = z.output<typeof NextRuleSchema>;
+
+export const NextSchema = z
+  .union([z.string().regex(/^[a-z0-9_-]+$/), z.array(NextRuleSchema).min(1)])
+  .describe(
+    'Куда идти после блока (развилка). Строка — всегда в этот блок или end. Список правил проверяется по порядку после того, как блок завершился (done или исчерпал итерации с on_fail: continue): первое выполненное правило решает, куда идти. Ни одно не выполнилось — следующий блок по порядку. Блоки, через которые перешли, не выполняются. Переход только вперёд: повтор — это loop блока.',
+  );
+
+/**
+ * Блок в flow.yaml: этапы (phases) или вызов другого flow (flow), у любого — развилка next.
+ * Генератор пишет только блоки этапов без next: его схема — BlockSchema (GeneratedFlowSchema).
+ */
+export const FlowBlockSchema = BlockSchema.extend({
+  phases: z.array(PhaseSchema).min(1).optional(),
+  flow: z
+    .string()
+    .regex(/^[a-z0-9-]+$/)
+    .optional()
+    .describe(
+      'Вызов flow из flows/ по имени вместо phases. Каждая итерация блока — дочерний запуск этого flow (своя папка и страница, ссылка на родителя); родитель ждёт его конца. Итог дочернего запуска (вывод последнего шага) попадает в {{prev}} и {{phases.<имя блока>}}; блок успешен, если дочерний завершился done. Его этапы родителю не видны.',
+    ),
+  input: z
+    .string()
+    .optional()
+    .describe(
+      'Только у блока-вызова: задача вызываемого flow (его {{input}}), шаблон с теми же переменными, что у промпта этапа. По умолчанию — {{input}}, итог прошлого шага и {{feedback}}, если они есть.',
+    ),
+  next: NextSchema.optional(),
+});
+export type FlowBlock = z.output<typeof FlowBlockSchema>;
+/** Блок, как его исполняет раннер (flowBlocks): у блока-вызова один этап — сам вызов. */
+export type Block = Omit<FlowBlock, 'phases'> & { phases: Phase[] };
 
 /** Артефакт запуска: именованный текстовый файл в runs/<id>/artifacts/, переживает итерации и блоки. */
 export const ArtifactSchema = z.object({
@@ -193,15 +242,64 @@ const FlowBaseSchema = z.object({
 export const FlowSchema = FlowBaseSchema.extend({
   loop: LoopSchema.optional(),
   phases: z.array(PhaseSchema).min(1).optional(),
-  blocks: z.array(BlockSchema).min(1).optional(),
+  blocks: z.array(FlowBlockSchema).min(1).optional(),
 }).superRefine((spec, ctx) => {
   if (spec.blocks && (spec.phases || spec.loop)) {
     ctx.addIssue({ code: 'custom', path: ['blocks'], message: 'Либо blocks, либо loop + phases наверху: в полной форме цикл и этапы задаются внутри блоков' });
   } else if (!spec.blocks && !spec.phases) {
     ctx.addIssue({ code: 'custom', path: ['phases'], message: 'Нужны phases (один блок) или blocks' });
   }
+  for (const [path, message] of blockIssues(spec)) ctx.addIssue({ code: 'custom', path, message });
 });
 export type FlowSpec = z.output<typeof FlowSchema>;
+
+/** Правила next блока списком: строка — одно безусловное правило. */
+export function nextRules(block: Pick<FlowBlock, 'next'>): NextRule[] {
+  if (block.next === undefined) return [];
+  return typeof block.next === 'string' ? [{ goto: block.next }] : block.next;
+}
+
+/** Блок этапов или вызова — что можно и нельзя каждому; переходы next — только вперёд, к существующему блоку или end. */
+function blockIssues(spec: { name?: string; blocks?: FlowBlock[] }): [(string | number)[], string][] {
+  const blocks = spec.blocks ?? [];
+  const names = blocks.map((b) => b.name);
+  const out: [(string | number)[], string][] = [];
+  const branching = blocks.some((b) => b.next !== undefined);
+  blocks.forEach((b, i) => {
+    const at = (...p: (string | number)[]) => ['blocks', i, ...p];
+    if (b.flow !== undefined && b.phases) out.push([at('flow'), 'Либо phases, либо flow: у блока-вызова этапы — в вызываемом flow']);
+    if (b.flow === undefined && !b.phases) out.push([at('phases'), 'Нужны phases или flow (вызов другого flow)']);
+    if (b.flow === undefined && b.input !== undefined) out.push([at('input'), 'input — задача вызываемого flow: он бывает только у блока с flow']);
+    if (b.flow !== undefined) {
+      if (b.flow === spec.name) out.push([at('flow'), `Flow ${b.flow} вызывает сам себя`]);
+      if (b.knowledge?.length) out.push([at('knowledge'), 'У блока-вызова нет своих этапов: теги знаний задаются в вызываемом flow']);
+      if (b.plugins?.length) out.push([at('plugins'), 'У блока-вызова нет своих этапов: плагины задаются в вызываемом flow']);
+      if (b.loop?.pause_marker) out.push([at('loop', 'pause_marker'), 'Пауза по маркеру задаётся в вызываемом flow']);
+      if (b.loop?.until.type === 'marker' && b.loop.until.phase) out.push([at('loop', 'until', 'phase'), 'marker блока-вызова проверяет итог вызова: phase не указывают']);
+    }
+    if (branching && b.name === NEXT_END) out.push([at('name'), 'Блок не может называться end во flow с next: end — конец запуска']);
+    const rules = nextRules(b);
+    rules.forEach((r, k) => {
+      const where = typeof b.next === 'string' ? at('next') : at('next', k);
+      if (!r.if && k < rules.length - 1) out.push([where, 'Правило без if — последнее: следующие за ним никогда не проверятся']);
+      if (r.goto !== NEXT_END) {
+        const j = names.indexOf(r.goto);
+        if (j < 0) out.push([where, `Неизвестный блок ${r.goto}`]);
+        else if (j <= i) out.push([where, `Переход только вперёд: блок ${r.goto} не ниже блока ${b.name}. Повтор — это loop блока`]);
+      }
+      const cond = r.if;
+      if (cond?.type === 'marker' && cond.phase) {
+        if (b.flow !== undefined) out.push([where, 'marker блока-вызова проверяет итог вызова: phase не указывают']);
+        else if (!b.phases?.some((p) => p.name === cond.phase)) out.push([where, `marker: этап ${cond.phase} не из этого блока`]);
+      }
+      // «последний этап блока» у группы — случайный участник, как и в until
+      if (cond?.type === 'marker' && !cond.phase && b.phases?.at(-1)?.group) {
+        out.push([where, `marker: блок кончается параллельной группой ${b.phases.at(-1)!.group}, укажи phase — вывод какого этапа проверять`]);
+      }
+    });
+  });
+  return out;
+}
 
 /** Что генерирует генератор: всегда полная форма. */
 export const GeneratedFlowSchema = FlowBaseSchema.extend({
@@ -211,15 +309,27 @@ export const GeneratedFlowSchema = FlowBaseSchema.extend({
 /** Имя единственного блока короткой формы. */
 export const MAIN_BLOCK = 'main';
 
-/** Блоки флоу независимо от формы записи. */
+/**
+ * Блоки флоу независимо от формы записи. Блок-вызов получает один этап — сам вызов (callPhase): так {{prev}},
+ * {{phases.<блок>}}, история, итог запуска и продолжение работают с ним, как с обычным этапом.
+ */
 export function flowBlocks(spec: FlowSpec): Block[] {
-  if (spec.blocks) return spec.blocks;
+  // блок этапов отдаётся тем же объектом, как раньше: phases у него есть по схеме
+  if (spec.blocks) return spec.blocks.map((b) => (isCallBlock(b) ? { ...b, phases: [callPhase(b)] } : (b as Block)));
   return [{ name: MAIN_BLOCK, loop: spec.loop, phases: spec.phases ?? [] }];
 }
 
-/** Все этапы флоу по порядку. */
+/** Блок вызывает другой flow. */
+export const isCallBlock = <T extends Pick<FlowBlock, 'flow'>>(block: T): block is T & { flow: string } => block.flow !== undefined;
+
+/** Этап блока-вызова: имя — имя блока, промпт — шаблон задачи вызываемого flow, без инструментов и сессии. */
+export function callPhase(block: FlowBlock): Phase {
+  return { name: block.name, title: block.title ?? block.flow, prompt: block.input ?? '', tools: [] };
+}
+
+/** Все этапы флоу по порядку — сессии этого flow: у блока-вызова они в вызываемом flow, его этап сюда не входит. */
 export function flowPhases(spec: FlowSpec): Phase[] {
-  return flowBlocks(spec).flatMap((b) => b.phases);
+  return flowBlocks(spec).flatMap((b) => (isCallBlock(b) ? [] : b.phases));
 }
 
 /** Шаг блока: один этап или параллельная группа. index — номер этапа в блоке. */
@@ -236,10 +346,10 @@ export function phaseSteps(block: Block): PhaseStep[] {
   return steps;
 }
 
-/** Один блок без названия, on_fail и тегов знаний записываем короткой формой (у неё этих полей нет). */
+/** Один блок этапов без названия, on_fail, тегов знаний и next записываем короткой формой (у неё этих полей нет). */
 export function compactSpec(spec: FlowSpec): FlowSpec {
   const only = spec.blocks?.length === 1 ? spec.blocks[0] : undefined;
-  if (!only || only.title || only.on_fail || only.knowledge?.length || only.plugins?.length) return spec;
+  if (!only?.phases || only.title || only.on_fail || only.knowledge?.length || only.plugins?.length || only.next !== undefined) return spec;
   const { blocks: _, ...rest } = spec;
   return { ...rest, ...(only.loop ? { loop: only.loop } : {}), phases: only.phases };
 }

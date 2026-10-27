@@ -8,6 +8,7 @@ import {
   assertFlowName,
   blankFlowYaml,
   deleteFlow,
+  flowCallers,
   flowExists,
   flowFileName,
   flowFolder,
@@ -359,6 +360,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       }
     }
     if (method === 'DELETE') {
+      // вызываемый другими flow не удаляем: они упали бы только на запуске
+      const callers = flowCallers(name);
+      if (callers.length) return sendJson(res, 409, { error: `Flow ${name} вызывают ${callers.join(', ')}: сначала убери вызовы из них`, callers });
       deleteFlow(name);
       return sendJson(res, 200, { ok: true });
     }

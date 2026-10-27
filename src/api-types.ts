@@ -184,7 +184,12 @@ export type BlockSummary = {
   maxIterations: number;
   condition: string;
   onFail: 'stop' | 'continue';
+  /** Этапы блока; у блока-вызова пусто — его этапы в вызываемом flow. */
   phases: PhaseSummary[];
+  /** Блок-вызов: имя вызываемого flow. */
+  flow?: string;
+  /** Развилка после блока для людей (describeNext): «маркер <BUG> → fix; иначе → build». */
+  next?: string;
 };
 
 export type FlowSummary = {

@@ -95,7 +95,7 @@ test('факты: по этапам — сводка через итерации
   assert.equal(i.contextPct, 80);
   assert.equal(i.denials, 2);
   assert.equal(i.handoff, true);
-  assert.equal(i.promptChars, spec.blocks![0].phases[1].prompt.length);
+  assert.equal(i.promptChars, spec.blocks![0].phases![1].prompt.length);
   assert.deepEqual(i.uses, { prev: true, feedback: true, phases: [], artifacts: [] });
   assert.equal(i.costUsd, 0.1 + 0.3 + 0.1);
   assert.equal(i.last?.contextPct, undefined);
