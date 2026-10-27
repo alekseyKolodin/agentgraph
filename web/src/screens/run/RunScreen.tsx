@@ -25,7 +25,7 @@ import { sourceLabel } from '../../lib/run-form';
 import { deleteRunText } from '../../lib/runs';
 import { artAttention } from '../../lib/run/artifacts';
 import {
-  continueVisible, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
+  continueTitle, continueVisible, flowEditsLine, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
 } from '../../lib/run/view';
 import { useOpenFlow } from '../flow/nav';
 import { LimitCtl, Overview } from './Overview';
@@ -35,6 +35,7 @@ import {
 } from './artStore';
 import { ArtifactsPanel, artReveal } from './ArtifactsPanel';
 import { ArtifactWindow } from './ArtifactWindow';
+import { FixPanel } from './FixPanel';
 import { answerKey, setPauseAnswer, usePauseAnswer } from './pauseAnswer';
 import { RunChat } from './RunChat';
 import { RunGraph } from './RunGraph';
@@ -292,6 +293,8 @@ function RunPage({ id }: { id: string }) {
     r.worktree ? <PathLink key="wt" path={r.worktree.path}>{`worktree${r.worktree.branch ? ` · ${r.worktree.branch}` : ''}`}</PathLink> : null,
   ].filter(Boolean);
   const openQuestions = r.live ? r.questions.filter((q) => !q.answers) : [];
+  // правки flow на паузе (FixPanel): сколько, а что поменяли — в подсказке
+  const edits = flowEditsLine(r);
   const shownTabs = RUN_TABS.filter((t) => available.has(t));
   const onTabKey = (e: KeyboardEvent) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -321,6 +324,7 @@ function RunPage({ id }: { id: string }) {
           <p title={t('Стоимость: оценка по прайсу API; с подписки не списывается')}>{runMeta(r, st.tagPending)}</p>
           <p className={cx('muted small', styles.runSub)}>{sub.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}</p>
           {extras.length > 0 && <p className={cx('muted small', styles.runExtras)}>{extras.flatMap((x, i) => (i ? [<span key={`e${i}`}>·</span>, x] : [x]))}</p>}
+          {edits && <p className="muted small" title={edits.title}>{edits.text}</p>}
           {!multi && limitEditable(r, blocks[0]!) && <p className={cx('muted', styles.runLimit)}>{t('Лимит итераций:')} <LimitCtl block={blocks[0]!} /></p>}
         </div>
         <div className="row">
@@ -328,7 +332,7 @@ function RunPage({ id }: { id: string }) {
           {r.adhoc && canAdhoc && <button className="btn" title={t('Разовый запуск: сохранить его flow в flows/, чтобы запускать снова')} onClick={() => setSaveOpen(true)}>{t('Сохранить как flow')}</button>}
           {r.live && !pause && <button className="btn" title={t('Текущий этап доработает, следующий не начнётся')} onClick={() => void act(() => pauseRun(id))}>{t('Пауза')}</button>}
           {pause && <button className="btn primary" onClick={() => void resume()}>{resumeLabel}</button>}
-          {continueVisible(r) && <button className="btn primary" title={t('Новый запуск текущей версией flow: пройденные блоки не повторяются')} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
+          {continueVisible(r) && <button className="btn primary" title={continueTitle(r)} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
           {r.live && <button className="btn danger" onClick={() => void abort()}>{t('Остановить запуск')}</button>}
           {manage && <button className="btn ghost" title={t('Убрать из списка запусков слева; файлы останутся')} onClick={() => void hide()}>{r.hidden ? t('Вернуть в список') : t('Скрыть')}</button>}
           {manage && <button className="btn danger" title={t('Удалить папку запуска из runs/')} onClick={() => void remove()}>{t('Удалить')}</button>}
@@ -349,6 +353,7 @@ function RunPage({ id }: { id: string }) {
                 <MdText text={r.pauseReason!.text} />
               </>
             )}
+            {pause === 'paused' && <FixPanel r={r} onResume={resume} />}
           </div>
         )}
         {dec && (

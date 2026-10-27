@@ -668,10 +668,41 @@ export type RunReport = {
   digest?: RunDigest;
   /** Сессии итогов: вызовы, стоимость (входит в totalCostUsd), сбои с последней ошибкой, повторы без вызова. */
   digestSession?: DigestSession;
+  /** Указания пользователя по ходу запуска: ждущие и применённые (где — в applied). У запусков без указаний поля нет. */
+  notes?: RunNote[];
+  /** Правки flow этого запуска на паузе, по порядку; снимок flow.yaml — последняя версия. Есть — продолжение берёт снимок. */
+  flowEdits?: RunFlowEdit[];
 };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };
+
+// ---------- «Починить и продолжить» (src/run-fix.ts): указания, правка flow идущего запуска, повтор итерации
+
+/** Откуда пришли указание или правка: кнопки UI, хелпер скилла, чат запуска. */
+export type RunFixVia = 'ui' | 'skill' | 'chat';
+
+/**
+ * Указание идущему запуску (POST /api/runs/:id/note): хвост «Указание пользователя» в промпте. next — только следующему
+ * шагу (этапу, всем участникам группы или судье), run — каждому шагу до конца запуска. applied — где уже применено:
+ * phase — имя этапа, у судьи — '#cond'.
+ */
+export type RunNote = {
+  id: string;
+  text: string;
+  scope: 'next' | 'run';
+  at: string;
+  via: RunFixVia;
+  applied?: { block: string; iteration: number; phase: string; at: string }[];
+};
+
+/**
+ * Правка flow идущего запуска на паузе: PUT /api/runs/:id/flow (source edit) или POST …/flow/reload (reload — из flows/).
+ * version — номер нового снимка flow.yaml (исходный — 0; прошлые версии лежат рядом как flow.N.yaml). changed — что
+ * поменялось, по-человечески. savedToFlows — правку записали и в flows/<имя>.yaml; saveError — записать не вышло
+ * (правка запуска при этом действует).
+ */
+export type RunFlowEdit = { version: number; at: string; source: 'edit' | 'reload'; via: RunFixVia; changed: string[]; savedToFlows?: boolean; saveError?: string };
 
 export type RunEvent =
   | { type: 'start'; report: RunReport }
@@ -712,6 +743,10 @@ export type RunEvent =
    * его не обновили. totalCostUsd — итог запуска уже со стоимостью вызова.
    */
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
+  /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
+  | { type: 'note'; note: RunNote }
+  /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
+  | { type: 'flow'; edit: RunFlowEdit }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */

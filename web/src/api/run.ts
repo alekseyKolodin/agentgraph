@@ -2,6 +2,7 @@
 // «Сохранить как flow», артефакты и чат запуска (ответ — поток NDJSON).
 import type { ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
 import type { Block, FlowSpec } from '@server/schema';
+import type { RunFlowEdit, RunNote } from '@server/api-types';
 import { api, streamNdjson } from './client';
 import { t } from '../lib/i18n';
 
@@ -28,6 +29,20 @@ export const resumeRun = (id: string, answer?: string) => api<unknown>('POST', `
 export const abortRun = (id: string) => api<unknown>('POST', `${runUrl(id)}/abort`);
 export const setMaxIterations = (id: string, block: string, value: number) => api<unknown>('POST', `${runUrl(id)}/max-iterations`, { block, value });
 export const continueRun = (id: string) => api<{ id: string }>('POST', `${runUrl(id)}/continue`, {});
+/** Указание идущему запуску: хвостом в промпт следующего шага (next) или каждого до конца запуска (run). */
+export const addRunNote = (id: string, text: string, scope: RunNote['scope'] = 'next') =>
+  api<{ note: RunNote }>('POST', `${runUrl(id)}/note`, { text, scope, via: 'ui' });
+/**
+ * Правка flow запуска на паузе (снимок из YamlEditor); saveToFlows — и в flows/; base — сколько правок было у прочитанного
+ * снимка (сменился — 409 stale). Не подходит — 400 incompatible, в data.problems — почему.
+ */
+export const applyRunFlow = (id: string, yaml: string, saveToFlows: boolean, base: number) =>
+  api<{ edit: RunFlowEdit }>('PUT', `${runUrl(id)}/flow`, { yaml, saveToFlows, base, via: 'ui' });
+/** Flow запуска на паузе — текущая версия из flows/ (поправили в Claude Code). */
+export const reloadRunFlow = (id: string) => api<{ edit: RunFlowEdit }>('POST', `${runUrl(id)}/flow/reload`, { via: 'ui' });
+/** Повтор итерации на паузе: остаток шагов отброшен, дальше — итерация N+1, лимит +1; note — в {{feedback}} и указанием. */
+export const restartIteration = (id: string, note?: string) =>
+  api<{ block: string; iteration: number }>('POST', `${runUrl(id)}/restart-iteration`, { ...(note ? { note } : {}), via: 'ui' });
 export const saveRunFlow = (id: string, body: { name?: string; folder: string }) => api<{ name: string; folder?: string }>('POST', `${runUrl(id)}/save-flow`, body);
 
 /** Анализ flow по завершённому запуску: сохранённый (404 с code missing — ещё не делали) и новый, ответ — готовый анализ (запуск идёт — 409 live, уже анализируется — 409 busy). */

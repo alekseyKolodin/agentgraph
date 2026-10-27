@@ -82,10 +82,16 @@ export function resetLog(): void {
 // ---------- открытие и события
 
 let loadSeq = 0;
+/** Нужен ли странице снимок flow (граф): так же решает openRun. */
+let flowWanted = false;
+/** События, меняющие отчёты блоков: ответ reloadFlow, снятый раньше них, отчёты не затирает. */
+let blockSeq = 0;
+const BLOCK_EVENTS = new Set<RunStreamEvent['type']>(['block_start', 'block_end', 'iteration', 'limit']);
 
 /** Открыть запуск: отчёт, сброс страницы, снимок flow для графа. Ошибка (нет запуска) — исключение. */
 export async function openRun(id: string, withFlow: boolean): Promise<void> {
   const my = ++loadSeq;
+  flowWanted = withFlow;
   const run = await fetchRun(id);
   if (my !== loadSeq) return;
   if (runState.foldId !== id) {
@@ -117,13 +123,34 @@ export function runEvent(e: RunStreamEvent): EventEffect | null {
   const st = runState.st;
   if (!st) return null;
   const eff = applyRunEvent(st, e);
+  if (BLOCK_EVENTS.has(e.type)) blockSeq++;
   if (eff.log) {
     runLog.append(eff.log);
     if (!logFrame) logFrame = requestAnimationFrame(flushLog);
   }
   if (eff.close) runState.streaming = false;
+  if (eff.flow && runState.id) void reloadFlow(runState.id);
   if (eff.render) bumpSoon();
   return eff;
+}
+
+/**
+ * Flow запуска поправили на паузе (событие flow): снимок для графа — новая версия, отчёты блоков — с сервера (будущие
+ * блоки правка могла заменить, а событий block_start по ним ещё не было).
+ */
+async function reloadFlow(id: string): Promise<void> {
+  const my = loadSeq;
+  const seq = blockSeq;
+  const [spec, run] = await Promise.all([flowWanted ? fetchRunFlow(id).catch(() => null) : null, fetchRun(id).catch(() => null)]);
+  const st = runState.st;
+  if (my !== loadSeq || runState.id !== id || !st) return;
+  if (spec) runState.flow = { id, spec };
+  // пока шёл запрос, блоки уже поменяли события (запуск возобновили): они свежее ответа
+  if (run && st.run.live && seq === blockSeq) {
+    st.run.blocks = run.blocks;
+    st.run.maxIterations = run.maxIterations;
+  }
+  bump();
 }
 
 /** Живой запуск закончился: событие end не знает, можно ли его продолжить, — спрашиваем сервер. */

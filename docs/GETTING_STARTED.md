@@ -375,7 +375,8 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/generate.ts` | the generator: task → flow (a Claude session without tools) |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
 | `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
-| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/` |
+| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`) |
+| `src/run-fix.ts` | "fix and continue": what an edit of a running run's flow may not change and what it changed (pure functions; the runner applies the edit at a checkpoint) |
 | `src/artifacts.ts` | run artifacts without the file system: phase permissions (`reads`, `writes`, substitutions), validation, the map of a large artifact, the "Run artifacts" prompt section, the guard decision, whether an artifact may be edited |
 | `src/artifact-store.ts` | run artifact store: files and versions, quarantine and reconciliation with disk before a step, locking during a writing step, authorship, user edits and replies to a pause |
 | `src/artifact-tools.ts` | tools for reading an artifact by section for phases and the judge (`artifact_map`, `artifact_read`, `artifact_search`, in-process MCP) |
