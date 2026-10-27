@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parse as parseYaml } from 'yaml';
 import { assertRunnable, CALL_DEPTH_MAX, callInput, callOutcome, callProblems, calledFlows, describeNext, pickNext } from './compose.js';
 import { flowToYaml, parseFlow, summarize, validateSpec } from './flows.js';
+import { specFromRunBody } from './adhoc.js';
 import { compactSpec, flowBlocks, flowJsonSchema, flowPhases, GeneratedFlowSchema, type FlowSpec } from './schema.js';
 import { emptyContext } from './template.js';
 
@@ -213,4 +214,9 @@ test('до подключения в раннер flow с вызовом или 
   assert.throws(() => assertRunnable(flow(chain)), /раннер пока не исполняет вызов flow \(блоки spec, implement, review\)/);
   assert.throws(() => assertRunnable(flow('name: n\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n')), /развилку next \(блоки a\)/);
   assert.doesNotThrow(() => assertRunnable(flow('name: n\nphases: [{ name: p, tools: [], prompt: x }]\n')));
+});
+
+test('запуск из UI и скилла: flow с вызовом отклоняется до создания папки запуска, и сохранённый, и черновик', () => {
+  assert.throws(() => specFromRunBody({ flow: 'pipeline' }, () => flow(chain)), /раннер пока не исполняет вызов flow/);
+  assert.throws(() => specFromRunBody({ yaml: 'name: d\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n' }), /развилку next/);
 });

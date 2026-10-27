@@ -3,7 +3,7 @@
 import { useRef } from 'react';
 import { Link } from 'react-router';
 import { useFlows } from '../../api';
-import { callVariables, DEFAULT_CALL_INPUT, insertVar, nextRules, nextTargets, untilFor, usesVar, type EditBlock, type EditNextRule } from '../../lib/flow/edit';
+import { callVariables, DEFAULT_CALL_INPUT, insertVar, NEXT_JUDGE, nextRules, nextTargets, untilFor, usesVar, type EditBlock, type EditNextRule } from '../../lib/flow/edit';
 import { schemeSummary } from '../../lib/flow/summary';
 import { t } from '../../lib/i18n';
 import { afterRender } from './actions';
@@ -112,7 +112,8 @@ export function NextFields({ bi }: { bi: number }) {
   const setKind = (k: number, kind: string) => {
     const r = rules[k]!;
     if (kind === 'always') update(k, { if: undefined });
-    else update(k, { if: untilFor(kind, r.if ?? { type: 'none' }) });
+    // у судьи развилки своя заготовка рубрики: не «задача выполнена», а «когда идти по правилу»
+    else update(k, { if: untilFor(kind, { type: 'none', ...r.if, prompt: r.if?.prompt || NEXT_JUDGE }) });
   };
   const add = () => {
     // новое условное правило — перед «иначе», если оно есть: правило без if — последнее
@@ -155,12 +156,15 @@ export function NextFields({ bi }: { bi: number }) {
             {u?.type === 'command' && (
               <input value={u.run || ''} placeholder="test -f report.md" aria-label={t('Команда')} onChange={(e) => update(k, { if: { ...u, run: e.target.value } })} />
             )}
-            <span className="muted">→</span>
-            <select value={r.goto} onChange={(e) => update(k, { goto: e.target.value })} aria-label={t('Куда перейти')}>
-              {!targets.some((x) => x.value === r.goto) && <option value={r.goto}>{t('{name} (не ниже этого блока)', { name: r.goto })}</option>}
-              {targets.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
-            </select>
-            <button type="button" className={cx(styles.icon, styles.danger)} title={t('Убрать правило')} onClick={() => save(rules.filter((_, j) => j !== k))}>✕</button>
+            {/* «→ блок ✕» переносится целиком: стрелка не остаётся в конце строки условия */}
+            <span className={styles.nextGoto}>
+              <span className="muted">→</span>
+              <select value={r.goto} onChange={(e) => update(k, { goto: e.target.value })} aria-label={t('Куда перейти')}>
+                {!targets.some((x) => x.value === r.goto) && <option value={r.goto}>{t('{name} (не ниже этого блока)', { name: r.goto })}</option>}
+                {targets.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+              </select>
+              <button type="button" className={cx(styles.icon, styles.danger)} title={t('Убрать правило')} onClick={() => save(rules.filter((_, j) => j !== k))}>✕</button>
+            </span>
             {u?.type === 'judge' && (
               <textarea
                 className={styles.nextJudge}
@@ -173,7 +177,7 @@ export function NextFields({ bi }: { bi: number }) {
           </div>
         );
       })}
-      <div className="row">
+      <div className={styles.nextFoot}>
         <button type="button" className="btn ghost small" onClick={add}>{t('+ Правило «если …»')}</button>
         <span className="muted small">
           {rules.some((r) => !r.if)

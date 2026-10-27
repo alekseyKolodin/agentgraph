@@ -78,6 +78,31 @@ export function toEditable(spec: FlowSpec): EditSpec {
 }
 
 export const isCall = (b: Pick<EditBlock, 'flow'>): boolean => b.flow !== undefined;
+
+/** Переходы между блоками: [откуда, куда] по правилам next и «следующему по порядку»; конец запуска — blocks.length. */
+function blockJumps(spec: EditSpec): [number, number][] {
+  const n = spec.blocks.length;
+  const out: [number, number][] = [];
+  spec.blocks.forEach((b, k) => {
+    const rules = nextRules(b);
+    for (const r of rules) {
+      const to = r.goto === NEXT_END ? n : spec.blocks.findIndex((x) => x.name === r.goto);
+      if (to > k) out.push([k, to]);
+    }
+    if (!rules.some((r) => !r.if)) out.push([k, k + 1]);
+  });
+  return out;
+}
+
+/** Блоки, после которых может идти блок bi: обычно предыдущий, с развилкой — любой, чьё правило next ведёт сюда. */
+export function predecessors(spec: EditSpec, bi: number): number[] {
+  return [...new Set(blockJumps(spec).filter(([, to]) => to === bi).map(([from]) => from))].sort((a, z) => a - z);
+}
+
+/** Развилка может пропустить блок j по пути к блоку bi: есть переход через j к блоку не дальше bi. */
+export function mayBypass(spec: EditSpec, j: number, bi: number): boolean {
+  return blockJumps(spec).some(([from, to]) => from < j && to > j && to <= bi);
+}
 /** Правила next блока списком: строка — одно безусловное правило. */
 export const nextRules = (b: Pick<EditBlock, 'next'>): EditNextRule[] => nextRulesOf(b as Pick<GraphBlock, 'next'>) as EditNextRule[];
 
@@ -85,6 +110,8 @@ export const allPhases = (spec: EditSpec): EditPhase[] => spec.blocks.flatMap((b
 export const isMulti = (spec: EditSpec): boolean => spec.blocks.length > 1;
 export const blockLabel = (b: { name: string; title?: string }, bi: number): string => b.title || (b.name === 'main' ? t('Блок {n}', { n: bi + 1 }) : b.name);
 export const phaseNum = (spec: EditSpec, bi: number, i: number): string => (isMulti(spec) ? `${bi + 1}.${i + 1}` : `${i + 1}`);
+/** Рубрика судьи для правила развилки: когда переходить по нему. */
+export const NEXT_JUDGE = 'Задача: {{input}}\n\nВыводы блока:\n{{outputs}}\n\nОтветь done=true, если … (когда идти по этому правилу). Иначе done=false.';
 export const DEFAULT_JUDGE = 'Задача: {{input}}\n\nВыводы этапов текущей итерации:\n{{outputs}}\n\nРубрика: done=true только если задача выполнена целиком. Иначе перечисли в feedback конкретные пробелы.';
 
 const asGraph = (b: EditBlock) => b as unknown as GraphBlock;
@@ -102,7 +129,11 @@ export function variableList(spec: EditSpec, bi: number, idx: number): Variable[
   const prevBlockEnd = prevBlock ? blockSteps(asGraph(prevBlock)).at(-1) : null;
   const ownLast = steps.at(-1);
   const ownEnd = isGroupStep(ownLast) ? t('склейка выводов группы {g} этого блока', { g: ownLast!.group! }) : t('последнего этапа этого блока');
-  let prev: { label: string; hint: string } = prevStep
+  const preds = predecessors(spec, bi);
+  const branched = !prevStep && bi > 0 && (preds.length !== 1 || preds[0] !== bi - 1);
+  let prev: { label: string; hint: string } = branched
+    ? branchedPrev(spec, preds)
+    : prevStep
     ? isGroupStep(prevStep)
       ? { label: t('Выводы группы {g}', { g: prevStep.group! }), hint: t('склейка выводов участников группы в порядке объявления') }
       : { label: t('Вывод предыдущего ({name})', { name: block.phases[prevStep.from]!.name }), hint: t('полный ответ предыдущего этапа') }
@@ -124,13 +155,13 @@ export function variableList(spec: EditSpec, bi: number, idx: number): Variable[
   // этапы этого и предыдущих блоков; этапы следующих блоков к этому моменту ещё не выполнялись
   spec.blocks.slice(0, bi + 1).forEach((b, j) => {
     // итог блока-вызова — {{phases.<имя блока>}}
-    if (isCall(b) && j < bi) list.push({ key: `phases.${b.name}`, label: t('Итог вызова {flow} (блок {n})', { flow: b.flow || '…', n: j + 1 }), hint: t('итог вызванного flow: вывод его последнего шага') });
+    if (isCall(b) && j < bi) list.push({ key: `phases.${b.name}`, label: t('Итог вызова {flow} (блок {n})', { flow: b.flow || '…', n: j + 1 }), hint: maybeEmpty(spec, j, bi, t('итог вызванного flow: вывод его последнего шага')) });
     for (const [k, p] of b.phases.entries()) {
       if (p === block.phases[idx]) continue;
       // соседи по группе идут одновременно: на их вывод ссылаться нельзя
       if (j === bi && isGroupStep(step) && k >= step!.from && k <= step!.to) continue;
       const label = j < bi ? t('Вывод этапа {name} (блок {n})', { name: p.name, n: j + 1 }) : t('Вывод этапа {name}', { name: p.name });
-      list.push({ key: `phases.${p.name}`, label, hint: t('последний вывод этого этапа') });
+      list.push({ key: `phases.${p.name}`, label, hint: maybeEmpty(spec, j, bi, t('последний вывод этого этапа')) });
     }
   });
   list.push(
@@ -155,7 +186,7 @@ export function phaseInputs(spec: EditSpec, bi: number, i: number): string[] {
   const steps = blockSteps(asGraph(b));
   const si = steps.findIndex((s) => i >= s.from && i <= s.to);
   const prevBlock = bi > 0 ? spec.blocks[bi - 1]! : null;
-  const prevName = si > 0 ? stepSource(asGraph(b), steps[si - 1]!) : prevBlock ? blockSource(prevBlock) : null;
+  const prevName = si > 0 ? stepSource(asGraph(b), steps[si - 1]!) : prevBlock ? prevSources(spec, bi) : null;
   const text = phaseText(p);
   return variableList(spec, bi, i)
     .filter((v) => usesVar(text, v.key))
@@ -165,6 +196,20 @@ export function phaseInputs(spec: EditSpec, bi: number, i: number): string[] {
 /** Источник {{prev}} от конца блока: последний шаг блока этапов или сам блок-вызов. */
 const blockSource = (b: EditBlock): string => (isCall(b) ? b.name : stepSource(asGraph(b), blockSteps(asGraph(b)).at(-1)!));
 
+/** {{prev}} блока, в который ведёт развилка: вывод того блока, что выполнился перед ним. */
+function branchedPrev(spec: EditSpec, preds: number[]): { label: string; hint: string } {
+  const list = preds.map((k) => `«${blockLabel(spec.blocks[k]!, k)}»`).join(', ');
+  return { label: t('Вывод предыдущего блока'), hint: t('вывод последнего шага блока, выполненного перед этим, — смотря по развилке: {list}', { list }) };
+}
+
+/** Подсказка переменной этапа блока j для блока bi: развилка может пропустить блок j — тогда пусто. */
+const maybeEmpty = (spec: EditSpec, j: number, bi: number, hint: string): string =>
+  j < bi && mayBypass(spec, j, bi) ? t('{hint}; пусто, если развилка пропустила блок {n}', { hint, n: j + 1 }) : hint;
+
+/** Источники {{prev}} первого шага блока bi для строки «получает»: с развилкой — все возможные. */
+const prevSources = (spec: EditSpec, bi: number): string =>
+  predecessors(spec, bi).map((k) => blockSource(spec.blocks[k]!)).join(' / ');
+
 /** Шаблон задачи вызываемого flow по умолчанию — так его собирает раннер (callInput в src/compose.ts). */
 export const DEFAULT_CALL_INPUT = '{{input}}\n\n## Результат предыдущего шага\n{{prev}}\n\n## Замечания проверки\n{{feedback}}';
 
@@ -172,19 +217,25 @@ export const DEFAULT_CALL_INPUT = '{{input}}\n\n## Результат преды
 export function callVariables(spec: EditSpec, bi: number): Variable[] {
   const b = spec.blocks[bi]!;
   const prevBlock = bi > 0 ? spec.blocks[bi - 1]! : null;
+  const preds = predecessors(spec, bi);
+  const branched = bi > 0 && (preds.length !== 1 || preds[0] !== bi - 1);
+  const again = b.loop ? t('; на итерации 2+ — итог прошлого вызова') : '';
+  const prev = branched
+    ? branchedPrev(spec, preds)
+    : prevBlock && isCall(prevBlock)
+      ? { label: t('Итог блока «{block}»', { block: blockLabel(prevBlock, bi - 1) }), hint: t('итог вызванного flow {flow}: вывод его последнего шага', { flow: prevBlock.flow || '…' }) }
+      : prevBlock ? { label: t('Вывод блока «{block}»', { block: blockLabel(prevBlock, bi - 1) }), hint: t('вывод последнего шага предыдущего блока') } : null;
   const list: Variable[] = [
     { key: 'input', label: t('Задача'), hint: t('задача, введённая при запуске') },
-    prevBlock
-      ? { key: 'prev', label: t('Вывод блока «{block}»', { block: blockLabel(prevBlock, bi - 1) }), hint: b.loop ? t('на итерации 2+ — итог прошлого вызова') : t('вывод последнего шага предыдущего блока') }
-      : { key: 'prev', label: t('Итог прошлого вызова'), hint: t('на первой итерации пусто') },
+    prev ? { key: 'prev', label: prev.label, hint: prev.hint + again } : { key: 'prev', label: t('Итог прошлого вызова'), hint: t('на первой итерации пусто') },
     { key: 'feedback', label: t('Замечания условия'), hint: t('вывод команды или замечания судьи после прошлой итерации блока; пусто на первой') },
   ];
   spec.blocks.slice(0, bi + 1).forEach((x, j) => {
     if (isCall(x)) {
-      if (j < bi) list.push({ key: `phases.${x.name}`, label: t('Итог вызова {flow} (блок {n})', { flow: x.flow || '…', n: j + 1 }), hint: t('итог вызванного flow: вывод его последнего шага') });
+      if (j < bi) list.push({ key: `phases.${x.name}`, label: t('Итог вызова {flow} (блок {n})', { flow: x.flow || '…', n: j + 1 }), hint: maybeEmpty(spec, j, bi, t('итог вызванного flow: вывод его последнего шага')) });
       return;
     }
-    for (const p of x.phases) list.push({ key: `phases.${p.name}`, label: t('Вывод этапа {name} (блок {n})', { name: p.name, n: j + 1 }), hint: t('последний вывод этого этапа') });
+    for (const p of x.phases) list.push({ key: `phases.${p.name}`, label: t('Вывод этапа {name} (блок {n})', { name: p.name, n: j + 1 }), hint: maybeEmpty(spec, j, bi, t('последний вывод этого этапа')) });
   });
   list.push(
     { key: 'iteration', label: t('№ итерации'), hint: t('номер текущей итерации блока') },
@@ -200,7 +251,7 @@ export function callInputs(spec: EditSpec, bi: number): string[] {
   const prevBlock = bi > 0 ? spec.blocks[bi - 1]! : null;
   return callVariables(spec, bi)
     .filter((v) => usesVar(text, v.key))
-    .map((v) => (v.key === 'prev' ? (prevBlock ? `← ${blockSource(prevBlock)}` : t('← прошлая итерация')) : v.key.startsWith('phases.') ? `← ${v.key.slice(7)}` : v.label.toLowerCase()));
+    .map((v) => (v.key === 'prev' ? (prevBlock ? `← ${prevSources(spec, bi)}` : t('← прошлая итерация')) : v.key.startsWith('phases.') ? `← ${v.key.slice(7)}` : v.label.toLowerCase()));
 }
 
 /**

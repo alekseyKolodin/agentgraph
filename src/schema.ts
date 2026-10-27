@@ -177,8 +177,11 @@ export const NextSchema = z
  * Блок в flow.yaml: этапы (phases) или вызов другого flow (flow), у любого — развилка next.
  * Генератор пишет только блоки этапов без next: его схема — BlockSchema (GeneratedFlowSchema).
  */
-export const FlowBlockSchema = BlockSchema.extend({
-  phases: z.array(PhaseSchema).min(1).optional(),
+const B = BlockSchema.shape;
+// порядок ключей — порядок в YAML: вызов сразу под именем, next — после этапов; у блока этапов он прежний
+export const FlowBlockSchema = z.object({
+  name: B.name,
+  title: B.title,
   flow: z
     .string()
     .regex(/^[a-z0-9-]+$/)
@@ -192,6 +195,11 @@ export const FlowBlockSchema = BlockSchema.extend({
     .describe(
       'Только у блока-вызова: задача вызываемого flow (его {{input}}), шаблон с теми же переменными, что у промпта этапа. По умолчанию — {{input}}, итог прошлого шага и {{feedback}}, если они есть.',
     ),
+  loop: B.loop,
+  on_fail: B.on_fail,
+  knowledge: B.knowledge,
+  plugins: B.plugins,
+  phases: z.array(PhaseSchema).min(1).optional(),
   next: NextSchema.optional(),
 });
 export type FlowBlock = z.output<typeof FlowBlockSchema>;

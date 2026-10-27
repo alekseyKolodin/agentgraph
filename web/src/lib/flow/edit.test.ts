@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSpec } from '@server/schema';
 import {
-  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, renameBlock,
+  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, renameBlock,
   renamePhase, setBlockMode, specChanges, SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
 import { conditionText, schemeSummary } from './summary';
@@ -335,4 +335,26 @@ test('сводка flow с вызовами: блоки, вызовы и эта�
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks }), '3 блока · 2 вызова flow · 1 этап');
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: blocks.slice(0, 2) }), '2 блока · 2 вызова flow');
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: blocks.slice(0, 1) }), '1 вызов flow x · один проход');
+});
+
+test('развилка в переменных: {{prev}} — вывод того блока, что выполнился перед этим; пропускаемый блок — «может быть пусто»', () => {
+  const s = spec([
+    { name: 'triage', phases: [ph('decide')], next: [{ if: { type: 'marker', marker: '<IDEA>' }, goto: 'review' }, { goto: 'slogan' }] },
+    { name: 'review', flow: 'example-parallel', phases: [], next: 'end' },
+    { name: 'slogan', flow: 'example-blocks', phases: [], loop: { max_iterations: 2, until: { type: 'none' } } },
+    { name: 'after', phases: [ph('x', { prompt: '{{prev}} {{phases.review}} {{phases.decide}}' })] },
+  ]);
+  assert.deepEqual(predecessors(s, 2), [0]);
+  assert.deepEqual(predecessors(s, 1), [0]);
+  assert.ok(mayBypass(s, 1, 2));
+  assert.ok(!mayBypass(s, 0, 2));
+  const prev = callVariables(s, 2).find((v) => v.key === 'prev')!;
+  assert.equal(prev.label, 'Вывод предыдущего блока');
+  assert.match(prev.hint, /«triage»; на итерации 2\+ — итог прошлого вызова/);
+  assert.match(callVariables(s, 2).find((v) => v.key === 'phases.review')!.hint, /пусто, если развилка пропустила блок 2/);
+  // в after попадают только из slogan: review ведёт в конец
+  assert.deepEqual(phaseInputs(s, 3, 0), ['← slogan', '← decide', '← review']);
+  assert.equal(variableList(s, 3, 0).find((v) => v.key === 'prev')!.label, 'Итог блока «slogan»');
+  assert.match(variableList(s, 3, 0).find((v) => v.key === 'phases.review')!.hint, /пусто, если развилка пропустила блок 2/);
+  assert.doesNotMatch(variableList(s, 3, 0).find((v) => v.key === 'phases.decide')!.hint, /пусто/);
 });

@@ -150,7 +150,9 @@
 .block-pane textarea.call-input { min-height: 22vh; line-height: 1.6; }
 .next-box { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .next-rule { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.next-rule select, .next-rule input { width: auto; min-width: 0; flex: 1 1 140px; }
+.next-rule select, .next-rule input { width: auto; min-width: 0; flex: 1 1 120px; }
 .next-rule input { font-family: var(--font-mono); font-size: var(--fs-meta); }
-.next-rule > .icon { flex: 0 0 auto; }
+.next-goto { display: flex; gap: 6px; align-items: center; flex: 1 1 200px; min-width: 0; }
+.next-goto .icon { flex: 0 0 auto; }
+.next-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 textarea.next-judge { flex-basis: 100%; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.45; }
