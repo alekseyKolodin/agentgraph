@@ -1,6 +1,6 @@
 // Запросы страницы запуска: отчёт, снимок flow, файлы запуска, управление (пауза, лимит, остановка, продолжение),
 // «Сохранить как flow», артефакты и чат запуска (ответ — поток NDJSON).
-import type { ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
+import type { ArtifactList, ArtifactRead, ArtifactSaved, ChatActionReply, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
 import type { Block, FlowSpec } from '@server/schema';
 import type { RunFlowEdit, RunNote } from '@server/api-types';
 import { api, streamNdjson } from './client';
@@ -64,3 +64,7 @@ export const stopChat = (id: string) => api<unknown>('POST', `${runUrl(id)}/chat
 /** Сообщение в чат запуска: ответ читается потоком, каждая строка — событие. Не 2xx — ApiError. */
 export const postChat = (id: string, body: { message: string; model?: string }, onEvent: (e: ChatStreamEvent) => void): Promise<void> =>
   streamNdjson<ChatStreamEvent>(`${runUrl(id)}/chat`, body, onEvent);
+
+/** Клик по кнопке под ответом чата: сервер сверит состояние и выполнит действие один раз (409 busy — идёт ход, 409 used — уже нажимали). */
+export const postChatAction = (id: string, body: { msgIndex: number; actionId: string; saveToFlows?: boolean }) =>
+  api<ChatActionReply>('POST', `${runUrl(id)}/chat/action`, body);

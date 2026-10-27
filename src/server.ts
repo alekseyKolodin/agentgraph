@@ -23,11 +23,11 @@ import {
   summarize,
 } from './flows.js';
 import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { truncate, type AskAnswers } from './agent.js';
+import { type AskAnswers } from './agent.js';
 import { editBase } from './edit.js';
 import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunReport } from './runner.js';
-import { chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type RunView } from './chat.js';
+import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
 import { pickRunTitle } from './run-title.js';
 import { writeDigest } from './run-digest.js';
@@ -41,7 +41,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent } from './api-types.js';
+import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -126,8 +126,11 @@ type LiveRun = {
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
 type HomeEvent = HomeEventOf<RunEvent['type']>;
 
-/** Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю. */
-type ChatTurnState = { abort: AbortController; lines: string[]; clients: Set<http.ServerResponse> };
+/**
+ * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
+ * live — шаги, последний текст и виджеты хода: их видит вкладка, которая подключилась посреди ответа.
+ */
+type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http.ServerResponse> };
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
@@ -138,7 +141,6 @@ const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
 const homeClients = new Map<http.ServerResponse, boolean>();
 const LOG_REPLAY_MAX = 3000;
-const CHAT_ACTIVITY_MAX = 200;
 
 /** Ошибка с HTTP-кодом: функции управления запуском бросают её, а отвечает обработчик запроса. */
 class HttpError extends Error {
@@ -588,6 +590,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/chat\/stop$/)) && method === 'POST') {
     chats.get(m[1])?.abort.abort();
     return sendJson(res, 200, { ok: true });
+  }
+
+  // Клик по кнопке под ответом чата: опасное действие выполняется здесь, один раз, после сверки с состоянием запуска
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/chat\/action$/)) && method === 'POST') {
+    const id = m[1];
+    const body = await readJson(req);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'Тело — объект { msgIndex, actionId }', code: 'bad_request' });
+    if (!runView(id)) return sendJson(res, 404, { error: 'Запуск не найден' });
+    // после чтения тела — без await до записи итога: занятость чата и сверка состояния не устареют
+    const r = chatAction({ runDir: path.join(RUNS_DIR, id), controls: chatControls(id, opts), busy: chats.has(id), body: body as Record<string, unknown> });
+    if (r.status !== 200 || !r.chat) return sendJson(res, r.status, r.chat ? { ...r.body, chat: chatPayload(id, r.chat) } : r.body);
+    return sendJson(res, 200, { action: r.action!, chat: chatPayload(id, r.chat), effects: r.effects ?? [] } satisfies ChatActionReply);
   }
 
   // Удаление из истории: вся папка запуска. Идущий запуск не трогаем.
@@ -1339,11 +1353,96 @@ function chatControls(id: string, srv: ServerOptions): ChatControls {
     abort: () => abortRun(id),
     setMaxIterations: (block, value) => changeMaxIterations(id, block, value),
     answer: (questionId, answers) => answerQuestion(id, questionId, answers),
-    continueRun: () => continueRun(id, {}, srv),
+    continueRun: (o) => continueRun(id, { model: o?.model, maxBudgetUsd: o?.maxBudgetUsd }, srv),
+    rerun: (o) => rerunRun(id, { model: o?.model, maxBudgetUsd: o?.maxBudgetUsd }, srv),
+    // артефакты — тем же API, что у панели; запись и ответ на паузу — от имени пользователя через чат
+    artifacts: {
+      list: () => {
+        const run = artifactRun(id);
+        return run ? listArtifacts(run) : NO_ARTIFACTS;
+      },
+      read: (key) => {
+        const run = artifactRun(id);
+        return run ? readArtifact(run, key) : NO_ARTIFACTS;
+      },
+      write: (key, text, base) => {
+        const run = artifactRun(id);
+        return run ? writeArtifact(run, key, { text, base }, 'chat') : NO_ARTIFACTS;
+      },
+    },
+    answerPause: (text) => {
+      const lr = live.get(id);
+      if (!lr) return { status: 409, body: { error: 'Запуск не на паузе в этом сервере: ответ не записан', code: 'not_paused' } };
+      return answerPause(lr.pause, artifactRun(id), text, 'chat');
+    },
+    readFlow: () => runFlows(id),
+    saveFlow: (yaml) => {
+      const r = readReport(id);
+      if (!r) throw new HttpError(404, 'Запуск не найден');
+      if (r.adhoc) throw new HttpError(400, 'У разового запуска нет файла в flows/');
+      try {
+        return { file: saveFlowYaml(r.flow, yaml).file };
+      } catch (err) {
+        throw new HttpError(400, errMsg(err));
+      }
+    },
   };
 }
 
-/** История чата для UI; busy и activity — идущий ход (его видно и из другой вкладки, и после возврата на запуск). */
+/** Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу. */
+function runFlows(id: string): FlowSnapshots {
+  const r = live.get(id)?.report ?? readReport(id);
+  if (!r) throw new HttpError(404, 'Запуск не найден');
+  const snap = path.join(RUNS_DIR, id, 'flow.yaml');
+  const out: FlowSnapshots = { name: r.flow, adhoc: Boolean(r.adhoc) };
+  if (fs.existsSync(snap)) out.run = { file: snap, yaml: fs.readFileSync(snap, 'utf8') };
+  if (!r.adhoc) {
+    try {
+      out.flows = { file: resolveFlowFile(r.flow), yaml: readFlowYaml(r.flow) };
+    } catch {
+      // файла нет: flow удалили или переименовали после запуска
+    }
+  }
+  return out;
+}
+
+/**
+ * Перезапуск из чата: тот же flow заново (текущая версия из flows/, у разового — снимок) с той же задачей, директорией,
+ * тегами и вложениями. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной директории столкнутся.
+ */
+function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, srv: ServerOptions): { id: string } {
+  const prev = readReport(prevId);
+  if (!prev) throw new HttpError(404, 'Запуск не найден');
+  if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: перезапустить можно только завершённый');
+  if (!prev.cwd || !fs.existsSync(prev.cwd)) throw new HttpError(400, 'Директории проекта запуска больше нет');
+  let spec: FlowSpec;
+  let addDirs: string[];
+  try {
+    spec = specOf(prev);
+    addDirs = runAddDirs(prev.addDirs, prev.cwd);
+    // удалённый с тех пор тег знаний — отказ до создания папки запуска, как у POST /api/runs
+    resolveKnowledge(spec, prev.knowledge ?? []);
+  } catch (err) {
+    throw new HttpError(400, errMsg(err));
+  }
+  spec.input = prev.input;
+  const id = startRun(spec, {
+    cwd: prev.cwd,
+    maxBudgetUsd: o.maxBudgetUsd,
+    model: o.model,
+    source: prev.source,
+    worktree: prev.worktree,
+    addDirs,
+    attachmentsFrom: path.join(RUNS_DIR, prevId),
+    adhoc: prev.adhoc,
+    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
+    ...(prev.title ? { title: prev.title } : {}),
+  }, srv);
+  return { id };
+}
+
+/** История чата для UI; busy и live — идущий ход (его видно и из другой вкладки, и после возврата на запуск). */
 function chatPayload(id: string, chat: ChatLog): ChatPayload {
   const turn = chats.get(id);
   return {
@@ -1351,12 +1450,13 @@ function chatPayload(id: string, chat: ChatLog): ChatPayload {
     totalCostUsd: chat.totalCostUsd,
     sessionId: chat.sessionId,
     busy: Boolean(turn),
-    activity: turn?.lines.slice(-30) ?? [],
+    ...(turn ? { live: turn.live } : {}),
   };
 }
 
 /**
- * Сообщение в чат запуска. Ответ — поток NDJSON: saved (сообщение записано), log (ход ответа), done (история после ответа) или error.
+ * Сообщение в чат запуска. Ответ — поток NDJSON: saved (сообщение записано), step, text, widget и effect (ход ответа),
+ * done (история после ответа) или error.
  * Ход не зависит от соединения: закрыли вкладку — агент доотвечает, ответ ляжет в историю. Остановка — POST …/chat/stop.
  */
 async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id: string, srv: ServerOptions): Promise<void> {
@@ -1367,7 +1467,7 @@ async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id:
   const view = runView(id);
   if (!view) return sendJson(res, 404, { error: 'Запуск не найден' });
 
-  const turn: ChatTurnState = { abort: new AbortController(), lines: [], clients: new Set([res]) };
+  const turn: ChatTurnState = { abort: new AbortController(), live: { steps: [], widgets: [] }, clients: new Set([res]) };
   chats.set(id, turn);
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache' });
   res.on('close', () => turn.clients.delete(res));
@@ -1384,11 +1484,19 @@ async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id:
       model: body.model || undefined,
       controls: chatControls(id, srv),
       abort: turn.abort,
-      log: (line) => {
-        const l = truncate(line, 400);
-        if (turn.lines.push(l) > CHAT_ACTIVITY_MAX) turn.lines.splice(0, turn.lines.length - CHAT_ACTIVITY_MAX / 2);
-        send({ type: 'log', line: l });
+      onStep: (index, step) => {
+        turn.live.steps[index] = step;
+        send({ type: 'step', index, step });
       },
+      onText: (text) => {
+        turn.live.text = text;
+        send({ type: 'text', text });
+      },
+      onWidget: (widget) => {
+        turn.live.widgets.push(widget);
+        send({ type: 'widget', widget });
+      },
+      onEffect: (e) => send({ type: 'effect', ...e }),
       onSaved: (chat) => send({ type: 'saved', chat: chatPayload(id, chat) }),
     });
     // до done: в истории, которую он несёт, ответ уже не «идёт»
