@@ -1,0 +1,29 @@
+/* ход ИИ над flow: шапка (точка, шаг, модель, таймер, «Прервать»), повтор, строки хода, «нет вестей» */
+.ai-progress {
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 10px 14px;
+}
+.head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: ai-pulse 1.4s ease-in-out infinite; }
+@keyframes ai-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 30%, transparent); } }
+.stage { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip {
+  flex: none; font-family: var(--font-mono); font-size: var(--fs-cap); line-height: 1.5; color: var(--ink-2);
+  background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 6px;
+}
+.chip.pending { color: var(--ink-3); border-style: dashed; }
+.timer { margin-left: auto; flex: none; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); color: var(--ink-2); }
+.lines {
+  margin: 0; padding: 6px 8px; list-style: none; background: var(--well); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.5; color: var(--ink-2);
+}
+.lines li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lines li.result { color: var(--ink-3); }
+.lines li:last-child { color: var(--ink); }
+.quiet { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); }
+.warn { margin: 0; font-size: var(--fs-small); color: var(--st-wait); }
+
+/* выбор модели рядом с кнопкой ИИ */
+.model { flex: none; max-width: 150px; padding: 6px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.model:disabled { opacity: .7; }

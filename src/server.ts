@@ -9,7 +9,6 @@ import {
   blankFlowYaml,
   deleteFlow,
   flowExists,
-  flowFileName,
   flowFolder,
   flowToYaml,
   listFlows,
@@ -24,8 +23,8 @@ import {
 } from './flows.js';
 import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema.js';
 import { truncate, type AskAnswers } from './agent.js';
-import { generateFlow } from './generate.js';
-import { editBase, editFlow } from './edit.js';
+import { editBase } from './edit.js';
+import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunReport } from './runner.js';
 import { chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
@@ -125,6 +124,8 @@ type ChatTurnState = { abort: AbortController; lines: string[]; clients: Set<htt
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
+/** Идущие генерации и правки flow ИИ: живут, пока живо соединение; stopServer прерывает их. */
+const generations = new Set<AbortController>();
 /** Идущие анализы flow (POST /api/runs/:id/analysis): один на запуск, второй одновременно — 409 busy. */
 const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
@@ -167,8 +168,9 @@ export function startServer(opts: ServerOptions): Promise<string> {
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
   for (const id of live.keys()) abortRun(id);
   for (const turn of chats.values()) turn.abort.abort();
+  for (const abort of generations) abort.abort();
   const deadline = Date.now() + timeoutMs;
-  while ((live.size || chats.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  while ((live.size || chats.size || generations.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await Promise.all(
     [...servers].map(
       (server) =>
@@ -258,14 +260,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const task = (body.task ?? '').trim();
     if (!task) return sendJson(res, 400, { error: 'Опиши задачу' });
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
-    const { spec, result } = await generateFlow(task, { cwd, model: body.model || undefined });
-    if (body.save === false) {
-      return sendJson(res, 200, { name: spec.name, spec, yaml: flowToYaml(spec), summary: summarize(spec.name, '', spec), costUsd: result.costUsd });
-    }
-    const { name, file } = flowFileName(spec.name, (body.folder ?? '').trim());
-    spec.name = name;
-    fs.writeFileSync(file, flowToYaml(spec));
-    return sendJson(res, 201, { name, yaml: flowToYaml(spec), summary: summarize(name, file, spec), costUsd: result.costUsd });
+    // тело — как было; с Accept: application/x-ndjson — поток хода сессии (src/flow-ai.ts)
+    return respondFlowAi(req, res, generations, (ai) =>
+      generateReply(task, { cwd, model: body.model || undefined, folder: (body.folder ?? '').trim(), save: body.save !== false }, ai),
+    );
   }
 
   // Проверка черновика разового запуска ({ spec } из конструктора или { yaml }): ничего не пишет.
@@ -312,15 +310,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const instruction = (body.instruction ?? '').trim();
     if (!instruction) return sendJson(res, 400, { error: 'Опиши, что поменять' });
     const base = editBase(name, body.spec || typeof body.yaml === 'string' ? body : { yaml: readFlowYaml(name) });
-    // закрыли вкладку или нажали «Остановить» — останавливаем и сессию
-    const abort = new AbortController();
-    res.on('close', () => { if (!res.writableEnded) abort.abort(); });
-    const r = await editFlow(name, instruction, base, {
-      cwd: path.resolve((body.cwd ?? '').trim() || opts.defaultCwd),
-      model: body.model || undefined,
-      abort,
-    });
-    return sendJson(res, 200, { name, spec: r.spec, summary: r.summary, changed: r.changed, costUsd: r.costUsd });
+    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию
+    const cwd = path.resolve((body.cwd ?? '').trim() || opts.defaultCwd);
+    return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
   }
 
   if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/folder$/)) && method === 'PUT') {

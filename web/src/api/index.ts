@@ -6,7 +6,7 @@ export {
 } from './queries';
 export {
   blankFlow, checkFlow, deleteFlow, editFlow, fetchConnectors, fetchFlow, generateFlow, moveFlow, saveFlowSpec, saveFlowYaml, useTags,
-  type FlowDetail, type FlowEdited, type FlowGenerated, type FlowSaved,
+  type FlowAiProgressEvent, type FlowDetail, type FlowEdited, type FlowGenerated, type FlowSaved,
 } from './flows';
 export {
   deleteRun, fetchTag, hideRecentDir, prepareWorktree, recentDirsKey, RUN_DELETED, setRunHidden, startRun, useRecentDirs,
