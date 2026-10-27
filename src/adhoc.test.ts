@@ -70,6 +70,24 @@ test('runSpec: продолжение продолжения разового �
   assert.equal(runSpec(report({ id: 'run-3', adhoc: true, continuedFrom: 'run-2' }), loaders).description, 'снимок run-3');
 });
 
+const edit = { version: 1, at: '2026-10-27T10:00:00.000Z', source: 'edit' as const, via: 'ui' as const, changed: ['этап a: prompt'] };
+
+test('runSpec: flow правили на ходу (flowEdits) — снимок запуска, а не flows/', () => {
+  assert.equal(runSpec(report({ flowEdits: [edit] }), loaders).description, 'снимок run-1');
+  assert.equal(runSpec(report({ flowEdits: [] }), loaders).description, 'из flows/');
+});
+
+test('runSpec: продолжение запуска с правкой flow — свой снимок по цепочке continuedFrom', () => {
+  const reports: Record<string, RunReport> = {
+    'run-1': report({ flowEdits: [edit] }),
+    'run-2': report({ id: 'run-2', continuedFrom: 'run-1' }),
+  };
+  const chain = { ...loaders, report: (id: string) => reports[id] };
+  assert.equal(runSpec(report({ id: 'run-3', continuedFrom: 'run-2' }), chain).description, 'снимок run-3');
+  // начало цепочки без правок или удалено — flows/
+  assert.equal(runSpec(report({ id: 'run-3', continuedFrom: 'gone' }), chain).description, 'из flows/');
+});
+
 test('readRunFlow: id с .. или / — отказ', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-adhoc-'));
   try {

@@ -62,15 +62,29 @@ export function runFlowView(runsDir: string, id: string): { name: string; blocks
   return { name: spec.name, blocks: flowBlocks(spec), ...(spec.artifacts ? { artifacts: spec.artifacts } : {}) };
 }
 
+type SpecReport = Pick<RunReport, 'id' | 'flow' | 'adhoc' | 'flowEdits' | 'continuedFrom'>;
+
+/** Как в CONTINUE_DEPTH_MAX раннера: дальше по цепочке продолжений не идём. */
+const EDITED_DEPTH_MAX = 50;
+
 /**
- * По какому spec идёт запуск: у разового — его снимок (в flows/ может лежать чужой flow с тем же именем),
- * у обычного — текущая версия сохранённого flow по имени.
+ * По какому spec идёт запуск: у разового — его снимок (в flows/ может лежать чужой flow с тем же именем); у запуска,
+ * чей flow правили на ходу (flowEdits), — тоже снимок: правка живёт только в нём и в его продолжениях (report читает
+ * прошлые запуски цепочки continuedFrom); у обычного — текущая версия сохранённого flow по имени.
  */
 export function runSpec(
-  report: Pick<RunReport, 'id' | 'flow' | 'adhoc'>,
-  load: { flow: (name: string) => FlowSpec; snapshot: (id: string) => FlowSpec },
+  report: SpecReport,
+  load: { flow: (name: string) => FlowSpec; snapshot: (id: string) => FlowSpec; report?: (id: string) => SpecReport | undefined },
 ): FlowSpec {
-  return report.adhoc ? load.snapshot(report.id) : load.flow(report.flow);
+  return report.adhoc || editedFlow(report, load.report) ? load.snapshot(report.id) : load.flow(report.flow);
+}
+
+/** Flow правили на ходу в этом запуске или в одном из тех, что он продолжает. */
+function editedFlow(report: SpecReport, read: ((id: string) => SpecReport | undefined) | undefined, depth = 0): boolean {
+  if (report.flowEdits?.length) return true;
+  if (!read || !report.continuedFrom || depth >= EDITED_DEPTH_MAX) return false;
+  const prev = read(report.continuedFrom);
+  return prev ? editedFlow(prev, read, depth + 1) : false;
 }
 
 export type SaveFlowDeps = {
