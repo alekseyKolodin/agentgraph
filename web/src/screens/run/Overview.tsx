@@ -157,7 +157,7 @@ function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; 
       return (
         <div className={styles.blockHead}>
           {item.foldKey ? <FoldButton foldKey={item.foldKey} open={item.open}>{item.label}</FoldButton> : <span>{item.label}</span>}
-          <Badge status={b.status} />
+          {!b.bypassed && <Badge status={b.status} />}
           <span className="muted">
             {how !== null
               ? `${how}${item.cost ? ` · ${usd(item.cost)}` : ''}`
@@ -246,7 +246,7 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
         <span className={styles.tools}>{p.call ? <CallLink call={p.call} /> : `[${toolsLabel(p.tools, implicit)}]`}</span>
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
-        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${t('{n} ходов', { n: p.turns })} · ${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
+        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
       <StepNotes notes={notes} />
@@ -386,7 +386,7 @@ function RunFinal({ r }: { r: RunReport }) {
         {r.digest?.text && <div className={styles.sumDigest}>{r.digest.text}</div>}
         {multi && (
           <div className={styles.finalBlocks}>
-            {blocks.map((b, i) => <span key={i}>{`${b.title || b.name} `}<Badge status={b.status} /></span>)}
+            {blocks.map((b, i) => <span key={i}>{`${b.title || b.name} `}{b.bypassed ? <span className="muted">{t('не выбран')}</span> : <Badge status={b.status} />}</span>)}
           </div>
         )}
         {r.error && <div className="error">{r.error}</div>}
@@ -494,7 +494,7 @@ function Ribbons({ st, spec }: { st: LiveState; spec: SpecBlocks }) {
             <div className={styles.rbHead}>
               <span className={styles.rbBn}>{t('Блок {n}', { n: row.bi + 1 })}</span>
               <span className={styles.rbTitle}>{row.head.title}</span>
-              <Badge status={row.head.status} />
+              {row.head.status && <Badge status={row.head.status} />}
               <span className="muted small">{row.head.note}</span>
             </div>
           )}

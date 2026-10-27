@@ -109,7 +109,10 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
       case 'phase_end': {
         const r = e.report;
         const used = [r.model, r.effort].filter(Boolean).join(' · ');
-        const stats = c.dim(`${r.turns} ходов · ${fmtMs(r.durationMs)} · ${fmtUsd(r.costUsd)} · ${r.chars} знаков${used ? ` · ${used}` : ''}`);
+        // у блока-вызова ходов нет: его итог — статус дочернего запуска
+        const stats = c.dim(r.call
+          ? `${fmtMs(r.durationMs)} · ${fmtUsd(r.costUsd)} · flow ${r.call.flow}: ${STATUS_LABEL[r.call.status]}`
+          : `${r.turns} ходов · ${fmtMs(r.durationMs)} · ${fmtUsd(r.costUsd)} · ${r.chars} знаков${used ? ` · ${used}` : ''}`);
         const who = grouped.has(r.phase) ? `${grouped.get(r.phase)} ` : '';
         grouped.delete(r.phase);
         if (r.ok) out.log(`${c.green('✓')} ${who}${stats}`);

@@ -376,7 +376,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/generate.ts` | the generator: task → flow (a Claude session without tools) |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
 | `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
-| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`) |
+| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`); call blocks as child runs (`runChild`) and branching by `next` |
 | `src/run-fix.ts` | "fix and continue": what an edit of a running run's flow may not change and what it changed (pure functions; the runner applies the edit at a checkpoint) |
 | `src/artifacts.ts` | run artifacts without the file system: phase permissions (`reads`, `writes`, substitutions), validation, the map of a large artifact, the "Run artifacts" prompt section, the guard decision, whether an artifact may be edited |
 | `src/artifact-store.ts` | run artifact store: files and versions, quarantine and reconciliation with disk before a step, locking during a writing step, authorship, user edits and replies to a pause |
@@ -394,7 +394,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/attachments.ts` | task attachments: type and size checks, writing to `runs/<id>/attachments/`, copying on continuation |
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
 | `src/template.ts` | substituting `{{variables}}` into prompts |
-| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs |
+| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs (a call block's child run is a live run of its own; pause, resume and stop reach it from the parent) |
 | `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, artifacts, flow) and the `ui` widget tools (table, links, action buttons, reply chips); dangerous actions run only on a confirmed click (`chatAction`); history with steps and widgets in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
 | `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, stopping runs and the server (`stopServer`) on quit |

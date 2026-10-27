@@ -444,9 +444,11 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
   const sole = blocks.length === 1;
   const rows: RibbonRow[] = [];
   blocks.forEach((b, bi) => {
-    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: blockSkipNote(b) || (b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход')) };
+    const how = blockSkipNote(b) || (b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход'));
+    // не выбранный развилкой блок не «ожидает»: статуса у него нет, только подпись
+    const head = sole ? undefined : { title: b.title || b.name || '', status: b.bypassed ? '' : b.status, note: [how, blockNextNote(b, blocks)].filter(Boolean).join(' · ') };
     const bs = blockIters(st, bi, spec);
-    if (!b.looped || b.skipped) {
+    if (!b.looped || b.skipped || b.bypassed) {
       if (!sole) rows.push({ bi, head, chain: bs.iters > 0 && !b.skipped ? bs.chain(1) : undefined });
       return;
     }
@@ -644,7 +646,7 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
       input,
       running: Boolean(run),
       last: rep && !run
-        ? { iteration: rep.iteration, text: `${t('{n} ходов', { n: rep.turns })} · ${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
+        ? { iteration: rep.iteration, text: `${rep.call ? '' : `${t('{n} ходов', { n: rep.turns })} · `}${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
         : undefined,
       hist: done.length > 1 ? done.slice(-6) : [],
       files,
