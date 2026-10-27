@@ -7,7 +7,7 @@ export const chat: Record<string, string> = {
   'Чат запуска': 'Run chat',
   'Открыть чат с агентом об этом запуске': 'Open the chat with the agent about this run',
   'Чат': 'Chat',
-  'Свернуть чат': 'Collapse the chat',
+  'Свернуть чат в полоску у края (Esc)': 'Collapse the chat into a strip at the edge (Esc)',
   'думает…': 'thinking…',
   'Агент видит этот запуск: статус, этапы, выводы и транскрипты, живой лог, артефакты, flow и репозиторий.':
     'The agent sees this run: status, phases, outputs and transcripts, the live log, artifacts, the flow and the repository.',

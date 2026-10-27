@@ -92,7 +92,9 @@
 .rail-meta { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); }
 .rail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--live); flex: none; }
 .chat-head { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line); }
-.chat-title { font-weight: 600; }
+.chat-title-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.chat-title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--fs-body); font-weight: 600; }
+.chat-title-row :global(.btn) { flex: none; }
 .chat-meta { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .chat-head .push { margin-left: auto; gap: 6px; }
 .chat-head select { padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-meta); max-width: 150px; }

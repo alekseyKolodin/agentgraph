@@ -199,6 +199,7 @@ export function RunChat({ runId, live, onAfterTurn }: { runId: string; live: boo
   const toast = useToast();
   const field = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
+  const rail = useRef<HTMLButtonElement>(null);
   const afterTurn = useRef(onAfterTurn);
   afterTurn.current = onAfterTurn;
 
@@ -255,12 +256,13 @@ export function RunChat({ runId, live, onAfterTurn }: { runId: string; live: boo
     }
   };
 
+  /** Открыть или свернуть док; фокус — туда, где продолжат: в поле ввода или на полоску «Чат», чтобы открыть снова. */
   const toggle = () => {
     const next = !chat.open.get(runId);
     chat.open.set(runId, next);
     LS.set('agentgraph.chatOpen', next);
     render(true);
-    if (next) requestAnimationFrame(() => field.current?.focus());
+    requestAnimationFrame(() => (next ? field.current : rail.current)?.focus());
   };
 
   /** Как /clear: новая сессия, история пуста. С кнопки — с подтверждением, командой /clear — сразу. */
@@ -363,16 +365,28 @@ export function RunChat({ runId, live, onAfterTurn }: { runId: string; live: boo
   return (
     <aside className={cx(styles.chatDock, !open && styles.closed)} aria-label={t('Чат запуска')}>
       {open && <Grip />}
-      <button type="button" className={styles.dockRail} hidden={open} onClick={toggle} title={t('Открыть чат с агентом об этом запуске')} aria-expanded={false}>
+      <button ref={rail} type="button" className={styles.dockRail} hidden={open} onClick={toggle} title={t('Открыть чат с агентом об этом запуске')} aria-expanded={false}>
         <span className={styles.railTitle}>{t('Чат')}</span>
         {busy && <span className={styles.railDot} aria-label={t('агент отвечает…')} />}
         {meta && <span className={styles.railMeta}>{meta}</span>}
       </button>
-      <div className={styles.dockBody} hidden={!open}>
+      {/* Esc в любом месте дока сворачивает его; открытый поверх диалог Esc забирает себе — до дока он не дойдёт */}
+      <div
+        className={styles.dockBody}
+        hidden={!open}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          toggle();
+        }}
+      >
         <div className={styles.chatHead}>
-          <button type="button" className={cx('fold-head', styles.chatTitle)} aria-expanded onClick={toggle} title={t('Свернуть чат')}>
-            {t('Чат с агентом об этом запуске')}
-          </button>
+          <div className={styles.chatTitleRow}>
+            <h2 className={styles.chatTitle}>{t('Чат с агентом об этом запуске')}</h2>
+            <button type="button" className="btn small ghost" aria-expanded onClick={toggle} title={t('Свернуть чат в полоску у края (Esc)')}>
+              {t('Свернуть')}
+            </button>
+          </div>
           <span className={styles.chatMeta} title={chat.data?.sessionId ? t('Сессия чата: claude --resume {id} (в директории проекта запуска)', { id: chat.data.sessionId }) : ''}>
             {meta}
           </span>
