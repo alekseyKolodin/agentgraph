@@ -4,13 +4,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { checkFlow, deleteFlow, errorText, fetchFlow, keys, saveFlowYaml, useFeature, useTags } from '../../api';
+import { checkFlow, deleteFlow, errorText, fetchFlow, keys, saveFlowYaml, useFeature, useFlows, useTags } from '../../api';
 import { AdhocBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
 import { ICON } from '../../components/shell/FlowList';
 import { findPhase, toEditable } from '../../lib/flow/edit';
-import { schemeSummary } from '../../lib/flow/summary';
+import { callSubOf, schemeSummary } from '../../lib/flow/summary';
 import { flowGraphModel } from '../../lib/graph/model';
 import { t } from '../../lib/i18n';
 import { LS } from '../../lib/storage';
@@ -299,7 +299,8 @@ function RunTab({ hidden, intake, intakeKey }: { hidden: boolean; intake: RunTab
   const flow = st.flow!;
   const artifacts = useFeature('artifacts');
   const [open, setOpen] = useState(() => LS.get('agentgraph.graphOpen.flowTab', true));
-  const model = useMemo(() => (flow.spec ? flowGraphModel(toEditable(flow.spec), { artifacts }) : null), [flow.spec, artifacts]);
+  const flows = useFlows().data;
+  const model = useMemo(() => (flow.spec ? flowGraphModel(toEditable(flow.spec), { artifacts, callSub: callSubOf(flows) }) : null), [flow.spec, artifacts, flows]);
 
   // клик по узлу: конструктор на этом этапе. Индексы у сохранённого flow и конструктора могут разойтись — этап ищем по имени
   const openBuilderAt = useCallback((n: GraphHit) => {

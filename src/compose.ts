@@ -5,6 +5,19 @@ import { flowBlocks, isCallBlock, NEXT_END, nextRules, type Block, type FlowSpec
 import { referencedPhases, render, type TemplateContext } from './template.js';
 import type { RunReport } from './api-types.js';
 
+/**
+ * Пока раннер не исполняет вызовы и развилку, запуск такого flow отклоняется: иначе блок-вызов прошёл бы как сессия
+ * с задачей вызова вместо вызываемого flow, а next молча пропустился бы. Уйдёт вместе с подключением в раннер.
+ */
+export function assertRunnable(spec: FlowSpec): void {
+  const blocks = flowBlocks(spec);
+  const calls = blocks.filter(isCallBlock).map((b) => b.name);
+  const branching = blocks.filter((b) => b.next !== undefined).map((b) => b.name);
+  if (!calls.length && !branching.length) return;
+  const what = [calls.length ? `вызов flow (блоки ${calls.join(', ')})` : '', branching.length ? `развилку next (блоки ${branching.join(', ')})` : ''].filter(Boolean).join(' и ');
+  throw new Error(`Flow ${spec.name} нельзя запустить: раннер пока не исполняет ${what}`);
+}
+
 /** Глубина вызовов: flow → вызванный → его вызванный. Глубже — ошибка до старта. */
 export const CALL_DEPTH_MAX = 3;
 

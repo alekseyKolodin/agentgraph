@@ -18,12 +18,25 @@ export type GraphPhase = {
 };
 export type GraphUntil = { type?: string; run?: string; marker?: string };
 export type GraphLoop = { max_iterations: number; until: GraphUntil };
-export type GraphBlock = { name: string; title?: string; knowledge?: string[]; loop?: GraphLoop; on_fail?: string; phases: GraphPhase[] };
+/** Правило развилки next: условие (как until, без none) и куда идти — блок ниже или end. */
+export type GraphNextRule = { if?: GraphUntil & { prompt?: string; phase?: string }; goto: string };
+export type GraphBlock = {
+  name: string;
+  title?: string;
+  knowledge?: string[];
+  loop?: GraphLoop;
+  on_fail?: string;
+  phases: GraphPhase[];
+  /** Блок-вызов: имя вызываемого flow; на графе — один узел вызова вместо этапов. */
+  flow?: string;
+  input?: string;
+  next?: string | GraphNextRule[];
+};
 export type GraphArtifact = { title?: string; file?: string } | null | undefined;
 /** Форма blocks, как после toEditable. */
 export type GraphSpec = { blocks?: GraphBlock[]; artifacts?: Record<string, GraphArtifact> };
 
-export type NodeKind = 'start' | 'phase' | 'cond' | 'artifact';
+export type NodeKind = 'start' | 'phase' | 'cond' | 'artifact' | 'call' | 'end';
 export type GraphNode = {
   id: string;
   key: string;
@@ -48,6 +61,8 @@ export type GraphNode = {
   /** Тип условия у ромба. */
   type?: string;
   art?: string;
+  /** Узел вызова: имя вызываемого flow. */
+  flow?: string;
 };
 
 export type EdgeKind = 'flow' | 'next' | 'loop' | 'art-write' | 'art-read';
@@ -157,7 +172,42 @@ export type GraphModelOptions = {
   inputsOf?: (bi: number, i: number) => string[] | undefined;
   /** Нарисовать колонку артефактов справа от блоков (только если у flow они объявлены). */
   artifacts?: boolean;
+  /** Подпись узла вызова по имени вызываемого flow («2 блока · 3 этапа»); без неё — «вызов flow». */
+  callSub?: (flow: string) => string | undefined;
 };
+
+/** Конец запуска как цель next. */
+export const NEXT_END = 'end';
+export const END_W = 140;
+export const END_H = 44;
+const BRANCH_ROW = 22; // между горизонталями рёбер развилки под блоком: подписи не налезают друг на друга
+const SKIP_LANE = 12; // шаг между вертикалями рёбер, которые перепрыгивают через блоки
+
+/** Правила next списком: строка — одно безусловное правило. */
+export const nextRulesOf = (b: Pick<GraphBlock, 'next'>): GraphNextRule[] =>
+  b.next === undefined ? [] : typeof b.next === 'string' ? [{ goto: b.next }] : b.next;
+
+/** Подпись ребра развилки: условие правила. */
+export function nextCondLabel(c: NonNullable<GraphNextRule['if']>): string {
+  return c.type === 'marker' ? `${c.marker || '…'} →` : c.type === 'command' ? `$ ${c.run || '…'} →` : t('судья: да →');
+}
+
+/**
+ * Куда ведёт блок bi из n: индекс цели (n — конец запуска) → подпись ребра. Правила next по порядку; правило без if —
+ * «иначе»; без безусловного правила — ещё и следующий блок по порядку. Без next — следующий блок с подписью fallback.
+ */
+export function blockTargets(b: Pick<GraphBlock, 'next'>, bi: number, names: string[], fallback: string): Map<number, string> {
+  const rules = nextRulesOf(b);
+  const out = new Map<number, string>();
+  const add = (to: number, label: string) => out.set(to, out.has(to) ? `${out.get(to)} · ${label}` : label);
+  for (const r of rules) {
+    const to = r.goto === NEXT_END ? names.length : names.indexOf(r.goto);
+    if (to <= bi) continue; // переход назад или в неизвестный блок валидация не пропустит; граф не падает
+    add(to, r.if ? nextCondLabel(r.if) : rules.length > 1 ? t('иначе →') : fallback);
+  }
+  if (!rules.some((r) => !r.if)) add(bi + 1, rules.length ? t('иначе →') : fallback);
+  return out;
+}
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 type ArtLink = { n: GraphNode; kind: 'art-write' | 'art-read'; key: string; j: number; li: number; y: number };
@@ -175,7 +225,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
   let laneTop = MARGIN;
   let right = start.x + start.w;
   let bottom = start.y + start.h;
-  let prev: { end: Box; frameBottom: number; label: string } | null = null; // чем кончился предыдущий блок
+  let prev: { end: Box; frameBottom: number; targets: Map<number, string> } | null = null; // чем кончился предыдущий блок и куда из него идти
   // артефакты — колонка справа от всех блоков. Рёбра к ней идут через свой промежуток и канал под своим блоком,
   // поэтому не пересекают другие блоки. Трасса достраивается после раскладки блоков, когда известен их правый край
   const arts = opts.artifacts ? Object.entries(spec.artifacts || {}) : [];
@@ -199,7 +249,14 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     }
   };
 
-  blocks.forEach((b, bi) => {
+  const names = blocks.map((b) => b.name);
+  // вход в каждый блок и выход из него — для рёбер развилки, которые перепрыгивают через блоки
+  const entries: (GraphNode[] | undefined)[] = [];
+  const exits: { bi: number; end: Box; frameBottom: number; targets: Map<number, string> }[] = [];
+  blocks.forEach((raw, bi) => {
+    // блок-вызов — один узел вызова; ключ как у этапа (p:<блок>:<блок>): так его находят статусы запуска
+    const call = raw.flow !== undefined;
+    const b: GraphBlock = call ? { ...raw, phases: [{ name: raw.name, title: raw.title || raw.flow, prompt: raw.input, handoff: t('итог вызванного flow') }] } : raw;
     const steps = blockSteps(b);
     const framed = multi || Boolean(b.title) || Boolean(b.knowledge?.length);
     const hasGroup = steps.some(isGroupStep);
@@ -213,10 +270,12 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       const members = b.phases.slice(s.from, s.to + 1).map((p, k) => {
         const i = s.from + k;
         const n: GraphNode = {
-          id: `p:${b.name}:${p.name}`, key: `p:${b.name}:${p.name}`, kind: 'phase', b: bi, i, block: b.name, name: p.name,
+          id: `p:${b.name}:${p.name}`, key: `p:${b.name}:${p.name}`, kind: call ? 'call' : 'phase', b: bi, i, block: b.name, name: p.name,
           num: multi ? `${bi + 1}.${i + 1}` : `${i + 1}`, title: p.title || p.name,
-          sub: [p.name, p.model, p.effort].filter(Boolean).join(' · '), tools: (p.tools || []).length, group: p.group || '',
+          sub: call ? opts.callSub?.(raw.flow!) || t('вызов flow') : [p.name, p.model, p.effort].filter(Boolean).join(' · '),
+          tools: (p.tools || []).length, group: p.group || '',
           x, y: top + k * (NODE_H + ROW_GAP), w: NODE_W, h: NODE_H,
+          ...(call ? { flow: raw.flow } : {}),
         };
         if (opts.inputsOf) {
           n.inputs = opts.inputsOf(bi, i) || [];
@@ -249,6 +308,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     // вход в блок: от «Задачи» или от конца предыдущего блока. Блок без этапов (недописанный YAML) пропускаем, граф не падает
     const firstCol = cols[0];
     if (!firstCol) return;
+    entries[bi] = firstCol.members;
     // канал под узлами блока для рёбер артефактов: у каждой пары «артефакт + чтение или запись» своя дорожка
     if (artIndex.size) {
       const mine: Omit<ArtLink, 'y'>[] = [];
@@ -264,7 +324,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       if (lanes.length) contentBottom += 12 + lanes.length * ART_LANE;
     }
     if (!prev) connect([start], firstCol.members, t('задача'), 'flow', mid);
-    else {
+    else if (prev.targets.has(bi)) {
       const e = prev.end;
       const sx = e.x + e.w / 2;
       const sy = e.y + e.h;
@@ -275,7 +335,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
         const ty = t.y + t.h / 2;
         edges.push({
           id: `${e.id}->${t.id}`, kind: 'next', from: e.id, to: t.id, points: [[sx, sy], [sx, gapY], [cx, gapY], [cx, ty], [t.x, ty]],
-          ...(first ? { label: prev.label, lx: (sx + cx) / 2, ly: gapY, lw: 220 } : {}),
+          ...(first ? { label: prev.targets.get(bi)!, lx: (sx + cx) / 2, ly: gapY, lw: 220 } : {}),
         });
         first = false;
       }
@@ -317,9 +377,50 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     const nextLabel = !loop
       ? stepHandoff(b, lastCol.s)
       : loop.until?.type === 'none' ? t('после {n} →', { n: iterWord(loop.max_iterations) }) : b.on_fail === 'continue' ? t('выполнено или лимит →') : t('выполнено →');
-    prev = { end: cond || (isGroupStep(lastCol.s) ? { ...lastCol.box, id: lastCol.frameKey } : lastCol.members[0]!), frameBottom, label: nextLabel };
-    laneTop = frameBottom + LANE_GAP;
+    const end = cond || (isGroupStep(lastCol.s) ? { ...lastCol.box, id: lastCol.frameKey } : lastCol.members[0]!);
+    const targets = blockTargets(b, bi, names, nextLabel);
+    prev = { end, frameBottom, targets };
+    exits.push({ bi, end, frameBottom, targets });
+    // рёбра через блоки идут своими горизонталями под блоком: промежуток до следующего блока шире на их число
+    const far = [...targets.keys()].filter((to) => to > bi + 1 || (to === blocks.length && to !== bi + 1)).length;
+    laneTop = frameBottom + LANE_GAP + far * BRANCH_ROW;
   });
+
+  // развилка: «Конец», если на него ведёт правило next, и рёбра, которые перепрыгивают через блоки (или ведут в «Конец»).
+  // Ребро к соседнему блоку нарисовано выше, как раньше. Трасса: вниз под блок, влево на свою вертикаль левее канала
+  // обычных рёбер, вниз до цели, вправо в её первый узел
+  const toEnd = blocks.some((b) => nextRulesOf(b).some((r) => r.goto === NEXT_END));
+  if (toEnd) {
+    const endNode: GraphNode = { id: 'end', key: 'end', kind: 'end', title: t('Конец'), sub: '', x: x0, y: laneTop, w: END_W, h: END_H };
+    nodes.push(endNode);
+    bottom = Math.max(bottom, endNode.y + endNode.h);
+    right = Math.max(right, endNode.x + endNode.w);
+  }
+  const channel = x0 - GPAD - FPAD - 22;
+  let lane = 0;
+  for (const ex of exits) {
+    let row = 0;
+    for (const [to, label] of ex.targets) {
+      if (to === ex.bi + 1 && to < blocks.length) continue;
+      const tgts = to === blocks.length ? nodes.filter((n) => n.kind === 'end') : entries[to];
+      if (!tgts?.length) continue;
+      // в «Конец» из последнего блока — по обычному каналу, через блоки — каждое ребро на своей вертикали
+      const adjacent = to === ex.bi + 1;
+      const lx = adjacent ? channel : Math.max(start.x + start.w + 8, channel - SKIP_LANE * ++lane);
+      const sx = ex.end.x + ex.end.w / 2;
+      const sy = ex.end.y + ex.end.h;
+      const gy = ex.frameBottom + LANE_GAP / 2 + (adjacent ? 0 : ++row) * BRANCH_ROW;
+      let first = true;
+      for (const t of tgts) {
+        const ty = t.y + t.h / 2;
+        edges.push({
+          id: `${ex.end.id}->${t.id}`, kind: 'next', from: ex.end.id, to: t.id, points: [[sx, sy], [sx, gy], [lx, gy], [lx, ty], [t.x, ty]],
+          ...(first ? { label, lx: (sx + lx) / 2, ly: gy, lw: 220 } : {}),
+        });
+        first = false;
+      }
+    }
+  }
 
   // колонка артефактов: узел на артефакт, рёбра записи (сплошные) и чтения (пунктир).
   // Трасса ребра: из правого бока этапа вправо и вниз по промежутку за его колонкой, по каналу под блоком к шине справа

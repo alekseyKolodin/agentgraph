@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parse as parseYaml } from 'yaml';
-import { CALL_DEPTH_MAX, callInput, callOutcome, callProblems, calledFlows, describeNext, pickNext } from './compose.js';
+import { assertRunnable, CALL_DEPTH_MAX, callInput, callOutcome, callProblems, calledFlows, describeNext, pickNext } from './compose.js';
 import { flowToYaml, parseFlow, summarize, validateSpec } from './flows.js';
 import { compactSpec, flowBlocks, flowJsonSchema, flowPhases, GeneratedFlowSchema, type FlowSpec } from './schema.js';
 import { emptyContext } from './template.js';
@@ -207,4 +207,10 @@ test('flow без вызовов и next разбирается как рань�
   const spec = validateSpec(raw);
   assert.equal(flowBlocks(spec)[0], spec.blocks![0]);
   assert.deepEqual(spec, raw);
+});
+
+test('до подключения в раннер flow с вызовом или next не запускается, остальные — как раньше', () => {
+  assert.throws(() => assertRunnable(flow(chain)), /раннер пока не исполняет вызов flow \(блоки spec, implement, review\)/);
+  assert.throws(() => assertRunnable(flow('name: n\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n')), /развилку next \(блоки a\)/);
+  assert.doesNotThrow(() => assertRunnable(flow('name: n\nphases: [{ name: p, tools: [], prompt: x }]\n')));
 });

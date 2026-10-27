@@ -3,13 +3,14 @@
 // выбрано, ниже — «Все поля списком».
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, type FormEvent, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { checkFlow, editFlow, errorText, keys, saveFlowSpec, useConfig, useFeature } from '../../api';
+import { checkFlow, editFlow, errorText, keys, saveFlowSpec, useConfig, useFeature, useFlows } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
 import { usd } from '../../lib/format';
 import {
   addPhaseAfter, blockHeading, collectSpec, isMulti, newBlock, phaseInputs, phaseNum, specChanges, SpecError, toEditable, type EditSpec,
 } from '../../lib/flow/edit';
+import { callSubOf } from '../../lib/flow/summary';
 import { toolsLabel } from '../../lib/flow/tools';
 import { flowGraphModel, type GraphNode } from '../../lib/graph/model';
 import { LS } from '../../lib/storage';
@@ -34,9 +35,11 @@ export function Builder({ hidden }: { hidden: boolean }) {
   // рабочая копия правится на месте: модель — заново на каждую правку, но с низким приоритетом (как задержка 250 мс в старом),
   // чтобы ввод в промпт не ждал раскладки графа
   const editSeq = useDeferredValue(st.editSeq);
+  // узел вызова подписан составом вызываемого flow — из списка flow
+  const flows = useFlows().data;
   const graphModel = useMemo(
-    () => (spec ? flowGraphModel(spec, { inputsOf: (bi, i) => phaseInputs(spec, bi, i), artifacts }) : null),
-    [spec, artifacts, editSeq],
+    () => (spec ? flowGraphModel(spec, { inputsOf: (bi, i) => phaseInputs(spec, bi, i), artifacts, callSub: callSubOf(flows) }) : null),
+    [spec, artifacts, editSeq, flows],
   );
   const toolsOf = useCallback((n: GraphNode) => toolsLabel(flowState.spec?.blocks[n.b!]?.phases[n.i!]?.tools, config.implicitTools), [config.implicitTools]);
 
@@ -124,7 +127,7 @@ export function graphPick(n: GraphHit) {
   const spec = flowState.spec;
   if (!spec) return;
   if (n.kind === 'phase') openPhasePane(n.b!, n.i!, styles.flash!);
-  else if (n.kind === 'block' || n.kind === 'cond') {
+  else if (n.kind === 'block' || n.kind === 'cond' || n.kind === 'call') {
     if (paneShown()) return openBlockPane(n.b!);
     const panel = document.querySelector(`#bblock-${n.b} [data-bpanel]`);
     panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -343,6 +346,18 @@ function BuilderList({ spec }: { spec: EditSpec }) {
           }}
         >
           {t('Добавить блок')}
+        </button>
+        <button
+          className="btn"
+          title={t('Блок, который запускает другой flow отдельным запуском и передаёт дальше его итог')}
+          onClick={() => {
+            newBlock(spec, '');
+            markDirty();
+            openBlockPane(spec.blocks.length - 1);
+            afterRender(() => document.getElementById(`bblock-${spec.blocks.length - 1}`)?.scrollIntoView({ behavior: 'smooth' }));
+          }}
+        >
+          {t('Добавить вызов flow')}
         </button>
         <span className="muted small" title={t('Например, ещё один цикл со своим условием')}>{t('начнётся, когда закончится предыдущий блок')}</span>
       </div>
