@@ -132,13 +132,13 @@ export function saveFlowSpec(name: string, raw: unknown): { spec: FlowSpec; yaml
  * Вызовы flow (блоки с flow:) годятся для запуска: вызываемые flow есть в flows/ и валидны, нет круга, глубина в пределах.
  * Файлы читает, поэтому не входит в validateSpec: её зовут и для одного файла без flows/ рядом.
  */
-export function checkCalls(spec: FlowSpec, load: (name: string) => FlowSpec = loadFlowByName): void {
+export function checkCalls(spec: FlowSpec, load: (name: string) => FlowSpec = loadCalledFlow): void {
   const problems = callProblems(spec, load);
   if (problems.length) throw new Error(problems.join('\n'));
 }
 
 /** Вызываемый flow — только по имени из flows/, не путь к файлу. */
-function loadFlowByName(name: string): FlowSpec {
+export function loadCalledFlow(name: string): FlowSpec {
   assertFlowName(name);
   const file = findFlowFile(name);
   if (!file) throw new Error(`нет такого flow в flows/`);

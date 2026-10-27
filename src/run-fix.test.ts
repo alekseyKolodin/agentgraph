@@ -104,6 +104,23 @@ test('изменения: поля этапа, добавленные и убр�
   ]);
 });
 
+test('изменения: у блока-вызова — строка блока с flow, input и next, без этапа-двойника', () => {
+  const call = (over: Record<string, unknown> = {}) =>
+    ({ name: 'f', blocks: [{ name: 'plan', phases: [phase('analyze')] }, { name: 'review', flow: 'checker', input: '{{prev}}', ...over }] }) as unknown as FlowSpec;
+  assert.deepEqual(flowChanges(call(), call({ flow: 'other', input: 'проверь {{prev}}', next: [{ goto: 'end' }] })), ['блок review: flow, input, next']);
+  // блок этапов стал вызовом: его этапы ушли
+  const was = { name: 'f', blocks: [{ name: 'plan', phases: [phase('analyze')] }, { name: 'review', phases: [phase('check')] }] } as unknown as FlowSpec;
+  assert.deepEqual(flowChanges(was, call()), ['блок review: flow, input', '− этап check']);
+});
+
+test('совместимость: пройденный блок-вызов менять нельзя, идущий и будущие — можно', () => {
+  const spec = (input: string, later = '{{prev}}') =>
+    ({ name: 'f', blocks: [{ name: 'a', flow: 'x', input }, { name: 'b', flow: 'y', input: later }, { name: 'c', phases: [phase('z')] }] }) as unknown as FlowSpec;
+  const point: FixPoint = { block: 1, iterations: 1, limit: (b) => blockMaxIterations(b, {}) };
+  assert.deepEqual(flowEditProblems(spec('{{input}}'), spec('другое'), point), ['блок a уже пройден: менять его нельзя']);
+  assert.deepEqual(flowEditProblems(spec('{{input}}'), spec('{{input}}', 'иначе {{prev}}'), point), []);
+});
+
 test('keepBlockName: короткая форма правки получает имя единственного блока запуска', () => {
   const run = { name: 'f', blocks: [{ name: 'impl', loop: { max_iterations: 3, until: { type: 'none' } }, phases: [phase('a')] }] } as unknown as FlowSpec;
   const short = { name: 'f', loop: { max_iterations: 3, until: { type: 'none' } }, phases: [phase('a', { prompt: 'новый' })] } as unknown as FlowSpec;

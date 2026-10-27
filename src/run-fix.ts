@@ -2,7 +2,7 @@
 // (flowEditProblems) и что поменялось (flowChanges). Раннер зовёт их в остановленной контрольной точке, а директории,
 // плагины и теги знаний новой версии проверяет сам — теми же функциями, что на старте.
 import { parseDocument } from 'yaml';
-import { flowBlocks, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
+import { flowBlocks, isCallBlock, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
 
 /** Где стоит запуск: block — индекс идущего блока (все до него завершены), iterations — сколько итераций он начал. */
 export type FixPoint = {
@@ -106,8 +106,10 @@ export function flowChanges(prev: FlowSpec, next: FlowSpec): string[] {
   for (const b of pb) if (!nbm.has(b.name)) out.push(`− блок ${b.name}`);
   for (const b of nb) if (!pbm.has(b.name)) out.push(`+ блок ${b.name}`);
 
-  // имена этапов уникальны во всём flow: этап, перенесённый в другой блок, — тот же этап
-  const phases = (list: Block[]) => new Map(list.flatMap((b) => b.phases.map((p) => [p.name, p] as const)));
+  // имена этапов уникальны во всём flow: этап, перенесённый в другой блок, — тот же этап. Этап блока-вызова — его же
+  // поля flow и input (flowBlocks), они уже в строке блока
+  const own = (b: Block) => (isCallBlock(b) ? [] : b.phases);
+  const phases = (list: Block[]) => new Map(list.flatMap((b) => own(b).map((p) => [p.name, p] as const)));
   const pp = phases(pb);
   const np = phases(nb);
   for (const b of nb) {
@@ -115,7 +117,7 @@ export function flowChanges(prev: FlowSpec, next: FlowSpec): string[] {
     if (!was) continue;
     const fields = diff(was, b, new Set(['phases']));
     if (fields.length) out.push(`блок ${b.name}: ${fields.join(', ')}`);
-    const order = (blk: Block, other: Block) => blk.phases.filter((p) => other.phases.some((q) => q.name === p.name)).map((p) => p.name);
+    const order = (blk: Block, other: Block) => own(blk).filter((p) => own(other).some((q) => q.name === p.name)).map((p) => p.name);
     if (canon(order(was, b)) !== canon(order(b, was))) out.push(`блок ${b.name}: порядок этапов`);
   }
   for (const [name] of pp) if (!np.has(name)) out.push(`− этап ${name}`);

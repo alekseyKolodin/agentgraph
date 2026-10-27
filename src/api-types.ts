@@ -99,6 +99,8 @@ export type RunSummary = {
   tags?: string[];
   /** Теги знаний запуска: чипы рядом с тегами задачи. */
   knowledge?: string[];
+  /** Дочерний запуск блока-вызова: список показывает его под родителем. */
+  parent?: RunParent;
 };
 
 /** Идущий этап: у параллельной группы их несколько. */
@@ -132,6 +134,8 @@ export type HomeRun = {
   pauseReason?: { phase: string; iteration: number; at?: string };
   /** У flow есть артефакт решений: ответ на паузу пишется на странице запуска. */
   decisions?: true;
+  /** Дочерний запуск блока-вызова: кто его вызвал. */
+  parent?: RunParent;
 };
 
 export type HomeResponse = { runs: HomeRun[] };
@@ -561,7 +565,18 @@ export type PhaseReport = {
   effort?: EffortLevel;
   /** Токены сессии этапа: контекст первого и самого большого запроса, итог input/output/кэша, окно модели главного цикла (contextWindow, нет — неизвестно); нет — SDK не прислал usage. */
   tokens?: SessionTokens;
+  /** Этап блока-вызова: дочерний запуск вызванного flow и чем он кончился. Стоимость этапа — его итог. */
+  call?: { runId: string; flow: string; status: RunStatus };
 };
+
+/** Кто вызвал запуск (блок-вызов, flow: X): родитель, его блок и итерация. */
+export type RunParent = { runId: string; flow: string; block: string; iteration: number };
+
+/** Проверка правила развилки next: номер правила, условие, вердикт. Стоимость (у судьи) входит в итог запуска. */
+export type NextCheck = { rule: number; type: 'judge' | 'command' | 'marker'; done: boolean; detail?: string; costUsd: number; logFile?: string };
+
+/** Развилка после блока: куда пошли (блок или end), какое правило решило (нет — следующий по порядку) и проверки. */
+export type BlockNext = { to: string; rule?: number; checks: NextCheck[] };
 
 export type ConditionReport = {
   block: string;
@@ -598,6 +613,10 @@ export type BlockReport = {
   onFail: 'stop' | 'continue';
   /** Пройден в запуске, который этот продолжает (continuedFrom), и не повторялся. */
   skipped?: boolean;
+  /** Развилка перешла через блок: он не выполнялся (status pending). */
+  bypassed?: boolean;
+  /** Куда пошла развилка после блока (только у блока с next, который завершился). */
+  next?: BlockNext;
 };
 
 /** reused — провал с теми же замечаниями, что и прошлый: итог взят у прошлой итерации, модель не звали. */
@@ -677,6 +696,8 @@ export type RunReport = {
   notes?: RunNote[];
   /** Правки flow этого запуска на паузе, по порядку; снимок flow.yaml — последняя версия. Есть — продолжение берёт снимок. */
   flowEdits?: RunFlowEdit[];
+  /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
+  parent?: RunParent;
 };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
@@ -752,6 +773,10 @@ export type RunEvent =
   | { type: 'note'; note: RunNote }
   /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
   | { type: 'flow'; edit: RunFlowEdit }
+  /** Блок-вызов начал дочерний запуск runId вызванного flow: этап phase (имя блока) идёт, пока идёт он. */
+  | { type: 'call'; block: string; iteration: number; phase: string; runId: string; flow: string }
+  /** Развилка после блока решила: block.next — куда, пропущенные блоки придут своими block_end с bypassed. */
+  | { type: 'next'; block: string; next: BlockNext }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */
