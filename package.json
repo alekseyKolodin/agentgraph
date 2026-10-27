@@ -2,8 +2,9 @@
   "name": "agentgraph",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
-  "description": "Генератор и раннер агентских flow: задача -> flow.yaml -> цепочка сессий Claude в цикле до выполнения условия",
+  "description": "Generator and runner for agent flows: task -> flow.yaml -> a chain of Claude sessions looping until the acceptance condition passes",
   "main": "dist/desktop/main.js",
   "bin": {
     "agentgraph": "./bin/agentgraph.js"

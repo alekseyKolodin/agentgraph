@@ -1,6 +1,6 @@
 // Релиз agentgraph: поднять версию в package.json и package-lock.json, дописать раздел в CHANGELOG.md из заголовков
 // коммитов feat:/fix: с прошлого релиза (коммит «chore(release): vX.Y.Z») и закоммитить это одним коммитом.
-// Публикация и тег v<версия> — отдельным шагом: npm run share -- --push (или /agentgraph-ship).
+// Публикация — PR в main: после слияния CI заводит GitHub-релиз v<версия> с этим разделом (.github/workflows/ci.yml).
 //
 //   npm run release -- minor              -> 0.1.0 → 0.2.0
 //   npm run release -- patch --dry-run    -> только показать раздел changelog, ничего не менять
@@ -53,4 +53,4 @@ git('add', 'package.json', 'package-lock.json', 'CHANGELOG.md');
 git('commit', '-q', '-m', RELEASE_SUBJECT(next));
 
 console.log(`Закоммичено: ${RELEASE_SUBJECT(next)}`);
-console.log('CHANGELOG.md уходит в публичный origin: проверь пункты (поправить — git commit --amend), затем npm run share -- --push.');
+console.log('CHANGELOG.md публичный: проверь пункты (поправить — git commit --amend), затем PR в main — после слияния CI выпустит релиз.');

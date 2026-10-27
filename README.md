@@ -1,5 +1,7 @@
 # agentgraph
 
+[![CI](https://github.com/alekseyKolodin/agentgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/alekseyKolodin/agentgraph/actions/workflows/ci.yml)
+
 **An orchestrator for Claude Code agents with a guaranteed result.** agentgraph describes an engineering task as a process: one or more phases, an acceptance condition and a loop. The process runs until the result passes formal acceptance: tests, an LLM judge with a rubric, or an explicit done marker. It runs locally: in the browser, in the desktop app or from the CLI.
 
 <p align="center"><img src="docs/assets/run-overview.png" width="960" alt="Run page: the &quot;where we are now&quot; summary, the judge's verdict on the first iteration and the feed of iterations by block"></p>
@@ -179,7 +181,7 @@ src/desktop/    Electron main process
 web/            React web interface
 flows/example/  example flows: blocks, agent questions, pause, parallel groups, artifacts
 docs/           guide and reference
-scripts/        UI build, publishing, releases, SDK hook check
+scripts/        UI build, zip archive, releases, SDK hook check
 .claude/        /agentgraph and /session-to-flow skills, development rules (agentgraph-core, -web, -tests, flow-author skills), code-reviewer subagent
 ```
 
@@ -198,8 +200,16 @@ The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<
 
 The rules for working on the code live as skills in `.claude/skills/` and load into a Claude Code session on their own when an edit touches their area: `agentgraph-core` for `src/`, `agentgraph-web` for `web/`, `agentgraph-tests` for tests, `flow-author` for flows. Independent review before a commit is the `code-reviewer` subagent in `.claude/agents/`: read-only and a clean context.
 
+**Language.** The documentation is in English and the UI has an EN / RU switch, but the code is Russian-first: comments, `.describe()` texts in the flow schema, error messages, the development skills and the `code-reviewer` subagent are in Russian.
+
+CI runs on GitHub Actions: typecheck, tests and the UI build on every pull request; a new version merged into `main` gets a GitHub release with its section from [CHANGELOG.md](CHANGELOG.md). Details are in [GETTING_STARTED.md](docs/GETTING_STARTED.md#releases-and-ci).
+
 ## Documentation
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — installation, first run, day-to-day work, deployment, how the code is organized.
 - [docs/REFERENCE.md](docs/REFERENCE.md) — reference: all `flow.yaml` fields, interface screens, artifacts, tags, cost, limitations.
 - [flows/example/](flows/example/) — ready-made example flows.
+
+## License
+
+[MIT](LICENSE)

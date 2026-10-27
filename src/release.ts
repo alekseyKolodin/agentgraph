@@ -10,7 +10,7 @@ export const RELEASE_SUBJECT = (version: string) => `chore(release): v${version}
 export const RELEASE_SUBJECT_RE = /^chore\(release\): v[0-9]+\.[0-9]+\.[0-9]+$/;
 
 export const CHANGELOG_HEADER =
-  '# Changelog\n\nВерсии agentgraph. Раздел пишет `npm run release`, тег `v<версия>` ставит `npm run share -- --push`.\n';
+  '# Changelog\n\nagentgraph versions. Sections are written by `npm run release`; when a new version reaches `main`, CI publishes the GitHub release `v<version>` with its section.\n';
 
 const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;
 
@@ -24,13 +24,13 @@ export function bumpVersion(version: string, bump: Bump): string {
 }
 
 const GROUPS = [
-  { type: 'feat', title: 'Новое' },
-  { type: 'fix', title: 'Исправления' },
+  { type: 'feat', title: 'Features' },
+  { type: 'fix', title: 'Fixes' },
 ] as const;
 
 const COMMIT_RE = /^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)$/;
 
-/** Пункты по группам: feat → «Новое», fix → «Исправления»; остальные типы и коммиты без типа в changelog не идут. */
+/** Пункты по группам: feat → Features, fix → Fixes; остальные типы и коммиты без типа в changelog не идут. */
 export function groupCommits(subjects: string[]): { title: string; items: string[] }[] {
   return GROUPS.map(({ type, title }) => ({
     title,

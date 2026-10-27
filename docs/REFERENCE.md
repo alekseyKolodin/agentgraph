@@ -424,9 +424,9 @@ Each phase is a new session with the full Claude Code system prompt (~33K tokens
 
 ## Sharing the project
 
-`npm run share` builds `release/agentgraph-<version>-<date>.zip`: the sources, the UI, the documentation, the `/agentgraph` and `/session-to-flow` skills and the examples, without personal flows, `runs/`, `node_modules` and `dist`. Options: `--out <folder>` and `--no-examples`. `npm run share -- --push` publishes the same set from the committed `main` as a commit to `origin`: your personal history doesn't go there. More in [GETTING_STARTED.md](GETTING_STARTED.md#sharing-the-project-with-your-team).
+`npm run share` builds `release/agentgraph-<version>-<date>.zip`: the sources, the UI, the documentation, the `/agentgraph` and `/session-to-flow` skills and the examples, without personal flows, `runs/`, `node_modules` and `dist`. Options: `--out <folder>` and `--no-examples`. More in [GETTING_STARTED.md](GETTING_STARTED.md#sharing-the-project-with-your-team).
 
-Release: `npm run release -- <major|minor|patch>` bumps the version and writes a `CHANGELOG.md` section, the next `npm run share -- --push` sets the `v<version>` tag, and on the tag CI creates a release in GitLab. On every MR, CI runs the typecheck and the tests. More in [GETTING_STARTED.md](GETTING_STARTED.md#releases-and-ci).
+Release: `npm run release -- <major|minor|patch>` bumps the version and writes a `CHANGELOG.md` section; once that commit is merged into `main`, CI (GitHub Actions) creates the GitHub release `v<version>`. On every pull request, CI runs the typecheck and the tests. More in [GETTING_STARTED.md](GETTING_STARTED.md#releases-and-ci).
 
 ## Limitations and what's next
 
