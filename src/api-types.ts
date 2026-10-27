@@ -745,8 +745,11 @@ export type RunEvent =
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
   /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
   | { type: 'note'; note: RunNote }
-  /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
-  | { type: 'flow'; edit: RunFlowEdit }
+  /**
+   * Flow запуска поправили на паузе: снимок flow.yaml уже новый (граф его перечитывает), blocks и maxIterations — отчёты
+   * блоков и лимит после правки. Событие самодостаточно: при переигрывании оно идёт по порядку с остальными.
+   */
+  | { type: 'flow'; edit: RunFlowEdit; blocks: BlockReport[]; maxIterations: number }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */

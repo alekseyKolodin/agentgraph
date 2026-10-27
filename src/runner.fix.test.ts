@@ -192,6 +192,11 @@ test('правка будущих блоков: отчёты блоков и с�
   assert.deepEqual(r.calls.map((c) => c.name), ['a', 'c', 'c', 'c', 'c']);
   assert.deepEqual(r.saved.blocks.map((b) => [b.name, b.status, b.iterations, b.maxIterations]), [['one', 'done', 1, 1], ['three', 'done', 4, 4]]);
   assert.equal(r.saved.maxIterations, 5);
+  // событие несёт отчёты блоков на момент правки: клиенту не нужен запрос, переигрывание идёт по порядку
+  const ev = r.events.find((e) => e.type === 'flow');
+  assert.ok(ev?.type === 'flow');
+  assert.deepEqual(ev.blocks.map((b) => [b.name, b.status, b.maxIterations]), [['one', 'running', 1], ['three', 'pending', 4]]);
+  assert.equal(ev.maxIterations, 5);
 });
 
 // --- повтор итерации
