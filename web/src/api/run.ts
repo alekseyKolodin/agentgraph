@@ -1,8 +1,8 @@
 // Запросы страницы запуска: отчёт, снимок flow, файлы запуска, управление (пауза, лимит, остановка, продолжение),
 // «Сохранить как flow», артефакты и чат запуска (ответ — поток NDJSON).
-import type { ApiErrorBody, ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
+import type { ArtifactList, ArtifactRead, ArtifactSaved, ChatPayload, ChatStreamEvent, RunAnalysis, RunDetail } from '@server/api-types';
 import type { Block, FlowSpec } from '@server/schema';
-import { api, ApiError } from './client';
+import { api, streamNdjson } from './client';
 import { t } from '../lib/i18n';
 
 /** GET /api/runs/:id/flow: снимок flow.yaml, по которому идёт запуск. */
@@ -47,24 +47,5 @@ export const clearChat = (id: string) => api<ChatPayload>('DELETE', `${runUrl(id
 export const stopChat = (id: string) => api<unknown>('POST', `${runUrl(id)}/chat/stop`);
 
 /** Сообщение в чат запуска: ответ читается потоком, каждая строка — событие. Не 2xx — ApiError. */
-export async function postChat(id: string, body: { message: string; model?: string }, onEvent: (e: ChatStreamEvent) => void): Promise<void> {
-  const res = await fetch(`${runUrl(id)}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as Partial<ApiErrorBody>;
-    throw new ApiError(data.error || res.statusText, res.status, data.code, data);
-  }
-  const reader = res.body!.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i);
-      buf = buf.slice(i + 1);
-      if (line.trim()) onEvent(JSON.parse(line) as ChatStreamEvent);
-    }
-  }
-}
+export const postChat = (id: string, body: { message: string; model?: string }, onEvent: (e: ChatStreamEvent) => void): Promise<void> =>
+  streamNdjson<ChatStreamEvent>(`${runUrl(id)}/chat`, body, onEvent);

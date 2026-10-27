@@ -50,6 +50,8 @@ export type SessionRequest = {
   onModel?: (model: string) => void;
   /** Вызывается после каждого нового запроса главного цикла к модели: занятость контекста по ходу сессии. */
   onContext?: (c: ContextSnapshot) => void;
+  /** Ход сессии событиями (SessionEvent) — рядом с LogFn, а не вместо: строки лога остаются как были. */
+  onEvent?: (e: SessionEvent) => void;
   abort?: AbortController;
 };
 
@@ -198,6 +200,16 @@ export function takePreface(p: Preface): string | undefined {
 export type LogFn = (line: string) => void;
 
 /**
+ * Ход сессии структурно, для UI, которому мало строк LogFn (чат, генератор): текст агента, вызов инструмента
+ * и его результат целиком, повтор запроса к API. Сабагенты тоже присылают сообщения — parent у них id вызова Agent.
+ */
+export type SessionEvent =
+  | { kind: 'text'; text: string; parent?: string }
+  | { kind: 'tool_use'; id: string; name: string; input: Record<string, unknown>; parent?: string }
+  | { kind: 'tool_result'; toolUseId: string; isError: boolean; text: string; parent?: string }
+  | { kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; status: number | null };
+
+/**
  * Headless-сессия заканчивается вместе с ответом агента, и фоновая задача погибает с ней. Агент,
  * ответивший «жду уведомления о push», оставляет push недоделанным. Поэтому фоновые задачи
  * отключаем, а таймауты Bash поднимаем, чтобы долгие проверки (pre-push хук, сборка, ожидание CI)
@@ -269,6 +281,7 @@ export async function runSession(req: SessionRequest, log: LogFn, deps: SessionD
     for await (const msg of q) {
       trackPreface(preface, msg);
       handle(msg, result, log);
+      if (req.onEvent) for (const e of sessionEvents(msg)) req.onEvent(e);
       const model = initModel(msg);
       if (model && !result.model) {
         result.model = model;
@@ -436,6 +449,31 @@ function handle(msg: SDKMessage, result: SessionResult, log: LogFn): void {
       result.errors.push(...msg.errors);
     }
   }
+}
+
+/** События SessionEvent из одного сообщения SDK; служебное и результат сессии — ничего. */
+export function sessionEvents(msg: SDKMessage): SessionEvent[] {
+  const parentOf = (m: { parent_tool_use_id?: string | null }) => (m.parent_tool_use_id ? { parent: m.parent_tool_use_id } : {});
+  if (msg.type === 'assistant') {
+    const out: SessionEvent[] = [];
+    for (const block of blocksOf(msg.message)) {
+      if (block.type === 'text' && typeof block.text === 'string') out.push({ kind: 'text', text: block.text, ...parentOf(msg) });
+      else if (block.type === 'tool_use') {
+        const input = block.input && typeof block.input === 'object' ? (block.input as Record<string, unknown>) : {};
+        out.push({ kind: 'tool_use', id: String(block.id), name: String(block.name), input, ...parentOf(msg) });
+      }
+    }
+    return out;
+  }
+  if (msg.type === 'user') {
+    return blocksOf(msg.message)
+      .filter((block) => block.type === 'tool_result')
+      .map((block) => ({ kind: 'tool_result', toolUseId: String(block.tool_use_id), isError: block.is_error === true, text: contentToText(block.content), ...parentOf(msg) }));
+  }
+  if (msg.type === 'system' && msg.subtype === 'api_retry') {
+    return [{ kind: 'retry', attempt: msg.attempt, maxRetries: msg.max_retries, delayMs: msg.retry_delay_ms, status: msg.error_status }];
+  }
+  return [];
 }
 
 export function truncate(s: string, max: number): string {

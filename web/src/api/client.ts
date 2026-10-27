@@ -40,5 +40,41 @@ export async function api<T>(method: Method, url: string, body?: unknown, signal
   return data as T;
 }
 
+/**
+ * POST с ответом-потоком NDJSON: каждая строка — событие, onEvent вызывается по мере прихода. Не 2xx — ApiError,
+ * как у api(). signal обрывает и запрос, и чтение потока.
+ */
+export async function streamNdjson<E>(
+  url: string,
+  body: unknown,
+  onEvent: (e: E) => void,
+  opts: { signal?: AbortSignal; headers?: Record<string, string> } = {},
+): Promise<void> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as Partial<ApiErrorBody>;
+    throw new ApiError(data.error || res.statusText, res.status, data.code, data);
+  }
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (line.trim()) onEvent(JSON.parse(line) as E);
+    }
+  }
+}
+
 /** Текст ошибки для показа: у ApiError — сообщение сервера. */
 export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));

@@ -54,6 +54,146 @@
         "--strictPort"
       ],
       "port": 5174
+    },
+    {
+      "name": "agentgraph-f1-chat",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4751",
+        "--no-notify"
+      ],
+      "port": 4751
+    },
+    {
+      "name": "agentgraph-f1-chat-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4751",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5175",
+        "--strictPort"
+      ],
+      "port": 5175
+    },
+    {
+      "name": "agentgraph-f2-ai",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4752",
+        "--no-notify"
+      ],
+      "port": 4752
+    },
+    {
+      "name": "agentgraph-f2-ai-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4752",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5176",
+        "--strictPort"
+      ],
+      "port": 5176
+    },
+    {
+      "name": "agentgraph-f3-fix",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4753",
+        "--no-notify"
+      ],
+      "port": 4753
+    },
+    {
+      "name": "agentgraph-f3-fix-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4753",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5177",
+        "--strictPort"
+      ],
+      "port": 5177
+    },
+    {
+      "name": "agentgraph-f4-compose",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4754",
+        "--no-notify"
+      ],
+      "port": 4754
+    },
+    {
+      "name": "agentgraph-f4-compose-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4754",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5178",
+        "--strictPort"
+      ],
+      "port": 5178
+    },
+    {
+      "name": "agentgraph-f5-session",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "ui",
+        "--",
+        "--port",
+        "4755",
+        "--no-notify"
+      ],
+      "port": 4755
+    },
+    {
+      "name": "agentgraph-f5-session-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AGENTGRAPH_API=http://127.0.0.1:4755",
+        "npm",
+        "run",
+        "dev:web",
+        "--",
+        "--port",
+        "5179",
+        "--strictPort"
+      ],
+      "port": 5179
     }
   ]
 }

@@ -8,5 +8,9 @@ import { run } from './run';
 import { runart } from './runart';
 import { launch } from './launch';
 import { misc } from './misc';
+import { chat } from './chat';
+import { ai } from './ai';
+import { fix } from './fix';
+import { compose } from './compose';
 
-export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc };
+export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose };
