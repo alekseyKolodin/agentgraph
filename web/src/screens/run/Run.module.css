@@ -71,30 +71,67 @@
    Containment требует заданной высоты, поэтому включаем, когда строк уже больше, чем влезает в 50vh. */
 .log-body.tall { height: 50vh; contain: strict; }
 
-/* ---------- чат запуска */
-.run-chat { background: var(--panel); border: 1px solid color-mix(in srgb, var(--live) 35%, var(--line)); border-radius: var(--r-md); padding: 8px 14px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 8px; }
-.run-chat.collapsed { padding-bottom: 8px; }
-.run-chat.collapsed .chat-body { display: none; }
-.chat-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.chat-head :global(.fold-head) { font-weight: 600; }
+/* ---------- чат запуска: док справа, виден на всех вкладках (узкий экран — шторка снизу). Ширина и высота — переменные
+   --run-chat-w / --run-chat-h на корне документа (ручка у края, RunChat.tsx); место под док — отступ у main, вкладки не трогаем.
+   Свёрнутый — узкая полоска «Чат» у края. Слой ниже всплывашек (Toast — 10); --chat-dock-w / --chat-dock-h — сколько
+   док занимает справа и снизу: всплывашка встаёт рядом с ним, а не поверх поля ввода.
+   Ширина дока уступает контенту: сайдбар 300px и не меньше 420px на вкладки, сам док — не уже 280px. */
+:global(:root):has(.chat-dock) { --chat-dock-w: clamp(280px, min(var(--run-chat-w, 420px), 100vw - 720px), 70vw); }
+:global(:root):has(.chat-dock.closed) { --chat-dock-w: 40px; }
+.chat-dock { position: fixed; z-index: 8; top: 0; right: 0; bottom: 0; width: var(--chat-dock-w); display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+:global(main):has(.chat-dock) { margin-right: var(--chat-dock-w); }
+.dock-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.dock-body[hidden] { display: none; }
+.dock-grip { position: absolute; z-index: 1; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; }
+.dock-grip:hover, .dock-grip:focus-visible { background: color-mix(in srgb, var(--live) 45%, transparent); outline: none; }
+.dock-rail { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0; border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
+.dock-rail[hidden] { display: none; }
+.dock-rail:hover { background: var(--hover); color: var(--ink); }
+.dock-rail:focus-visible { outline: none; box-shadow: inset var(--focus); }
+.rail-title, .rail-meta { writing-mode: vertical-rl; }
+.rail-title { font-weight: 500; }
+.rail-meta { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); }
+.rail-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--live); flex: none; }
+.chat-head { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line); }
+.chat-title-row { display: flex; align-items: center; gap: 8px; width: 100%; }
+.chat-title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--fs-body); font-weight: 600; }
+.chat-title-row :global(.btn) { flex: none; }
+.chat-meta { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .chat-head .push { margin-left: auto; gap: 6px; }
-.chat-head select { padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-meta); }
-.chat-body { display: flex; flex-direction: column; gap: 8px; }
-.chat-log { max-height: 45vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
-.chat-hint { color: var(--ink-2); font-size: var(--fs-small); }
-.cmsg { max-width: 85%; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.5; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
-.cmsg .ctext { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
-.cmsg.user { align-self: flex-end; background: color-mix(in srgb, var(--live) 14%, var(--panel)); }
-.cmsg.assistant { align-self: flex-start; background: var(--deck); border: 1px solid var(--line); }
-.cmsg.assistant.error { border-color: var(--st-fail); }
-.cmsg.note { align-self: center; color: var(--ink-2); font-size: var(--fs-meta); padding: 2px 8px; }
-.cmsg .cmeta { color: var(--ink-2); font-size: var(--fs-cap); }
-.cmsg pre { background: var(--well); padding: 8px; border-radius: var(--r-sm); overflow-x: auto; margin: 4px 0; white-space: pre; }
-.cmsg code { background: var(--well); padding: 0 4px; border-radius: var(--r-xs); }
-.cmsg.busy { color: var(--ink-2); }
-.cmsg.busy .activity { align-self: stretch; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--fs-meta); max-height: 160px; overflow: auto; }
-.chat-form { display: flex; flex-direction: column; gap: 6px; }
-.chat-form textarea { width: 100%; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+.chat-head select { padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-meta); max-width: 150px; }
+.chat-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px; }
+.chat-hint { color: var(--ink-2); font-size: var(--fs-small); display: flex; flex-direction: column; gap: 6px; }
+.chat-hint p { margin: 0; }
+/* ответ агента — текст на панели без пузыря: его читают, как документ; своё сообщение — справа на приподнятом */
+.cmsg { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; line-height: 1.5; }
+.cmsg.user { align-self: flex-end; max-width: 88%; background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmsg.assistant.error { border-left: 2px solid var(--st-fail); padding-left: 10px; }
+.cmsg.note { align-self: center; color: var(--ink-3); font-size: var(--fs-meta); text-align: center; }
+.cmsg :global(.md) h1, .cmsg :global(.md) h2 { font-size: var(--fs-h3); }
+.cmsg :global(.md) h3 { font-size: var(--fs-body); }
+.cmsg :global(.btn) { align-self: flex-start; }
+.cmeta { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--fs-cap); }
+.thinking { color: var(--ink-2); font-size: var(--fs-small); }
+.thinking::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--live); margin-right: 8px; vertical-align: middle; animation: chat-pulse 1.2s ease-in-out infinite; }
+.live-text { margin: 0; color: var(--ink-2); font-size: var(--fs-small); overflow-wrap: anywhere; }
+@keyframes chat-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .thinking::before { animation: none; } }
+.chat-form { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.chat-form textarea { width: 100%; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--well); color: var(--ink); font: inherit; resize: vertical; max-height: 40vh; }
+.chat-form :global(.row) { flex-wrap: wrap; }
+@media (max-width: 800px) {
+  /* шторка снизу: высота — ручкой у верхнего края, свёрнутая — полоска 44px */
+  :global(:root):has(.chat-dock) { --chat-dock-w: 0px; --chat-dock-h: var(--run-chat-h, 60vh); }
+  :global(:root):has(.chat-dock.closed) { --chat-dock-w: 0px; --chat-dock-h: 44px; }
+  .chat-dock { top: auto; left: 0; width: auto; height: var(--chat-dock-h); border-left: 0; border-top: 1px solid var(--line); }
+  :global(main):has(.chat-dock) { padding-bottom: calc(var(--chat-dock-h) + 16px); }
+  /* страница здесь прокручивается целиком: цель прокрутки (карточка этапа по центру, поле ответа) встаёт над шторкой, а не под ней */
+  :global(html):has(.chat-dock) { scroll-padding-bottom: var(--chat-dock-h); }
+  .dock-grip { left: 0; right: 0; top: -3px; bottom: auto; width: auto; height: 6px; cursor: row-resize; }
+  .dock-rail { flex-direction: row; justify-content: flex-start; padding: 0 16px; }
+  .rail-title, .rail-meta { writing-mode: horizontal-tb; }
+  .rail-meta { margin-left: auto; }
+}
 
 /* секция «Схема» на странице запуска */
 .graph-box { margin-bottom: 12px; }

@@ -70,6 +70,8 @@ export const nodeProbe: PathProbe = {
 export type StepHolder = { artifacts?: StepArtifacts; denials?: Denial[] };
 export type { PauseAnswer } from './api-types.js';
 import type { PauseAnswer } from './api-types.js';
+/** Откуда правка пользователя: UI, хелпер скилла или кнопка в чате запуска. */
+export type UserVia = PauseAnswer['via'];
 type PauseLike = { block: string; iteration: number; phase: string; text: string; at?: string; resumedAt?: string; answer?: PauseAnswer };
 /** Отчёт запуска глазами хранилища (структурно — RunReport или сырой run.json). */
 export type StoreReport = {
@@ -464,10 +466,10 @@ export class ArtifactStore {
   // ---------- правка пользователем
 
   /**
-   * Запись через API (UI, скилл). Отказ: идёт пишущий шаг — locked; файл изменился после base — conflict с автором и временем;
+   * Запись через API (UI, скилл, кнопка в чате запуска). Отказ: идёт пишущий шаг — locked; файл изменился после base — conflict с автором и временем;
    * больше 1 МБ — too_big. Успех — версия с автором «пользователь» и этапы идущего шага, которые уже прочли прежнюю версию.
    */
-  userWrite(key: string, text: string, base: string, via: 'ui' | 'skill'): WriteResult {
+  userWrite(key: string, text: string, base: string, via: UserVia): WriteResult {
     if (this.readonly) throw new Error('Хранилище открыто только для чтения');
     const m = this.meta(key);
     if (!m) return { ok: false, code: 'unknown_key', message: `Нет артефакта ${key}` };
@@ -500,7 +502,7 @@ export class ArtifactStore {
    * Ответ на паузу по просьбе агента: запись в конец артефакта decisions (дата и время, блок, итерация, этап,
    * вопросы этапа цитатой, ответ) и answer в записи паузы report.pauses. Ошибка — ничего не записано.
    */
-  appendAnswer(text: string, via: 'ui' | 'skill'): AnswerResult {
+  appendAnswer(text: string, via: UserVia): AnswerResult {
     if (this.readonly) throw new Error('Хранилище открыто только для чтения');
     const m = this.state.items.find((x) => x.decisions);
     if (!m) return { ok: false, code: 'no_decisions', message: 'Во flow нет артефакта с decisions: true' };

@@ -46,7 +46,7 @@ export function artAuthor(a: ArtifactAuthor | undefined, multi: boolean): string
   switch (a?.kind) {
     case 'phase': return t('этап {phase} ({where})', { phase: a.phase, where: where(a) });
     case 'unknown': return t('неизвестно: изменён во время этапа {phase} ({where}) не через UI', { phase: a.phase, where: where(a) });
-    case 'user': return a.via === 'skill' ? t('пользователь через скилл') : t('пользователь');
+    case 'user': return a.via === 'skill' ? t('пользователь через скилл') : a.via === 'chat' ? t('пользователь (чат)') : t('пользователь');
     case 'outside': return t('снаружи: вне этапов между шагами');
     case 'condition': return t('проверка условия ({where})', { where: where(a) });
     case 'initial': return t('заготовка flow');
@@ -59,7 +59,7 @@ export function artBy(a: ArtifactAuthor | undefined): string {
   switch (a?.kind) {
     case 'phase': return t('этапом {phase}', { phase: a.phase });
     case 'unknown': return t('во время этапа {phase}, не через UI', { phase: a.phase });
-    case 'user': return a.via === 'skill' ? t('через скилл') : t('пользователем в UI (другая вкладка или окно)');
+    case 'user': return a.via === 'skill' ? t('через скилл') : a.via === 'chat' ? t('кнопкой в чате запуска') : t('пользователем в UI (другая вкладка или окно)');
     case 'outside': return t('снаружи, вне этапов');
     case 'condition': return t('проверкой условия');
     default: return t('неизвестно кем');

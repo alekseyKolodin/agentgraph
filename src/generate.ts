@@ -1,7 +1,7 @@
 // Генератор: описание задачи -> FlowSpec (через сессию без инструментов и structured output).
 import fs from 'node:fs';
 import { compactSpec, flowBlocks, flowJsonSchema, FlowSchema, GeneratedFlowSchema, isWriter, phaseSteps, type Block, type FlowSpec } from './schema.js';
-import { runSession, type SessionResult } from './agent.js';
+import { runSession, type LogFn, type SessionEvent, type SessionResult } from './agent.js';
 import { referencedPhases } from './template.js';
 import { artifactProblems } from './artifacts.js';
 
@@ -83,13 +83,25 @@ export type GenerateOptions = {
   cwd: string;
   model?: string;
   abort?: AbortController;
+  /** Строки хода сессии (поток в UI); нет — молча. */
+  log?: LogFn;
+  /** Ход сессии событиями: отсюда повторы запроса к API. */
+  onEvent?: (e: SessionEvent) => void;
+  /** Фактическая модель из system/init. */
+  onModel?: (model: string) => void;
+  /** Подмена сессии в тестах. */
+  deps?: { session: typeof runSession };
 };
 
-export async function generateFlow(task: string, opts: GenerateOptions): Promise<{ spec: FlowSpec; result: SessionResult }> {
+/** model — фактическая модель сессии (нет — init не пришёл), durationMs — весь вызов. */
+export async function generateFlow(task: string, opts: GenerateOptions): Promise<{ spec: FlowSpec; result: SessionResult; model?: string; durationMs: number }> {
+  const started = Date.now();
   const listing = describeDir(opts.cwd);
   const prompt = `Задача пользователя:\n<task>\n${task}\n</task>\n\nДиректория проекта: ${opts.cwd}\nВерхний уровень директории:\n${listing}\n\nСгенерируй flow spec.`;
 
-  const result = await runSession(
+  if (opts.abort?.signal.aborted) throw new Error('Генерация прервана');
+  const session = opts.deps?.session ?? runSession;
+  const result = await session(
     {
       prompt,
       cwd: opts.cwd,
@@ -100,9 +112,12 @@ export async function generateFlow(task: string, opts: GenerateOptions): Promise
       outputSchema: flowJsonSchema(),
       persist: false,
       abort: opts.abort,
+      onEvent: opts.onEvent,
+      onModel: opts.onModel,
     },
-    () => {},
+    opts.log ?? (() => {}),
   );
+  if (opts.abort?.signal.aborted) throw new Error('Генерация прервана');
 
   const raw = result.structured ?? tryJson(result.text);
   if (!raw) {
@@ -111,7 +126,7 @@ export async function generateFlow(task: string, opts: GenerateOptions): Promise
   const spec = compactSpec(FlowSchema.parse(GeneratedFlowSchema.parse(raw)));
   if (!spec.input) spec.input = task;
   validateReferences(spec);
-  return { spec, result };
+  return { spec, result, model: result.model, durationMs: Date.now() - started };
 }
 
 /**

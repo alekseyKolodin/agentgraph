@@ -7,10 +7,10 @@ import { spawn } from 'node:child_process';
 import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
 import type {
-  BlockReport, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunReport,
-  RunStatus, RunWorktree, TagSummaryReport,
+  BlockReport, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
+  RunFlowEdit, RunNote, RunReport, RunStatus, RunWorktree, TagSummaryReport,
 } from './api-types.js';
-import { flowBlocks, phaseSteps, type Block, type FlowSpec, type Phase, type Until } from './schema.js';
+import { flowBlocks, phaseSteps, type Block, type FlowSpec, type Phase, type PhaseStep, type Until } from './schema.js';
 import { emptyContext, render, type TemplateContext } from './template.js';
 import { randomUUID } from 'node:crypto';
 import { runSession, type AskAnswers, type EffortLevel, type AskQuestion, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
@@ -37,6 +37,7 @@ import type { RunTitleReport } from './run-title.js';
 import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
 import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
 import { KNOWLEDGE_TOOLS_ALLOW, KNOWLEDGE_TOOLS_SERVER, knowledgeToolsServer } from './knowledge-tools.js';
+import { flowChanges, flowEditProblems, keepBlockName, RESTART_DETAIL, RunFixError } from './run-fix.js';
 
 export type RunOptions = {
   /** Рабочая директория агентов (репозиторий, над которым работаем). */
@@ -103,6 +104,8 @@ export type RunOptions = {
    * концом. Не бросает; signal прерывается остановкой запуска. Без опции нет ни итогов, ни ключей digest/digestSession.
    */
   digest?: (input: DigestInput, signal: AbortSignal) => Promise<DigestReport>;
+  /** Правка запуска на паузе (RunFix): раннер отдаёт её до первой контрольной точки. Без опции править запуск нечем. */
+  onFix?: (fix: RunFix) => void;
 };
 
 export type { RunWorktree } from './api-types.js';
@@ -132,6 +135,28 @@ export type RunControl = {
   checkpoint: () => Promise<void>;
   /** Пауза по просьбе агента (loop.pause_marker): ближайший checkpoint() встанет. Причина уже лежит в report.pauseReason. */
   requestPause?: () => void;
+  /**
+   * Указания пользователя, ждущие шага: раннер забирает их в начале каждого шага (этапа или группы) и судьи и дописывает
+   * хвостом в промпт. Отдать надо все ждущие; next больше не отдавать, run — отдавать и дальше. Где применено, пишет раннер.
+   */
+  takeNotes?: () => RunNote[];
+};
+
+/**
+ * «Починить и продолжить» (run-fix.ts): правка идущего запуска, пока раннер стоит в контрольной точке на паузе
+ * (control.checkpoint ещё не отпустил). Вне паузы и неподходящая правка — RunFixError, запуск при этом не меняется.
+ * Никогда не посреди параллельной группы: контрольные точки только между шагами.
+ */
+export type RunFix = {
+  /** Что мешает перейти на next; пусто — можно. */
+  checkFlow: (next: FlowSpec) => string[];
+  /** Перейти на next: следующие шаги идут по нему, снимок flow.yaml переписан, прошлый — flow.N.yaml. Без изменений — ничего не пишет. */
+  applyFlow: (next: FlowSpec, o: { source: RunFlowEdit['source']; via: RunFixVia; savedToFlows?: boolean; saveError?: string }) => RunFlowEdit;
+  /**
+   * Повторить итерацию идущего блока: остаток её шагов отбрасывается, дальше идёт итерация N+1, лимит блока +1 (и у блока
+   * без цикла). note дописывается в {{feedback}} новой итерации; хвостом в промпт его кладёт тот, кто зовёт (указание next).
+   */
+  restart: (o?: { note?: string }) => { block: string; iteration: number };
 };
 
 export type { QuestionRecord } from './api-types.js';
@@ -144,10 +169,14 @@ export type { RunStatus } from './api-types.js';
 
 export type { RunDigest } from './api-types.js';
 
+export type { RunFixVia, RunFlowEdit, RunNote } from './api-types.js';
+
 const HISTORY_ENTRY_MAX = 6000;
 const FEEDBACK_MAX = 6000;
 /** Как в LoopSchema.max_iterations. */
 const MAX_ITERATIONS_LIMIT = 50;
+/** Шаг проверки условия в applied указаний (судья), как ключ карточки условия в UI. */
+const COND_STEP = '#cond';
 
 export async function runFlow(spec: FlowSpec, opts: RunOptions): Promise<RunReport> {
   const namer = new RunNamer();
@@ -332,8 +361,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   fs.writeFileSync(path.join(runDir, 'flow.yaml'), toYaml(spec, { lineWidth: 0 }));
   const emit = opts.onEvent ?? (() => {});
 
-  const blocks = flowBlocks(spec);
-  // Один блок пишет логи как раньше (iter-NN/…), несколько — в NN-<блок>/iter-NN/….
+  // spec и blocks подменяет правка flow на паузе (fix.applyFlow): все шаги после неё читают новые
+  let blocks = flowBlocks(spec);
+  // Один блок пишет логи как раньше (iter-NN/…), несколько — в NN-<блок>/iter-NN/…. Правка раскладку не меняет (run-fix.ts).
   const multi = blocks.length > 1;
   const cont = opts.continueFrom;
   const blockReports: BlockReport[] = blocks.map((b, i) => {
@@ -404,10 +434,45 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   digester.start(report, opts, save, emit);
 
   const aborted = () => Boolean(opts.abort?.signal.aborted);
+  let current: BlockReport | undefined;
+  /**
+   * Раннер стоит в контрольной точке: только здесь правят flow и повторяют итерацию (fix). open — итерация начата, а её
+   * условие ещё не проверено: повтор её обрывает. restarted — на этой паузе итерацию уже перезапустили.
+   */
+  let stopped: { open: boolean; restarted?: boolean } | null = null;
+  /** Повтор итерации, заказанный посреди неё: раннер обрывает её сразу после контрольной точки. */
+  let cut = false;
   /** Граница шага: здесь запуск встаёт на паузу. true — запуск остановлен, дальше не идём. */
-  const checkpoint = async (): Promise<boolean> => {
-    if (opts.control) await opts.control.checkpoint();
+  const checkpoint = async (open = false): Promise<boolean> => {
+    if (opts.control) {
+      stopped = { open };
+      try {
+        await opts.control.checkpoint();
+      } finally {
+        stopped = null;
+      }
+    }
     return aborted();
+  };
+
+  /**
+   * Указания пользователя к шагу (phases — его этапы, у судьи — '#cond'): где применено — в самом указании и report.notes,
+   * событие note на каждое. Возвращает тексты для хвоста промпта.
+   */
+  const takeNotes = (block: string, iteration: number, phases: string[]): string[] => {
+    const got = opts.control?.takeNotes?.() ?? [];
+    if (!got.length) return [];
+    const at = new Date().toISOString();
+    const list = (report.notes ??= []);
+    const fresh = phases.map((phase) => ({ block, iteration, phase, at }));
+    for (const n of got) {
+      (n.applied ??= []).push(...fresh);
+      if (!list.some((x) => x.id === n.id)) list.push(n);
+    }
+    save();
+    // в событии — только новые записи applied: указание run применяется к каждому шагу, и лента переигрывания не должна расти квадратично
+    for (const n of got) emit({ type: 'note', note: { ...n, applied: fresh } });
+    return got.map((n) => n.text);
   };
 
   // prev, phases.* и history переходят из блока в блок; feedback, outputs и счётчик итераций у каждого блока свои.
@@ -420,15 +485,123 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     ctx.history = history.join('\n\n');
   }
 
+  // --- правка запуска на паузе (run-fix.ts)
+  const fixLimit = (b: Block) => blockMaxIterations(b, opts);
+  /** Блок, на котором стоит раннер; вне контрольной точки — RunFixError not_paused. */
+  const stoppedAt = (): { br: BlockReport; open: boolean; restarted?: boolean } => {
+    if (!stopped || !current) throw new RunFixError('Запуск не на паузе: править flow и повторять итерацию можно только на паузе', 'not_paused');
+    return { br: current, ...stopped };
+  };
+  /** Что мешает перейти на next: совместимость с идущим запуском и то же, что проверяется на старте. */
+  const flowProblems = (next: FlowSpec, br: BlockReport): { problems: string[]; known: Map<string, KnowledgeTag[]> } => {
+    const problems = flowEditProblems(spec, next, { block: br.index, iterations: br.iterations, limit: fixLimit });
+    // пройденным блокам директории, плагины и теги знаний уже не нужны: их пропажа не мешает править будущее
+    const ahead = flowBlocks(next).slice(br.index);
+    const aheadSpec: FlowSpec = next.blocks ? { ...next, blocks: ahead } : next;
+    let known = new Map<string, KnowledgeTag[]>();
+    const steps = [
+      () => checkAddDirs(ahead, opts.cwd, opts.addDirs),
+      () => checkPlugins(ahead, opts.cwd),
+      () => { known = resolveKnowledge(aheadSpec, opts.knowledge); },
+    ];
+    for (const step of steps) {
+      try {
+        step();
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    return { problems, known };
+  };
+  /**
+   * Отчёты блоков под новую версию: пройденные не трогаем; у идущего — заголовок, цикл и лимит, если его поменяли во flow
+   * (поднятый руками или повтором остаётся); будущие — заново, с лимитом, поднятым руками, если во flow он тот же.
+   */
+  const syncBlocks = (br: BlockReport, prev: Block[], restarted: boolean) => {
+    const was = new Map(prev.map((b) => [b.name, b]));
+    const reports = new Map(blockReports.map((b) => [b.name, b]));
+    const limitOf = (b: Block, old?: BlockReport) => {
+      const def = was.get(b.name);
+      return old && def && fixLimit(def) === fixLimit(b) ? old.maxIterations : fixLimit(b);
+    };
+    const cur = blocks[br.index];
+    // итерацию на этой паузе уже повторили: её номер обещан клиенту, лимит из flow его не отменяет
+    const curMax = restarted ? Math.max(limitOf(cur, br), br.iterations + 1) : limitOf(cur, br);
+    Object.assign(br, { title: cur.title ?? cur.name, maxIterations: curMax, condition: cur.loop?.until.type ?? 'none', looped: Boolean(cur.loop), onFail: cur.on_fail ?? 'stop' });
+    const later = blocks.slice(br.index + 1).map((b, k): BlockReport => ({
+      index: br.index + 1 + k,
+      name: b.name,
+      title: b.title ?? b.name,
+      status: 'pending',
+      iterations: 0,
+      maxIterations: limitOf(b, reports.get(b.name)),
+      condition: b.loop?.until.type ?? 'none',
+      looped: Boolean(b.loop),
+      onFail: b.on_fail ?? 'stop',
+    }));
+    blockReports.splice(br.index + 1, blockReports.length, ...later);
+    report.maxIterations = blockReports.reduce((n, b) => n + b.maxIterations, 0);
+  };
+  const fix: RunFix = {
+    checkFlow: (raw) => {
+      const { br } = stoppedAt();
+      return flowProblems(keepBlockName(spec, raw), br).problems;
+    },
+    applyFlow: (raw, o) => {
+      const { br, restarted } = stoppedAt();
+      const next = keepBlockName(spec, raw);
+      const { problems, known } = flowProblems(next, br);
+      if (problems.length) throw new RunFixError(`Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
+      const changed = flowChanges(spec, next);
+      const version = report.flowEdits?.length ?? 0;
+      const edit: RunFlowEdit = {
+        version, at: new Date().toISOString(), source: o.source, via: o.via, changed,
+        ...(o.savedToFlows ? { savedToFlows: true } : {}), ...(o.saveError ? { saveError: o.saveError } : {}),
+      };
+      // те же этапы — новой версии нет: ни снимка, ни записи в отчёте
+      if (!changed.length) return edit;
+      edit.version++;
+      const snap = path.join(runDir, 'flow.yaml');
+      fs.copyFileSync(snap, path.join(runDir, `flow.${version}.yaml`));
+      fs.writeFileSync(snap, toYaml(next, { lineWidth: 0 }));
+      const prev = blocks;
+      spec = next;
+      blocks = flowBlocks(next);
+      knowledge = known;
+      syncBlocks(br, prev, Boolean(restarted));
+      (report.flowEdits ??= []).push(edit);
+      save();
+      emit({ type: 'flow', edit, blocks: blockReports.map((b) => ({ ...b })), maxIterations: report.maxIterations });
+      return edit;
+    },
+    restart: (o = {}) => {
+      const at = stoppedAt();
+      const { br } = at;
+      if (at.restarted) throw new RunFixError('Итерацию уже перезапустили на этой паузе: возобнови запуск', 'restarted');
+      if (!br.iterations) throw new RunFixError(`Блок ${br.title} ещё не начал итераций: повторять нечего — дай указание`, 'not_started');
+      if (br.maxIterations >= MAX_ITERATIONS_LIMIT) throw new RunFixError(`Лимит итераций блока ${br.title} уже ${MAX_ITERATIONS_LIMIT}: поднять его нельзя`, 'limit');
+      const note = o.note?.trim();
+      if (note) ctx.feedback = ctx.feedback.trim() ? `${ctx.feedback.trimEnd()}\n\nУказание пользователя: ${note}` : note;
+      br.maxIterations++;
+      report.maxIterations = blockReports.reduce((n, b) => n + b.maxIterations, 0);
+      stopped!.restarted = true;
+      if (at.open) cut = true;
+      save();
+      emit({ type: 'limit', block: br.name, max: br.maxIterations, total: report.maxIterations });
+      return { block: br.name, iteration: br.iterations + 1 };
+    },
+  };
+  opts.onFix?.(fix);
+
   /**
    * Один этап: промпт из снимка контекста, сессия, файлы и отчёт. Контекст не трогает — выводы
    * сливает runBlock после шага, поэтому участники группы могут идти одновременно.
    */
-  const runPhase = async (block: Block, phase: Phase, i: number, iter: number, iterRel: string, snap: TemplateContext, art?: PhaseArtifacts): Promise<PhaseRun> => {
+  const runPhase = async (block: Block, phase: Phase, i: number, iter: number, iterRel: string, snap: TemplateContext, art?: PhaseArtifacts, notes?: string[]): Promise<PhaseRun> => {
     const title = phase.title ?? phase.name;
     const group = phase.group ? { group: phase.group } : {};
     const known = knowledge.get(block.name);
-    const prompt = renderPhasePrompt(phase, snap, opts.cwd, runOpts, art, known);
+    const prompt = renderPhasePrompt(phase, snap, opts.cwd, runOpts, art, known, notes);
     const baseRel = `${iterRel}/${pad(i + 1)}-${phase.name}`;
     const files: PhaseFiles = { prompt: `${baseRel}.prompt.md`, transcript: `${baseRel}.transcript.md`, output: `${baseRel}.output.md` };
     fs.writeFileSync(path.join(runDir, files.prompt), prompt);
@@ -552,16 +725,19 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   };
 
   /** Цикл одного блока: итерации -> шаги (этап или параллельная группа) -> условие. Возвращает итоговый статус блока. */
-  const runBlock = async (block: Block, br: BlockReport, blockRel: string): Promise<RunStatus> => {
+  const runBlock = async (bi: number, br: BlockReport, blockRel: string): Promise<RunStatus> => {
     ctx.feedback = '';
     ctx.outputs = '';
 
-    // лимит читаем на каждом шаге: его можно поменять во время запуска (setBlockMaxIterations)
-    for (let iter = 1; iter <= br.maxIterations; iter++) {
-      // пауза до начала итерации, чтобы на паузе в отчёте не висела пустая итерация
+    // лимит читаем на каждом шаге: его можно поменять во время запуска (setBlockMaxIterations, повтор итерации)
+    for (let iter = 1; ; iter++) {
+      // Пауза до начала итерации, чтобы на паузе в отчёте не висела пустая итерация. После последней — тоже: на ней
+      // можно повторить итерацию или поднять лимит, и блок пойдёт дальше.
       if (await checkpoint()) return 'aborted';
       // лимит могли уменьшить, пока стояли на паузе
       if (iter > br.maxIterations) break;
+      // блок берём заново после каждой контрольной точки: на паузе flow могли поправить (fix.applyFlow)
+      let block = blocks[bi];
       ctx.iteration = iter;
       ctx.max_iterations = br.maxIterations;
       br.iterations = iter;
@@ -573,24 +749,39 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       ctx.outputs = '';
       emit({ type: 'iteration', block: block.name, iteration: iter, max: br.maxIterations });
 
-      for (const [si, step] of phaseSteps(block).entries()) {
-        // Пауза только между шагами: у сервера один release, и второй параллельный checkpoint
-        // перезаписал бы его — первая ветка группы так и осталась бы ждать.
-        if (si > 0 && (await checkpoint())) return 'aborted';
+      // Шаги ищутся по именам этапов: после правки flow на паузе следующий — первый, чьи этапы в этой итерации ещё не шли.
+      // Номер этапа (index) после правки сдвигается за уже прошедшие: вставленный этап не делит номер с прошедшим,
+      // и порядок итерации (итог запуска, history продолжения, карточки) остаётся порядком выполнения.
+      const ran = new Set<string>();
+      let lastIndex = -1;
+      const nextStep = (): PhaseStep | undefined => {
+        for (const s of phaseSteps(block)) {
+          const left = s.phases.filter(({ phase }) => !ran.has(phase.name));
+          if (!left.length) continue;
+          const shift = Math.max(0, lastIndex + 1 - Math.min(...left.map((m) => m.index)));
+          return { ...s, phases: left.map((m) => ({ ...m, index: m.index + shift })) };
+        }
+        return undefined;
+      };
+      let step = nextStep();
+      while (step) {
         // Участники группы рендерят промпты из одного снимка: {{prev}} и {{phases.*}} — как до группы.
         // Пока группа идёт, в ctx, history и выводы итерации никто не пишет: всё сливается после шага.
         const snapshot: TemplateContext = { ...ctx, phases: { ...ctx.phases } };
+        const members = step.phases;
+        // указания — всем участникам шага: группа стартует разом
+        const notes = takeNotes(block.name, iter, members.map(({ phase }) => phase.name));
         // Артефакты: prepareStep → beginStep → снимок → синхронная часть runPhase без await между ними,
         // finishStep и endStep — на любом выходе из шага.
         let ref: Extract<StepRef, { kind: 'phases' }> | undefined;
         const arts: PhaseArtifacts[] = [];
         if (store) {
           store.prepareStep();
-          ref = { kind: 'phases', block: block.name, iteration: iter, members: step.phases.map(({ phase }) => ({ name: phase.name, access: artifactAccess(phase) })) };
+          ref = { kind: 'phases', block: block.name, iteration: iter, members: members.map(({ phase }) => ({ name: phase.name, access: artifactAccess(phase) })) };
           store.beginStep(ref);
-          const texts = store.snapshot(step.phases.flatMap(({ phase }) => [phase.prompt, phase.handoff ?? '']));
+          const texts = store.snapshot(members.flatMap(({ phase }) => [phase.prompt, phase.handoff ?? '']));
           ref.members.forEach((m, k) => {
-            const { prompt, handoff } = step.phases[k].phase;
+            const { prompt, handoff } = members[k].phase;
             arts.push({
               dir: store!.dir,
               access: m.access,
@@ -603,7 +794,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         let settled: PromiseSettledResult<PhaseRun>[];
         try {
           settled = await Promise.allSettled(
-            step.phases.map(({ phase, index }, k) => runPhase(block, phase, index, iter, iterRel, snapshot, arts[k])),
+            members.map(({ phase, index }, k) => runPhase(block, phase, index, iter, iterRel, snapshot, arts[k], notes)),
           );
         } finally {
           if (store && ref) {
@@ -611,6 +802,10 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
             store.finishStep(ref);
             store.endStep();
           }
+        }
+        for (const { phase, index } of members) {
+          ran.add(phase.name);
+          lastIndex = Math.max(lastIndex, index);
         }
         if (aborted()) return 'aborted';
         // Ошибки разбираем в порядке объявления: запуск получает ошибку первого упавшего участника.
@@ -643,6 +838,26 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
           report.error = `Лимит ${opts.maxBudgetUsd.toFixed(2)} превышен: ${report.totalCostUsd.toFixed(2)}`;
           return 'budget_exceeded';
         }
+
+        // Пауза только между шагами и перед условием: у сервера один release, и второй параллельный checkpoint
+        // перезаписал бы его — первая ветка группы так и осталась бы ждать. У блока без цикла после последнего шага её нет.
+        if (!nextStep() && !block.loop) break;
+        if (await checkpoint(true)) return 'aborted';
+        block = blocks[bi];
+        if (cut) break;
+        step = nextStep();
+      }
+
+      if (cut) {
+        // Повтор по просьбе пользователя: итерация обрывается, вместо проверки условия — запись о перезапуске.
+        // Её замечания (с указанием, fix.restart) получает следующая итерация.
+        cut = false;
+        const cond: ConditionReport = { block: block.name, iteration: iter, type: block.loop?.until.type ?? 'none', done: false, feedback: ctx.feedback, detail: RESTART_DETAIL, costUsd: 0 };
+        report.conditions.push(cond);
+        fs.writeFileSync(path.join(runDir, iterRel, 'condition.json'), JSON.stringify(cond, null, 2));
+        save();
+        emit({ type: 'condition', report: cond });
+        continue;
       }
 
       // Блок без цикла — один проход, условие не проверяется.
@@ -651,7 +866,6 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         return 'done';
       }
 
-      if (await checkpoint()) return 'aborted';
       // проверка условия — тоже шаг: изменения за неё получают автора «условие», судья читает все артефакты
       let cref: Extract<StepRef, { kind: 'condition' }> | undefined;
       let judgeArt: PhaseArtifacts | undefined;
@@ -663,7 +877,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       }
       let cond!: ConditionReport;
       try {
-        cond = await evaluateUntil(spec, block, ctx, runOpts, runDir, iterRel, emit, judgeArt, knowledge.get(block.name));
+        cond = await evaluateUntil(spec, block, ctx, runOpts, runDir, iterRel, emit, judgeArt, knowledge.get(block.name), () => takeNotes(block.name, iter, [COND_STEP]));
       } finally {
         if (store && cref) {
           cref.report = cond;
@@ -704,10 +918,11 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         save();
       }
     }
-    return block.loop?.until.type === 'none' ? 'done' : 'max_iterations';
+    // без цикла (его могли снять правкой на паузе) условия нет — проход завершён
+    const until = blocks[bi].loop?.until.type;
+    return !until || until === 'none' ? 'done' : 'max_iterations';
   };
 
-  let current: BlockReport | undefined;
   try {
     if (storeError) throw storeError;
     // несуществующую директорию ловим до первого этапа, а не молча отдаём сессии без неё
@@ -715,14 +930,15 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     checkPlugins(blocks, opts.cwd);
     // как и несуществующий тег знаний
     knowledge = resolveKnowledge(spec, opts.knowledge);
-    for (const [bi, block] of blocks.entries()) {
+    // по индексу, а не по списку: правка flow на паузе меняет будущие блоки (fix.applyFlow)
+    for (let bi = 0; bi < blocks.length; bi++) {
       current = blockReports[bi];
       if (current.skipped) continue;
       current.status = 'running';
       save();
       emit({ type: 'block_start', block: current, total: blocks.length });
 
-      current.status = await runBlock(block, current, multi ? `${pad(bi + 1)}-${block.name}` : '');
+      current.status = await runBlock(bi, current, multi ? `${pad(bi + 1)}-${blocks[bi].name}` : '');
       save();
       emit({ type: 'block_end', block: current });
 
@@ -783,6 +999,8 @@ async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: 
   return out;
 }
 
+// TODO(F5): тело — в queueTagSummary(tag, …) из tags.ts, когда она появится со слиянием F5: иначе запуск и сессия
+// по одному тегу пишут саммари одновременно и затирают друг друга.
 async function updateTagSummary(report: RunReport, final: FinalPhase[], tag: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport> {
   let out: TagSummaryReport;
   try {
@@ -843,7 +1061,7 @@ export type RunExtras = Pick<RunOptions, 'addDirs' | 'attachments' | 'runDir'>;
  * блока (knowledge: список по строке на тег, inline-теги целиком) + раздел «Артефакты запуска» + вложения к задаче.
  * art — артефакты этапа на старте шага (подстановки и раздел); без них промпт как до артефактов, без knowledge — как до тегов знаний.
  */
-export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[]): string {
+export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[], notes?: string[]): string {
   const vars = art ? { ...ctx, artifacts: art.snapshot } : ctx;
   let body = render(phase.prompt, vars);
   if (phase.handoff?.trim()) body = `${body.trimEnd()}\n\n${handoffTail(render(phase.handoff, vars))}`;
@@ -852,7 +1070,20 @@ export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: stri
   const known = knowledgeBlock(knowledge ?? []);
   if (known) body = `${body.trimEnd()}\n\n${known}`;
   if (art?.section) body = `${body.trimEnd()}\n\n${art.section}`;
-  return withAttachments(body, run);
+  return withNotes(withAttachments(body, run), notes);
+}
+
+/**
+ * Хвост промпта с указаниями пользователя, данными по ходу запуска (POST /api/runs/:id/note) — последним, после
+ * вложений: это поправка к плану, её агент должен увидеть. Без указаний промпт не меняется.
+ */
+export function withNotes(body: string, notes?: string[]): string {
+  const list = (notes ?? []).map((n) => n.trim()).filter(Boolean);
+  if (!list.length) return body;
+  const tail = list.length === 1
+    ? `Указание пользователя (дано по ходу запуска — учти его):\n${list[0]}`
+    : `Указания пользователя (даны по ходу запуска — учти их):\n${list.map((n, i) => `${i + 1}. ${n}`).join('\n\n')}`;
+  return `${body.trimEnd()}\n\n${tail}`;
 }
 
 /** Хвост промпта с handoff: чем этап заканчивает ответ. Общий с страницей «Контекст», которая считает его размер. */
@@ -1039,6 +1270,8 @@ async function evaluateUntil(
   emit: (e: RunEvent) => void,
   judgeArt?: PhaseArtifacts,
   knowledge?: KnowledgeTag[],
+  /** Указания пользователя судье: забираются, только если судья и правда идёт. */
+  notes: () => string[] = () => [],
 ): Promise<ConditionReport> {
   const until = block.loop!.until;
   const base: ConditionReport = { block: block.name, iteration: ctx.iteration, type: until.type, done: false, feedback: '', costUsd: 0 };
@@ -1073,6 +1306,7 @@ async function evaluateUntil(
 
     case 'judge': {
       const req = judgeRequest(spec, until, render(until.prompt, judgeArt ? { ...ctx, artifacts: judgeArt.snapshot } : ctx), opts, judgeArt, knowledge, ctx.input);
+      req.prompt = withNotes(req.prompt, notes());
       const logFile = `${iterRel}/condition.judge.prompt.md`;
       fs.writeFileSync(path.join(runDir, logFile), req.prompt);
       // событие после записи: промпт судьи можно открыть, пока он думает
