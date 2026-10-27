@@ -775,8 +775,8 @@ export type RunEvent =
   | { type: 'flow'; edit: RunFlowEdit }
   /** Блок-вызов начал дочерний запуск runId вызванного flow: этап phase (имя блока) идёт, пока идёт он. */
   | { type: 'call'; block: string; iteration: number; phase: string; runId: string; flow: string }
-  /** Развилка после блока решила: block.next — куда, пропущенные блоки придут своими block_end с bypassed. */
-  | { type: 'next'; block: string; next: BlockNext }
+  /** Развилка после блока решила: next — куда, total — лимит итераций запуска без пропущенных блоков; они придут следом своими block_end с bypassed. */
+  | { type: 'next'; block: string; next: BlockNext; total: number }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */

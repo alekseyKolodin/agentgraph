@@ -138,10 +138,15 @@ export type Continuation = {
   /** Блоки, через которые развилка перешла в прошлом запуске: не выполняются и в этом. */
   bypassBlocks?: string[];
   /**
-   * Блок-вызов, на котором прошлый запуск остановился: его первая итерация продолжает последний дочерний запуск
-   * (cont — его продолжение, from — откуда артефакты, spec — его flow), а не начинает заново.
+   * Последний пропускаемый блок с next, чья развилка в прошлом запуске так и не решилась (остановили во время её
+   * проверки): раннер решает её по выводам этого блока, прежде чем идти дальше.
    */
-  calls?: Record<string, { cont: Continuation; from: { runId: string; runDir: string }; spec: FlowSpec }>;
+  branchFrom?: string;
+  /**
+   * Блок-вызов, на котором прошлый запуск остановился: его первая итерация берёт артефакты последнего дочернего запуска
+   * (from), а если тот можно продолжить — продолжает его (cont — продолжение, spec — его flow), а не начинает заново.
+   */
+  calls?: Record<string, { from: { runId: string; runDir: string }; cont?: Continuation; spec?: FlowSpec }>;
 };
 
 /**
@@ -753,16 +758,19 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     if (opts.abort?.signal.aborted) stop();
     else opts.abort?.signal.addEventListener('abort', stop, { once: true });
     let child: RunReport | undefined;
+    let childDir: string | undefined;
     let res: SessionResult;
     try {
-      // продолжение: первая итерация блока, где прошлый запуск остановился, продолжает его дочерний запуск
-      const resume = iter === 1 ? cont?.calls?.[block.name] : undefined;
+      // продолжение: первая итерация блока, где прошлый запуск остановился, берёт артефакты его последнего дочернего,
+      // а если тот можно продолжить — продолжает его
+      const prior = iter === 1 ? cont?.calls?.[block.name] : undefined;
+      const resume = prior?.cont && prior.spec ? { cont: prior.cont, spec: prior.spec } : undefined;
       const callee: FlowSpec = resume ? resume.spec : { ...(opts.loadFlow ?? loadCalledFlow)(block.flow), input: task };
-      const childDir = makeRunDir(opts.runsDir, callee.name);
+      childDir = makeRunDir(opts.runsDir, callee.name);
       // вложения задачи — и дочернему: те же имена, копия в его папке
       const attachments = opts.attachments ?? [];
       if (attachments.length) fs.cpSync(path.join(runDir, ATTACHMENTS_DIR), path.join(childDir, ATTACHMENTS_DIR), { recursive: true });
-      const before = iter > 1 ? lastCall.get(block.name) : undefined;
+      const before = iter > 1 ? lastCall.get(block.name) : prior?.from;
       const budget = opts.maxBudgetUsd !== undefined ? Math.max(0, opts.maxBudgetUsd - report.totalCostUsd) : undefined;
       const parent: RunParent = { runId: report.id, flow: spec.name, block: block.name, iteration: iter };
       const childOpts: RunOptions = {
@@ -779,7 +787,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(before ? { artifactsFrom: before } : {}),
-        ...(resume ? { continueFrom: resume.cont, artifactsFrom: resume.from } : {}),
+        ...(resume ? { continueFrom: resume.cont } : {}),
         ...(opts.tagDirs?.length ? { tagDirs: opts.tagDirs } : {}),
         ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
         ...(report.title ? { title: `${report.title} · ${block.title ?? block.name}` } : {}),
@@ -789,7 +797,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         parent,
       };
       emit({ type: 'call', block: block.name, iteration: iter, phase: phase.name, runId: path.basename(childDir), flow: block.flow });
-      log(`↪ вызов flow ${block.flow}: запуск ${path.basename(childDir)}${resume ? `, продолжение ${resume.from.runId}` : ''}`);
+      log(`↪ вызов flow ${block.flow}: запуск ${path.basename(childDir)}${resume ? `, продолжение ${prior!.from.runId}` : ''}`);
       calling = { flow: block.flow, runId: path.basename(childDir) };
       child = await (opts.runChild ?? runFlow)(callee, childOpts);
       lastCall.set(block.name, { runId: child.id, runDir: child.runDir });
@@ -803,6 +811,8 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       const message = err instanceof Error ? err.message : String(err);
       log(`ошибка: ${message}`);
       res = { ok: false, subtype: 'exception', text: message, costUsd: child?.totalCostUsd ?? 0, turns: 0, durationMs: Date.now() - startedAt, errors: [message] };
+      // дочерний не начался (вложения, загрузка flow): пустая папка без run.json выглядела бы сломанным запуском
+      if (!child && childDir && !fs.existsSync(path.join(childDir, 'run.json'))) fs.rmSync(childDir, { recursive: true, force: true });
     } finally {
       calling = undefined;
       opts.abort?.signal.removeEventListener('abort', stop);
@@ -834,9 +844,14 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     return { phase, index: i, res, output, files };
   };
 
-  /** Правило развилки после блока: marker по выводу этапа, command по коду выхода, judge по вердикту — как until. */
+  /**
+   * Правило развилки после блока: marker по выводу этапа, command по коду выхода, judge по вердикту — как until.
+   * Судья без вердикта — ошибка, а не «нет»: решение развилки окончательное, его не исправит следующая итерация.
+   */
   const checkNext = async (block: Block, br: BlockReport, cond: NonNullable<NextRule['if']>, k: number): Promise<NextCheck> => {
     const rel = path.posix.join(multi ? `${pad(br.index + 1)}-${block.name}` : '', `next-${k + 1}`);
+    // у блока, пропущенного продолжением (Continuation.branchFrom), своей папки в этом запуске нет
+    if (cond.type !== 'marker') fs.mkdirSync(path.join(runDir, path.posix.dirname(rel)), { recursive: true });
     const base = { rule: k, type: cond.type, costUsd: 0 };
     switch (cond.type) {
       case 'marker': {
@@ -857,32 +872,54 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         fs.writeFileSync(path.join(runDir, logFile), req.prompt);
         const res = await (opts.session ?? runSession)(req, () => {});
         const verdict = parseVerdict(res);
-        return { ...base, done: Boolean(verdict?.done), detail: verdict ? verdict.reason : `судья не вернул вердикт: ${res.errors.join('; ') || res.subtype}`, costUsd: res.costUsd, logFile };
+        if (!verdict) {
+          report.totalCostUsd += res.costUsd;
+          throw new Error(`Развилка после блока ${block.title ?? block.name}: судья правила ${k + 1} не вернул вердикт (${res.errors.join('; ') || res.subtype}) — продолжи запуск, чтобы решить её заново`);
+        }
+        return { ...base, done: verdict.done, detail: verdict.reason, costUsd: res.costUsd, logFile };
       }
     }
   };
 
-  /** Куда после блока bi: правила next по порядку (pickNext), без next — следующий блок. Пропущенные блоки помечаются. */
-  const branch = async (bi: number, br: BlockReport): Promise<number> => {
+  /**
+   * Куда после блока bi: правила next по порядку (pickNext), без next — следующий блок. Пропущенные блоки помечаются.
+   * Остановили во время проверки — 'aborted', и ничего не записано: прерванная проверка не решение, развилку решит
+   * продолжение (Continuation.branchFrom).
+   */
+  const branch = async (bi: number, br: BlockReport): Promise<number | 'aborted'> => {
     const block = blocks[bi];
     if (block.next === undefined) return bi + 1;
     const checks: NextCheck[] = [];
-    const choice = await pickNext(blocks, bi, async (cond, k) => {
-      const c = await checkNext(block, br, cond, k);
-      checks.push(c);
-      report.totalCostUsd += c.costUsd;
-      return c.done;
-    });
+    const stopped = new Error('stopped');
+    let choice: Awaited<ReturnType<typeof pickNext>>;
+    try {
+      choice = await pickNext(blocks, bi, async (cond, k) => {
+        let c: NextCheck;
+        try {
+          c = await checkNext(block, br, cond, k);
+        } catch (err) {
+          throw aborted() ? stopped : err;
+        }
+        report.totalCostUsd += c.costUsd;
+        if (aborted()) throw stopped;
+        checks.push(c);
+        return c.done;
+      });
+    } catch (err) {
+      if (err !== stopped) throw err;
+      save();
+      return 'aborted';
+    }
     br.next = { to: choice.to >= blocks.length ? NEXT_END : blocks[choice.to].name, ...(choice.rule !== undefined ? { rule: choice.rule } : {}), checks };
-    for (const k of bypassedBlocks(bi, choice.to)) {
-      const skip = blockReports[k];
+    const skipped = bypassedBlocks(bi, choice.to).map((k) => blockReports[k]);
+    for (const skip of skipped) {
       skip.bypassed = true;
       skip.maxIterations = 0;
-      emit({ type: 'block_end', block: skip });
     }
     report.maxIterations = blockReports.reduce((n, b) => n + b.maxIterations, 0);
     save();
-    emit({ type: 'next', block: block.name, next: br.next });
+    emit({ type: 'next', block: block.name, next: br.next, total: report.maxIterations });
+    for (const skip of skipped) emit({ type: 'block_end', block: skip });
     return choice.to;
   };
 
@@ -1128,8 +1165,25 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     // по индексу, а не по списку: правка flow на паузе меняет будущие блоки (fix.applyFlow); развилка next — переход вперёд
     for (let bi = 0; bi < blocks.length; ) {
       current = blockReports[bi];
+      // развилка после блока (у пропущенного продолжением — только нерешённая в прошлом запуске)
+      const go = async (): Promise<boolean> => {
+        const to = await branch(bi, current!);
+        if (to === 'aborted') {
+          report.status = 'aborted';
+          return false;
+        }
+        // проверка развилки (судья) тоже стоит денег: дальше не идём, если бюджет кончился
+        if (to < blocks.length && opts.maxBudgetUsd !== undefined && report.totalCostUsd > opts.maxBudgetUsd) {
+          report.error = `Лимит ${opts.maxBudgetUsd.toFixed(2)} превышен: ${report.totalCostUsd.toFixed(2)}`;
+          report.status = 'budget_exceeded';
+          return false;
+        }
+        bi = to;
+        return true;
+      };
       if (current.skipped) {
-        bi++;
+        if (cont?.branchFrom !== current.name) bi++;
+        else if (!(await go())) break;
         continue;
       }
       current.status = 'running';
@@ -1141,7 +1195,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       emit({ type: 'block_end', block: current });
 
       if (current.status === 'done' || (current.status === 'max_iterations' && current.onFail === 'continue')) {
-        bi = await branch(bi, current);
+        if (!(await go())) break;
         continue;
       }
       if (current.status === 'max_iterations' && multi) report.error = `Блок ${current.title}: условие не выполнено за ${current.iterations} итераций`;
@@ -1233,6 +1287,7 @@ export function setBlockMaxIterations(report: RunReport, blockName: string, valu
   const br = report.blocks.find((b) => b.name === blockName);
   if (!br) throw new Error(`Нет блока ${blockName}`);
   if (!br.looped) throw new Error(`У блока ${br.title} нет цикла`);
+  if (br.bypassed || br.skipped) throw new Error(`Блок ${br.title} в этом запуске не выполняется`);
   if (br.status !== 'pending' && br.status !== 'running') throw new Error(`Блок ${br.title} уже завершён`);
   if (!Number.isInteger(value) || value < 1 || value > MAX_ITERATIONS_LIMIT) {
     throw new Error(`Лимит итераций — целое от 1 до ${MAX_ITERATIONS_LIMIT}`);
@@ -1645,6 +1700,8 @@ export type RunStore = {
   output: (runId: string, rel: string) => string | undefined;
   /** Flow запуска для продолжения его дочернего (блок-вызов): без него упавший вызов начинается заново. */
   spec?: (report: RunReport) => FlowSpec;
+  /** Папка запуска по id: откуда брать артефакты дочернего. Нет — runDir из его run.json. */
+  dir?: (runId: string) => string;
 };
 
 const CONTINUE_DEPTH_MAX = 50;
@@ -1655,7 +1712,7 @@ const CONTINUE_DEPTH_MAX = 50;
  * Смотрит только на статусы, файлы не читает. skip — сплошное начало блоков, завершённых в prev (done), по имени.
  * prev — отчёт глазами сервера: у оборвавшегося запуска статус interrupted, а не running.
  */
-export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'>, spec: FlowSpec): { ok: true; skip: Block[] } | { ok: false; reason: string } {
+export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'> & { phases?: RunReport['phases'] }, spec: FlowSpec): { ok: true; skip: Block[] } | { ok: false; reason: string } {
   if (prev.status === 'running') return { ok: false, reason: 'Запуск ещё идёт: продолжить можно только завершённый' };
   if (prev.status === 'done') return { ok: false, reason: 'Запуск завершён полностью: продолжать нечего' };
   const blocks = flowBlocks(spec);
@@ -1668,9 +1725,10 @@ export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'>, spec: Fl
   }
   if (skip.length === blocks.length) return { ok: false, reason: 'Все блоки flow уже завершены в этом запуске: продолжать нечего' };
   // первый блок, упёршийся в лимит итераций, продолжаем: он идёт заново с новым лимитом, а код и артефакты остаются;
-  // первый блок-вызов — тоже: его первая итерация продолжает упавший дочерний запуск (Continuation.calls)
+  // первый блок-вызов, уже вызывавший flow, — тоже: его первая итерация продолжает дочерний запуск (Continuation.calls)
   const first = prev.blocks?.find((x) => x.name === blocks[0].name)?.status;
-  if (!skip.length && first !== 'max_iterations' && !isCallBlock(blocks[0])) {
+  const called = isCallBlock(blocks[0]) && Boolean(prev.phases?.some((p) => p.block === blocks[0].name && p.call));
+  if (!skip.length && first !== 'max_iterations' && !called) {
     return { ok: false, reason: `Первый блок «${blocks[0].title ?? blocks[0].name}» не завершён: продолжать нечего, запусти заново` };
   }
   return { ok: true, skip };
@@ -1683,7 +1741,7 @@ export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'>, spec: Fl
  * выводы берутся из запуска, где блок выполнялся (по цепочке continuedFrom). Бросает ошибку, если
  * продолжать нечего или вывода пропускаемого этапа нет: без него {{phases.*}} молча остался бы пустым.
  */
-export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStore): Continuation {
+export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStore, depth = 0): Continuation {
   const check = canContinue(prev, spec);
   if (!check.ok) throw new Error(check.reason);
   const blocks = flowBlocks(spec);
@@ -1733,33 +1791,40 @@ export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStor
   const lastStep = lastRan ? phaseSteps(lastRan).at(-1)! : undefined;
   const tail = lastStep ? stepPrev(lastStep.phases.map(({ phase }) => ({ phase: phase.name, output: phases[phase.name] }))) : '';
   const bypass = skip.filter(bypassed).map((b) => b.name);
-  const calls = callContinuation(prev, blocks[skip.length], store);
+  const calls = callContinuation(prev, blocks[skip.length], store, depth);
+  // развилку после последнего пропускаемого блока не решили (остановили на её проверке) — её решит этот запуск
+  const last = skip.at(-1);
+  const undecided = last && last === lastRan && last.next !== undefined && !prev.blocks?.find((x) => x.name === last.name)?.next;
   return {
     runId: prev.id, skipBlocks: skip.map((b) => b.name), phases, prev: tail, history,
     ...(bypass.length ? { bypassBlocks: bypass } : {}),
     ...(calls ? { calls } : {}),
+    ...(undecided ? { branchFrom: last.name } : {}),
   };
 }
 
 /**
- * Блок-вызов, на котором prev остановился: его последний дочерний запуск продолжается, если его можно продолжить (и
- * дальше вглубь — его собственный упавший вызов). Иначе, без flow дочернего (store.spec) или без вызова — ничего:
- * блок начнёт вызов заново.
+ * Блок-вызов, на котором prev остановился: артефакты его последнего дочернего запуска переходят в первый вызов, а сам
+ * дочерний продолжается, если его можно продолжить (и дальше вглубь — его собственный упавший вызов). Без вызова или
+ * если блок теперь зовёт другой flow — ничего: блок начнёт вызов заново. Без flow дочернего (store.spec) или когда
+ * продолжить его не выходит — только артефакты.
  */
-function callContinuation(prev: RunReport, block: Block | undefined, store: RunStore, depth = 0): Continuation['calls'] {
-  if (!block || !isCallBlock(block) || !store.spec || depth >= CONTINUE_DEPTH_MAX) return undefined;
+function callContinuation(prev: RunReport, block: Block | undefined, store: RunStore, depth: number): Continuation['calls'] {
+  if (!block || !isCallBlock(block)) return undefined;
   const last = [...prev.phases].reverse().find((p) => p.block === block.name && p.call);
   const child = last?.call ? store.report(last.call.runId) : undefined;
-  if (!child) return undefined;
-  let childSpec: FlowSpec;
+  if (!child || child.flow !== block.flow) return undefined;
+  const from = { runId: child.id, runDir: store.dir?.(child.id) ?? child.runDir };
+  if (!store.spec || depth >= CONTINUE_DEPTH_MAX) return { [block.name]: { from } };
   try {
-    childSpec = store.spec(child);
+    const childSpec = store.spec(child);
+    if (!canContinue(child, childSpec).ok) return { [block.name]: { from } };
+    const cont = continuationFrom(child, childSpec, store, depth + 1);
+    return { [block.name]: { from, cont, spec: { ...childSpec, input: child.input } } };
   } catch {
-    return undefined;
+    // нет flow дочернего, его выводов или запуска в цепочке его продолжений: вызов начнётся заново, с его артефактами
+    return { [block.name]: { from } };
   }
-  if (!canContinue(child, childSpec).ok) return undefined;
-  const cont = continuationFrom(child, childSpec, store);
-  return { [block.name]: { cont, from: { runId: child.id, runDir: child.runDir }, spec: { ...childSpec, input: child.input } } };
 }
 
 /**

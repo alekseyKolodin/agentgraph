@@ -38,9 +38,9 @@ test('консольный вывод связки: «▶ блок … вызо�
   const call: RunEvent[] = [
     { ...events[0], phase: 'review', title: 'review' } as RunEvent,
     { type: 'call', block: 'main', iteration: 1, phase: 'review', runId: 'kid-1', flow: 'child' },
-    { type: 'next', block: 'main', next: { to: 'ship', rule: 0, checks: [] } },
+    { type: 'next', block: 'main', next: { to: 'ship', rule: 0, checks: [] }, total: 2 },
     { type: 'block_end', block: { name: 'slogan', title: 'Слоган', status: 'pending', bypassed: true } as never },
-    { type: 'next', block: 'ship', next: { to: 'end', checks: [] } },
+    { type: 'next', block: 'ship', next: { to: 'end', checks: [] }, total: 2 },
   ];
   const lines = capture(() => call.forEach(consoleReporter(false))).split('\n').filter(Boolean);
   assert.deepEqual(lines, [

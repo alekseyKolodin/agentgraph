@@ -1349,8 +1349,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
         const f = path.resolve(dir, rel);
         return f.startsWith(dir + path.sep) && fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : undefined;
       },
-      // упавший блок-вызов продолжает свой дочерний запуск по его flow
+      // упавший блок-вызов продолжает свой дочерний запуск по его flow, артефакты берёт из его папки в runs/
       spec: specOf,
+      dir: (runId) => path.join(RUNS_DIR, runId),
     });
   } catch (err) {
     throw new HttpError(400, errMsg(err));
@@ -1780,6 +1781,26 @@ function listRuns(): RunSummary[] {
 const childContinueReason = (p: RunParent) =>
   `Запуск вызван блоком ${p.block} запуска ${p.runId}: продолжай его — вызов продолжится с того же места`;
 
+/**
+ * Артефакты дочернего запуска для правила «можно ли править» (artifacts.ts): сам он не продолжается, но его артефакты
+ * переходят в продолжение родителя (Continuation.calls), если родитель остановился на его блоке и он там последний вызов.
+ */
+function childArtifactsContinuability(report: RunReport, p: RunParent): { continuable: boolean; continueReason?: string } {
+  const parent = readReport(p.runId);
+  if (!parent) return { continuable: false, continueReason: `Нет запуска ${p.runId}, который вызвал этот` };
+  const c = continuability(parent, live.has(parent.id));
+  if (!c.continuable) return { continuable: false, continueReason: `Запуск ${p.runId}, который вызвал этот, продолжить нельзя: ${c.continueReason ?? ''}`.trim() };
+  try {
+    const spec = specOf(parent);
+    const at = canContinue(parent, spec);
+    const last = [...parent.phases].reverse().find((x) => x.block === p.block && x.call)?.call?.runId;
+    if (at.ok && flowBlocks(spec)[at.skip.length]?.name === p.block && last === report.id) return { continuable: true };
+  } catch {
+    // flow родителя не загружается: как и у него самого, продолжения не будет
+  }
+  return { continuable: false, continueReason: `Продолжение запуска ${p.runId} не возьмёт артефакты этого вызова` };
+}
+
 /** Папка завершённого запуска для скрытия и удаления. Идущий (здесь или процессом CLI) не отдаём; без run.json — не запуск. */
 function finishedRun(id: string): { dir: string; file: string } | { code: number; error: string } {
   const r = readReport(id);
@@ -1876,7 +1897,7 @@ function artifactRun(id: string): ArtifactRun | undefined {
     status: report.status,
     live: false,
     cliAlive: report.status === 'running',
-    ...continuability(report, false),
+    ...(report.parent ? childArtifactsContinuability(report, report.parent) : continuability(report, false)),
     pendingQuestion: [],
     pause: null,
     view,

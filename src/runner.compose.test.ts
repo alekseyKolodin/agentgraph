@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canContinue, continuationFrom, runFlow, type RunEvent, type RunFix, type RunOptions, type RunReport, type RunStore } from './runner.js';
+import { canContinue, continuationFrom, runFlow, setBlockMaxIterations, type RunEvent, type RunFix, type RunOptions, type RunReport, type RunStore } from './runner.js';
 import { RunFixError } from './run-fix.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { FlowSpec } from './schema.js';
@@ -23,7 +23,8 @@ type Call = { name: string; prompt: string };
 async function run(spec: FlowSpec, o: {
   flows?: Record<string, FlowSpec>;
   output?: (name: string, n: number) => string | SessionResult;
-  judge?: (n: number) => boolean;
+  /** Вердикт судьи; SessionResult — ответ без вердикта (ошибка API). */
+  judge?: (n: number) => boolean | SessionResult;
   opts?: Partial<RunOptions>;
   onSession?: (name: string) => void;
 } = {}) {
@@ -36,6 +37,7 @@ async function run(spec: FlowSpec, o: {
     if (req.outputSchema && !req.prompt.startsWith('PHASE:')) {
       calls.push({ name: '#judge', prompt: req.prompt });
       const done = o.judge?.(++judged) ?? false;
+      if (typeof done !== 'boolean') return done;
       return { ...result('', { costUsd: 0.02 }), structured: { done, reason: done ? 'да' : 'нет', feedback: done ? '' : 'доделай' } };
     }
     const name = nameOf(req);
@@ -61,7 +63,8 @@ async function run(spec: FlowSpec, o: {
       if (fs.statSync(f).isFile()) files.set(rel, fs.readFileSync(f, 'utf8'));
     }
     const read = (rel: string) => files.get(rel) ?? assert.fail(`нет ${rel}`);
-    return { report, saved, calls, events, children, childSaved, read };
+    const runs = fs.readdirSync(runsDir);
+    return { report, saved, calls, events, children, childSaved, read, runs };
   } finally {
     fs.rmSync(runsDir, { recursive: true, force: true });
   }
@@ -230,7 +233,7 @@ const branchy = (next: unknown) =>
   flow([
     { name: 'triage', phases: [phase('t')], next },
     { name: 'slogan', phases: [phase('s')], next: 'end' },
-    { name: 'review', phases: [phase('r')] },
+    { name: 'review', phases: [phase('r', 'prev=[{{prev}}]')] },
   ]);
 
 test('развилка marker: правило выполнилось — переход вниз, блоки между — пропущены и в отчёте bypassed', async () => {
@@ -249,6 +252,8 @@ test('развилка marker: правило выполнилось — пер�
   assert.equal(review.status, 'done');
   assert.equal(r.saved.maxIterations, 2);
   assert.deepEqual(r.report.final?.map((f) => f.phase), ['r']);
+  // {{prev}} целевого блока — вывод блока, который на самом деле шёл перед ним
+  assert.match(r.calls[1].prompt, /prev=\[идея\n<IDEA>\]/);
   const ev = r.events.find((e) => e.type === 'next');
   assert.equal(ev?.type === 'next' && ev.next.to, 'review');
 });
@@ -353,6 +358,7 @@ const store = (reports: Record<string, RunReport>, specs: Record<string, FlowSpe
   spec: (r) => specs[r.flow] ?? assert.fail(`нет flow ${r.flow}`),
 });
 
+const files0: RunStore = { report: () => undefined, output: () => 'out' };
 const rep = (over: Partial<RunReport>): RunReport => ({ id: 'prev', flow: 'parent', status: 'failed', phases: [], ...over }) as unknown as RunReport;
 
 test('продолжение: пропущенные развилкой блоки не повторяются, {{prev}} — из последнего выполненного', () => {
@@ -388,22 +394,38 @@ test('продолжение: упавший блок-вызов продолж�
   const c = continuationFrom(prev, spec, store({ 'kid-2': kidRun }, { child: kid }));
   assert.deepEqual(c.skipBlocks, ['plan']);
   const resume = c.calls?.review;
-  assert.ok(resume);
+  assert.ok(resume?.cont && resume.spec);
   assert.deepEqual(resume.from, { runId: 'kid-2', runDir: '/runs/kid-2' });
   assert.equal(resume.spec.input, 'задача дочернего');
   assert.deepEqual(resume.cont.skipBlocks, ['one']);
   assert.equal(resume.cont.prev, 'OUT kid-2:o/c1');
+  // папку дочернего даёт хранилище, а не его run.json
+  assert.deepEqual(continuationFrom(prev, spec, { ...store({ 'kid-2': kidRun }, { child: kid }), dir: (id) => `/real/${id}` }).calls?.review.from, { runId: 'kid-2', runDir: '/real/kid-2' });
 
-  // без flow дочернего или когда дочерний продолжать нечего — блок начнёт вызов заново
-  assert.equal(continuationFrom(prev, spec, { ...store({ 'kid-2': kidRun }), spec: undefined }).calls, undefined);
+  // без flow дочернего, когда дочерний продолжать нечего или его продолжение не собрать — вызов заново, но с его артефактами
+  const onlyFrom = { review: { from: { runId: 'kid-2', runDir: '/runs/kid-2' } } };
+  assert.deepEqual(continuationFrom(prev, spec, { ...store({ 'kid-2': kidRun }), spec: undefined }).calls, onlyFrom);
   const fresh = rep({ ...kidRun, blocks: [{ name: 'one', status: 'failed' }] as RunReport['blocks'] });
-  assert.equal(continuationFrom(prev, spec, store({ 'kid-2': fresh }, { child: kid })).calls, undefined);
+  assert.deepEqual(continuationFrom(prev, spec, store({ 'kid-2': fresh }, { child: kid })).calls, onlyFrom);
+  const done = rep({ ...kidRun, status: 'done' });
+  assert.deepEqual(continuationFrom(prev, spec, store({ 'kid-2': done }, { child: kid })).calls, onlyFrom);
+  const noOutput: RunStore = { ...store({ 'kid-2': kidRun }, { child: kid }), output: (id, rel) => (id === 'kid-2' ? undefined : `OUT ${rel}`) };
+  assert.deepEqual(continuationFrom(prev, spec, noOutput).calls, onlyFrom);
+
+  // блок теперь зовёт другой flow — прошлый дочерний ни при чём
+  const other = flow([{ name: 'plan', phases: [phase('a')] }, { name: 'review', flow: 'other', input: '{{prev}}' }]);
+  assert.equal(continuationFrom(prev, other, store({ 'kid-2': kidRun }, { child: kid })).calls, undefined);
 });
 
 test('продолжение: первый блок — упавший вызов — продолжать можно, обычный упавший первый блок — нет', () => {
   const call = flow([{ name: 'review', flow: 'child', input: 'x' }, { name: 'ship', phases: [phase('s')] }]);
-  const prev = rep({ blocks: [{ name: 'review', status: 'failed' }] as RunReport['blocks'] });
+  const prev = rep({
+    blocks: [{ name: 'review', status: 'failed' }] as RunReport['blocks'],
+    phases: [{ block: 'review', iteration: 1, phase: 'review', call: { runId: 'k', flow: 'child', status: 'failed' } }] as RunReport['phases'],
+  });
   assert.equal(canContinue(prev, call).ok, true);
+  // упал до первого вызова (проверка на старте): продолжать нечего
+  assert.equal(canContinue(rep({ blocks: prev.blocks }), call).ok, false);
   const plain = flow([{ name: 'plan', phases: [phase('a')] }, { name: 'ship', phases: [phase('s')] }]);
   assert.equal(canContinue(rep({ blocks: [{ name: 'plan', status: 'failed' }] as RunReport['blocks'] }), plain).ok, false);
 });
@@ -428,4 +450,102 @@ test('продолжение: первая итерация блока-вызо�
   assert.equal(co.continueFrom, kidCont);
   assert.deepEqual(co.artifactsFrom, { runId: 'kid-1', runDir: '/nowhere' });
   assert.equal(r.childSaved[0].input, 'старая задача');
+});
+
+test('продолжение: развилку, не решённую в прошлом запуске (остановили на её проверке), решает новый запуск', async () => {
+  const spec = branchy([{ if: { type: 'marker', marker: '<IDEA>' }, goto: 'review' }]);
+  const prev = rep({
+    status: 'aborted',
+    blocks: [{ name: 'triage', status: 'done' }, { name: 'slogan', status: 'pending' }, { name: 'review', status: 'pending' }] as RunReport['blocks'],
+    phases: [{ block: 'triage', iteration: 1, phase: 't', files: { output: 'o/t' } }] as RunReport['phases'],
+  });
+  const c = continuationFrom(prev, spec, { report: () => undefined, output: () => 'идея\n<IDEA>' });
+  assert.equal(c.branchFrom, 'triage');
+  const r = await run(spec, { opts: { continueFrom: c } });
+  assert.deepEqual(ran(r.calls), ['r']);
+  assert.equal(r.saved.blocks![0].next?.to, 'review');
+  assert.equal(r.saved.blocks![1].bypassed, true);
+
+  // решённая развилка не перепроверяется
+  const decided = rep({ ...prev, blocks: [{ name: 'triage', status: 'done', next: { to: 'slogan', checks: [] } }, { name: 'slogan', status: 'failed' }] as RunReport['blocks'] });
+  assert.equal(continuationFrom(decided, spec, files0).branchFrom, undefined);
+});
+
+// --- развилка: остановка и сбой проверки
+
+test('развилка: остановка во время проверки — не решение: next не записан, блоки не пропущены, запуск aborted', async () => {
+  const abort = new AbortController();
+  const next = [{ if: { type: 'judge', prompt: 'Нужны правки?' }, goto: 'review' }, { goto: 'end' }];
+  const r = await run(branchy(next), { judge: () => { abort.abort(); return true; }, opts: { abort } });
+  assert.equal(r.report.status, 'aborted');
+  assert.deepEqual(ran(r.calls), ['t', '#judge']);
+  assert.equal(r.saved.blocks![0].status, 'done');
+  assert.equal(r.saved.blocks![0].next, undefined);
+  assert.ok(r.saved.blocks!.every((b) => !b.bypassed));
+  assert.equal(r.events.some((e) => e.type === 'next'), false);
+  // продолжение решит развилку заново
+  assert.equal(continuationFrom(r.saved, branchy(next), files0).branchFrom, 'triage');
+});
+
+test('развилка: судья без вердикта — запуск failed с понятной ошибкой, ветка «иначе» не выбрана, стоимость учтена', async () => {
+  const next = [{ if: { type: 'judge', prompt: 'Нужны правки?' }, goto: 'review' }, { goto: 'end' }];
+  const r = await run(branchy(next), { judge: () => result('', { ok: false, subtype: 'error_during_execution', errors: ['API 529'], costUsd: 0.02 }) });
+  assert.equal(r.report.status, 'failed');
+  assert.match(r.report.error!, /Развилка после блока triage: судья правила 1 не вернул вердикт \(API 529\)/);
+  assert.equal(r.saved.blocks![0].next, undefined);
+  assert.ok(Math.abs(r.report.totalCostUsd - 0.03) < 1e-9);
+  assert.equal(continuationFrom(r.saved, branchy(next), files0).branchFrom, 'triage');
+});
+
+test('развилка: next уходит до block_end пропущенных блоков и несёт лимит итераций без них', async () => {
+  const r = await run(branchy('review'));
+  const order = r.events.filter((e) => e.type === 'next' || (e.type === 'block_end' && e.block.bypassed)).map((e) => e.type);
+  assert.deepEqual(order, ['next', 'block_end']);
+  const ev = r.events.find((e) => e.type === 'next');
+  assert.equal(ev?.type === 'next' && ev.total, 2);
+  // лимит пропущенного блока не меняется
+  const bypassed = { blocks: [{ name: 'x', title: 'X', looped: true, bypassed: true, status: 'pending', iterations: 0, maxIterations: 0 }], maxIterations: 0 } as unknown as RunReport;
+  assert.throws(() => setBlockMaxIterations(bypassed, 'x', 5), /X в этом запуске не выполняется/);
+  assert.equal(bypassed.maxIterations, 0);
+});
+
+test('развилка: судья съел остаток бюджета — дальше не идём, budget_exceeded', async () => {
+  const next = [{ if: { type: 'judge', prompt: 'p' }, goto: 'review' }];
+  const r = await run(branchy(next), { judge: () => true, opts: { maxBudgetUsd: 0.025 } });
+  assert.equal(r.report.status, 'budget_exceeded');
+  assert.deepEqual(ran(r.calls), ['t', '#judge']);
+});
+
+test('продолжение: нерешённая развилка с command пишет лог в папку пропущенного блока', async () => {
+  const spec = branchy([{ if: { type: 'command', run: 'true' }, goto: 'review' }]);
+  const r = await run(spec, { opts: { continueFrom: { runId: 'prev', skipBlocks: ['triage'], phases: { t: 'x' }, prev: 'x', history: [], branchFrom: 'triage' } } });
+  assert.equal(r.report.status, 'done');
+  assert.deepEqual(ran(r.calls), ['r']);
+  const check = r.saved.blocks![0].next!.checks[0];
+  assert.equal(check.logFile, '01-triage/next-1.command.log');
+  assert.equal(r.read(check.logFile!), '');
+});
+
+test('продолжение: первый вызов без продолжения дочернего всё равно берёт его артефакты', async () => {
+  const spec = flow([{ name: 'review', flow: 'child', input: '{{input}}' }]);
+  const r = await run(spec, {
+    flows: { child: child() },
+    opts: { continueFrom: { runId: 'prev', skipBlocks: [], phases: {}, prev: '', history: [], calls: { review: { from: { runId: 'kid-1', runDir: '/nowhere' } } } } },
+  });
+  assert.equal(r.report.status, 'done');
+  assert.deepEqual(r.children[0].opts.artifactsFrom, { runId: 'kid-1', runDir: '/nowhere' });
+  assert.equal(r.children[0].opts.continueFrom, undefined);
+  // задача — новая, из input блока
+  assert.equal(r.childSaved[0].input, 'задача');
+});
+
+test('блок-вызов: вызываемый flow не загрузился — этап с ошибкой, пустой папки дочернего не остаётся', async () => {
+  let calls = 0;
+  const r = await run(flow([{ name: 'review', flow: 'child', input: 'x' }]), {
+    opts: { loadFlow: () => { if (++calls > 1) throw new Error('flow child сломан'); return child(); } },
+  });
+  assert.equal(r.report.status, 'failed');
+  assert.match(r.report.error!, /flow child сломан/);
+  assert.deepEqual(r.children, []);
+  assert.ok(!r.runs.some((d) => d.includes('child')), r.runs.join(', '));
 });

@@ -156,8 +156,10 @@ test('связка flow: call даёт идущему этапу ссылку н
   const fx = applyRunEvent(st, { type: 'call', block: 'main', iteration: 1, phase: 'review', runId: 'kid-1', flow: 'child' });
   assert.deepEqual(st.pending.get(pendingKey({ block: 'main', iteration: 1, phase: 'review' }))?.call, { runId: 'kid-1', flow: 'child' });
   assert.equal(fx.runsSoon, true);
-  applyRunEvent(st, { type: 'next', block: 'main', next: { to: 'end', rule: 0, checks: [] } });
+  applyRunEvent(st, { type: 'next', block: 'main', next: { to: 'end', rule: 0, checks: [] }, total: 3 });
   assert.deepEqual(st.run.blocks[0]!.next, { to: 'end', rule: 0, checks: [] });
+  // лимит итераций запуска в шапке — уже без пропущенных блоков
+  assert.equal(st.run.maxIterations, 3);
   // пропущенный развилкой блок приходит своим block_end
   applyRunEvent(st, { type: 'block_end', block: block('ship', { index: 1, bypassed: true, maxIterations: 0 }) });
   assert.equal(st.run.blocks[1]!.bypassed, true);

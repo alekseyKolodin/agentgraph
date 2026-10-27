@@ -110,6 +110,7 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
     case 'next': {
       const b = r.blocks?.find((x) => x.name === e.block);
       if (b) b.next = e.next;
+      r.maxIterations = e.total;
       break;
     }
     case 'log':

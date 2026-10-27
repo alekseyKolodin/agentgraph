@@ -28,7 +28,7 @@ async function until(cond: () => boolean, what: string): Promise<void> {
  * Родитель с блоком-вызовом как живой запуск сервера, с поддельной сессией: этап c дочернего ждёт, пока тест его не
  * отпустит (release) — в это время дочерний идёт, а родитель стоит в блоке-вызове.
  */
-function launch() {
+function launch(spec: FlowSpec = parentSpec, flows: Record<string, FlowSpec> = { child: childSpec }) {
   const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-live-'));
   const started: string[] = [];
   let release!: () => void;
@@ -41,9 +41,9 @@ function launch() {
   };
   const deps = {
     // итоги итераций зовут модель: в тесте их нет
-    runFlow: (spec: FlowSpec, o: Parameters<typeof runFlow>[1]) => runFlow(spec, { ...o, digest: undefined, session, loadFlow: () => childSpec }),
+    runFlow: (s: FlowSpec, o: Parameters<typeof runFlow>[1]) => runFlow(s, { ...o, digest: undefined, session, loadFlow: (n) => flows[n]! }),
   };
-  const { id, done } = liveControl.launch(parentSpec, { cwd: runsDir, runsDir, runDir: makeRunDir(runsDir, 'parent') }, { port: 0, host: '127.0.0.1', defaultCwd: runsDir, notify: false }, undefined, deps);
+  const { id, done } = liveControl.launch(spec, { cwd: runsDir, runsDir, runDir: makeRunDir(runsDir, 'parent') }, { port: 0, host: '127.0.0.1', defaultCwd: runsDir, notify: false }, undefined, deps);
   const child = () => liveControl.state(id)?.child;
   const cleanup = () => fs.rmSync(runsDir, { recursive: true, force: true });
   return { id, done, started, release, child, runsDir, cleanup };
@@ -104,12 +104,15 @@ test('остановка родителя отпускает дочерний с
     assert.equal(report.status, 'aborted');
     assert.equal(childReport(r.runsDir, kid).status, 'aborted');
     assert.deepEqual(r.started, ['c']);
+    // живых записей не осталось ни у родителя, ни у дочернего
+    assert.equal(liveControl.state(kid), undefined);
+    assert.equal(liveControl.state(r.id), undefined);
   } finally {
     r.cleanup();
   }
 });
 
-test('остановка дочернего останавливает связку: родитель aborted, его можно продолжить', async () => {
+test('остановка дочернего останавливает связку: родитель aborted', async () => {
   const r = launch();
   try {
     await until(() => Boolean(r.child()), 'дочерний');
@@ -118,6 +121,28 @@ test('остановка дочернего останавливает связ�
     const report = await r.done;
     assert.equal(report.status, 'aborted');
     assert.deepEqual(r.started, ['c']);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('пауза и остановка родителя доходят до внука через дочерний', async () => {
+  const mid = { name: 'mid', blocks: [{ name: 'inner', flow: 'child', input: '{{input}}' }] } as unknown as FlowSpec;
+  const top = { name: 'top', input: 'задача', blocks: [{ name: 'outer', flow: 'mid', input: '{{input}}' }] } as unknown as FlowSpec;
+  const r = launch(top, { mid, child: childSpec });
+  try {
+    await until(() => r.started.includes('c') && Boolean(r.child() && liveControl.state(r.child()!)?.child), 'внук идёт');
+    const kid = r.child()!;
+    const grandkid = liveControl.state(kid)!.child!;
+    liveControl.pause(r.id);
+    assert.equal(liveControl.state(grandkid)?.pause, 'requested');
+    r.release();
+    await until(() => liveControl.state(grandkid)?.pause === 'paused', 'пауза внука');
+    liveControl.abort(r.id);
+    assert.equal((await r.done).status, 'aborted');
+    assert.equal(childReport(r.runsDir, grandkid).status, 'aborted');
+    assert.equal(childReport(r.runsDir, grandkid).parent.runId, kid);
+    assert.equal(liveControl.state(grandkid), undefined);
   } finally {
     r.cleanup();
   }
