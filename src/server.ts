@@ -1386,6 +1386,11 @@ function chatControls(id: string, srv: ServerOptions): ChatControls {
         throw new HttpError(400, errMsg(err));
       }
     },
+    // «починить и продолжить» — те же функции, что у кнопок на паузе
+    note: (text, o) => addRunNote(id, text, o),
+    applyRunFlow: (yaml, o) => applyRunFlow(id, yaml, o),
+    reloadRunFlow: (o) => reloadRunFlow(id, o),
+    restartIteration: (o) => restartIteration(id, o),
   };
 }
 

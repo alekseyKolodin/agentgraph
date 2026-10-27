@@ -233,7 +233,7 @@ function flowRule(r: RunReport, caps: Caps): string {
   const live = caps.runFlow
     ? ' Идущий запуск на паузе может взять правку кнопкой apply_flow (только в этом запуске) или reload_flow (подхватить файл из flows/).'
     : ' Идущий запуск правок flow не видит.';
-  return `6. Flow читай через flow_read.${live} Продолжение и перезапуск берут текущую версию из flows/. ${save}`;
+  return `6. Flow читай через flow_read.${live} Продолжение и перезапуск берут текущую версию из flows/, а если запуск правили на ходу и последнюю правку в flows/ не сохранили — его снимок. ${save}`;
 }
 
 /**
