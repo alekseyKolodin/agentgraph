@@ -39,6 +39,7 @@ import { ContextError, getContext, readContextFile, writeContextFile } from './c
 import type { ContextFile, ContextFileSaved, ContextView } from './api-types.js';
 import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
+import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
 import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
@@ -46,7 +47,7 @@ import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
 import { requestProblem } from './server-guard.js';
 import { legacyRedirect, resolveWebFile } from './web-static.js';
-import { isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
+import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
 import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
 import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
@@ -200,7 +201,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -213,6 +214,26 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       const code = (err as { code?: string }).code;
       throw new HttpError(code === 'busy' ? 409 : code === 'unsupported' ? 501 : 500, errMsg(err));
     }
+  }
+
+  // --- показать путь из интерфейса или вывода агента в Finder; относительный — от cwd и доп. папок запуска, потом от его папки
+  // и папки артефактов (агент называет артефакт по имени: ideas.md)
+  if (method === 'POST' && p === '/api/reveal') {
+    if (!canReveal) throw new HttpError(501, 'Показ в Finder есть только на macOS');
+    const body = (await readJson(req)) as { path?: unknown; run?: unknown };
+    const runId = typeof body.run === 'string' && RUN_ID_RE.test(body.run) ? body.run : undefined;
+    const r = runId ? readReport(runId) : undefined;
+    const runDir = runId && path.join(RUNS_DIR, runId);
+    const bases = [r?.cwd, ...(r?.addDirs ?? []), runDir, runDir && path.join(runDir, ARTIFACTS_DIR)];
+    const abs = typeof body.path === 'string' ? resolveReveal(body.path, bases) : undefined;
+    if (!abs) throw new HttpError(404, 'Файл не найден');
+    try {
+      await reveal(abs);
+    } catch (err) {
+      // исчез между проверкой и показом
+      throw (err as { code?: string }).code === 'ENOENT' ? new HttpError(404, 'Файл не найден') : err;
+    }
+    return sendJson(res, 200, { path: abs });
   }
 
   // --- Jira, проекты GitLab, мои MR с причинами, вход из задачи/MR/ветки, worktree

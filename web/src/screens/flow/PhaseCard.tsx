@@ -16,7 +16,7 @@ import {
   addConnTools, connChips, connManualError, connNote, connPick, connPicked, CONN_PREFIX, EFFORTS, modelOptions, normalizeConnectors, PERMS, TOOL_HINT,
 } from '../../lib/flow/tools';
 import { afterRender, dropStaleSel, openPhasePane, showPhasePane } from './actions';
-import { DraftInput, DraftTextarea } from './fields';
+import { DraftInput, DraftTextarea, PluginsField } from './fields';
 import { flowState, markDirty, selPhaseAt, useFlowStore } from './store';
 import styles from './Flow.module.css';
 
@@ -221,6 +221,11 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
             />
           </div>
         </label>
+        <PluginsField
+          value={p.plugins}
+          hint={t('Плагины только этого этапа, по папке на строку (как --plugin-dir): их скиллы, агенты, хуки и MCP добавятся к плагинам блока. Несуществующая папка роняет запуск до старта')}
+          onChange={(plugins) => set({ plugins })}
+        />
         <label><span>{t('Системный промпт (пусто = стандартный промпт Claude Code)')}</span><textarea className={styles.pSystem} rows={2} value={p.system || ''} onChange={(e) => set({ system: e.target.value })} /></label>
         <label>
           <span>{t('Схема вывода (JSON Schema): если задана, этап вернёт JSON по ней')}</span>

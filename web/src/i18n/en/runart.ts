@@ -110,7 +110,6 @@ export const runart: Record<string, string> = {
   'как текст': 'as text',
   'Закрыть': 'Close',
   'последний автор: {author}': 'last author: {author}',
-  'Путь к файлу': 'File path',
   'Текст артефакта': 'Artifact text',
   'Превью': 'Preview',
   'Править': 'Edit',
