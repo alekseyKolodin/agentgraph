@@ -342,37 +342,25 @@ The archive includes the sources (`src/`, `web/`, `bin/`, `scripts/`), `package.
 
 The recipient unpacks the archive and follows the "Installation" and "Launching" sections above.
 
-If the project has a git remote, only this same shared set goes there; your personal history with your flows is not published. `npm run share -- --push` builds the set from the committed `main` (not from the working tree) and puts it as a single commit on top of `main` in `origin`. If the set hasn't changed, there is nothing to publish. `--ref` and `--remote` set a different branch and a different remote.
-
-Colleagues' MRs are merged straight into `main` in `origin`, bypassing your local `main`. So `--push` first checks that the changes merged into `origin` since the last snapshot are already in your `main`; otherwise the snapshot would revert them. If not, publishing refuses and lists the commits: bring them into `main` (`git fetch origin && git cherry-pick -x <sha>`) and try again. `--overwrite-remote` overwrites them deliberately.
-
-So that a regular `git push` doesn't send personal files by mistake, install a hook. It rejects the push if any new commit has files outside the shared set:
-
-```bash
-printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/scripts/share.sh" --pre-push "$1"\n' > .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
-```
+To contribute, fork the repository on GitHub and open a pull request into `main`.
 
 ## Releases and CI
 
-The version is in `package.json`, following semver. After a major update, bump it and publish:
+The version is in `package.json`, following semver. To release, bump it on a branch and merge it into `main` with a pull request:
 
 ```bash
 npm run release -- minor --dry-run   # show the changelog section without changing anything
 npm run release -- minor             # major | minor | patch
-npm run share -- --push              # snapshot and the v<version> tag to origin
 ```
 
-`npm run release` takes the `feat:` and `fix:` commit titles since the previous release (the `chore(release): vX.Y.Z` commit), writes a section in `CHANGELOG.md` from them, bumps the version in `package.json` and `package-lock.json`, and commits all this as a single commit. Other commit types don't go into the changelog. The first time there is no previous release, so specify the start: `--from <commit>`. `CHANGELOG.md` goes to the public `origin`, so read the items before publishing: commit titles sometimes contain the names of personal flows. You can fix the items with `git commit --amend`.
+`npm run release` takes the `feat:` and `fix:` commit titles since the previous release (the `chore(release): vX.Y.Z` commit), writes a section in `CHANGELOG.md` from them, bumps the version in `package.json` and `package-lock.json`, and commits all this as a single commit. Other commit types don't go into the changelog. The first time there is no previous release, so specify the start: `--from <commit>` (for example `--from v0.1.0`). Read the items before opening the pull request; you can fix them with `git commit --amend`.
 
-`npm run share -- --push` notices that the version is newer than in `origin` and, in the same push, puts the `v<version>` tag on the publishing commit. If a tag with that version already exists, it refuses: bump the version.
+CI is GitHub Actions (`.github/workflows/ci.yml`):
 
-CI in GitLab (`.gitlab-ci.yml`):
+- on every pull request and on `main` — `npm ci`, `npm run typecheck`, `npm test` and the `npm run build:web` UI build on Node 24;
+- on `main`, after the checks pass — if there is no GitHub release for the version in `package.json` yet, it creates the release `v<version>` (and the tag, if it doesn't exist) with this version's section from `CHANGELOG.md`. A version without a `CHANGELOG.md` section fails the job.
 
-- on every MR and on `main` — `npm ci`, `npm run typecheck`, `npm test` and the `npm run build:web` UI build on Node 24;
-- on a `vX.Y.Z` tag — a GitLab release (Deploy → Releases) with this version's section from `CHANGELOG.md`.
-
-So that an MR can't be merged with red tests, enable Settings → Merge requests → "Pipelines must succeed" in the project settings.
+So that a pull request can't be merged with red checks, require the `test` check in a branch protection rule for `main` (Settings → Branches).
 
 ## How the code is organized
 
@@ -429,12 +417,12 @@ So that an MR can't be merged with red tests, enable Settings → Merge requests
 | `scripts/ensure-web.mts` | before `npm run ui`: builds `dist/web` if there is no build or `web/` and `package-lock.json` are newer |
 | `.claude/skills/agentgraph/` | the `/agentgraph` skill and its helper `agentgraph.mjs` (a client for the server API) |
 | `.claude/skills/session-to-flow/` | the `/session-to-flow` skill and its helper `digest.mjs` (finding session transcripts and the digest) |
-| `scripts/share.sh` | the project's shared set: a zip for the team, publishing to git (`--push`, with a version tag) and the check for the pre-push hook |
+| `scripts/share.sh` | `npm run share`: a zip of the project without personal flows, runs and local settings |
 | `src/release.ts`, `scripts/release.mts` | `npm run release`: a new semver version and a `CHANGELOG.md` section from `feat:`/`fix:` commits |
-| `.gitlab-ci.yml` | CI: typecheck, tests and the UI build on MRs and `main`, a GitLab release on a `vX.Y.Z` tag |
+| `.github/workflows/ci.yml` | CI: typecheck, tests and the UI build on pull requests and `main`, a GitHub release when a new version reaches `main` |
 | `scripts/check-sdk-hooks.mts` | checks artifact protection on a real Claude Code session: guard denials (including in subagents and with every `permission_mode`), what is loaded from the artifacts folder, the read tools, a run of the example with cost measurement |
 
-Development: `npm run ui` runs the server through `tsx` straight from `src/`, so no server build is needed; restart it after editing `src/`. UI with hot reload: `npm run dev:web` while `npm run ui` is running: Vite at http://127.0.0.1:5173 proxies `/api` and SSE to the server (for a different server address: `AGENTGRAPH_API=http://127.0.0.1:4848 npm run dev:web`). Without dev mode, restart `npm run ui` after editing `web/`, and it rebuilds the UI itself. Before committing: `npm run typecheck && npm test && npm run build:web`. Working rules are skills in `.claude/skills/`: `agentgraph-core` (the core in `src/`), `agentgraph-web` (the UI in `web/`: stack, where things are, how to check), `agentgraph-tests` (tests), `flow-author` (designing flows); they are loaded into a Claude Code session by their description when relevant. Independent review before a commit is the `.claude/agents/code-reviewer.md` subagent (read-only, fresh context); the history of the migration from the old `ui/` is in `docs/redesign/react-migration.md` (comments like "port of `ui/app.js` …" refer to the old UI, which is in git up to the phase 7 commit).
+Development: `npm run ui` runs the server through `tsx` straight from `src/`, so no server build is needed; restart it after editing `src/`. UI with hot reload: `npm run dev:web` while `npm run ui` is running: Vite at http://127.0.0.1:5173 proxies `/api` and SSE to the server (for a different server address: `AGENTGRAPH_API=http://127.0.0.1:4848 npm run dev:web`). Without dev mode, restart `npm run ui` after editing `web/`, and it rebuilds the UI itself. Before committing: `npm run typecheck && npm test && npm run build:web`. Working rules are skills in `.claude/skills/`: `agentgraph-core` (the core in `src/`), `agentgraph-web` (the UI in `web/`: stack, where things are, how to check), `agentgraph-tests` (tests), `flow-author` (designing flows); they are loaded into a Claude Code session by their description when relevant. Independent review before a commit is the `.claude/agents/code-reviewer.md` subagent (read-only, fresh context). Comments like "port of `ui/app.js` …" refer to the pre-React UI, which is not part of this repository.
 
 After updating the Agent SDK, run `npx tsx scripts/check-sdk-hooks.mts` (spends up to $5, on haiku by default; `--only <scenarios>` and `--budget` narrow the check): artifact protection relies on the pre-tool-call hook, and a new SDK version may stop calling it, for example in subagents. The report goes to the folder the script prints at the end; any `FAIL` line is a reason not to update until you've figured it out.
 
