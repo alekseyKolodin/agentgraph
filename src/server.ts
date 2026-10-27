@@ -52,6 +52,7 @@ import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './ar
 import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
 import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
+import { assertRunnable } from './compose.js';
 import {
   addTagAttachmentReply,
   createTag,
@@ -1060,6 +1061,12 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   if (!prev.cwd) throw new HttpError(400, 'В отчёте запуска нет директории проекта');
   const spec = specOf(prev);
   spec.input = prev.input;
+  // flow могли поправить после запуска: вызовы и next раннер пока не исполняет (как и в POST /api/runs)
+  try {
+    assertRunnable(spec);
+  } catch (err) {
+    throw new HttpError(400, errMsg(err));
+  }
   let cont: Continuation;
   try {
     cont = continuationFrom(prev, spec, {

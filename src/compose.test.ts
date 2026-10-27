@@ -61,7 +61,7 @@ test('блок-вызов: имя блока — имя его этапа, {{pha
     { name: 'f', blocks: [{ name: 'a', phases: [phase('p', '{{phases.b}}')] }, { name: 'b', flow: 'g' }] },
     /\{\{phases\.b\}\} — этап из следующего блока b/,
   );
-  fails({ name: 'f', blocks: [{ name: 'a', phases: [phase('b')] }, { name: 'b', flow: 'g' }] }, /этап b встречается дважды/);
+  fails({ name: 'f', blocks: [{ name: 'a', phases: [phase('b')] }, { name: 'b', flow: 'g' }] }, /Блок-вызов b называется как этап: его итог — \{\{phases\.b\}\}/);
 });
 
 test('next: строка или правила; переход только вперёд, к известному блоку или end', () => {
@@ -80,6 +80,8 @@ test('next: строка или правила; переход только вп
   fails({ name: 'f', blocks: blocks([{ if: { type: 'marker', marker: '<X>', phase: 'q' }, goto: 'c' }]) }, /этап q не из этого блока/);
   fails({ name: 'f', blocks: [{ name: 'a', flow: 'g', next: [{ if: { type: 'marker', marker: '<X>', phase: 'a' }, goto: 'end' }] }] }, /phase не указывают/);
   fails({ name: 'f', blocks: blocks([{ if: { type: 'judge', prompt: '{{phases.q}}' }, goto: 'c' }]) }, /next\[0\] судья: \{\{phases\.q\}\} — этап из следующего блока b/);
+  fails({ name: 'f', blocks: blocks([{ if: { type: 'judge', prompt: '{{artifacts.nope}} {{artifacts.plan.path}}' }, goto: 'c' }]) }, /next\[0\] судья: \{\{artifacts\.nope\}\} — неизвестный артефакт nope/);
+  assert.doesNotThrow(() => validateSpec({ name: 'f', artifacts: { plan: {} }, blocks: blocks([{ if: { type: 'judge', prompt: '{{artifacts.plan.path}}' }, goto: 'c' }]) }));
   fails({ name: 'f', blocks: [{ name: 'a', next: 'end', phases: [phase('p')] }, { name: 'end', phases: [phase('q')] }] }, /не может называться end/);
   // без next блок end, как раньше, допустим
   assert.doesNotThrow(() => validateSpec({ name: 'f', blocks: [{ name: 'a', phases: [phase('p')] }, { name: 'end', phases: [phase('q')] }] }));

@@ -41,6 +41,8 @@ export const compose: Record<string, string> = {
   'вывод последнего шага блока, выполненного перед этим, — смотря по развилке: {list}': 'output of the last step of the block that ran before this one, depending on the branching: {list}',
   '{hint}; пусто, если развилка пропустила блок {n}': '{hint}; empty if the branching skipped block {n}',
   '; на итерации 2+ — итог прошлого вызова': '; on iteration 2+, the result of the previous call',
+  'Так называется блок-вызов: {name} — его итог': 'That is the name of a call block: {name} is its result',
+  'end в правилах next — конец запуска: выбери другое имя блока': 'end in next rules is the end of the run: choose another block name',
   // развилка next
   'Проверяется по порядку после блока; первое выполненное правило решает, куда идти. Переход только вперёд: повтор — это цикл блока':
     'Checked in order after the block; the first rule that holds decides where to go. Jumps go forward only: repeating is the block\'s loop',

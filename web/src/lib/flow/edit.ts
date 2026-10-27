@@ -369,6 +369,8 @@ export function moveBlock(spec: EditSpec, bi: number, up: boolean): void {
 export function renamePhase(spec: EditSpec, from: string, to: string): string | null {
   if (from === to) return null;
   if (allPhases(spec).some((x) => x.name === to)) return t('Этап {name} уже есть', { name: to });
+  // имя блока-вызова — имя его итога {{phases.<имя>}}: ссылки на этап и на итог склеились бы
+  if (spec.blocks.some((b) => isCall(b) && b.name === to)) return t('Так называется блок-вызов: {name} — его итог', { name: to });
   const re = new RegExp(`\\{\\{\\s*phases\\.${from}\\s*\\}\\}`, 'g');
   for (const x of allPhases(spec)) {
     if (x.name === from) x.name = to;
@@ -402,6 +404,7 @@ function renameRefs(spec: EditSpec, re: RegExp, to: string): void {
 export function renameBlock(spec: EditSpec, from: string, to: string): string | null {
   if (from === to) return null;
   if (spec.blocks.some((b) => b.name === to)) return t('Блок {name} уже есть', { name: to });
+  if (to === NEXT_END) return t('end в правилах next — конец запуска: выбери другое имя блока');
   const block = spec.blocks.find((b) => b.name === from);
   if (!block) return null;
   if (isCall(block)) {
@@ -422,12 +425,24 @@ export function renameBlock(spec: EditSpec, from: string, to: string): string | 
   return null;
 }
 
-/** Куда может вести правило next блока bi: блоки ниже и конец запуска. */
+/** Куда может вести правило next блока bi: блоки ниже и конец запуска. Блок с именем end целью быть не может. */
 export function nextTargets(spec: EditSpec, bi: number): { value: string; label: string }[] {
   return [
-    ...spec.blocks.slice(bi + 1).map((b, k) => ({ value: b.name, label: blockHeading(b, bi + 1 + k) })),
+    ...spec.blocks.slice(bi + 1).map((b, k) => ({ value: b.name, label: blockHeading(b, bi + 1 + k) })).filter((x) => x.value !== NEXT_END),
     { value: NEXT_END, label: t('конец запуска') },
   ];
+}
+
+/** Удалить блок bi: правила next, которые вели в него, уходят вместе с ним (иначе сохранение упадёт на неизвестном блоке). */
+export function removeBlock(spec: EditSpec, bi: number): void {
+  const [gone] = spec.blocks.splice(bi, 1);
+  if (!gone) return;
+  for (const b of spec.blocks) {
+    if (b.next === undefined) continue;
+    const rules = nextRules(b).filter((r) => r.goto !== gone.name);
+    if (rules.length) b.next = rules;
+    else delete b.next;
+  }
 }
 
 /** Режим блока: «один проход» снимает цикл и запоминает его, «цикл» возвращает прежний или ставит судью на 3 итерации. */

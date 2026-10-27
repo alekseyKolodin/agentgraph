@@ -273,6 +273,7 @@ function blockIssues(spec: { name?: string; blocks?: FlowBlock[] }): [(string | 
   const names = blocks.map((b) => b.name);
   const out: [(string | number)[], string][] = [];
   const branching = blocks.some((b) => b.next !== undefined);
+  const phaseNames = new Set(blocks.flatMap((b) => (b.phases ?? []).map((p) => p.name)));
   blocks.forEach((b, i) => {
     const at = (...p: (string | number)[]) => ['blocks', i, ...p];
     if (b.flow !== undefined && b.phases) out.push([at('flow'), 'Либо phases, либо flow: у блока-вызова этапы — в вызываемом flow']);
@@ -280,6 +281,7 @@ function blockIssues(spec: { name?: string; blocks?: FlowBlock[] }): [(string | 
     if (b.flow === undefined && b.input !== undefined) out.push([at('input'), 'input — задача вызываемого flow: он бывает только у блока с flow']);
     if (b.flow !== undefined) {
       if (b.flow === spec.name) out.push([at('flow'), `Flow ${b.flow} вызывает сам себя`]);
+      if (phaseNames.has(b.name)) out.push([at('name'), `Блок-вызов ${b.name} называется как этап: его итог — {{phases.${b.name}}}, имена не должны совпадать`]);
       if (b.knowledge?.length) out.push([at('knowledge'), 'У блока-вызова нет своих этапов: теги знаний задаются в вызываемом flow']);
       if (b.plugins?.length) out.push([at('plugins'), 'У блока-вызова нет своих этапов: плагины задаются в вызываемом flow']);
       if (b.loop?.pause_marker) out.push([at('loop', 'pause_marker'), 'Пауза по маркеру задаётся в вызываемом flow']);

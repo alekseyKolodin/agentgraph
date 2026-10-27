@@ -9,7 +9,7 @@ import { flowBlocks, isCallBlock, type FlowSpec, type Phase } from './schema.js'
 import { assertRunnable, describeNext } from './compose.js';
 import { artifactAccess, declaredArtifacts } from './artifacts.js';
 import { generateFlow } from './generate.js';
-import { describeCondition, flowFileName, flowToYaml, loadFlow, resolveFlowFile } from './flows.js';
+import { checkCalls, describeCondition, flowFileName, flowToYaml, loadFlow, resolveFlowFile } from './flows.js';
 import { editBase, editFlow } from './edit.js';
 import { runFlow, type QuestionRecord, type RunOptions } from './runner.js';
 import type { AskAnswers } from './agent.js';
@@ -173,6 +173,8 @@ async function main(): Promise<number> {
         console.log(c.dim('\nФайл не изменился'));
         return 0;
       }
+      // как сохранение в UI: вызываемые flow есть, без круга и не глубже лимита
+      checkCalls(r.spec);
       fs.writeFileSync(file, r.yaml.endsWith('\n') ? r.yaml : r.yaml + '\n');
       console.log(`\n${c.green('✓')} Сохранил ${c.bold(file)}`);
       printPlan(r.spec);

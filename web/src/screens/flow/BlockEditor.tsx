@@ -4,7 +4,7 @@ import { useFeature } from '../../api';
 import { TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
-  blockHeading, blockLabel, isCall, isMulti, moveBlock, newPhase, phaseNum, renameBlock, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
+  blockHeading, blockLabel, isCall, isMulti, moveBlock, newPhase, phaseNum, removeBlock, renameBlock, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
 } from '../../lib/flow/edit';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
@@ -52,7 +52,7 @@ export function BlockHead({ bi, inPane = false }: { bi: number; inPane?: boolean
       if (!(await askConfirm(ask, { ok: t('Удалить'), danger: true }))) return;
       // за время вопроса рабочую копию могла заменить правка ИИ или сохранение
       if (flowState.spec !== spec) return;
-      spec.blocks.splice(bi, 1);
+      removeBlock(spec, bi);
     } else moveBlock(spec, bi, what === 'up');
     markDirty();
     dropStaleSel();
@@ -319,7 +319,8 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
           </div>
         </div>
       )}
-      {multi && <NextFields bi={bi} />}
+      {/* у одиночного блока переходить некуда, но оставшиеся от удалённых блоков правила должно быть видно и можно убрать */}
+      {(multi || b.next !== undefined) && <NextFields bi={bi} />}
       {!call && <PluginsField
         value={b.plugins}
         hint={t('Плагины для всех этапов блока, по папке на строку (как --plugin-dir): скиллы, агенты, хуки и MCP плагина будут только в сессиях этого блока. Несуществующая папка роняет запуск до старта')}

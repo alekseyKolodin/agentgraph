@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSpec } from '@server/schema';
 import {
-  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, renameBlock,
+  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, removeBlock, renameBlock,
   renamePhase, setBlockMode, specChanges, SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
 import { conditionText, schemeSummary } from './summary';
@@ -357,4 +357,23 @@ test('развилка в переменных: {{prev}} — вывод того
   assert.equal(variableList(s, 3, 0).find((v) => v.key === 'prev')!.label, 'Итог блока «slogan»');
   assert.match(variableList(s, 3, 0).find((v) => v.key === 'phases.review')!.hint, /пусто, если развилка пропустила блок 2/);
   assert.doesNotMatch(variableList(s, 3, 0).find((v) => v.key === 'phases.decide')!.hint, /пусто/);
+});
+
+test('развилка в конструкторе: этап не получает имя блока-вызова, блок — имя end; удаление блока убирает ведущие в него правила', () => {
+  const s = spec([
+    { name: 'a', phases: [ph('p', { prompt: '{{phases.rev}} {{phases.p}}' })], next: [{ if: { type: 'marker', marker: '<X>' }, goto: 'c' }, { goto: 'rev' }] },
+    { name: 'rev', flow: 'review', phases: [] },
+    { name: 'c', phases: [ph('q')], next: [{ if: { type: 'marker', marker: '<Y>' }, goto: 'end' }] },
+  ]);
+  assert.equal(renamePhase(s, 'p', 'rev'), 'Так называется блок-вызов: rev — его итог');
+  assert.equal(s.blocks[0]!.phases[0]!.prompt, '{{phases.rev}} {{phases.p}}');
+  assert.match(renameBlock(s, 'c', 'end')!, /end в правилах next — конец запуска/);
+  removeBlock(s, 2);
+  assert.deepEqual(s.blocks[0]!.next, [{ goto: 'rev' }]);
+  removeBlock(s, 1);
+  assert.equal(s.blocks[0]!.next, undefined);
+  // унаследованный блок end целью перехода не предлагается
+  const legacy = spec([{ name: 'a', phases: [ph('p')] }, { name: 'end', phases: [ph('q')] }]);
+  assert.deepEqual(nextTargets(legacy, 0).map((x) => x.value), ['end']);
+  assert.equal(nextTargets(legacy, 0).length, 1);
 });

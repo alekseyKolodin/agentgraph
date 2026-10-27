@@ -2,7 +2,7 @@
 // Чистые функции: граф вызовов, задача вызываемого flow, выбор следующего блока, итог вызова. Внешнее (загрузка flow,
 // проверка условия, сам дочерний запуск) приходит параметрами — раннер и сервер зовут их в своих точках входа.
 import { flowBlocks, isCallBlock, NEXT_END, nextRules, type Block, type FlowSpec, type NextRule } from './schema.js';
-import { referencedPhases, render, type TemplateContext } from './template.js';
+import { referencedArtifacts, referencedPhases, render, type TemplateContext } from './template.js';
 import type { RunReport } from './api-types.js';
 
 /**
@@ -75,22 +75,27 @@ export function callProblems(spec: FlowSpec, load: (name: string) => FlowSpec): 
 
 /**
  * Ссылки судей развилки: {{phases.X}} — этап этого или более раннего блока (next проверяется после блока,
- * этапы следующих ещё не выполнялись). Остальное про next проверяет схема (blockIssues в schema.ts).
+ * этапы следующих ещё не выполнялись), {{artifacts.KEY}} — объявленный артефакт. Остальное про next — в схеме (blockIssues).
  */
 export function nextProblems(spec: FlowSpec): string[] {
   const blocks = flowBlocks(spec);
   const blockOf = new Map<string, number>();
   blocks.forEach((b, bi) => b.phases.forEach((p) => blockOf.set(p.name, bi)));
+  const known = new Set(Object.keys(spec.artifacts ?? {}));
   const problems: string[] = [];
   blocks.forEach((b, bi) => {
     nextRules(b).forEach((r, k) => {
       if (r.if?.type !== 'judge') return;
+      const where = `блок ${b.name}, next[${k}] судья`;
       for (const ref of referencedPhases(r.if.prompt)) {
         const at = blockOf.get(ref);
-        const where = `блок ${b.name}, next[${k}] судья`;
         if (at === undefined) problems.push(`${where}: неизвестный этап {{phases.${ref}}}`);
         else if (at > bi) problems.push(`${where}: {{phases.${ref}}} — этап из следующего блока ${blocks[at].name}, к этому моменту он ещё не выполнялся`);
       }
+      // как у судьи цикла (artifactProblems): подстановка только объявленного артефакта
+      const arts = referencedArtifacts(r.if.prompt);
+      for (const a of arts.content) if (!known.has(a)) problems.push(`${where}: {{artifacts.${a}}} — неизвестный артефакт ${a}`);
+      for (const a of arts.path) if (!known.has(a)) problems.push(`${where}: {{artifacts.${a}.path}} — неизвестный артефакт ${a}`);
     });
   });
   return problems;
