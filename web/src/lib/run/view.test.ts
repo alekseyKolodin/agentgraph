@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { BlockReport, ConditionReport, PhaseReport, RunDetail, RunReport } from '@server/api-types';
 import { liveState, type LiveState, type PendingPhase } from './events';
 import {
-  blockIters, chatMeta, chatText, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, gotoTarget, headerStatus, inspectView,
+  blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, gotoTarget, headerStatus, inspectView,
   iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, ribbonRows, runBlocks, runMeta, runSteps, summaryView, tagFinalLines,
   type RunFold,
 } from './view';
@@ -193,10 +193,4 @@ test('переход из графа: ещё не выполнялся, карт
   assert.deepEqual(nodeFromKey('p:main:build'), { kind: 'phase', block: 'main', name: 'build', key: 'p:main:build' });
   assert.deepEqual(nodeFromKey('c:'), { kind: 'cond', block: '', key: 'c:' });
   assert.equal(nodeFromKey('start'), null);
-});
-
-test('чат: разметка с экранированием, строка над чатом', () => {
-  assert.equal(chatText('a <b> `x` **ж**\n```js\ncode\n```'), 'a &lt;b&gt; <code>x</code> <b>ж</b>\n<pre>code</pre>');
-  assert.equal(chatMeta([{ role: 'user' }, { role: 'note' }, { role: 'assistant' }], 0.5, true), 'сообщений 2 · потрачено $0.50 · агент отвечает…');
-  assert.equal(chatMeta([], 0, false), '');
 });

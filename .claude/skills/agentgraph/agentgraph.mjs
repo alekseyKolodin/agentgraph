@@ -204,7 +204,7 @@ function who(a) {
   switch (a.kind) {
     case 'phase': return `этап ${a.phase}, итерация ${a.iteration}${at}`;
     case 'unknown': return `неизвестно: во время этапа ${a.phase} не этапом с правом записи${at}`;
-    case 'user': return `пользователь (${a.via === 'skill' ? 'скилл' : 'UI'})${at}`;
+    case 'user': return `пользователь (${a.via === 'skill' ? 'скилл' : a.via === 'chat' ? 'чат' : 'UI'})${at}`;
     case 'outside': return `снаружи, между шагами${at}`;
     case 'condition': return `проверка условия, итерация ${a.iteration}${at}`;
     case 'initial': return 'заготовка flow';

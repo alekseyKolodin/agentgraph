@@ -400,7 +400,6 @@ function RunPage({ id }: { id: string }) {
       </nav>
       <section id="run-pane-overview" className={styles.runPane} role="tabpanel" hidden={tab !== 'overview'}>
         <Overview st={st} spec={flow?.blocks} graphNow={graphNow} implicit={config.implicitTools} />
-        {canChat && <RunChat runId={id} onAfterTurn={runsSoon} />}
       </section>
       <section id="run-pane-graph" className={styles.runPane} role="tabpanel" hidden={tab !== 'graph'}>
         {flow && rs && (
@@ -425,6 +424,7 @@ function RunPage({ id }: { id: string }) {
         {artPanel && <ArtifactsPanel r={r} onContinue={() => void cont()} />}
       </section>
       {artOn && <ArtifactWindow onContinue={() => void cont()} />}
+      {canChat && <RunChat runId={id} live={r.live} onAfterTurn={runsSoon} />}
       {r.adhoc && <SaveFlowDialog runId={id} flow={r.flow} open={saveOpen} onClose={() => setSaveOpen(false)} />}
     </div>
   );

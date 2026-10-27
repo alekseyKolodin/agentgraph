@@ -392,7 +392,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
 | `src/template.ts` | substituting `{{variables}}` into prompts |
 | `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs |
-| `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, continuation), history in `chat.json` |
+| `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, artifacts, flow) and the `ui` widget tools (table, links, action buttons, reply chips); dangerous actions run only on a confirmed click (`chatAction`); history with steps and widgets in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
 | `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, stopping runs and the server (`stopServer`) on quit |
 | `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked, dmg and zip targets |

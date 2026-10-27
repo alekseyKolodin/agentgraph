@@ -627,19 +627,3 @@ export function gotoTarget(
   if (target && b.looped) open.push(`i:${bi}:${target.it}`);
   return { open, target: target?.key ?? null, bi };
 }
-
-// ---------- чат
-
-/** Лёгкая разметка ответа чата: блоки кода, `код`, **жирный**; остальное — как есть. Возвращает HTML с экранированием. */
-export function chatText(text: string): string {
-  const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!);
-  return esc(text).split(/```[^\n]*\n?/).map((part, i) => (i % 2
-    ? `<pre>${part.replace(/\n$/, '')}</pre>`
-    : part.replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'))).join('');
-}
-
-/** Строка над чатом: сообщений, потрачено, «агент отвечает…». */
-export function chatMeta(messages: { role: string }[], totalCostUsd: number | undefined, busy: boolean): string {
-  const n = messages.filter((m) => m.role !== 'note').length;
-  return [n ? t('сообщений {n}', { n }) : '', totalCostUsd ? t('потрачено {cost}', { cost: usd(totalCostUsd) }) : '', busy ? t('агент отвечает…') : ''].filter(Boolean).join(' · ');
-}
