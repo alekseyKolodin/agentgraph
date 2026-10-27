@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Хелпер скилла /agentgraph: запуск флоу через API UI-сервера agentgraph и ретрансляция вопросов агента в чат.
-// Команды: ensure | flows | draft | start | continue | wait | answer | status | pause | resume | abort | artifacts | artifact | artifact-write.
+// Команды: ensure | flows | draft | start | continue | wait | answer | status | pause | resume | abort | note | flow-reload | artifacts | artifact | artifact-write.
 // Вывод — JSON или короткий текст для Claude.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -367,6 +367,41 @@ async function resume(pos, opt) {
   }
 }
 
+// Маршрута нет — сервер поднят до «починить и продолжить»: новых команд он не знает
+const oldServer = (err) => err.status === 404 && /^Нет такого маршрута/.test(err.message);
+
+// Указание идущему запуску (идёт или на паузе): хвостом в промпт следующего шага, с --all — каждого до конца запуска.
+async function note(pos, opt) {
+  const id = pos[0];
+  if (!id) fail('нужно: note <runId> (--text T | --file F) [--all]');
+  const text = opt.file && opt.file !== true ? fs.readFileSync(expandHome(opt.file), 'utf8') : opt.text;
+  if (!text || text === true || !String(text).trim()) fail('передай указание через --text или --file');
+  try {
+    const r = await api('POST', `/api/runs/${id}/note`, { text: String(text), scope: opt.all ? 'run' : 'next', via: 'skill' });
+    return { ok: true, note: r.note.id, scope: r.note.scope };
+  } catch (err) {
+    if (oldServer(err)) fail('сервер запущен до обновления agentgraph: перезапусти npm run ui');
+    throw err;
+  }
+}
+
+// «Починил flow в Claude Code»: запуск на паузе берёт текущую версию flows/<имя>.yaml и идёт по ней дальше тем же id.
+// Неподходящая правка (пройденные блоки, артефакты, имя) — ошибка со списком причин, запуск идёт по-старому.
+async function flowReload(pos) {
+  const id = pos[0];
+  if (!id) fail('нужно: flow-reload <runId>');
+  try {
+    const { edit } = await api('POST', `/api/runs/${id}/flow/reload`, { via: 'skill' });
+    return { ok: true, version: edit.version, changed: edit.changed };
+  } catch (err) {
+    if (oldServer(err)) fail('сервер запущен до обновления agentgraph: перезапусти npm run ui');
+    if (err.code === 'not_paused') fail(`${err.message}. Поставь паузу (pause), дождись PAUSED в wait и повтори`);
+    if (err.code === 'incompatible') fail(`${err.message.split('\n')[0]}\n${(err.data.problems || []).map((p) => `- ${p}`).join('\n')}\nЗапуск остался на паузе со старым flow`);
+    if (err.code) fail(`${err.message} (${err.code})`);
+    throw err;
+  }
+}
+
 // Список артефактов запуска: файл, последний автор, можно ли сейчас править и почему
 async function artifacts(pos) {
   const id = pos[0];
@@ -476,10 +511,12 @@ try {
     case 'pause': out(await api('POST', `/api/runs/${pos[0]}/pause`)); break;
     case 'resume': out(await resume(pos, opt)); break;
     case 'abort': out(await api('POST', `/api/runs/${pos[0]}/abort`)); break;
+    case 'note': out(await note(pos, opt)); break;
+    case 'flow-reload': out(await flowReload(pos)); break;
     case 'artifacts': out(await artifacts(pos)); break;
     case 'artifact': { const r = await artifact(pos, opt); if (r) out(r); break; }
     case 'artifact-write': out(await artifactWrite(pos, opt)); break;
-    default: fail('команды: ensure | flows | draft --task-file F [--cwd DIR] [--out F.yaml] [--model M] | start (<flow> | --spec-file F.yaml) --cwd DIR [--input TEXT | --input-file F] [--add-dir DIR]... [--attach FILE]... [--max-iterations N] [--max-budget USD] [--model M] | continue <id> [--max-budget USD] [--model M] | wait <id> [--timeout SEC] | answer <id> <qid> --json J | status <id> | pause <id> | resume <id> [--answer-file F] | abort <id> | save-flow <id> [--name N] [--folder D] | artifacts <id> | artifact <id> <key> [--version N] [--out F] | artifact-write <id> <key> --file F [--base HASH] [--resume]');
+    default: fail('команды: ensure | flows | draft --task-file F [--cwd DIR] [--out F.yaml] [--model M] | start (<flow> | --spec-file F.yaml) --cwd DIR [--input TEXT | --input-file F] [--add-dir DIR]... [--attach FILE]... [--max-iterations N] [--max-budget USD] [--model M] | continue <id> [--max-budget USD] [--model M] | wait <id> [--timeout SEC] | answer <id> <qid> --json J | status <id> | pause <id> | resume <id> [--answer-file F] | abort <id> | note <id> (--text T | --file F) [--all] | flow-reload <id> | save-flow <id> [--name N] [--folder D] | artifacts <id> | artifact <id> <key> [--version N] [--out F] | artifact-write <id> <key> --file F [--base HASH] [--resume]');
   }
 } catch (err) {
   fail(err instanceof Error ? err.message : String(err));

@@ -1,0 +1,8 @@
+/* «Править flow запуска» (RunFlowDialog.tsx): диалог шире обычного — в нём YamlEditor со снимком flow. */
+.dlg { width: min(960px, 94vw); }
+.editor { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+/* в редакторе flow — 60vh; здесь под ним ещё галочка, причины отказа и кнопки: на низком окне они не должны уезжать */
+.editor :global(.cm-editor) { height: clamp(200px, calc(100vh - 360px), 60vh); }
+.dlg .save { flex-direction: row; align-items: center; gap: 6px; flex: none; font-size: var(--fs-small); color: var(--ink-2); }
+.dlg .save input { width: auto; }
+.problems { margin: 0; padding-left: 18px; color: var(--st-fail); font-size: var(--fs-small); display: flex; flex-direction: column; gap: 2px; }
