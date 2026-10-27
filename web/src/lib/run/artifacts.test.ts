@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ArtifactLite, ArtifactMeta, ArtifactRead, ConditionReport, PhaseReport } from '@server/api-types';
 import {
-  allWarnings, artAuthor, artBy, artClock, artLite, artStepKey, draftSaveWhy, draftsDialog, hintLines, iterWarnCount, loadErrText, lockText, mergeItems,
+  allWarnings, artAuthor, artBy, artClock, artLite, artStepKey, draftSaveWhy, draftsDialog, editMessage, hintLines, iterWarnCount, loadErrText, lockText, mergeItems,
   mergeStep, rowMarks, saveError, stepLine, stepOf, summaryParts, tasksBadge, versionOptions, winNote, winState, winStatus, type ArtDraft, type ArtWin,
   type StepInfo,
 } from './artifacts';
+import { setLangForTest } from '../i18n';
 
 const lite = (key: string, over: Partial<ArtifactLite> = {}): ArtifactLite => ({
   key, title: key.toUpperCase(), file: `${key}.md`, size: 10, hash: `h-${key}`, author: { kind: 'initial' }, versions: 1, lockedBy: [], ...over,
@@ -22,6 +23,18 @@ const read = (over: Partial<ArtifactRead> = {}): ArtifactRead => ({
   key: 'plan', title: 'План', file: 'plan.md', path: '/runs/r/artifacts/plan.md', versions: [], lockedBy: [], text: 'текст', hash: 'h1', editable: true, ...over,
 });
 const draft = (over: Partial<ArtDraft> = {}): ArtDraft => ({ id: 1, runId: 'r', key: 'plan', title: 'План', text: 'текст', orig: 'текст', base: 'h1', ...over });
+
+test('правило правки по-английски — по коду причины; без перевода и у неизвестной причины — текст сервера', () => {
+  assert.equal(editMessage({ reason: 'done', message: 'Запуск завершён: правка ни на что не повлияет' }), 'Запуск завершён: правка ни на что не повлияет');
+  setLangForTest('en');
+  try {
+    assert.equal(editMessage({ reason: 'done', message: 'x' }), 'The run is finished: an edit would change nothing');
+    assert.equal(editMessage({ reason: 'writing', phases: ['plan', 'code'], message: 'x' }), 'Phase plan, code is writing: editing opens after the step ends');
+    assert.equal(editMessage({ reason: 'too-big', message: 'Артефакт больше 1 МБ' }), 'Артефакт больше 1 МБ');
+  } finally {
+    setLangForTest('ru');
+  }
+});
 
 test('автор словами: этап с блоком у многоблочного, пользователь, скилл, заготовка, пусто', () => {
   const at = '2026-10-24T10:00:00Z';

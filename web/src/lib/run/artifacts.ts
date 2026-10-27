@@ -2,10 +2,11 @@
 // итоги шагов (что изменил этап или проверка условия, предупреждения, отказы записи), тексты панели, строк, окна
 // и диалога несохранённой правки. Состояние живёт в screens/run/artStore.ts, сюда оно приходит параметрами.
 import type {
-  ArtifactAuthor, ArtifactLite, ArtifactListItem, ArtifactMeta, ArtifactRead, ArtifactTasks, ConditionReport, Denial, PhaseReport, RunReport, StepDelta,
+  ArtifactAuthor, ArtifactLite, ArtifactListItem, ArtifactMeta, ArtifactRead, ArtifactTasks, ConditionReport, Denial, Editability, PhaseReport, RunReport,
+  StepDelta,
 } from '@server/api-types';
 import { plural } from '../format';
-import { locale, t } from '../i18n';
+import { getLang, locale, t } from '../i18n';
 
 /** Правка в UI — до 1 МБ в байтах, как на сервере. */
 export const ART_EDIT_MAX = 1024 * 1024;
@@ -234,8 +235,8 @@ export function hintLines(o: {
   } else {
     // правило правки у неживого запуска одно на все артефакты (кроме «больше 1 МБ») — берём его из списка сервера
     const it = o.items.find((a) => a.reason && a.reason !== 'too-big');
-    if (it?.reason === 'continuable') out.push({ kind: 'continue', text: `${it.message}.` });
-    else if (it?.message) out.push({ kind: 'text', text: `${it.message}.` });
+    if (it?.reason === 'continuable') out.push({ kind: 'continue', text: `${editMessage(it)}.` });
+    else if (it?.message) out.push({ kind: 'text', text: `${editMessage(it)}.` });
   }
   if (o.foreignDrafts.length) {
     out.push({
@@ -313,12 +314,30 @@ export function winState(w: ArtWin, d: ArtDraft | undefined): WinState {
   return 'edit';
 }
 
+/**
+ * Правило правки сервера (artifactEditability в src/artifacts.ts) на языке интерфейса — по коду причины: message сервер
+ * пишет по-русски. Причины с подробностями сервера («too-big», «not-continuable») остаются его текстом.
+ */
+export function editMessage(e: Pick<Editability, 'reason' | 'message' | 'phases'>): string {
+  // по-русски текст сервера и есть нужный
+  if (getLang() === 'ru') return e.message ?? '';
+  const phases = (e.phases ?? []).join(', ');
+  switch (e.reason) {
+    case 'done': return t('Запуск завершён: правка ни на что не повлияет');
+    case 'cli': return t('Запуск идёт из CLI: править можно после его конца');
+    case 'continuable': return t('Правка попадёт в продолжение этого запуска');
+    case 'writing': return t('Пишет этап {phases}: правка откроется после конца шага', { phases });
+    case 'asking': return t('Этап {phases} ждёт твоего ответа и пишет этот артефакт: ответь в вопросе или поправь после шага', { phases });
+    default: return e.message ?? '';
+  }
+}
+
 /** Почему правки нет: текст недоступен или правило сервера. */
 export function winReason(w: Pick<ArtWin, 'cur'>): string {
   const cur = w.cur;
   if (!cur) return '';
   if (cur.text === null && cur.textMessage) return cur.textMessage;
-  return cur.editable ? '' : cur.message || t('Сейчас артефакт не правится');
+  return cur.editable ? '' : editMessage(cur) || t('Сейчас артефакт не правится');
 }
 
 /** Строка статуса окна: причина недоступности, ошибка, итог действия, подсказка про паузу. */

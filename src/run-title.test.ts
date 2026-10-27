@@ -60,6 +60,15 @@ test('имя запуска: промпт — flow и источник; зада
   assert.ok(!long.reqs[0].prompt.includes('а'.repeat(2001)));
 });
 
+test('имя запуска: язык имени — язык задачи', async () => {
+  const en = fake({ title: 'x' });
+  await pickRunTitle('Implement volume discounts for bulk orders', {}, { session: en.session });
+  assert.match(en.reqs[0].prompt, /имя запуска по-английски \(in English\):/);
+  const ru = fake({ title: 'x' });
+  await pickRunTitle('Добавь скидку за объём', {}, { session: ru.session });
+  assert.match(ru.reqs[0].prompt, /имя запуска по-русски:/);
+});
+
 test('имя запуска: переводы строк, управляющие символы и угловые скобки вычищены, длина до 60', async () => {
   const r = await pickRunTitle('задача', {}, { session: fake({ title: 'Бонусы\n\r\t<script>кофе</script>\u001b[31m' }).session });
   assert.equal(r.title, 'Бонусы scriptкофе/script [31m');

@@ -3,6 +3,7 @@
 import type { AskAnswers, AskQuestion, HomeCond, HomeRun, QuestionRecord } from '@server/api-types';
 import { ago, excerpt, usd } from './format';
 import { t } from './i18n';
+import { runnerText } from './run/runner-text';
 
 /** Подряд одинаковых провалов в конце, после которых запуск «буксует» (как в ленте страницы запуска). */
 export const STUCK_MIN = 5;
@@ -37,13 +38,17 @@ export function homeStuck(conds: HomeCond[]): { from: number; to: number; text: 
   if (tail.length < STUCK_MIN) return null;
   const first = tail.at(-1)!.c;
   const last = tail[0]!.c;
-  return { from: first.iteration, to: last.iteration, text: last.summary || excerpt(last.text, 120) };
+  return { from: first.iteration, to: last.iteration, text: last.summary || excerpt(runnerText(last.text, last.type), 120) };
 }
+
+const CONDITION_STEP = 'проверка условия';
 
 /** «этапы «a», «b»» у параллельной группы, «этап «a»» у одного, пусто между шагами. */
 function nowText(r: Pick<Partial<HomeRun>, 'running' | 'current'>): string {
   if (r.running && r.running.length > 1) return t('этапы {list}', { list: r.running.map((x) => t('«{title}»', { title: x.title })).join(', ') });
-  return r.current ? t('этап «{title}»', { title: r.current.title }) : '';
+  if (!r.current) return '';
+  // проверку условия сервер присылает тем же полем, текстом «проверка условия» (server.ts, condition_start): это не этап
+  return r.current.title === CONDITION_STEP ? t(CONDITION_STEP) : t('этап «{title}»', { title: r.current.title });
 }
 
 export type HomeRunView = {
@@ -87,7 +92,7 @@ export function homeRunView(r: HomeRun, project: string, artifacts: boolean, now
     sum = t('Буксует: итерации {from}–{to} падают с одним и тем же — «{text}»', { from: stuck.from, to: stuck.to, text: stuck.text });
   } else {
     // сводка модели «где мы» важнее вердикта: в ней он уже пересказан; без неё — итог или начало замечаний
-    const why = last && !last.done && cur?.looped ? t('итерация {n} не прошла: «{text}»', { n: last.iteration, text: last.summary || excerpt(last.text, 120) }) : '';
+    const why = last && !last.done && cur?.looped ? t('итерация {n} не прошла: «{text}»', { n: last.iteration, text: last.summary || excerpt(runnerText(last.text, last.type), 120) }) : '';
     sum = [current ? t('Сейчас {current}', { current }) : t('Между шагами'), r.digest?.text || why].filter(Boolean).join(' · ');
   }
   if (r.pause === 'requested') sum += ` · ${t('пауза после шага')}`;

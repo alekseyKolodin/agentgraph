@@ -5,6 +5,7 @@ import { useMatch } from 'react-router';
 import type { FlowListItem } from '@server/api-types';
 import { useFlows } from '../../api';
 import { useMemoryState } from '../useMemoryState';
+import { conditionText } from '../../lib/flow/summary';
 import { flowMatches, searchWords } from '../../lib/search';
 import { t } from '../../lib/i18n';
 import { NewFlowDialog } from '../../screens/flow/NewFlowDialog';
@@ -129,7 +130,7 @@ export function FlowList() {
       key={f.name}
       draggable
       className={cx(!f.valid && styles.invalid, activeName === f.name && styles.active)}
-      title={f.valid ? f.description || t('{n} этапов · {condition}', { n: f.phases?.length ?? 0, condition: String(f.condition) }) : f.error}
+      title={f.valid ? f.description || t('{n} этапов · {condition}', { n: f.phases?.length ?? 0, condition: conditionText(String(f.condition)) }) : f.error}
       onClick={() => void openFlow(f.name)}
       onDragStart={(e) => {
         setDragged(f.name);

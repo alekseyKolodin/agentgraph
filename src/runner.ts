@@ -15,6 +15,7 @@ import { emptyContext, render, type TemplateContext } from './template.js';
 import { randomUUID } from 'node:crypto';
 import { runSession, type AskAnswers, type EffortLevel, type AskQuestion, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
 import { ATTACHMENTS_DIR } from './attachments.js';
+import { replyIn, taskLang } from './lang.js';
 import {
   artifactAccess,
   declaredArtifacts,
@@ -1002,17 +1003,20 @@ const JUDGE_SYSTEM =
   'Ты строгий приёмщик результата многошагового агентского процесса. Тебе дают исходную задачу и выводы этапов текущей итерации. ' +
   'Оцени по рубрике из промпта. Отвечай done=true только когда задача выполнена целиком; иначе перечисли конкретные пробелы в feedback.';
 
+/** reason и feedback — на языке задачи: их читает человек в интерфейсе и этапы следующей итерации. */
+const judgeSystem = (task: string) => `${JUDGE_SYSTEM} Пиши reason и feedback ${replyIn(taskLang(task))}, если рубрика не требует другого языка.`;
+
 /**
  * Сессия судьи. Вложения — часть задачи: судья получает их список и папку attachments/.
  * Доп. директории (этапа и запуска) ему не даются; артефакты (art) — даются: раздел в промпте и их папка.
  * Теги знаний блока (knowledge) — только папками: рубрика судьи своя, текст знаний ему не даётся.
  */
-export function judgeRequest(spec: FlowSpec, until: Extract<Until, { type: 'judge' }>, prompt: string, opts: RunOptions, art?: PhaseArtifacts, knowledge?: KnowledgeTag[]) {
+export function judgeRequest(spec: FlowSpec, until: Extract<Until, { type: 'judge' }>, prompt: string, opts: RunOptions, art?: PhaseArtifacts, knowledge?: KnowledgeTag[], task = '') {
   return {
     prompt: withAttachments(art?.section ? `${prompt.trimEnd()}\n\n${art.section}` : prompt, opts),
     cwd: opts.cwd,
     additionalDirectories: [...new Set([...attachmentsDir(opts), ...(art ? [art.dir] : []), ...(opts.tagDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
-    system: JUDGE_SYSTEM,
+    system: judgeSystem(task),
     // Только чтение + сабагенты (Agent добавляет runSession): судья может сам проверить файлы.
     tools: ['Read', 'Grep', 'Glob'],
     model: until.model ?? spec.defaults?.model ?? opts.model,
@@ -1068,7 +1072,7 @@ async function evaluateUntil(
     }
 
     case 'judge': {
-      const req = judgeRequest(spec, until, render(until.prompt, judgeArt ? { ...ctx, artifacts: judgeArt.snapshot } : ctx), opts, judgeArt, knowledge);
+      const req = judgeRequest(spec, until, render(until.prompt, judgeArt ? { ...ctx, artifacts: judgeArt.snapshot } : ctx), opts, judgeArt, knowledge, ctx.input);
       const logFile = `${iterRel}/condition.judge.prompt.md`;
       fs.writeFileSync(path.join(runDir, logFile), req.prompt);
       // событие после записи: промпт судьи можно открыть, пока он думает

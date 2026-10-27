@@ -87,6 +87,11 @@ export const flow: Record<string, string> = {
   // lib/flow/summary.ts
   'до {n}, {condition}': 'up to {n}, {condition}',
   'один проход': 'single pass',
+  'пока команда `{run}` не вернёт 0': 'until `{run}` exits 0',
+  'пока в выводе этапа нет маркера {marker}': 'until the phase outputs {marker}',
+  'пока судья не скажет «готово»': 'until the judge approves',
+  'без условия (все итерации)': 'no condition (all iterations)',
+  ', пауза по маркеру {marker}': ', pause on marker {marker}',
 
   // lib/flow/tools.ts: модели, подсказки инструментов, коннекторы
   'по умолчанию': 'default',
