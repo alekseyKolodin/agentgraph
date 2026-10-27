@@ -549,3 +549,26 @@ test('блок-вызов: вызываемый flow не загрузился �
   assert.deepEqual(r.children, []);
   assert.ok(!r.runs.some((d) => d.includes('child')), r.runs.join(', '));
 });
+
+test('правка flow на паузе после развилки: событие flow несёт решение развилки и пропущенные блоки', async () => {
+  let fix: RunFix | undefined;
+  let k = 0;
+  const spec = branchy([{ if: { type: 'marker', marker: '<IDEA>' }, goto: 'review' }]);
+  const edited = structuredClone(spec);
+  edited.blocks![2].phases![0].prompt = 'PHASE:r строже';
+  const r = await run(spec, {
+    output: (n) => (n === 't' ? 'идея\n<IDEA>' : `out-${n}`),
+    opts: {
+      onFix: (f) => { fix = f; },
+      // вторая контрольная точка — перед этапом блока review, уже после развилки
+      control: { checkpoint: async () => { if (++k === 2) fix!.applyFlow(edited, { source: 'edit', via: 'ui' }); }, takeNotes: () => [] },
+    },
+  });
+  assert.equal(r.report.status, 'done');
+  assert.match(r.calls[1].prompt, /строже/);
+  const ev = r.events.find((e) => e.type === 'flow');
+  assert.ok(ev?.type === 'flow');
+  assert.equal(ev.blocks[0].next?.to, 'review');
+  assert.equal(ev.blocks[1].bypassed, true);
+  assert.equal(ev.maxIterations, 2);
+});

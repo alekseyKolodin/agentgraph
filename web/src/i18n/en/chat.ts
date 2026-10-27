@@ -31,6 +31,8 @@ export const chat: Record<string, string> = {
   'Текст для записи': 'Text to write',
   'YAML flow': 'Flow YAML',
   'Общий файл: правка подействует на все следующие запуски и продолжения этого flow.': 'A shared file: the edit affects all following runs and continuations of this flow.',
+  'Общий файл: правка подействует на следующие запуски этого flow. Продолжение этого запуска останется на его снимке.':
+    'A shared file: the edit affects the following runs of this flow. Continuing this run stays on its snapshot.',
   'Записать ту же правку и в flows/: её возьмут следующие запуски': 'Write the same edit to flows/ too: following runs will take it',
   'сохранить и в flow': 'also save to the flow',
   'Открыть запуск {id}': 'Open run {id}',
@@ -60,8 +62,12 @@ export const chat: Record<string, string> = {
   'Записать ответ в {what} и возобновить запуск?': 'Write the reply to {what} and resume the run?',
   'Сохранить flow в {what}? Это общий файл: правка подействует на все следующие запуски и продолжения flow {flow}.':
     'Save the flow to {what}? It is a shared file: the edit affects all following runs and continuations of flow {flow}.',
+  'Сохранить flow в {what}? Это общий файл: правка подействует на все следующие запуски flow {flow}. Продолжение этого запуска останется на его снимке: правку на ходу в flows/ не сохраняли.':
+    'Save the flow to {what}? It is a shared file: the edit affects all following runs of flow {flow}. Continuing this run stays on its snapshot: the live edit was not saved to flows/.',
   'Продолжить запуск с места остановки новым запуском{extra}?': 'Continue the run from where it stopped as a new run{extra}?',
   'Запустить flow {flow} заново с той же задачей{extra}?': 'Run flow {flow} again with the same task{extra}?',
+  'Запустить flow {flow} заново с той же задачей{extra}? Возьмётся файл из flows/: правка flow на ходу этого запуска в него не войдёт.':
+    'Run flow {flow} again with the same task{extra}? It takes the file from flows/: the live flow edit of this run will not be in it.',
   'Применить правку flow к этому запуску? Запуск продолжит по новой версии.': 'Apply the flow edit to this run? The run will go on with the new version.',
   'Подхватить в этот запуск текущий файл flow из flows/?': 'Load the current flow file from flows/ into this run?',
   'Перезапустить текущую итерацию? Её этапы пойдут заново, когда запуск возобновят.': 'Restart the current iteration? Its phases will run again once the run is resumed.',

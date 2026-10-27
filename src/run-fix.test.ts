@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parse as parseYaml } from 'yaml';
-import { canon, flowChanges, flowEditProblems, keepBlockName, withFlowInput, type FixPoint } from './run-fix.js';
+import { canon, flowChanges, flowEditProblems, flowsSync, keepBlockName, patchFlowYaml, sameFlow, withFlowInput, type FixPoint, type FlowsFile } from './run-fix.js';
 import { blockMaxIterations } from './runner.js';
 import type { FlowSpec } from './schema.js';
 
@@ -141,4 +141,182 @@ test('withFlowInput: в flows/ уходит input сохранённого flow,
   assert.match(back, /# этап/);
   assert.equal((parseYaml(back) as FlowSpec).input, 'по умолчанию');
   assert.equal('input' in (parseYaml(withFlowInput(text, undefined)) as object), false);
+});
+
+// --- галочка «сохранить и в flow»: правка поверх flows/<имя>.yaml
+
+const flowsFile = [
+  '# flow для тестов: комментарий владельца',
+  'name: f',
+  'input: задача по умолчанию',
+  'phases:',
+  '  # первым — план',
+  '  - name: a',
+  '    tools: [Read]',
+  '    prompt: |',
+  '      план',
+  '      по шагам',
+  '  - name: b # проверка',
+  '    tools: []',
+  '    prompt: проверь',
+  '',
+].join('\n');
+// снимок запуска: без комментариев, input — задача запуска; правка поменяла промпт a и добавила этап c
+const runEdit = [
+  'name: f',
+  'input: задача запуска',
+  'phases:',
+  '  - name: a',
+  '    tools: [Read]',
+  '    prompt: |',
+  '      план',
+  '      по шагам, с тестами',
+  '  - name: b',
+  '    tools: []',
+  '    prompt: проверь',
+  '  - name: c',
+  '    tools: []',
+  '    prompt: отчёт',
+  '',
+].join('\n');
+
+test('sameFlow: задача не в счёт, остальное — да', () => {
+  const a = parseYaml(flowsFile) as FlowSpec;
+  assert.equal(sameFlow(a, { ...a, input: 'другая' }), true);
+  assert.equal(sameFlow(a, { ...a, phases: a.phases!.slice(0, 1) }), false);
+});
+
+test('patchFlowYaml: правка ложится поверх файла — комментарии и стиль строк остаются, по смыслу ровно правка', () => {
+  const out = patchFlowYaml(flowsFile, runEdit);
+  assert.deepEqual(parseYaml(out), parseYaml(runEdit));
+  assert.match(out, /^# flow для тестов: комментарий владельца/);
+  assert.match(out, /# первым — план\n  - name: a/);
+  assert.match(out, /- name: b # проверка/);
+  assert.match(out, /prompt: \|\n {6}план\n {6}по шагам, с тестами/);
+  assert.match(out, /tools: \[Read\]/);
+  // этапы сопоставляются по имени: перестановка уносит комментарий этапа с ним (комментарий над списком — над списком)
+  const swapped = runEdit.replace(/  - name: a[\s\S]*?(?=  - name: b)/, '').replace('  - name: c', '  - name: a\n    tools: [Read]\n    prompt: план\n  - name: c');
+  const moved = patchFlowYaml(flowsFile, swapped);
+  assert.deepEqual(parseYaml(moved), parseYaml(swapped));
+  assert.match(moved, /phases:\n  # первым — план\n  - name: b # проверка\n[\s\S]*- name: a\n/);
+  // файл не читается — текст правки как есть
+  assert.equal(patchFlowYaml('name: [', runEdit), runEdit);
+});
+
+test('patchFlowYaml: в списке без name комментарий не переезжает к чужому значению', () => {
+  const text = 'name: f\nphases:\n  - name: a\n    tools:\n      - Read # только чтение\n      - Bash # опасно: только тесты\n    prompt: p\n';
+  const out = patchFlowYaml(text, 'name: f\nphases:\n  - name: a\n    tools: [Bash]\n    prompt: p\n');
+  assert.match(out, /- Bash # опасно: только тесты/);
+  assert.doesNotMatch(out, /только чтение/);
+});
+
+// файл flows/ в памяти: что записано и сколько раз
+const memFile = (text: string | null) => {
+  const f = { text, writes: 0, fail: false };
+  const file: FlowsFile = {
+    read: () => f.text,
+    write: (t) => {
+      if (f.fail) throw new Error('EACCES');
+      f.text = t;
+      f.writes++;
+    },
+    parse: (t) => parseYaml(t) as FlowSpec,
+  };
+  return { f, file };
+};
+const startSpec = { ...(parseYaml(flowsFile) as FlowSpec), input: 'задача запуска' };
+
+test('flowsSync: файл тот, с которым шёл запуск, — правка поверх него с его input и комментариями; вторая запись тоже идёт', () => {
+  const { f, file } = memFile(flowsFile);
+  const sync = flowsSync('f', file, startSpec);
+  assert.ok('undo' in sync.save(runEdit));
+  assert.equal((parseYaml(f.text!) as FlowSpec).input, 'задача по умолчанию');
+  assert.equal((parseYaml(f.text!) as FlowSpec).phases!.length, 3);
+  assert.match(f.text!, /# проверка/);
+  // сверка теперь с записанным: следующая правка того же запуска тоже ложится в файл
+  assert.ok('undo' in sync.save(runEdit.replace('prompt: отчёт', 'prompt: отчёт кратко')));
+  assert.match(f.text!, /prompt: отчёт кратко/);
+  assert.equal(f.writes, 2);
+});
+
+test('flowsSync: файл переписали без смены смысла (конструктор, CRLF, комментарий) — запись идёт, чужой комментарий остаётся', () => {
+  const { f, file } = memFile(flowsFile);
+  const sync = flowsSync('f', file, startSpec);
+  f.text = `# добавлено в конструкторе\n${flowsFile}`.replace(/\n/g, '\r\n');
+  assert.ok('undo' in sync.save(runEdit));
+  assert.match(f.text, /# добавлено в конструкторе/);
+  assert.equal((parseYaml(f.text) as FlowSpec).phases!.length, 3);
+});
+
+test('flowsSync: файл поменяли по смыслу после старта или запуск шёл не по нему — отказ, файл не тронут', () => {
+  const { f, file } = memFile(flowsFile);
+  const sync = flowsSync('f', file, startSpec);
+  f.text = flowsFile + '  - name: z\n    tools: []\n    prompt: z\n';
+  const changed = sync.save(runEdit);
+  assert.ok('error' in changed);
+  assert.match(changed.error, /flows\/f\.yaml поменяли после старта запуска — правка только в запуске/);
+  f.text = null;
+  assert.ok('error' in sync.save(runEdit));
+  assert.equal(f.writes, 0);
+  // продолжение по снимку: flow запуска с файлом не совпадал уже на старте
+  const other = memFile(flowsFile);
+  const diverged = flowsSync('f', other.file, { ...startSpec, phases: startSpec.phases!.slice(0, 1) }).save(runEdit);
+  assert.ok('error' in diverged);
+  assert.match(diverged.error, /уже на старте отличался от flows\/f\.yaml/);
+  assert.equal(other.f.writes, 0);
+});
+
+test('flowsSync: после «взять из flows/» сверка — с файлом; undo возвращает файл и сверку; сбой записи — причина, а не исключение', () => {
+  const { f, file } = memFile(flowsFile);
+  const sync = flowsSync('f', file, { ...startSpec, phases: startSpec.phases!.slice(0, 1) });
+  sync.took(parseYaml(flowsFile) as FlowSpec);
+  const saved = sync.save(runEdit);
+  assert.ok('undo' in saved);
+  saved.undo();
+  assert.equal(f.text, flowsFile);
+  // сверка вернулась к прежнему файлу: запись снова проходит
+  assert.ok('undo' in sync.save(runEdit));
+  f.fail = true;
+  const failed = sync.save(runEdit);
+  assert.ok('error' in failed);
+  assert.match(failed.error, /flows\/f\.yaml не записан: EACCES/);
+});
+
+test('совместимость: идущий блок не меняет вид — этапы на вызов flow и обратно нельзя, flow, input и next вызова — можно', () => {
+  const spec = (second: Record<string, unknown>) =>
+    ({ name: 'f', blocks: [{ name: 'a', phases: [phase('x')], next: 'b' }, { name: 'b', ...second }, { name: 'c', phases: [phase('z')] }] }) as unknown as FlowSpec;
+  const point: FixPoint = { block: 1, iterations: 1, limit: (b) => blockMaxIterations(b, {}) };
+  const call = spec({ flow: 'checker', input: '{{prev}}' });
+  assert.deepEqual(flowEditProblems(spec({ phases: [phase('y')] }), call, point), ['блок b идёт сейчас: этапы заменить вызовом flow на ходу нельзя']);
+  assert.deepEqual(flowEditProblems(call, spec({ phases: [phase('y')] }), point), ['блок b идёт сейчас: вызов flow заменить этапами на ходу нельзя']);
+  assert.deepEqual(flowEditProblems(call, spec({ flow: 'other', input: 'иначе', next: [{ if: { type: 'marker', marker: '<X>' }, goto: 'end' }] }), point), []);
+  // next пройденного блока — уже решённая развилка
+  const moved = structuredClone(call);
+  moved.blocks![0].next = 'c';
+  assert.deepEqual(flowEditProblems(call, moved, point), ['блок a уже пройден: менять его нельзя']);
+});
+
+test('patchFlowYaml: правка блока-вызова и развилки ложится поверх файла, комментарии остаются', () => {
+  const file = [
+    'name: f',
+    'blocks:',
+    '  - name: triage # решает, куда дальше',
+    '    phases:',
+    '      - name: t',
+    '        tools: []',
+    '        prompt: p',
+    '    next:',
+    '      - if: { type: marker, marker: "<BUG>" } # баг',
+    '        goto: fix',
+    '      - goto: end',
+    '  - name: fix',
+    '    flow: fix-bug # вызов',
+    '    input: "{{input}}"',
+    '',
+  ].join('\n');
+  const edit = file.replace('flow: fix-bug # вызов', 'flow: fix-bug-v2').replace('input: "{{input}}"', 'input: "{{prev}}"').replace('goto: end', 'goto: fix');
+  const out = patchFlowYaml(file, edit);
+  assert.deepEqual(parseYaml(out), parseYaml(edit));
+  assert.match(out, /# решает, куда дальше/);
+  assert.match(out, /# баг/);
 });

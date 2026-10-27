@@ -221,6 +221,12 @@ export type StepItem =
   | { kind: 'cond'; c: ConditionReport }
   | { kind: 'condPending'; c: PendingCond };
 
+/** Сколько итераций у блока в «Обзоре» и есть ли у них заголовки: у блока без цикла — только когда итерацию повторили (fix.restart). */
+function blockIterHeads(r: RunView, b: RunBlockView): { iters: number; heads: boolean } {
+  const iters = Math.max(b.iterations || 0, ...r.phases.filter((p) => p.block === b.name).map((p) => p.iteration), 0);
+  return { iters, heads: b.looped || iters > 1 };
+}
+
 /** Список «Этапы по итерациям»: блоки, итерации, карточки шагов и свёртки (keys — все ключи, unfold — свёрнуто больше половины). */
 export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; keys: string[]; unfold: boolean } {
   const r = st.run;
@@ -235,9 +241,7 @@ export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; key
   blocks.forEach((b, bi) => {
     const inBlock = (x: { block?: string }) => x.block === b.name;
     const phases = r.phases.filter(inBlock);
-    const iters = Math.max(b.iterations || 0, ...phases.map((p) => p.iteration), 0);
-    // у блока без цикла заголовки итераций — только когда итерацию повторили (fix.restart)
-    const heads = b.looped || iters > 1;
+    const { iters, heads } = blockIterHeads(r, b);
     if (heads) for (let it = 1; it <= iters; it++) foldKeys.set(`i:${bi}:${it}`, foldOpen(fold, `i:${bi}:${it}`, it === iters));
     let blockOpen = true;
     if (multi) {
@@ -701,6 +705,6 @@ export function gotoTarget(
   }
   const open: string[] = [];
   if (blocks.length > 1) open.push(`b:${bi}`);
-  if (target && b.looped) open.push(`i:${bi}:${target.it}`);
+  if (target && blockIterHeads(r, b).heads) open.push(`i:${bi}:${target.it}`);
   return { open, target: target?.key ?? null, bi };
 }

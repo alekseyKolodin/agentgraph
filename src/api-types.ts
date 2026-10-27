@@ -771,8 +771,11 @@ export type RunEvent =
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
   /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
   | { type: 'note'; note: RunNote }
-  /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
-  | { type: 'flow'; edit: RunFlowEdit }
+  /**
+   * Flow запуска поправили на паузе: снимок flow.yaml уже новый (граф его перечитывает), blocks и maxIterations — отчёты
+   * блоков и лимит после правки. Событие самодостаточно: при переигрывании оно идёт по порядку с остальными.
+   */
+  | { type: 'flow'; edit: RunFlowEdit; blocks: BlockReport[]; maxIterations: number }
   /** Блок-вызов начал дочерний запуск runId вызванного flow: этап phase (имя блока) идёт, пока идёт он. */
   | { type: 'call'; block: string; iteration: number; phase: string; runId: string; flow: string }
   /** Развилка после блока решила: next — куда, total — лимит итераций запуска без пропущенных блоков; они придут следом своими block_end с bypassed. */
@@ -856,7 +859,7 @@ export type ChatLink = { kind: 'run_file' | 'artifact' | 'phase' | 'path'; ref: 
 export type ChatActionKind = 'abort' | 'write_artifact' | 'answer_pause' | 'save_flow' | 'continue' | 'rerun' | 'apply_flow' | 'reload_flow' | 'restart_iteration';
 
 export type ChatAction = {
-  /** Номер в сообщении: a1, a2… */
+  /** Уникален на всю историю чата: a-<uuid>. */
   id: string;
   kind: ChatActionKind;
   /** Текст кнопки от агента. */
@@ -872,6 +875,16 @@ export type ChatAction = {
   maxBudgetUsd?: number;
   /** Состояние, при котором действие предложено (хэш артефакта или файла flow, пауза): другое при клике — expired. */
   base?: string;
+  /**
+   * apply_flow — версия снимка flow запуска (flowEdits.length), которую прочёл агент; reload_flow — при которой предложена.
+   * Снимок правили после — expired: кнопка не откатит более новую правку.
+   */
+  flowVersion?: number;
+  /**
+   * save_flow, rerun — последнюю правку flow на ходу в flows/ не сохраняли: продолжение этого запуска пойдёт по его снимку,
+   * а flows/ и перезапуск этой правки не знают.
+   */
+  keepsSnapshot?: boolean;
   /** Итог клика; нет — ещё не нажимали. */
   state?: 'done' | 'failed' | 'expired';
   /** Что вышло или почему нет. */

@@ -174,7 +174,7 @@ export type RunFix = {
   /** Что мешает перейти на next; пусто — можно. */
   checkFlow: (next: FlowSpec) => string[];
   /** Перейти на next: следующие шаги идут по нему, снимок flow.yaml переписан, прошлый — flow.N.yaml. Без изменений — ничего не пишет. */
-  applyFlow: (next: FlowSpec, o: { source: RunFlowEdit['source']; via: RunFixVia; savedToFlows?: boolean }) => RunFlowEdit;
+  applyFlow: (next: FlowSpec, o: { source: RunFlowEdit['source']; via: RunFixVia; savedToFlows?: boolean; saveError?: string }) => RunFlowEdit;
   /**
    * Повторить итерацию идущего блока: остаток её шагов отбрасывается, дальше идёт итерация N+1, лимит блока +1 (и у блока
    * без цикла). note дописывается в {{feedback}} новой итерации; хвостом в промпт его кладёт тот, кто зовёт (указание next).
@@ -588,7 +588,10 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       if (problems.length) throw new RunFixError(`Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
       const changed = flowChanges(spec, next);
       const version = report.flowEdits?.length ?? 0;
-      const edit: RunFlowEdit = { version, at: new Date().toISOString(), source: o.source, via: o.via, changed, ...(o.savedToFlows ? { savedToFlows: true } : {}) };
+      const edit: RunFlowEdit = {
+        version, at: new Date().toISOString(), source: o.source, via: o.via, changed,
+        ...(o.savedToFlows ? { savedToFlows: true } : {}), ...(o.saveError ? { saveError: o.saveError } : {}),
+      };
       // те же этапы — новой версии нет: ни снимка, ни записи в отчёте
       if (!changed.length) return edit;
       edit.version++;
@@ -602,7 +605,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       syncBlocks(br, prev, Boolean(restarted));
       (report.flowEdits ??= []).push(edit);
       save();
-      emit({ type: 'flow', edit });
+      emit({ type: 'flow', edit, blocks: blockReports.map((b) => ({ ...b })), maxIterations: report.maxIterations });
       return edit;
     },
     restart: (o = {}) => {
@@ -1251,6 +1254,8 @@ async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: 
   return out;
 }
 
+// TODO(F5): тело — в queueTagSummary(tag, …) из tags.ts, когда она появится со слиянием F5: иначе запуск и сессия
+// по одному тегу пишут саммари одновременно и затирают друг друга.
 async function updateTagSummary(report: RunReport, final: FinalPhase[], tag: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport> {
   let out: TagSummaryReport;
   try {

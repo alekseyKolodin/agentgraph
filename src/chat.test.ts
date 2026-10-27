@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   actionKinds, CHAT_FILE, chatAction, chatAllowed, chatStep, chatSystemPrompt, chatTurn, clearChat, newSink, proposeAction, readChat, runDirGuard, runTools,
-  saveChat, statusLine, statusReport, uiTools, type ChatControls, type ChatDeps, type ChatTool, type RunView,
+  saveChat, statusLine, statusReport, uiTools, type ChatControls, type ChatDeps, type ChatTool, type FlowEditResult, type FlowSnapshots, type RunView,
 } from './chat.js';
 import { answerPause, readArtifact, writeArtifact, type ArtifactRun } from './artifact-api.js';
 import { ArtifactStore, type StoreReport } from './artifact-store.js';
@@ -148,6 +148,12 @@ test('правило 7 системного промпта: у flow с decisions
   assert.match(rule, /Ответ за пользователя не придумывай/);
   assert.doesNotMatch(rule, /запиши ответ туда/);
   assert.ok(withDecisions.includes('\n8. На вопрос агента'));
+
+  // сервер умеет указания этапам: ответ без decisions уходит следующему шагу, а не теряется
+  const noted = chatSystemPrompt(report(), '/runs/r1', '/repo', { note: true }).split('\n').find((l) => l.startsWith('7. '))!;
+  assert.match(noted, /передай ответ указанием следующему шагу \(run_note, scope next\)[^\n]*и возобнови запуск \(resume_run\)/);
+  assert.match(noted, /последней итерации блока[^\n]*сначала подними лимит \(set_max_iterations\)/);
+  assert.doesNotMatch(noted, /просто возобновлённый запуск ответа не передаст/);
 });
 
 test('правила 3 и 6: опасное — только кнопкой; flow сохраняется кнопкой в общий файл, у разового файла нет; правка идущего — только когда сервер умеет', () => {
@@ -162,23 +168,31 @@ test('правила 3 и 6: опасное — только кнопкой; flo
   assert.match(rule(6, adhoc), /У разового запуска файла в flows\/ нет/);
   assert.doesNotMatch(rule(6, adhoc), /save_flow/);
   const f3 = chatSystemPrompt(report(), '/runs/r1', '/repo', { note: true, runFlow: true });
-  assert.match(rule(6, f3), /apply_flow[^\n]*только в этом запуске/);
+  assert.match(rule(6, f3), /apply_flow[^\n]*только в этом запуске и его продолжениях/);
+  assert.match(rule(6, f3), /reload_flow/);
   assert.match(f3, /run_note/);
+  // перезапуск — flows/, продолжение после несохранённой правки на ходу — снимок, и save_flow его не меняет
+  assert.match(rule(6), /Перезапуск берёт текущую версию из flows\/\. Продолжение — тоже её, но [^\n]*его снимок, и save_flow на продолжение этого запуска не подействует/);
+  assert.doesNotMatch(rule(6), /все следующие запуски и продолжения/);
+  const adhocF3 = chatSystemPrompt(report({ adhoc: true }), '/runs/r1', '/repo', { runFlow: true });
+  assert.match(rule(6, adhocF3), /apply_flow[^\n]*Продолжение и перезапуск разового запуска берут его снимок/);
+  assert.doesNotMatch(rule(6, adhocF3), /reload_flow/);
 });
 
 // ---------- инструменты на поддельном ChatControls
 
 const FLOW = 'name: demo\nloop:\n  max_iterations: 1\n  until:\n    type: none\nphases:\n  - name: a\n    tools: []\n    prompt: x\n';
 
-type Fake = ChatControls & { calls: string[]; v: RunView; files: Map<string, string> };
+type Fake = ChatControls & { calls: string[]; v: RunView; files: Map<string, string>; snap: Pick<FlowSnapshots, 'version' | 'continueFrom'> };
 
-/** Поддельное управление: состояние — в v, вызовы — в calls, артефакты — текстами в files (хэш — сам текст). */
+/** Поддельное управление: состояние — в v, вызовы — в calls, артефакты — текстами в files (хэш — сам текст), версия снимка flow — в snap. */
 function fake(over: Partial<ChatControls> = {}, v: Partial<RunView> = {}): Fake {
   const calls: string[] = [];
   const files = new Map([['plan', '# План\n']]);
   const f: Fake = {
     calls,
     files,
+    snap: { version: 0, continueFrom: 'flows' },
     v: view(v),
     view: () => f.v,
     logTail: () => undefined,
@@ -202,7 +216,7 @@ function fake(over: Partial<ChatControls> = {}, v: Partial<RunView> = {}): Fake 
       },
     },
     answerPause: (text) => { calls.push(`answerPause ${text}`); return { status: 200, body: { ok: true } }; },
-    readFlow: () => ({ name: 'demo', adhoc: false, run: { file: '/runs/r1/flow.yaml', yaml: FLOW }, flows: { file: path.join(FLOWS_DIR, 'demo.yaml'), yaml: files.get('#flow') ?? FLOW } }),
+    readFlow: () => ({ name: 'demo', adhoc: false, ...f.snap, run: { file: '/runs/r1/flow.yaml', yaml: FLOW }, flows: { file: path.join(FLOWS_DIR, 'demo.yaml'), yaml: files.get('#flow') ?? FLOW } }),
     saveFlow: (yaml) => { calls.push('saveFlow'); files.set('#flow', yaml); return { file: path.join(FLOWS_DIR, 'demo.yaml') }; },
     ...over,
   };
@@ -239,7 +253,7 @@ test('run_note и правка flow идущего запуска: инстру�
   assert.throws(() => proposeAction(plain, { kind: 'apply_flow', label: 'Применить', text: FLOW }, new Map(), 'a1'), /не умеет/);
 
   const notes: unknown[] = [];
-  const f3 = fake({ note: (text, o) => notes.push([text, o]), applyRunFlow: () => ({}), restartIteration: () => ({ block: 'impl', iteration: 4 }) });
+  const f3 = fake({ note: (text, o) => notes.push([text, o]), applyRunFlow: () => ({ changed: [] }), restartIteration: () => ({ block: 'impl', iteration: 4 }) });
   const tools = runTools(f3, newSink());
   assert.ok(tools.some((t) => t.name === 'run_note'));
   assert.ok(chatAllowed(f3).includes('mcp__run__run_note'));
@@ -449,7 +463,7 @@ test('клик: 409 adhoc — не «устарело», а «не вышло»;
   assert.equal(click(dir, ctl, 'a1').action?.state, 'failed');
   assert.match(click(dir, ctl, 'a2').action!.result!, /^Итерация 4 блока impl начнётся заново, когда запуск возобновят/);
   // у разового запуска кнопку перечитать flow даже не предложат
-  assert.throws(() => proposeAction(fake({ reloadRunFlow: () => ({}) }, { status: 'paused', report: report({ adhoc: true }) }), { kind: 'reload_flow', label: 'x' }, new Map(), 'a1'), /разового/);
+  assert.throws(() => proposeAction(fake({ reloadRunFlow: () => ({ changed: [] }) }, { status: 'paused', report: report({ adhoc: true }) }), { kind: 'reload_flow', label: 'x' }, new Map(), 'a1'), /разового/);
 }));
 
 test('клик: начатый запуск гасит остальные кнопки продолжения и перезапуска во всей истории — второго запуска в той же директории не будет', withDir((dir) => {
@@ -473,11 +487,11 @@ test('клик: начатый запуск гасит остальные кно
 test('клик: «сохранить и в flow» доходит до applyRunFlow; пауза пользователя через итерацию — уже другая пауза', withDir((dir) => {
   const got: unknown[] = [];
   const v = { status: 'paused', report: report({ iterations: 5 }) };
-  const ctl = fake({ applyRunFlow: (yaml, o) => { got.push(o); return {}; } }, v);
-  const base = proposeAction(ctl, { kind: 'apply_flow', label: 'Применить', text: FLOW }, new Map(), 'a1').base!;
-  withActions(dir, [{ id: 'a1', kind: 'apply_flow', label: 'Применить', text: FLOW, base }, { id: 'a2', kind: 'apply_flow', label: 'Применить', text: FLOW, base }]);
-  assert.equal(click(dir, ctl, 'a1', false, { saveToFlows: true }).action?.result, 'Flow применён к запуску и сохранён в flows/.');
-  assert.deepEqual(got, [{ saveToFlows: true, via: 'chat' }]);
+  const ctl = fake({ applyRunFlow: (yaml, o) => { got.push(o); return { changed: ['этап a: prompt'], savedToFlows: true }; } }, v);
+  const base = proposeAction(ctl, { kind: 'apply_flow', label: 'Применить', text: FLOW }, new Map([['run', '0']]), 'a1').base!;
+  withActions(dir, [{ id: 'a1', kind: 'apply_flow', label: 'Применить', text: FLOW, base, flowVersion: 0 }, { id: 'a2', kind: 'apply_flow', label: 'Применить', text: FLOW, base }]);
+  assert.equal(click(dir, ctl, 'a1', false, { saveToFlows: true }).action?.result, 'Flow запуска поменян: этап a: prompt. Правка сохранена и в flows/.');
+  assert.deepEqual(got, [{ saveToFlows: true, via: 'chat', base: 0 }]);
   // пауза без pauseReason: возобновили, прошла итерация, снова пауза — кнопка с прошлой паузы устарела
   ctl.v = view({ status: 'paused', report: report({ iterations: 6 }) });
   assert.equal(click(dir, ctl, 'a2').action?.state, 'expired');
@@ -497,6 +511,132 @@ test('клик: запись артефакта говорит, какие эт�
   ctl.artifacts.write = () => ({ status: 200, body: { ok: true, readers: ['review'] } });
   withActions(dir, [{ id: 'a1', kind: 'write_artifact', label: 'Записать', key: 'plan', text: 'x', base: 'h', target: '«План» (plan.md)' }]);
   assert.equal(click(dir, ctl, 'a1').action?.result, 'Записан артефакт «План» (plan.md). Прежнюю версию уже прочли этапы review: они правку не увидят.');
+}));
+
+/** Пауза по просьбе этапа: на ней работают кнопки правки идущего запуска. */
+const onPause = (over: Partial<RunReport> = {}): Partial<RunView> => {
+  const pr = { block: 'impl', iteration: 4, phase: 'code', text: '?', output: 'o', at: 'P1' };
+  return { status: 'paused', report: report({ pauseReason: pr, pauses: [pr], ...over }) };
+};
+
+test('apply_flow: база — версия снимка из flow_read этого ответа; две правки на одной паузе — вторая устарела, а не откатила первую', withDir(async (dir) => {
+  const applied: unknown[] = [];
+  // как applyRunFlow сервера: base не та — 409 stale, иначе новая версия снимка
+  const ctl: Fake = fake({
+    applyRunFlow: (yaml, o) => {
+      if (o?.base !== undefined && o.base !== ctl.snap.version) {
+        throw Object.assign(new Error(`Снимок flow запуска сменился, пока его правили (версия ${ctl.snap.version}, а правили ${o.base}): перечитай и повтори`), { status: 409, code: 'stale' });
+      }
+      applied.push(o?.base);
+      ctl.snap.version++;
+      return { changed: ['этап a: prompt'] };
+    },
+  }, onPause());
+  const sink = newSink();
+  const ui = uiTools(ctl, sink, dir);
+  const propose = (n: number) => call(ui, 'propose_actions', { items: Array.from({ length: n }, () => ({ kind: 'apply_flow', label: 'Применить', text: FLOW })) });
+  assert.match((await propose(1)).text, /сначала прочитай flow инструментом flow_read/);
+  await call(runTools(ctl, sink), 'flow_read');
+  assert.equal(sink.seen.get('run'), '0');
+  assert.equal((await propose(2)).error, false);
+  const items = (sink.widgets.at(-1) as { items: ChatAction[] }).items;
+  assert.deepEqual(items.map((a) => a.flowVersion), [0, 0]);
+
+  withActions(dir, items);
+  assert.deepEqual([click(dir, ctl, items[0]!.id).action?.state, actionsOf(dir)[0]!.result], ['done', 'Flow запуска поменян: этап a: prompt.']);
+  const second = click(dir, ctl, items[1]!.id);
+  assert.equal(second.action?.state, 'expired');
+  assert.match(second.action!.result!, /сменился/);
+  assert.deepEqual(applied, [0]);
+  // правка в диалоге flow на этой же паузе после flow_read — кнопку с прежней версией даже не предложат
+  assert.match((await propose(1)).text, /поправили после flow_read — прочитай заново/);
+}));
+
+test('apply_flow и reload_flow: итог — что поменялось; ничего — «изменений нет»; сбой записи в flows/ — его текст; у разового «сохранить и в flow» не доходит до сервера', withDir((dir) => {
+  const got: Parameters<NonNullable<ChatControls['applyRunFlow']>>[1][] = [];
+  let edit: FlowEditResult = { changed: [] };
+  let reloads = 0;
+  const ctl = fake({ applyRunFlow: (yaml, o) => { got.push(o); return edit; }, reloadRunFlow: () => { reloads++; return edit; } }, onPause());
+  const base = 'paused:P1:1:5:0';
+  const act = (kind: ChatAction['kind'], extra: Record<string, unknown> = {}) => {
+    withActions(dir, [{ id: 'a1', kind, label: 'x', text: FLOW, base }]);
+    return click(dir, ctl, 'a1', false, extra);
+  };
+  const empty = act('apply_flow');
+  assert.deepEqual([empty.action?.result, empty.effects], ['Изменений нет: flow запуска уже такой.', []]);
+  // кнопка из старого chat.json без flowVersion — без base, как раньше
+  assert.deepEqual(got[0], { saveToFlows: false, via: 'chat' });
+  edit = { changed: ['+ этап lint'], saveError: 'flows/demo.yaml не записан: EACCES' };
+  const partly = act('apply_flow', { saveToFlows: true });
+  assert.deepEqual([partly.action?.state, partly.action?.result], ['done', 'Flow запуска поменян: + этап lint. flows/demo.yaml не записан: EACCES']);
+  assert.deepEqual(partly.effects, [{ kind: 'flow' }, { kind: 'artifacts' }]);
+  edit = { changed: [] };
+  assert.equal(act('reload_flow').action?.result, 'Изменений нет: файл в flows/ совпадает с flow запуска.');
+  edit = { changed: ['этап a: model'] };
+  assert.equal(act('reload_flow').action?.result, 'Запуск взял flow из flows/: этап a: model.');
+
+  // reload_flow помнит версию снимка при предложении: правка после него — expired, файл из flows/ её не откатит
+  const reload = proposeAction(ctl, { kind: 'reload_flow', label: 'Перечитать' }, new Map(), 'a2');
+  assert.equal(reload.flowVersion, 0);
+  ctl.snap.version = 1;
+  withActions(dir, [reload]);
+  assert.match(click(dir, ctl, 'a2').action!.result!, /поправили после предложения/);
+  assert.equal(reloads, 2);
+
+  ctl.v = view(onPause({ adhoc: true }));
+  act('apply_flow', { saveToFlows: true });
+  assert.deepEqual(got.map((o) => o?.saveToFlows), [false, true, false]);
+}));
+
+test('flow_read и save_flow: после несохранённой правки на ходу продолжение остаётся на снимке — так и подписано, и кнопка это говорит', withDir(async (dir) => {
+  const ctl = fake();
+  ctl.files.set('#flow', FLOW + '# правка\n');
+  const plain = (await call(runTools(ctl, newSink()), 'flow_read')).text;
+  assert.match(plain, /текущая версия: её возьмут продолжение и перезапуск/);
+  assert.doesNotMatch(plain, /останется на снимке/);
+
+  ctl.snap = { version: 2, continueFrom: 'run' };
+  const sink = newSink();
+  const out = (await call(runTools(ctl, sink), 'flow_read')).text;
+  assert.match(out, /flow\.yaml, правок на ходу: 2 — по нему идёт этот запуск; его же возьмёт продолжение/);
+  assert.match(out, /текущая версия: её возьмёт перезапуск, а продолжение этого запуска останется на снимке/);
+  const a = proposeAction(ctl, { kind: 'save_flow', label: 'Сохранить', text: FLOW }, sink.seen, 'a1');
+  assert.equal(a.keepsSnapshot, true);
+  // перезапуск возьмёт flows/ — кнопка помечена, подтверждение скажет, что правка на ходу в него не войдёт
+  const done = fake({}, { live: false, status: 'failed' });
+  done.snap = ctl.snap;
+  assert.equal(proposeAction(done, { kind: 'rerun', label: 'Заново' }, new Map(), 'a2').keepsSnapshot, true);
+  assert.equal(proposeAction(fake({}, { live: false, status: 'failed' }), { kind: 'rerun', label: 'Заново' }, new Map(), 'a3').keepsSnapshot, undefined);
+  withActions(dir, [a]);
+  assert.match(click(dir, ctl, 'a1').action!.result!, /^Flow сохранён в flows\/demo\.yaml\. Продолжение этого запуска останется на его снимке/);
+
+  const adhoc = fake();
+  adhoc.readFlow = () => ({ name: 'demo', adhoc: true, version: 0, continueFrom: 'run', run: { file: '/runs/r1/flow.yaml', yaml: FLOW } });
+  assert.match((await call(runTools(adhoc, newSink()), 'flow_read')).text, /^Flow demo \(разовый: файла в flows\/ нет — продолжение и перезапуск возьмут снимок\)\./);
+}));
+
+test('restart_iteration: блок без итераций, лимит 50 и указание длиннее 20 000 знаков отклоняются сразу; 409 not_started — «не вышло», а не «устарело»', withDir((dir) => {
+  const at = (impl: Partial<NonNullable<RunReport['blocks']>[number]>) => {
+    const r = report();
+    return onPause({ blocks: [r.blocks![0]!, { ...r.blocks![1]!, ...impl }] });
+  };
+  const restart = () => ({ block: 'impl', iteration: 5 });
+  const propose = (v: Partial<RunView>, text?: string) => proposeAction(fake({ restartIteration: restart }, v), { kind: 'restart_iteration', label: 'Заново', ...(text ? { text } : {}) }, new Map(), 'a1');
+  assert.throws(() => propose(at({ iterations: 0 })), /ещё не начал итераций/);
+  assert.throws(() => propose(at({ maxIterations: 50 })), /уже 50/);
+  assert.throws(() => propose(at({}), 'x'.repeat(20_001)), /длиннее 20000/);
+  assert.equal(propose(at({}), '  проверь порт  ').text, 'проверь порт');
+
+  const ctl = fake({ restartIteration: () => { throw Object.assign(new Error('Блок impl ещё не начал итераций'), { status: 409, code: 'not_started' }); } }, onPause());
+  withActions(dir, [{ id: 'a1', kind: 'restart_iteration', label: 'Заново', base: 'paused:P1:1:5:0' }]);
+  assert.equal(click(dir, ctl, 'a1').action?.state, 'failed');
+}));
+
+test('клик: перечень problems, уже вошедший в текст ошибки, не повторяется', withDir((dir) => {
+  const problems = ['name: у запуска flow demo — правка не может сменить имя'];
+  const ctl = fake({ applyRunFlow: () => { throw Object.assign(new Error(`Правка не подходит идущему запуску:\n${problems[0]}`), { status: 400, code: 'incompatible', problems }); } }, onPause());
+  withActions(dir, [{ id: 'a1', kind: 'apply_flow', label: 'x', text: FLOW, base: 'paused:P1:1:5:0' }]);
+  assert.equal(click(dir, ctl, 'a1').action?.result, `Правка не подходит идущему запуску:\n${problems[0]}`);
 }));
 
 test('artifacts: обрезанный текст большого артефакта базой кнопки не становится', async () => {

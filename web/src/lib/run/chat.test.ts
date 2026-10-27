@@ -42,9 +42,13 @@ test('подтверждение кнопки: что именно случит�
   assert.equal(actionConfirm(action({ kind: 'restart_iteration' }), 'demo').danger, true);
   const save = actionConfirm(action({ kind: 'save_flow', target: 'flows/demo.yaml' }), 'demo');
   assert.equal(save.danger, false);
-  assert.match(save.text, /flows\/demo\.yaml\? Это общий файл[^]*flow demo\./);
+  assert.match(save.text, /flows\/demo\.yaml\? Это общий файл[^]*запуски и продолжения flow demo\./);
+  // последнюю правку на ходу в flows/ не сохраняли: продолжение этого запуска файл не возьмёт — подтверждение так и говорит
+  const keeps = actionConfirm(action({ kind: 'save_flow', target: 'flows/demo.yaml', keepsSnapshot: true }), 'demo').text;
+  assert.match(keeps, /все следующие запуски flow demo\. Продолжение этого запуска останется на его снимке/);
   assert.equal(actionConfirm(action({ kind: 'continue', model: 'haiku', maxBudgetUsd: 0.2 }), 'demo').text, 'Продолжить запуск с места остановки новым запуском (модель haiku, лимит $0.20)?');
   assert.equal(actionConfirm(action({ kind: 'rerun' }), 'demo').text, 'Запустить flow demo заново с той же задачей?');
+  assert.match(actionConfirm(action({ kind: 'rerun', keepsSnapshot: true }), 'demo').text, /Возьмётся файл из flows\/: правка flow на ходу этого запуска в него не войдёт/);
   assert.equal(actionMeta(action({ kind: 'continue', target: 'x', model: 'haiku' })), 'x · модель haiku');
   // вид из будущей версии сервера в старой вкладке — подпись кнопки, а не падение
   assert.deepEqual(actionConfirm(action({ kind: 'new_kind' as ChatAction['kind'], label: 'Сделать' }), 'demo'), { text: 'Сделать', ok: 'Выполнить', danger: false });

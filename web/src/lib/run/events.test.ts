@@ -133,9 +133,35 @@ test('указания: добавленное появляется, приме�
   assert.equal(st.run.notes?.length, 1);
   assert.equal(st.run.notes![0]!.applied?.[0]?.phase, 'b');
   const edit = { version: 1, at: '2026-10-27T10:02:00Z', source: 'edit' as const, via: 'ui' as const, changed: ['этап b: prompt'] };
-  assert.deepEqual(applyRunEvent(st, { type: 'flow', edit }), { render: true, flow: true });
-  applyRunEvent(st, { type: 'flow', edit });
+  const flow = { type: 'flow' as const, edit, blocks: [block('main', { status: 'running', iterations: 1 })], maxIterations: 3 };
+  assert.deepEqual(applyRunEvent(st, flow), { render: true, flow: true });
+  applyRunEvent(st, flow);
   assert.deepEqual(st.run.flowEdits, [edit]);
+});
+
+test('правка flow при переподключении: отчёты будущих блоков — из события, переигрывание даёт то же состояние', () => {
+  const one = (over: Partial<BlockReport> = {}) => block('one', { maxIterations: 1, condition: 'none', looped: false, ...over });
+  const edit = { version: 1, at: '2026-10-27T10:02:00Z', source: 'edit' as const, via: 'ui' as const, changed: ['− блок two', '+ блок three'] };
+  // лента сервера: старт со старым flow, блок one идёт, на паузе блок two заменили на three, дальше запуск пошёл
+  const events = [
+    { type: 'start' as const, report: report({ blocks: [one(), block('two', { index: 1 })], maxIterations: 4 }) },
+    { type: 'block_start' as const, block: one({ status: 'running' }), total: 2 },
+    { type: 'iteration' as const, block: 'one', iteration: 1, max: 1 },
+    { type: 'flow' as const, edit, blocks: [one({ status: 'running', iterations: 1 }), block('three', { index: 1, maxIterations: 4 })], maxIterations: 5 },
+    { type: 'block_end' as const, block: one({ status: 'done', iterations: 1 }) },
+    { type: 'block_start' as const, block: block('three', { index: 1, status: 'running', maxIterations: 4 }), total: 2 },
+  ];
+  const replay = () => {
+    const st = liveState(detail());
+    for (const e of events) applyRunEvent(st, e);
+    return st.run;
+  };
+  const r = replay();
+  assert.deepEqual(r.blocks.map((b) => [b.name, b.status, b.maxIterations]), [['one', 'done', 1], ['three', 'running', 4]]);
+  assert.equal(r.maxIterations, 5);
+  assert.deepEqual(r.flowEdits, [edit]);
+  // второе переподключение — то же самое, событие в ленте не испорчено правками состояния
+  assert.deepEqual(replay(), r);
 });
 
 test('указание run: события несут только новые applied — клиент дописывает их без дублей', () => {

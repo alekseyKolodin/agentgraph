@@ -51,8 +51,8 @@ import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
 import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
-import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
-import { RunFixError, withFlowInput } from './run-fix.js';
+import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, snapshotOnly, specFromRunBody } from './adhoc.js';
+import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fix.js';
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
   addTagAttachmentReply,
@@ -124,6 +124,8 @@ type LiveRun = {
   fix?: RunFix;
   /** Идущий дочерний запуск блока-вызова: пауза, продолжение и остановка этого запуска доходят и до него. */
   child?: string;
+  /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
+  flows?: FlowsSync;
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
@@ -995,6 +997,8 @@ function launchRun(
   };
   const onFix = (fix: RunFix) => {
     lr.fix = fix;
+    // у дочернего запуска flow — тоже из flows/ (вызываются только сохранённые): правку его страницы можно сохранить туда же
+    if (!opts.adhoc) lr.flows = flowsSync(spec.name, flowsFile(spec.name), spec);
   };
   // итоги итераций и сводка «где мы сейчас» — для UI; у CLI их нет: смотреть их там некому
   const digest = (input: Parameters<typeof writeDigest>[0], signal: AbortSignal) => writeDigest(input, { signal });
@@ -1214,7 +1218,7 @@ function addRunNote(id: string, text: string, o: { scope?: 'next' | 'run'; via?:
  * снимка, который правили (flowEdits.length): с тех пор его сменили — 409 stale, чтобы не откатить чужую правку молча.
  */
 function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?: RunFixVia; base?: number } = {}): RunFlowEdit {
-  const { report, fix } = pausedRun(id);
+  const { lr, report, fix } = pausedRun(id);
   const via = fixVia(o.via);
   if (o.saveToFlows && report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
   const version = report.flowEdits?.length ?? 0;
@@ -1230,12 +1234,12 @@ function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?
   }
   // задача — запуска: без input в правке берётся она, другая — несовместимая правка (run-fix.ts)
   next.input ??= report.input;
-  return applyRunSpec(report, fix, next, 'edit', via, o.saveToFlows ? yaml : undefined);
+  return applyRunSpec(lr, report, fix, next, 'edit', via, o.saveToFlows ? yaml : undefined);
 }
 
 /** «Починил в Claude Code»: flow запуска на паузе — текущая версия flows/<имя>.yaml, задача остаётся своя. */
 function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
-  const { report, fix } = pausedRun(id);
+  const { lr, report, fix } = pausedRun(id);
   const via = fixVia(o.via);
   if (report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
   let next: FlowSpec;
@@ -1246,34 +1250,46 @@ function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
     throw new RunFixHttp(400, `Flow ${report.flow} не загружается: ${errMsg(err)}`, 'incompatible', [errMsg(err)]);
   }
   next.input = report.input;
-  return applyRunSpec(report, fix, next, 'reload', via);
+  const edit = applyRunSpec(lr, report, fix, next, 'reload', via);
+  // запуск теперь идёт ровно по этому файлу
+  lr.flows?.took(next);
+  return edit;
 }
 
 /**
- * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Сначала запуск, потом flows/: неподходящая
- * или упавшая правка flows/ не трогает. Сбой записи в flows/ правку запуска не отменяет — он в edit.saveError.
+ * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Порядок: совместимость, flows/, запуск —
+ * событие flow уходит уже с savedToFlows. Неподходящая правка flows/ не трогает, упавшая правка запуска возвращает файл.
+ * Файл поменяли мимо запуска или записать не вышло — правка только в запуске, причина в edit.saveError.
  */
-function applyRunSpec(report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
+function applyRunSpec(lr: LiveRun, report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
   const problems = callFix(() => fix.checkFlow(next));
   if (problems.length) throw new RunFixHttp(400, `Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
-  const edit = callFix(() => fix.applyFlow(next, { source, via }));
-  if (flowsYaml === undefined) return edit;
-  // в flows/ — без задачи этого запуска: input — как у сохранённого flow
-  let base: string | undefined;
+  const saved = flowsYaml !== undefined && lr.flows ? lr.flows.save(flowsYaml) : undefined;
+  const edits = report.flowEdits?.length ?? 0;
   try {
-    base = loadFlow(report.flow).input;
-  } catch {
-    base = undefined;
-  }
-  try {
-    saveFlowYaml(report.flow, withFlowInput(flowsYaml, base), flowFolder(report.flow));
-    edit.savedToFlows = true;
+    return callFix(() => fix.applyFlow(next, { source, via, ...(saved && 'error' in saved ? { saveError: saved.error } : saved ? { savedToFlows: true } : {}) }));
   } catch (err) {
-    edit.saveError = `flows/${report.flow}.yaml не записан: ${errMsg(err)}`;
+    // flows/ возвращаем, только если запуск на правку не перешёл (упал снимок); упал уже run.json — правка действует
+    if (saved && 'undo' in saved && (report.flowEdits?.length ?? 0) === edits) saved.undo();
+    throw err;
   }
-  // edit — тот же объект, что в report.flowEdits (если правка что-то поменяла): дописываем отметку и в run.json
-  fs.writeFileSync(path.join(report.runDir, 'run.json'), JSON.stringify(report, null, 2));
-  return edit;
+}
+
+/** flows/<имя>.yaml для сверки и записи правки запуска (run-fix.ts flowsSync). */
+function flowsFile(name: string): FlowsFile {
+  return {
+    read: () => {
+      try {
+        return readFlowYaml(name);
+      } catch {
+        return null;
+      }
+    },
+    write: (text) => {
+      saveFlowYaml(name, text, flowFolder(name));
+    },
+    parse: parseFlow,
+  };
 }
 
 /**
@@ -1460,12 +1476,20 @@ function chatControls(id: string, srv: ServerOptions): ChatControls {
   };
 }
 
-/** Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу. */
+/**
+ * Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу.
+ * continueFrom — что возьмёт продолжение (как specOf у continueRun): снимок у разового и после несохранённой правки на ходу.
+ */
 function runFlows(id: string): FlowSnapshots {
   const r = live.get(id)?.report ?? readReport(id);
   if (!r) throw new HttpError(404, 'Запуск не найден');
   const snap = path.join(RUNS_DIR, id, 'flow.yaml');
-  const out: FlowSnapshots = { name: r.flow, adhoc: Boolean(r.adhoc) };
+  const out: FlowSnapshots = {
+    name: r.flow,
+    adhoc: Boolean(r.adhoc),
+    version: r.flowEdits?.length ?? 0,
+    continueFrom: r.adhoc || snapshotOnly(r, readReport) ? 'run' : 'flows',
+  };
   if (fs.existsSync(snap)) out.run = { file: snap, yaml: fs.readFileSync(snap, 'utf8') };
   if (!r.adhoc) {
     try {
@@ -1478,8 +1502,10 @@ function runFlows(id: string): FlowSnapshots {
 }
 
 /**
- * Перезапуск из чата: тот же flow заново (текущая версия из flows/, у разового — снимок) с той же задачей, директорией,
- * тегами и вложениями. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной директории столкнутся.
+ * Перезапуск из чата: тот же flow заново с той же задачей, директорией, тегами и вложениями. Flow — текущая версия из
+ * flows/ (у разового — снимок), даже если этот запуск правили на ходу: такая правка живёт только в нём и его продолжениях,
+ * а перезапуск — новый запуск. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной
+ * директории столкнутся.
  */
 function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, srv: ServerOptions): { id: string } {
   const prev = readReport(prevId);
@@ -1489,7 +1515,12 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   let spec: FlowSpec;
   let addDirs: string[];
   try {
-    spec = specOf(prev);
+    // разовый — снимок, остальные — flows/: снимок правки на ходу (specOf) перезапуск не берёт
+    if (prev.adhoc) spec = readRunFlow(RUNS_DIR, prevId);
+    else {
+      assertFlowName(prev.flow);
+      spec = loadFlow(prev.flow);
+    }
     addDirs = runAddDirs(prev.addDirs, prev.cwd);
     // удалённый с тех пор тег знаний — отказ до создания папки запуска, как у POST /api/runs
     resolveKnowledge(spec, prev.knowledge ?? []);
