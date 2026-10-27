@@ -7,12 +7,13 @@ import { renderMarkdown } from '../../lib/md';
 import { fileIsMarkdown } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
 import { t } from '../../lib/i18n';
+import { PathText } from '../PathLink';
 import styles from './FileDialog.module.css';
 
-/** n — номер открытия: окно, закрытое Esc мимо состояния, открывается снова и при том же open. */
-type FileView = { open: boolean; n: number; title: string; session: string; text: string; md: boolean };
+/** n — номер открытия: окно, закрытое Esc мимо состояния, открывается снова и при том же open. run — база путей в тексте. */
+type FileView = { open: boolean; n: number; title: string; session: string; text: string; md: boolean; run: string };
 
-let view: FileView = { open: false, n: 0, title: '', session: '', text: '', md: false };
+let view: FileView = { open: false, n: 0, title: '', session: '', text: '', md: false, run: '' };
 let raw = LS.get('agentgraph.fileRaw', false);
 // поздний ответ прошлого открытия не перетирает текущее
 let seq = 0;
@@ -38,7 +39,7 @@ const useView = () =>
 /** Файл папки запуска. session — у транскрипта готового этапа: строка «claude --resume <session>». */
 export async function openRunFile(runId: string, file: string, title: string, session = ''): Promise<void> {
   const my = ++seq;
-  set({ open: true, n: view.n + 1, title: title || file, session, text: t('Загружаю…'), md: false });
+  set({ open: true, n: view.n + 1, title: title || file, session, text: t('Загружаю…'), md: false, run: runId });
   try {
     // no-store: у идущего этапа транскрипт растёт, при каждом открытии читаем заново
     const res = await fetchRunFile(runId, file, true);
@@ -51,7 +52,7 @@ export async function openRunFile(runId: string, file: string, title: string, se
 /** Саммари тега из карточки «Итог». */
 export async function openTagSummary(slug: string): Promise<void> {
   const my = ++seq;
-  set({ open: true, n: view.n + 1, title: t('Саммари тега · {slug}', { slug }), session: '', text: t('Загружаю…'), md: false });
+  set({ open: true, n: view.n + 1, title: t('Саммари тега · {slug}', { slug }), session: '', text: t('Загружаю…'), md: false, run: '' });
   try {
     const r = await fetchTag(slug);
     if (my === seq) set({ text: r.summary || t('Саммари пока нет'), md: true });
@@ -70,7 +71,7 @@ function Body({ text, md }: { text: string; md: boolean }) {
       /* исходник ниже */
     }
   }
-  return <pre>{text}</pre>;
+  return <pre><PathText text={text} /></pre>;
 }
 
 export function FileDialog() {
@@ -84,7 +85,7 @@ export function FileDialog() {
   const formatted = v.md && !raw;
   return (
     // событие close приходит задачей позже: окно, открытое заново за это время, оно закрывать не должно
-    <dialog ref={dlg} className={styles.dlgFile} onClose={(e) => !e.currentTarget.open && set({ open: false })}>
+    <dialog ref={dlg} className={styles.dlgFile} data-run={v.run || undefined} onClose={(e) => !e.currentTarget.open && set({ open: false })}>
       <header className="dlg-head">
         <span>{v.title}</span>
         <span className={styles.fileActions}>

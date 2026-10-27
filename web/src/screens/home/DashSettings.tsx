@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { IntegrationsInfo, ProjectInfo } from '@server/api-types';
 import { api, errorText, keys } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { PathLink } from '../../components/PathLink';
 import { PickDirButton } from '../../components/PickDirButton';
 import { t } from '../../lib/i18n';
 import { useIntegrations } from './Dash';
@@ -285,7 +286,7 @@ function ProjectForm({ p, info, onChanged, onRemoved }: { p: ProjectInfo; info: 
   return (
     <form ref={form} className="form" onSubmit={save}>
       <div className={styles.connFacts}>
-        <span className="muted small mono">{p.path}</span>
+        <PathLink className="muted small mono" path={p.path} />
         {p.remote ? <span className="muted small">{`${p.remote.host}/${p.remote.path}`}</span> : <span className="small warn">{t('нет origin на GitLab или GitHub')}</span>}
       </div>
       {info.glab === false && p.forge === 'gitlab' && <p className="msg err">{t('glab не найден: MR не загрузятся. Установи glab и выполни')} <code>glab auth login</code>.</p>}
@@ -295,7 +296,7 @@ function ProjectForm({ p, info, onChanged, onRemoved }: { p: ProjectInfo; info: 
         <label><span>{t('Базовая ветка для новых')}</span><input name="base" defaultValue={p.base || ''} placeholder="origin/HEAD" /></label>
       </div>
       <label><span>{t('Копировать в worktree (через запятую)')}</span><input name="copyFiles" defaultValue={(p.copyFiles || []).join(', ')} placeholder="local.properties" /></label>
-      <p className="muted small">{t('Worktree создаются в')} <code>{info.worktreesDir || ''}</code>.</p>
+      <p className="muted small">{t('Worktree создаются в')} <code>{info.worktreesDir ? <PathLink path={info.worktreesDir} /> : ''}</code>.</p>
       <div className="row">
         <button type="submit" className="btn primary">{t('Сохранить')}</button>
         <button type="button" className="btn danger" onClick={() => void remove()}>{t('Убрать')}</button>

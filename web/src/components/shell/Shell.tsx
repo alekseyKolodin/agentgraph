@@ -1,11 +1,12 @@
 // Оболочка: сайдбар и область экрана. Без /api/config интерфейс не стартует, как и старый (ui/app.js init).
-// Здесь же — общий поток событий, заголовок вкладки (число вопросов, имя открытого запуска), окно файла и диалог
-// несохранённой правки артефакта перед «Возобновить»: они нужны на любом экране.
+// Здесь же — общий поток событий, заголовок вкладки (число вопросов, имя открытого запуска), окно файла, диалог
+// несохранённой правки артефакта перед «Возобновить» и клик по путям к файлам: они нужны на любом экране.
 import { useEffect } from 'react';
 import { Outlet } from 'react-router';
 import { errorText, useConfig, useHome } from '../../api';
 import { docTitle, inboxCount } from '../../lib/home';
 import { FileDialog } from '../file/FileDialog';
+import { PathLinks } from '../PathLink';
 import { DraftsDialog } from '../../screens/run/DraftsDialog';
 import { useDocRunTitle } from './docTitle';
 import { Sidebar } from './Sidebar';
@@ -34,6 +35,7 @@ function Ready() {
       </main>
       <FileDialog />
       <DraftsDialog />
+      <PathLinks />
     </div>
   );
 }

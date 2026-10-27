@@ -1,7 +1,9 @@
 // Живой лог запуска (ui/app.js appendLog, flushLog, resetLog): окно лога на вкладке «Лог», хвост на «Обзоре» и хвост этапа
 // в инспекторе. Строки дописываются в DOM пачками-кусками раз в кадр, мимо React: старый текст не трогается, раскладка идёт
 // только по последней пачке, а перерисовка страницы на каждое событие не перекладывает тысячи строк лога.
+// Пути к файлам в строках — ссылки «показать в Finder» (appendPaths).
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { appendPaths } from '../../components/PathLink';
 import { LOG_TALL_LINES, planLogChunks } from '../../lib/run/log';
 import { onLog, runLog } from './store';
 import styles from './Run.module.css';
@@ -30,14 +32,14 @@ export function LogBody({ shown }: { shown: boolean }) {
       let i = 0;
       if (plan.fill) {
         const last = el.lastElementChild as HTMLElement;
-        last.append(add.slice(0, plan.fill).join('\n') + '\n');
+        appendPaths(last, add.slice(0, plan.fill).join('\n') + '\n');
         last.dataset.n = String(Number(last.dataset.n) + plan.fill);
         i = plan.fill;
       }
       for (const n of plan.chunks) {
         const chunk = document.createElement('div');
         chunk.dataset.n = String(n);
-        chunk.append(add.slice(i, i + n).join('\n') + '\n');
+        appendPaths(chunk, add.slice(i, i + n).join('\n') + '\n');
         el.append(chunk);
         i += n;
       }
@@ -55,15 +57,28 @@ export function LogBody({ shown }: { shown: boolean }) {
   return <div ref={box} className={`${styles.logBody} mono`} />;
 }
 
+/**
+ * Перезаполнить хвост, только если текст сменился: лог приходит раз в кадр, и пересборка на каждый кадр уводила бы
+ * из-под мыши ссылку между нажатием и отпусканием, а фокус с клавиатуры — на каждой строке.
+ */
+function fillPaths(el: HTMLElement): (text: string) => void {
+  let shown: string | undefined;
+  return (text) => {
+    if (text === shown) return;
+    shown = text;
+    el.replaceChildren();
+    appendPaths(el, text);
+  };
+}
+
 /** Последние строки всех этапов — «Живой лог · последние строки» на «Обзоре». */
 export function RunTail() {
   const pre = useRef<HTMLPreElement>(null);
   useLayoutEffect(() => {
     const el = pre.current!;
-    el.textContent = runLog.tail.join('\n');
-    return onLog(() => {
-      el.textContent = runLog.tail.join('\n');
-    });
+    const fill = fillPaths(el);
+    fill(runLog.tail.join('\n'));
+    return onLog(() => fill(runLog.tail.join('\n')));
   }, []);
   return <pre ref={pre} className={styles.runTail} />;
 }
@@ -73,11 +88,10 @@ export function PhaseTail({ phase }: { phase: string }) {
   const pre = useRef<HTMLPreElement>(null);
   useLayoutEffect(() => {
     const el = pre.current!;
-    const fill = () => {
-      el.textContent = (runLog.byPhase.get(phase) || []).join('\n');
-    };
-    fill();
-    return onLog(fill);
+    const fill = fillPaths(el);
+    const text = () => (runLog.byPhase.get(phase) || []).join('\n');
+    fill(text());
+    return onLog(() => fill(text()));
   }, [phase]);
   return <pre ref={pre} className={styles.runTail} />;
 }

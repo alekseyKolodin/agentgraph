@@ -311,4 +311,10 @@ export const flow: Record<string, string> = {
   'Спросить список заново': 'Fetch the list again',
   'Не подключены в claude.ai: {list}. Их инструменты появятся после подключения.':
     'Not connected in claude.ai: {list}. Their tools will appear once connected.',
+  // поле «Плагины» блока и этапа
+  'Плагины Claude Code': 'Claude Code plugins',
+  'Выбери папку плагина Claude Code': 'Choose a Claude Code plugin folder',
+  'Плагины только этого этапа, по папке на строку (как --plugin-dir): их скиллы, агенты, хуки и MCP добавятся к плагинам блока. Несуществующая папка роняет запуск до старта': 'Plugins for this phase only, one folder per line (like --plugin-dir): their skills, agents, hooks and MCP are added to the block plugins. A missing folder fails the run before it starts',
+  'Плагины для всех этапов блока, по папке на строку (как --plugin-dir): скиллы, агенты, хуки и MCP плагина будут только в сессиях этого блока. Несуществующая папка роняет запуск до старта': 'Plugins for every phase of the block, one folder per line (like --plugin-dir): the plugin skills, agents, hooks and MCP exist only in this block sessions. A missing folder fails the run before it starts',
+  'плагинов: {n}': 'plugins: {n}',
 };
