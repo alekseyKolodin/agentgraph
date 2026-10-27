@@ -174,11 +174,17 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       break;
     }
     case 'note': {
-      // добавлено или применено ещё к шагу: указание приходит целиком, заменяем по id
+      // добавлено или применено ещё к шагу: в applied события — только новые записи, дописываем их без дублей
       const list = (r.notes ||= []);
-      const i = list.findIndex((n) => n.id === e.note.id);
-      if (i >= 0) list[i] = e.note;
-      else list.push(e.note);
+      const cur = list.find((n) => n.id === e.note.id);
+      if (!cur) {
+        list.push({ ...e.note, applied: [...(e.note.applied ?? [])] });
+        break;
+      }
+      const key = (a: { block: string; iteration: number; phase: string }) => `${a.block}\u0000${a.iteration}\u0000${a.phase}`;
+      const seen = new Set((cur.applied ?? []).map(key));
+      const fresh = (e.note.applied ?? []).filter((a) => !seen.has(key(a)));
+      if (fresh.length) cur.applied = [...(cur.applied ?? []), ...fresh];
       break;
     }
     case 'flow': {

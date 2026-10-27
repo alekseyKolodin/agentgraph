@@ -69,22 +69,24 @@ const EDITED_DEPTH_MAX = 50;
 
 /**
  * По какому spec идёт запуск: у разового — его снимок (в flows/ может лежать чужой flow с тем же именем); у запуска,
- * чей flow правили на ходу (flowEdits), — тоже снимок: правка живёт только в нём и в его продолжениях (report читает
- * прошлые запуски цепочки continuedFrom); у обычного — текущая версия сохранённого flow по имени.
+ * чей flow поправили на ходу только в нём (последняя правка — снимка, без «сохранить и в flow»), — тоже снимок: правка
+ * живёт в нём и в его продолжениях (report читает прошлые запуски цепочки continuedFrom); у обычного — текущая версия
+ * сохранённого flow по имени, в том числе после правки, сохранённой в flows/, или взятой оттуда.
  */
 export function runSpec(
   report: SpecReport,
   load: { flow: (name: string) => FlowSpec; snapshot: (id: string) => FlowSpec; report?: (id: string) => SpecReport | undefined },
 ): FlowSpec {
-  return report.adhoc || editedFlow(report, load.report) ? load.snapshot(report.id) : load.flow(report.flow);
+  return report.adhoc || snapshotOnly(report, load.report) ? load.snapshot(report.id) : load.flow(report.flow);
 }
 
-/** Flow правили на ходу в этом запуске или в одном из тех, что он продолжает. */
-function editedFlow(report: SpecReport, read: ((id: string) => SpecReport | undefined) | undefined, depth = 0): boolean {
-  if (report.flowEdits?.length) return true;
+/** Последняя правка flow на ходу в цепочке продолжений (ближайший запуск с flowEdits) — только в снимке, не в flows/. */
+export function snapshotOnly(report: SpecReport, read?: (id: string) => SpecReport | undefined, depth = 0): boolean {
+  const last = report.flowEdits?.at(-1);
+  if (last) return last.source === 'edit' && !last.savedToFlows;
   if (!read || !report.continuedFrom || depth >= EDITED_DEPTH_MAX) return false;
   const prev = read(report.continuedFrom);
-  return prev ? editedFlow(prev, read, depth + 1) : false;
+  return prev ? snapshotOnly(prev, read, depth + 1) : false;
 }
 
 export type SaveFlowDeps = {

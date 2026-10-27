@@ -262,6 +262,66 @@ test('повтор у блока без цикла: вторая итераци�
   assert.equal(r.saved.conditions[0].detail, RESTART_DETAIL);
 });
 
+// --- сценарии из ревью
+
+test('событие note несёт только новые записи applied: указание run не раздувает ленту', async () => {
+  const r = await run(flat([phase('a'), phase('b'), phase('c')]), { onSession: (name, h) => { if (name === 'a') h.note('всегда', 'run'); } });
+  const applied = r.events.filter((e) => e.type === 'note').map((e) => (e.type === 'note' ? e.note.applied!.map((x) => x.phase) : []));
+  assert.deepEqual(applied, [['b'], ['c']]);
+  assert.deepEqual(r.saved.notes![0].applied!.map((x) => x.phase), ['b', 'c']);
+});
+
+test('цикл сняли правкой в начале итерации 2 — блок завершён done, а не max_iterations', async () => {
+  const spec = looped(3);
+  const r = await run(spec, {
+    // 1 — начало итерации 1, 2 — между a и b, 3 — перед условием, 4 — начало итерации 2
+    stop: (k, h) => {
+      if (k !== 4) return;
+      const next = structuredClone(spec);
+      delete next.loop;
+      h.fix!.applyFlow(next, { source: 'edit', via: 'ui' });
+    },
+  });
+  assert.deepEqual(r.calls.map((c) => c.name), ['a', 'b']);
+  assert.equal(r.report.status, 'done');
+  assert.deepEqual(r.saved.blocks.map((b) => [b.status, b.looped, b.maxIterations]), [['done', false, 1]]);
+});
+
+test('повтор и правка лимита на одной паузе: обещанная итерация N+1 всё равно идёт', async () => {
+  const spec = looped(3);
+  const r = await run(spec, {
+    // b первой итерации оборван повтором: его первый запуск — уже во второй
+    output: (name) => (name === 'b' ? '<DONE>' : `out-${name}`),
+    stop: (k, h) => {
+      if (k !== 2) return;
+      h.fix!.restart();
+      // лимит во flow опустили до начатой итерации: правка проходит, но повтор не отменяет
+      const next = structuredClone(spec);
+      next.loop!.max_iterations = 1;
+      h.fix!.applyFlow(next, { source: 'edit', via: 'ui' });
+    },
+  });
+  assert.deepEqual(r.calls.map((c) => c.name), ['a', 'a', 'b']);
+  assert.equal(r.report.status, 'done');
+  assert.equal(r.saved.blocks[0].maxIterations, 2);
+});
+
+test('этап, вставленный правкой посреди итерации перед прошедшими, получает номер после них', async () => {
+  const spec = flat([phase('a'), phase('b'), phase('c')]);
+  const r = await run(spec, {
+    // 1 — начало итерации, 2 — между a и b, 3 — между b и c
+    stop: (k, h) => {
+      if (k !== 3) return;
+      const next = structuredClone(spec);
+      next.phases!.splice(1, 0, phase('z') as never);
+      h.fix!.applyFlow(next, { source: 'edit', via: 'ui' });
+    },
+  });
+  assert.deepEqual(r.calls.map((c) => c.name), ['a', 'b', 'z', 'c']);
+  assert.deepEqual(r.saved.phases.map((p) => [p.phase, p.index]), [['a', 0], ['b', 1], ['z', 2], ['c', 3]]);
+  assert.deepEqual(r.saved.final!.map((f) => f.phase), ['c']);
+});
+
 function catchErr(fn: () => unknown): unknown {
   try {
     fn();

@@ -15,8 +15,8 @@ export const fix: Record<string, string> = {
   // действия на паузе (FixPanel.tsx)
   'Починить и продолжить этот запуск': 'Fix and continue this run',
   'Повторить итерацию': 'Repeat iteration',
-  'Повторить итерацию? Оставшиеся шаги итерации {it} не пойдут: дальше — итерация {next}, лимит блока {from} → {to}.':
-    'Repeat the iteration? The remaining steps of iteration {it} will not run: next comes iteration {next}, block limit {from} → {to}.',
+  'Повторить итерацию? Недоделанные шаги итерации {it}, если они есть, не пойдут: дальше — итерация {next}, лимит блока {from} → {to}.':
+    'Repeat the iteration? The unfinished steps of iteration {it}, if any, will not run: next comes iteration {next}, block limit {from} → {to}.',
   'Указание: {text}': 'Instruction: {text}',
   'Итерация {it} · лимит {max}': 'Iteration {it} · limit {max}',
   'Оставшиеся шаги итерации не пойдут: начнётся итерация {next}, указание из поля — в её {{feedback}}, лимит блока +1':
@@ -47,4 +47,6 @@ export const fix: Record<string, string> = {
   'из flows/': 'from flows/',
   'правка снимка': 'snapshot edit',
   'и в flows/': 'also to flows/',
+  'Новый запуск по снимку flow этого запуска (его правили на ходу): пройденные блоки не повторяются':
+    'A new run with this run\'s flow snapshot (it was edited mid-run): finished blocks are not repeated',
 };

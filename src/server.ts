@@ -744,10 +744,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/flow$/)) && method === 'PUT') {
     const id = m[1];
     liveRun(id);
-    const body = (await readJson(req)) as { yaml?: unknown; saveToFlows?: unknown; via?: unknown };
+    const body = (await readJson(req)) as { yaml?: unknown; saveToFlows?: unknown; via?: unknown; base?: unknown };
     if (typeof body.yaml !== 'string') return sendJson(res, 400, { error: 'yaml — строка', code: 'bad_request' });
     if (body.saveToFlows !== undefined && typeof body.saveToFlows !== 'boolean') return sendJson(res, 400, { error: 'saveToFlows — true или false', code: 'bad_request' });
-    return fixReply(res, () => ({ edit: applyRunFlow(id, body.yaml as string, { saveToFlows: body.saveToFlows === true, via: body.via as RunFixVia | undefined }) }));
+    if (body.base !== undefined && !Number.isInteger(body.base)) return sendJson(res, 400, { error: 'base — число правок снимка (flowEdits.length)', code: 'bad_request' });
+    return fixReply(res, () => ({
+      edit: applyRunFlow(id, body.yaml as string, { saveToFlows: body.saveToFlows === true, via: body.via as RunFixVia | undefined, base: body.base as number | undefined }),
+    }));
   }
 
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/flow\/reload$/)) && method === 'POST') {
@@ -1097,16 +1100,18 @@ function callFix<T>(fn: () => T): T {
 const fixVia = (via: unknown): RunFixVia => {
   if (via === undefined || via === null) return 'ui';
   if (via === 'ui' || via === 'skill' || via === 'chat') return via;
-  throw new HttpError(400, 'via — ui, skill или chat');
+  throw new RunFixHttp(400, 'via — ui, skill или chat', 'bad_request');
 };
 
 /** Текст указания: строка, не пустая и не длиннее NOTE_MAX. */
 function noteText(text: unknown): string {
   const t = typeof text === 'string' ? text.trim() : '';
-  if (!t) throw new HttpError(400, 'Пустое указание');
-  if (t.length > NOTE_MAX) throw new HttpError(400, `Указание длиннее ${NOTE_MAX} знаков`);
+  if (!t) throw new RunFixHttp(400, 'Пустое указание', 'bad_request');
+  if (t.length > NOTE_MAX) throw new RunFixHttp(400, `Указание длиннее ${NOTE_MAX} знаков`, 'bad_request');
   return t;
 }
+
+const ADHOC_FLOWS = 'Разовый запуск: его flow нет в flows/ — правь снимок запуска, а в flows/ его кладёт «Сохранить как flow»';
 
 /** Запуск на паузе в этом сервере: раннер стоит в контрольной точке. Иначе — 409 not_paused. */
 function pausedRun(id: string): { lr: LiveRun; report: RunReport; fix: RunFix } {
@@ -1127,7 +1132,7 @@ function addRunNote(id: string, text: string, o: { scope?: 'next' | 'run'; via?:
   if (lr.abort.signal.aborted) throw new HttpError(409, 'Запуск останавливается');
   const body = noteText(text);
   const scope = o.scope ?? 'next';
-  if (scope !== 'next' && scope !== 'run') throw new HttpError(400, 'scope — next или run');
+  if (scope !== 'next' && scope !== 'run') throw new RunFixHttp(400, 'scope — next или run', 'bad_request');
   const note: RunNote = { id: randomUUID(), text: body, scope, at: new Date().toISOString(), via: fixVia(o.via) };
   lr.notes.push(note);
   (lr.report.notes ??= []).push(note);
@@ -1138,12 +1143,17 @@ function addRunNote(id: string, text: string, o: { scope?: 'next' | 'run'; via?:
 
 /**
  * Правка flow запуска на паузе (снимок, поправленный в YamlEditor): действует в этом запуске, в flows/<имя>.yaml — только
- * с saveToFlows. Несовместимая правка — 400 incompatible с problems, запуск идёт по-старому.
+ * с saveToFlows. Несовместимая правка — 400 incompatible с problems, запуск идёт по-старому. base — сколько правок было у
+ * снимка, который правили (flowEdits.length): с тех пор его сменили — 409 stale, чтобы не откатить чужую правку молча.
  */
-function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?: RunFixVia } = {}): RunFlowEdit {
+function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?: RunFixVia; base?: number } = {}): RunFlowEdit {
   const { report, fix } = pausedRun(id);
   const via = fixVia(o.via);
-  if (o.saveToFlows && report.adhoc) throw new RunFixHttp(400, 'Разовый запуск: его flow нет в flows/ — сохрани его кнопкой «Сохранить как flow»', 'adhoc');
+  if (o.saveToFlows && report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
+  const version = report.flowEdits?.length ?? 0;
+  if (o.base !== undefined && o.base !== version) {
+    throw new RunFixHttp(409, `Снимок flow запуска сменился, пока его правили (версия ${version}, а правили ${o.base}): перечитай и повтори`, 'stale');
+  }
   let next: FlowSpec;
   try {
     if (typeof yaml !== 'string') throw new Error('yaml — строка');
@@ -1160,7 +1170,7 @@ function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?
 function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
   const { report, fix } = pausedRun(id);
   const via = fixVia(o.via);
-  if (report.adhoc) throw new RunFixHttp(409, 'Разовый запуск: его flow нет в flows/ — правь снимок запуска', 'adhoc');
+  if (report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
   let next: FlowSpec;
   try {
     assertFlowName(report.flow);
@@ -1172,25 +1182,31 @@ function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
   return applyRunSpec(report, fix, next, 'reload', via);
 }
 
-/** Проверить и подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/ (только если правка подходит). */
+/**
+ * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Сначала запуск, потом flows/: неподходящая
+ * или упавшая правка flows/ не трогает. Сбой записи в flows/ правку запуска не отменяет — он в edit.saveError.
+ */
 function applyRunSpec(report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
   const problems = callFix(() => fix.checkFlow(next));
   if (problems.length) throw new RunFixHttp(400, `Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
-  if (flowsYaml !== undefined) {
-    // в flows/ — без задачи этого запуска: input — как у сохранённого flow
-    let base: string | undefined;
-    try {
-      base = loadFlow(report.flow).input;
-    } catch {
-      base = undefined;
-    }
-    try {
-      saveFlowYaml(report.flow, withFlowInput(flowsYaml, base), flowFolder(report.flow));
-    } catch (err) {
-      throw new HttpError(400, `flows/: ${errMsg(err)}`);
-    }
+  const edit = callFix(() => fix.applyFlow(next, { source, via }));
+  if (flowsYaml === undefined) return edit;
+  // в flows/ — без задачи этого запуска: input — как у сохранённого flow
+  let base: string | undefined;
+  try {
+    base = loadFlow(report.flow).input;
+  } catch {
+    base = undefined;
   }
-  return callFix(() => fix.applyFlow(next, { source, via, ...(flowsYaml !== undefined ? { savedToFlows: true } : {}) }));
+  try {
+    saveFlowYaml(report.flow, withFlowInput(flowsYaml, base), flowFolder(report.flow));
+    edit.savedToFlows = true;
+  } catch (err) {
+    edit.saveError = `flows/${report.flow}.yaml не записан: ${errMsg(err)}`;
+  }
+  // edit — тот же объект, что в report.flowEdits (если правка что-то поменяла): дописываем отметку и в run.json
+  fs.writeFileSync(path.join(report.runDir, 'run.json'), JSON.stringify(report, null, 2));
+  return edit;
 }
 
 /**

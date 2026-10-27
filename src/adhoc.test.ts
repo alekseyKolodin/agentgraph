@@ -72,9 +72,13 @@ test('runSpec: продолжение продолжения разового �
 
 const edit = { version: 1, at: '2026-10-27T10:00:00.000Z', source: 'edit' as const, via: 'ui' as const, changed: ['этап a: prompt'] };
 
-test('runSpec: flow правили на ходу (flowEdits) — снимок запуска, а не flows/', () => {
+test('runSpec: flow правили на ходу только в запуске — снимок; правка сохранена в flows/ или взята оттуда — flows/', () => {
   assert.equal(runSpec(report({ flowEdits: [edit] }), loaders).description, 'снимок run-1');
   assert.equal(runSpec(report({ flowEdits: [] }), loaders).description, 'из flows/');
+  // решает последняя правка: после неё в flows/ могли ещё что-то починить
+  assert.equal(runSpec(report({ flowEdits: [edit, { ...edit, version: 2, savedToFlows: true }] }), loaders).description, 'из flows/');
+  assert.equal(runSpec(report({ flowEdits: [edit, { ...edit, version: 2, source: 'reload' }] }), loaders).description, 'из flows/');
+  assert.equal(runSpec(report({ flowEdits: [{ ...edit, source: 'reload' }, { ...edit, version: 2 }] }), loaders).description, 'снимок run-1');
 });
 
 test('runSpec: продолжение запуска с правкой flow — свой снимок по цепочке continuedFrom', () => {

@@ -683,9 +683,10 @@ export type RunNote = {
 /**
  * Правка flow идущего запуска на паузе: PUT /api/runs/:id/flow (source edit) или POST …/flow/reload (reload — из flows/).
  * version — номер нового снимка flow.yaml (исходный — 0; прошлые версии лежат рядом как flow.N.yaml). changed — что
- * поменялось, по-человечески. savedToFlows — правку записали и в flows/<имя>.yaml.
+ * поменялось, по-человечески. savedToFlows — правку записали и в flows/<имя>.yaml; saveError — записать не вышло
+ * (правка запуска при этом действует).
  */
-export type RunFlowEdit = { version: number; at: string; source: 'edit' | 'reload'; via: RunFixVia; changed: string[]; savedToFlows?: boolean };
+export type RunFlowEdit = { version: number; at: string; source: 'edit' | 'reload'; via: RunFixVia; changed: string[]; savedToFlows?: boolean; saveError?: string };
 
 export type RunEvent =
   | { type: 'start'; report: RunReport }
@@ -726,7 +727,7 @@ export type RunEvent =
    * его не обновили. totalCostUsd — итог запуска уже со стоимостью вызова.
    */
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
-  /** Указание добавлено или применено к шагу (тогда в applied новая запись): note — целиком, клиент заменяет его по id. */
+  /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
   | { type: 'note'; note: RunNote }
   /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
   | { type: 'flow'; edit: RunFlowEdit }

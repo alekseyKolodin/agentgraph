@@ -143,6 +143,16 @@ export function fixActions(r: RunView): { reload: boolean; restart: { block: Run
   return { reload: !r.adhoc, restart };
 }
 
+/**
+ * Подсказка «Продолжить с места остановки»: по снимку, если flow этого запуска последней правкой поменяли только в нём
+ * (как snapshotOnly в src/adhoc.ts; у продолжения такой цепочки сервер решает так же, а подсказка — общая).
+ */
+export function continueTitle(r: Pick<RunReport, 'flowEdits' | 'adhoc'>): string {
+  const last = r.flowEdits?.at(-1);
+  if (!r.adhoc && last?.source === 'edit' && !last.savedToFlows) return t('Новый запуск по снимку flow этого запуска (его правили на ходу): пройденные блоки не повторяются');
+  return t('Новый запуск текущей версией flow: пройденные блоки не повторяются');
+}
+
 /** Строка шапки о правках flow на ходу: сколько их; в подсказке — что поменяла каждая. */
 export function flowEditsLine(r: Pick<RunReport, 'flowEdits'>): { text: string; title: string } | null {
   const edits = r.flowEdits ?? [];

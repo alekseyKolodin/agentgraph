@@ -137,3 +137,15 @@ test('указания: добавленное появляется, приме�
   applyRunEvent(st, { type: 'flow', edit });
   assert.deepEqual(st.run.flowEdits, [edit]);
 });
+
+test('указание run: события несут только новые applied — клиент дописывает их без дублей', () => {
+  const st = liveState(detail());
+  const note = { id: 'n1', text: 'всегда', scope: 'run' as const, at: '2026-10-27T10:00:00Z', via: 'ui' as const };
+  const at = (phase: string) => ({ block: 'main', iteration: 1, phase, at: '2026-10-27T10:01:00Z' });
+  applyRunEvent(st, { type: 'note', note });
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('b')] } });
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('c')] } });
+  // переигрывание при переподключении
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('b')] } });
+  assert.deepEqual(st.run.notes![0]!.applied?.map((a) => a.phase), ['b', 'c']);
+});

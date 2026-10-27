@@ -119,7 +119,7 @@ export function FixPanel({ r, onResume }: { r: RunView; onResume: () => Promise<
     const rs = acts.restart;
     if (!rs) return;
     const note = draft.trim();
-    const text = t('Повторить итерацию? Оставшиеся шаги итерации {it} не пойдут: дальше — итерация {next}, лимит блока {from} → {to}.', {
+    const text = t('Повторить итерацию? Недоделанные шаги итерации {it}, если они есть, не пойдут: дальше — итерация {next}, лимит блока {from} → {to}.', {
       it: rs.block.iterations, next: rs.next, from: rs.block.maxIterations, to: rs.max,
     });
     if (!(await askConfirm(note ? `${text}\n\n${t('Указание: {text}', { text: note })}` : text, { ok: t('Повторить итерацию') }))) return;

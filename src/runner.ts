@@ -464,12 +464,14 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     if (!got.length) return [];
     const at = new Date().toISOString();
     const list = (report.notes ??= []);
+    const fresh = phases.map((phase) => ({ block, iteration, phase, at }));
     for (const n of got) {
-      (n.applied ??= []).push(...phases.map((phase) => ({ block, iteration, phase, at })));
+      (n.applied ??= []).push(...fresh);
       if (!list.some((x) => x.id === n.id)) list.push(n);
     }
     save();
-    for (const n of got) emit({ type: 'note', note: n });
+    // в событии — только новые записи applied: указание run применяется к каждому шагу, и лента переигрывания не должна расти квадратично
+    for (const n of got) emit({ type: 'note', note: { ...n, applied: fresh } });
     return got.map((n) => n.text);
   };
 
@@ -493,12 +495,14 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   /** Что мешает перейти на next: совместимость с идущим запуском и то же, что проверяется на старте. */
   const flowProblems = (next: FlowSpec, br: BlockReport): { problems: string[]; known: Map<string, KnowledgeTag[]> } => {
     const problems = flowEditProblems(spec, next, { block: br.index, iterations: br.iterations, limit: fixLimit });
-    const nb = flowBlocks(next);
+    // пройденным блокам директории, плагины и теги знаний уже не нужны: их пропажа не мешает править будущее
+    const ahead = flowBlocks(next).slice(br.index);
+    const aheadSpec: FlowSpec = next.blocks ? { ...next, blocks: ahead } : next;
     let known = new Map<string, KnowledgeTag[]>();
     const steps = [
-      () => checkAddDirs(nb, opts.cwd, opts.addDirs),
-      () => checkPlugins(nb, opts.cwd),
-      () => { known = resolveKnowledge(next, opts.knowledge); },
+      () => checkAddDirs(ahead, opts.cwd, opts.addDirs),
+      () => checkPlugins(ahead, opts.cwd),
+      () => { known = resolveKnowledge(aheadSpec, opts.knowledge); },
     ];
     for (const step of steps) {
       try {
@@ -513,7 +517,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
    * Отчёты блоков под новую версию: пройденные не трогаем; у идущего — заголовок, цикл и лимит, если его поменяли во flow
    * (поднятый руками или повтором остаётся); будущие — заново, с лимитом, поднятым руками, если во flow он тот же.
    */
-  const syncBlocks = (br: BlockReport, prev: Block[]) => {
+  const syncBlocks = (br: BlockReport, prev: Block[], restarted: boolean) => {
     const was = new Map(prev.map((b) => [b.name, b]));
     const reports = new Map(blockReports.map((b) => [b.name, b]));
     const limitOf = (b: Block, old?: BlockReport) => {
@@ -521,7 +525,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       return old && def && fixLimit(def) === fixLimit(b) ? old.maxIterations : fixLimit(b);
     };
     const cur = blocks[br.index];
-    Object.assign(br, { title: cur.title ?? cur.name, maxIterations: limitOf(cur, br), condition: cur.loop?.until.type ?? 'none', looped: Boolean(cur.loop), onFail: cur.on_fail ?? 'stop' });
+    // итерацию на этой паузе уже повторили: её номер обещан клиенту, лимит из flow его не отменяет
+    const curMax = restarted ? Math.max(limitOf(cur, br), br.iterations + 1) : limitOf(cur, br);
+    Object.assign(br, { title: cur.title ?? cur.name, maxIterations: curMax, condition: cur.loop?.until.type ?? 'none', looped: Boolean(cur.loop), onFail: cur.on_fail ?? 'stop' });
     const later = blocks.slice(br.index + 1).map((b, k): BlockReport => ({
       index: br.index + 1 + k,
       name: b.name,
@@ -542,7 +548,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       return flowProblems(keepBlockName(spec, raw), br).problems;
     },
     applyFlow: (raw, o) => {
-      const { br } = stoppedAt();
+      const { br, restarted } = stoppedAt();
       const next = keepBlockName(spec, raw);
       const { problems, known } = flowProblems(next, br);
       if (problems.length) throw new RunFixError(`Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
@@ -559,7 +565,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       spec = next;
       blocks = flowBlocks(next);
       knowledge = known;
-      syncBlocks(br, prev);
+      syncBlocks(br, prev, Boolean(restarted));
       (report.flowEdits ??= []).push(edit);
       save();
       emit({ type: 'flow', edit });
@@ -741,11 +747,16 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       emit({ type: 'iteration', block: block.name, iteration: iter, max: br.maxIterations });
 
       // Шаги ищутся по именам этапов: после правки flow на паузе следующий — первый, чьи этапы в этой итерации ещё не шли.
+      // Номер этапа (index) после правки сдвигается за уже прошедшие: вставленный этап не делит номер с прошедшим,
+      // и порядок итерации (итог запуска, history продолжения, карточки) остаётся порядком выполнения.
       const ran = new Set<string>();
+      let lastIndex = -1;
       const nextStep = (): PhaseStep | undefined => {
         for (const s of phaseSteps(block)) {
           const left = s.phases.filter(({ phase }) => !ran.has(phase.name));
-          if (left.length) return { ...s, phases: left };
+          if (!left.length) continue;
+          const shift = Math.max(0, lastIndex + 1 - Math.min(...left.map((m) => m.index)));
+          return { ...s, phases: left.map((m) => ({ ...m, index: m.index + shift })) };
         }
         return undefined;
       };
@@ -789,7 +800,10 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
             store.endStep();
           }
         }
-        for (const { phase } of members) ran.add(phase.name);
+        for (const { phase, index } of members) {
+          ran.add(phase.name);
+          lastIndex = Math.max(lastIndex, index);
+        }
         if (aborted()) return 'aborted';
         // Ошибки разбираем в порядке объявления: запуск получает ошибку первого упавшего участника.
         // Этап, упавший исключением, обрывает запуск как раньше, но только когда соседи дописали отчёты.
@@ -901,7 +915,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         save();
       }
     }
-    return blocks[bi].loop?.until.type === 'none' ? 'done' : 'max_iterations';
+    // без цикла (его могли снять правкой на паузе) условия нет — проход завершён
+    const until = blocks[bi].loop?.until.type;
+    return !until || until === 'none' ? 'done' : 'max_iterations';
   };
 
   try {

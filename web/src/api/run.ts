@@ -32,9 +32,12 @@ export const continueRun = (id: string) => api<{ id: string }>('POST', `${runUrl
 /** Указание идущему запуску: хвостом в промпт следующего шага (next) или каждого до конца запуска (run). */
 export const addRunNote = (id: string, text: string, scope: RunNote['scope'] = 'next') =>
   api<{ note: RunNote }>('POST', `${runUrl(id)}/note`, { text, scope, via: 'ui' });
-/** Правка flow запуска на паузе (снимок из YamlEditor); saveToFlows — и в flows/. Не подходит — 400 incompatible, в data.problems — почему. */
-export const applyRunFlow = (id: string, yaml: string, saveToFlows: boolean) =>
-  api<{ edit: RunFlowEdit }>('PUT', `${runUrl(id)}/flow`, { yaml, saveToFlows, via: 'ui' });
+/**
+ * Правка flow запуска на паузе (снимок из YamlEditor); saveToFlows — и в flows/; base — сколько правок было у прочитанного
+ * снимка (сменился — 409 stale). Не подходит — 400 incompatible, в data.problems — почему.
+ */
+export const applyRunFlow = (id: string, yaml: string, saveToFlows: boolean, base: number) =>
+  api<{ edit: RunFlowEdit }>('PUT', `${runUrl(id)}/flow`, { yaml, saveToFlows, base, via: 'ui' });
 /** Flow запуска на паузе — текущая версия из flows/ (поправили в Claude Code). */
 export const reloadRunFlow = (id: string) => api<{ edit: RunFlowEdit }>('POST', `${runUrl(id)}/flow/reload`, { via: 'ui' });
 /** Повтор итерации на паузе: остаток шагов отброшен, дальше — итерация N+1, лимит +1; note — в {{feedback}} и указанием. */

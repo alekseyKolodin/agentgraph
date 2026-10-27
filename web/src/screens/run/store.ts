@@ -84,6 +84,9 @@ export function resetLog(): void {
 let loadSeq = 0;
 /** Нужен ли странице снимок flow (граф): так же решает openRun. */
 let flowWanted = false;
+/** События, меняющие отчёты блоков: ответ reloadFlow, снятый раньше них, отчёты не затирает. */
+let blockSeq = 0;
+const BLOCK_EVENTS = new Set<RunStreamEvent['type']>(['block_start', 'block_end', 'iteration', 'limit']);
 
 /** Открыть запуск: отчёт, сброс страницы, снимок flow для графа. Ошибка (нет запуска) — исключение. */
 export async function openRun(id: string, withFlow: boolean): Promise<void> {
@@ -120,6 +123,7 @@ export function runEvent(e: RunStreamEvent): EventEffect | null {
   const st = runState.st;
   if (!st) return null;
   const eff = applyRunEvent(st, e);
+  if (BLOCK_EVENTS.has(e.type)) blockSeq++;
   if (eff.log) {
     runLog.append(eff.log);
     if (!logFrame) logFrame = requestAnimationFrame(flushLog);
@@ -136,11 +140,13 @@ export function runEvent(e: RunStreamEvent): EventEffect | null {
  */
 async function reloadFlow(id: string): Promise<void> {
   const my = loadSeq;
+  const seq = blockSeq;
   const [spec, run] = await Promise.all([flowWanted ? fetchRunFlow(id).catch(() => null) : null, fetchRun(id).catch(() => null)]);
   const st = runState.st;
   if (my !== loadSeq || runState.id !== id || !st) return;
   if (spec) runState.flow = { id, spec };
-  if (run && st.run.live) {
+  // пока шёл запрос, блоки уже поменяли события (запуск возобновили): они свежее ответа
+  if (run && st.run.live && seq === blockSeq) {
     st.run.blocks = run.blocks;
     st.run.maxIterations = run.maxIterations;
   }

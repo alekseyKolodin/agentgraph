@@ -25,7 +25,7 @@ import { sourceLabel } from '../../lib/run-form';
 import { deleteRunText } from '../../lib/runs';
 import { artAttention } from '../../lib/run/artifacts';
 import {
-  continueVisible, flowEditsLine, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
+  continueTitle, continueVisible, flowEditsLine, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
 } from '../../lib/run/view';
 import { useOpenFlow } from '../flow/nav';
 import { LimitCtl, Overview } from './Overview';
@@ -332,7 +332,7 @@ function RunPage({ id }: { id: string }) {
           {r.adhoc && canAdhoc && <button className="btn" title={t('Разовый запуск: сохранить его flow в flows/, чтобы запускать снова')} onClick={() => setSaveOpen(true)}>{t('Сохранить как flow')}</button>}
           {r.live && !pause && <button className="btn" title={t('Текущий этап доработает, следующий не начнётся')} onClick={() => void act(() => pauseRun(id))}>{t('Пауза')}</button>}
           {pause && <button className="btn primary" onClick={() => void resume()}>{resumeLabel}</button>}
-          {continueVisible(r) && <button className="btn primary" title={t('Новый запуск текущей версией flow: пройденные блоки не повторяются')} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
+          {continueVisible(r) && <button className="btn primary" title={continueTitle(r)} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
           {r.live && <button className="btn danger" onClick={() => void abort()}>{t('Остановить запуск')}</button>}
           {manage && <button className="btn ghost" title={t('Убрать из списка запусков слева; файлы останутся')} onClick={() => void hide()}>{r.hidden ? t('Вернуть в список') : t('Скрыть')}</button>}
           {manage && <button className="btn danger" title={t('Удалить папку запуска из runs/')} onClick={() => void remove()}>{t('Удалить')}</button>}

@@ -15,6 +15,8 @@ export default function RunFlowDialog({ r, onClose }: { r: RunView; onClose: () 
   const editor = useRef<YamlEditorHandle>(null);
   const toast = useToast();
   const [yaml, setYaml] = useState<string | null>(null);
+  // сколько правок было у прочитанного снимка: чужая правка после чтения — отказ stale, а не тихий откат
+  const [base, setBase] = useState(0);
   const [seq, setSeq] = useState(0);
   const [save, setSave] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -23,9 +25,11 @@ export default function RunFlowDialog({ r, onClose }: { r: RunView; onClose: () 
   useEffect(() => {
     dlg.current!.showModal();
     // снимок мог смениться прошлой правкой: читаем мимо кэша
+    const version = r.flowEdits?.length ?? 0;
     fetchRunFile(r.id, 'flow.yaml', true)
       .then((res) => {
         if (!res.ok) throw new Error(res.text);
+        setBase(version);
         setYaml(res.text);
         setSeq((n) => n + 1);
       })
@@ -38,11 +42,13 @@ export default function RunFlowDialog({ r, onClose }: { r: RunView; onClose: () 
     setBusy(true);
     setErr({ text: '', problems: [] });
     try {
-      const { edit } = await applyRunFlow(r.id, text, save);
+      const { edit } = await applyRunFlow(r.id, text, save, base);
       onClose();
-      toast(edit.changed.length
+      const done = edit.changed.length
         ? t('Flow запуска поправлен: {list}', { list: edit.changed.join('; ') })
-        : edit.savedToFlows ? t('Запуск уже идёт по этой версии; в flows/ сохранено') : t('Изменений нет: запуск идёт по этой версии'));
+        : edit.savedToFlows ? t('Запуск уже идёт по этой версии; в flows/ сохранено') : t('Изменений нет: запуск идёт по этой версии');
+      // правка запуска действует, а в flows/ записать не вышло — это сообщение сервера
+      toast(edit.saveError ? `${done}. ${edit.saveError}` : done);
     } catch (e) {
       const problems = e instanceof ApiError && e.code === 'incompatible' ? ((e.data as { problems?: string[] } | null)?.problems ?? []) : [];
       setErr({ text: problems.length ? t('Правка не подходит идущему запуску — он пойдёт по-старому:') : errorText(e), problems });
