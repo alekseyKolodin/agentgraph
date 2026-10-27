@@ -207,6 +207,22 @@ export type FlowSummary = {
 /** Элемент GET /api/flows: сводка flow (у невалидного — только имя, папка и ошибка). */
 export type FlowListItem = FlowSummary;
 
+/** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
+export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
+/** Что done потока добавляет к обычному телу ответа: фактическая модель (нет — init не пришёл) и длительность всего запроса. */
+export type FlowAiDone = { model?: string; durationMs: number };
+/**
+ * POST /api/flows/generate и /api/flows/:name/edit с Accept: application/x-ndjson — ход ИИ-сессии построчно.
+ * progress — модель (как только её назвал system/init), повтор запроса к API, шаг; log — строка хода (текст агента,
+ * вызов инструмента); done — тело, которое без заголовка пришло бы одним JSON, плюс FlowAiDone; error — ошибка, поток закрыт.
+ * B — тело маршрута: в web/ — FlowGenerated или FlowEdited (spec типизирован там).
+ */
+export type FlowAiStreamEvent<B = Record<string, unknown>> =
+  | { type: 'progress'; model?: string; retry?: { attempt: number; maxRetries: number; delayMs: number }; stage?: FlowAiStage }
+  | { type: 'log'; line: string }
+  | { type: 'done'; body: B & FlowAiDone }
+  | { type: 'error'; error: string };
+
 /** GET /api/connectors: коннекторы claude.ai аккаунта и их инструменты. read — только читает; write — меняет что-то снаружи. */
 export type ConnectorToolView = { name: string; tool: string; description?: string; readOnly: boolean };
 /** name — запись для tools этапа, которая разрешает весь коннектор: mcp__claude_ai_<Коннектор>. */
