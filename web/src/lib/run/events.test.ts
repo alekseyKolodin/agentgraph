@@ -149,3 +149,16 @@ test('указание run: события несут только новые ap
   applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('b')] } });
   assert.deepEqual(st.run.notes![0]!.applied?.map((a) => a.phase), ['b', 'c']);
 });
+
+test('связка flow: call даёт идущему этапу ссылку на дочерний запуск, next — решение развилки блоку', () => {
+  const st = liveState(detail({ blocks: [block('main'), block('ship', { index: 1 })] }));
+  applyRunEvent(st, start('review'));
+  const fx = applyRunEvent(st, { type: 'call', block: 'main', iteration: 1, phase: 'review', runId: 'kid-1', flow: 'child' });
+  assert.deepEqual(st.pending.get(pendingKey({ block: 'main', iteration: 1, phase: 'review' }))?.call, { runId: 'kid-1', flow: 'child' });
+  assert.equal(fx.runsSoon, true);
+  applyRunEvent(st, { type: 'next', block: 'main', next: { to: 'end', rule: 0, checks: [] } });
+  assert.deepEqual(st.run.blocks[0]!.next, { to: 'end', rule: 0, checks: [] });
+  // пропущенный развилкой блок приходит своим block_end
+  applyRunEvent(st, { type: 'block_end', block: block('ship', { index: 1, bypassed: true, maxIterations: 0 }) });
+  assert.equal(st.run.blocks[1]!.bypassed, true);
+});

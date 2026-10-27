@@ -4,7 +4,7 @@ import type { BlockReport, ConditionReport, PhaseReport, RunDetail, RunReport } 
 import { liveState, type LiveState, type PendingPhase } from './events';
 import {
   blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
-  inspectView, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
+  blockNextNote, blockSkipNote, inspectView, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
   summaryView, tagFinalLines, waitingNotes, type RunFold,
 } from './view';
 
@@ -235,4 +235,23 @@ test('правки flow в шапке: число и что поменяла к�
     { version: 2, at: '', source: 'reload', via: 'skill', changed: ['+ этап c'] },
   ] }));
   assert.deepEqual(line, { text: 'flow правили на ходу: 2', title: '1. правка снимка · и в flows/: этап b: prompt\n2. из flows/: + этап c' });
+});
+
+test('инспектор блока-вызова: дочерние запуски по итерациям, идущий — без статуса; подписи пропуска и развилки', () => {
+  const s = st({ phases: [phase('review', 1, { ok: false, subtype: 'failed', call: { runId: 'kid-1', flow: 'child', status: 'failed' } })] });
+  pend(s, { phase: 'review', iteration: 2, call: { runId: 'kid-2', flow: 'child' } });
+  const v = inspectView(s, { kind: 'phase', key: 'p:main:review', block: 'main', name: 'review' }, [{ flow: 'child', phases: [{ name: 'review' }] }]);
+  assert.ok(v.kind === 'phase' && v.call);
+  assert.deepEqual(v.call, { flow: 'child', runs: [{ iteration: 1, runId: 'kid-1', status: 'failed' }, { iteration: 2, runId: 'kid-2' }] });
+  // обычный этап — без call
+  const plain = inspectView(s, { kind: 'phase', key: 'p:main:a', block: 'main', name: 'a' }, [{ phases: [{ name: 'a' }] }]);
+  assert.equal(plain.kind === 'phase' && plain.call, undefined);
+
+  assert.equal(blockSkipNote({ bypassed: true, skipped: true }), 'не выбран развилкой');
+  assert.equal(blockSkipNote({ skipped: true }), 'пропущен');
+  assert.equal(blockSkipNote({}), '');
+  const blocks = [{ name: 'a', title: 'А' }, { name: 'b', title: 'Б' }];
+  assert.equal(blockNextNote({ next: { to: 'b', checks: [] } }, blocks), 'дальше: блок «Б»');
+  assert.equal(blockNextNote({ next: { to: 'end', checks: [] } }, blocks), 'дальше: конец запуска');
+  assert.equal(blockNextNote({}, blocks), '');
 });

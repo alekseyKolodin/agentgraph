@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import readline from 'node:readline/promises';
 import { parse as parseYaml } from 'yaml';
 import { flowBlocks, isCallBlock, type FlowSpec, type Phase } from './schema.js';
-import { assertRunnable, describeNext } from './compose.js';
+import { describeNext } from './compose.js';
 import { artifactAccess, declaredArtifacts } from './artifacts.js';
 import { generateFlow } from './generate.js';
 import { checkCalls, describeCondition, flowFileName, flowToYaml, loadFlow, resolveFlowFile } from './flows.js';
@@ -119,6 +119,7 @@ async function main(): Promise<number> {
     abort,
     onEvent: consoleReporter(values.verbose),
     onQuestion: askInTerminal,
+    runChild: childInTerminal(values.verbose, 1),
   };
 
   const [cmd, ...rest] = positionals;
@@ -183,7 +184,6 @@ async function main(): Promise<number> {
     case 'run': {
       if (!rest[0]) return fail('Укажи flow: agentgraph run flows/<name>.yaml');
       const spec = loadFlow(rest[0]);
-      assertRunnable(spec);
       if (values.input) spec.input = values.input;
       const tagOpts = await withTags(spec, tags, !values['no-save-tag'], autoTag);
       printPlan(spec);
@@ -205,7 +205,6 @@ async function main(): Promise<number> {
       // подпись flow в таблице — его имя; два варианта одного flow из файлов с одним name различаем суффиксом
       flows[0].name = flows[0].spec.name;
       if (flows[1]) flows[1].name = flows[1].spec.name === flows[0].name ? `${flows[1].spec.name} (2)` : flows[1].spec.name;
-      for (const f of flows) assertRunnable(f.spec);
       const tasks = loadTasks(values.tasks);
       const outDir = evalDir(RUNS_DIR, flows.map((f) => f.name));
       console.log(`${c.bold('Eval')} ${flows.map((f) => f.name).join(c.dim(' vs '))}  ·  задач: ${tasks.length}, прогонов на задачу: ${runs}  ·  ${c.dim(outDir)}`);
@@ -339,6 +338,11 @@ function printPlan(spec: FlowSpec, full = false): void {
     if (b.next !== undefined) console.log(`${pad}${c.dim(`после блока: ${describeNext(b)}`)}`);
   });
   console.log();
+}
+
+/** Дочерний запуск блока-вызова в терминале: его ход печатается под строкой блока, с отступом «│ » на уровень вызова. */
+function childInTerminal(verbose: boolean, depth: number): NonNullable<RunOptions['runChild']> {
+  return (spec, o) => runFlow(spec, { ...o, onEvent: consoleReporter(verbose, '│ '.repeat(depth)), runChild: childInTerminal(verbose, depth + 1) });
 }
 
 /** Вопросы агента в терминале: номер варианта (через запятую для multiSelect) или свой текст. */

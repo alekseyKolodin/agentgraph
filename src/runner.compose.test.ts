@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canContinue, continuationFrom, runFlow, type RunEvent, type RunOptions, type RunReport, type RunStore } from './runner.js';
+import { canContinue, continuationFrom, runFlow, type RunEvent, type RunFix, type RunOptions, type RunReport, type RunStore } from './runner.js';
+import { RunFixError } from './run-fix.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { FlowSpec } from './schema.js';
 
@@ -177,6 +178,27 @@ test('блок-вызов: опции дочернему — те же cwd, мо
   assert.equal(co.onEvent, undefined);
   assert.equal(typeof co.loadFlow, 'function');
   assert.equal(typeof co.runChild, 'function');
+});
+
+test('правка родителя, пока идёт вызванный flow, — not_paused с подсказкой править дочерний на его странице', async () => {
+  let fix: RunFix | undefined;
+  let err: unknown;
+  const spec = flow([{ name: 'review', flow: 'child', input: '{{input}}' }]);
+  const r = await run(spec, {
+    flows: { child: child() },
+    onSession: () => {
+      try {
+        fix!.checkFlow(spec);
+      } catch (e) {
+        err = e;
+      }
+    },
+    opts: { control: { checkpoint: async () => {}, takeNotes: () => [] }, onFix: (f) => { fix = f; } },
+  });
+  assert.equal(r.report.status, 'done');
+  assert.ok(err instanceof RunFixError);
+  assert.equal(err.code, 'not_paused');
+  assert.match(err.message, new RegExp(`вызванный flow child \\(запуск ${r.childSaved[0].id}\\): правь его на его странице`));
 });
 
 // --- вызов в цикле

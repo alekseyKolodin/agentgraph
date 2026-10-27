@@ -266,6 +266,12 @@ function RunPage({ id }: { id: string }) {
     r.cwd && <PathLink key="cwd" className={styles.subPath} path={r.cwd} />,
     r.hidden && <span key="hidden">{t('скрыт из списка')}</span>,
     from && (fromKnown ? <Link key="from" to={`/run/${from}`} title={from}>{t('продолжение запуска')}</Link> : <span key="from" title={from}>{t('продолжение запуска')}</span>),
+    // дочерний запуск блока-вызова: откуда вызван; продолжают и останавливают связку целиком — со страницы родителя
+    r.parent && (
+      <Link key="parent" to={`/run/${r.parent.runId}`} title={t('Запуск {id}, блок {block}, итерация {it}', { id: r.parent.runId, block: r.parent.block, it: r.parent.iteration })}>
+        {t('вызван из flow {flow}', { flow: r.parent.flow })}
+      </Link>
+    ),
   ].filter(Boolean);
   const extras = [
     r.attachments?.length ? (

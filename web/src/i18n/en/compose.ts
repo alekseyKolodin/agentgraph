@@ -72,4 +72,18 @@ export const compose: Record<string, string> = {
   'развилка после блока': 'branching after the block',
   // сводка flow
   'вызов|вызова|вызовов': 'call|calls',
+  // страница запуска: блоки-вызовы, развилка, дочерние запуски
+  'не выбран развилкой': 'not chosen by the branch',
+  'не выбран': 'not chosen',
+  'дальше: конец запуска': 'next: end of the run',
+  'дальше: блок «{title}»': 'next: block "{title}"',
+  'вызов flow {flow}': 'calls flow {flow}',
+  'Вызванные запуски': 'Called runs',
+  'Открыть запуск {flow} →': 'Open the {flow} run →',
+  'Flow {flow} ещё не вызывался': 'Flow {flow} has not been called yet',
+  'Открыть вызванный запуск {id}': 'Open the called run {id}',
+  '↪ запуск flow {flow}': '↪ run of flow {flow}',
+  'Запуск {id}, блок {block}, итерация {it}': 'Run {id}, block {block}, iteration {it}',
+  'вызван из flow {flow}': 'called from flow {flow}',
+  'вызван блоком {block} запуска {id}': 'called by block {block} of run {id}',
 };

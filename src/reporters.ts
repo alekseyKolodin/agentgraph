@@ -6,6 +6,7 @@ import { WRITE_TOOLS, type Denial } from './artifacts.js';
 import { ARTIFACTS_DIR } from './artifact-store.js';
 import type { BlockReport, RunEvent, RunReport, RunStatus, TagSummaryReport } from './runner.js';
 import { c, fmtMs, fmtUsd } from './ui.js';
+import { NEXT_END } from './schema.js';
 
 const CONDITION_LABEL: Record<BlockReport['condition'], string> = {
   command: 'условие — команда',
@@ -83,7 +84,8 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
         break;
       }
       case 'block_end':
-        if (e.block.status === 'max_iterations' && e.block.onFail === 'continue') {
+        if (e.block.bypassed) out.log(c.dim(`↷ Блок ${e.block.title}: пропущен развилкой`));
+        else if (e.block.status === 'max_iterations' && e.block.onFail === 'continue') {
           out.log(c.yellow(`↷ Блок ${e.block.title}: условие не выполнено за ${e.block.iterations} итераций, по on_fail: continue иду дальше`));
         }
         break;
@@ -112,6 +114,17 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
         grouped.delete(r.phase);
         if (r.ok) out.log(`${c.green('✓')} ${who}${stats}`);
         else out.log(`${c.yellow('!')} ${who}${r.subtype} ${stats}${r.errors.length ? '\n  ' + c.red(r.errors.join('\n  ')) : ''}`);
+        break;
+      }
+      case 'call':
+        // строка «▶ блок … » кончается здесь: дальше ход дочернего запуска со своим отступом
+        out.write(`${c.dim(`вызов flow ${e.flow} · запуск ${e.runId}`)}\n`);
+        break;
+      case 'next': {
+        const n = e.next;
+        const to = n.to === NEXT_END ? 'конец запуска' : `блок ${n.to}`;
+        const why = n.rule !== undefined ? `правило ${n.rule + 1}` : 'ни одно правило не выполнилось — по порядку';
+        out.log(`${c.cyan('⤷')} После блока ${e.block}: ${to} ${c.dim(`(${why})`)}`);
         break;
       }
       case 'condition_start':

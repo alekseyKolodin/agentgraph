@@ -18,7 +18,7 @@ import { linkifyText } from '../../lib/md';
 import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
-  COND_STEP, ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
+  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
   runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
@@ -152,7 +152,8 @@ function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; 
   switch (item.kind) {
     case 'block': {
       const b = item.block;
-      const how = b.skipped ? t('пропущен (уже пройден)') : b.looped ? null : t('один проход');
+      const how = b.bypassed ? t('не выбран развилкой') : b.skipped ? t('пропущен (уже пройден)') : b.looped ? null : t('один проход');
+      const next = blockNextNote(b, runBlocks(r));
       return (
         <div className={styles.blockHead}>
           {item.foldKey ? <FoldButton foldKey={item.foldKey} open={item.open}>{item.label}</FoldButton> : <span>{item.label}</span>}
@@ -163,6 +164,7 @@ function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; 
               : limitEditable(r, b)
                 ? <>{`${t('итераций {n}', { n: b.iterations || 0 })}/`}<LimitCtl block={b} />{item.cost ? ` · ${usd(item.cost)}` : ''}</>
                 : `${t('итераций {i}/{n}', { i: b.iterations || 0, n: b.maxIterations })}${item.cost ? ` · ${usd(item.cost)}` : ''}`}
+            {next && ` · ${next}`}
           </span>
         </div>
       );
@@ -241,7 +243,7 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
         <span className={styles.status}>{p.ok ? <span className="ok">✓</span> : <span className="warn">!</span>}</span>
         <span className={styles.title}>{p.title || p.phase}</span>
         <GroupTag group={p.group} />
-        <span className={styles.tools}>{`[${toolsLabel(p.tools, implicit)}]`}</span>
+        <span className={styles.tools}>{p.call ? <CallLink call={p.call} /> : `[${toolsLabel(p.tools, implicit)}]`}</span>
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
         <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${t('{n} ходов', { n: p.turns })} · ${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
@@ -260,6 +262,11 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
   );
 }
 
+/** Шаг блока-вызова: ссылка на его дочерний запуск вместо инструментов. */
+const CallLink = ({ call }: { call: { runId: string; flow: string } }) => (
+  <Link to={`/run/${call.runId}`} title={t('Открыть вызванный запуск {id}', { id: call.runId })}>{t('↪ запуск flow {flow}', { flow: call.flow })}</Link>
+);
+
 function RunningCard({ x, doing, runId, implicit, notes, children }: { x: PendingPhase; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
   // промпт записан до старта этапа, транскрипт пишется по ходу; вывода до phase_end ещё нет. У старых запусков files нет.
   const pf = x.files;
@@ -269,7 +276,7 @@ function RunningCard({ x, doing, runId, implicit, notes, children }: { x: Pendin
         <span className={styles.status}>⏳</span>
         <span className={styles.title}>{x.title}</span>
         <GroupTag group={x.group} />
-        <span className={styles.tools}>{`[${toolsLabel(x.tools, implicit)}]`}</span>
+        <span className={styles.tools}>{x.call ? <CallLink call={x.call} /> : `[${toolsLabel(x.tools, implicit)}]`}</span>
         <ModelChip x={x} />
         <CtxChip x={x} live />
         <span className={styles.stats}>{doing}</span>

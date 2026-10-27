@@ -1,6 +1,6 @@
 // Что показывает страница запуска (порт renderRun, renderRunSummary, blockIters, renderRunRibbons, renderRunFinal,
 // renderInspector, runGraphGoto из ui/app.js) — без React и DOM: компоненты только раскладывают готовые данные.
-import type { ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, SessionTokens } from '@server/api-types';
+import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens } from '@server/api-types';
 import { dur, excerpt, usd } from '../format';
 import { t } from '../i18n';
 import { markdownFits } from '../md';
@@ -17,6 +17,10 @@ export type RunBlockView = {
   maxIterations: number;
   looped: boolean;
   skipped?: boolean;
+  /** Развилка next перешла через блок: он не выполнялся. */
+  bypassed?: boolean;
+  /** Куда развилка после блока повела запуск. */
+  next?: BlockNext;
   onFail?: string;
 };
 
@@ -38,6 +42,18 @@ export const runPause = (r: RunView): 'requested' | 'paused' | undefined => (r.l
 export function currentBlockIndex(blocks: RunBlockView[]): number {
   const running = blocks.findIndex((b) => b.status === 'running');
   return running >= 0 ? running : blocks.findLastIndex((b) => b.status !== 'pending' && !b.skipped);
+}
+
+/** «Блок не выбран развилкой» или «пропущен» (продолжение) — подпись блока, который не выполнялся; иначе пусто. */
+export const blockSkipNote = (b: Pick<RunBlockView, 'skipped' | 'bypassed'>): string =>
+  b.bypassed ? t('не выбран развилкой') : b.skipped ? t('пропущен') : '';
+
+/** «дальше: блок X» или «дальше: конец» после блока с развилкой next; пусто — развилки нет или она ещё не решена. */
+export function blockNextNote(b: Pick<RunBlockView, 'next'>, blocks: Pick<RunBlockView, 'name' | 'title'>[]): string {
+  if (!b.next) return '';
+  if (b.next.to === 'end') return t('дальше: конец запуска');
+  const to = blocks.find((x) => x.name === b.next!.to);
+  return t('дальше: блок «{title}»', { title: to?.title || b.next.to });
 }
 
 export const COND_LABEL: Record<string, string> = { command: t('команда'), judge: t('судья'), marker: t('маркер'), none: t('без условия') };
@@ -428,7 +444,7 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
   const sole = blocks.length === 1;
   const rows: RibbonRow[] = [];
   blocks.forEach((b, bi) => {
-    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: b.skipped ? t('пропущен') : b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход') };
+    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: blockSkipNote(b) || (b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход')) };
     const bs = blockIters(st, bi, spec);
     if (!b.looped || b.skipped) {
       if (!sole) rows.push({ bi, head, chain: bs.iters > 0 && !b.skipped ? bs.chain(1) : undefined });
@@ -550,7 +566,7 @@ export function nodeFromKey(key: string): InspectSel | null {
 }
 
 type SpecPhase = { name: string; title?: string; tools?: string[]; model?: string; handoff?: string };
-type SpecBlock = { phases: SpecPhase[]; loop?: { until?: { type?: string; run?: string } } };
+type SpecBlock = { phases: SpecPhase[]; flow?: string; loop?: { until?: { type?: string; run?: string } } };
 
 export type InspectPhase = {
   kind: 'phase';
@@ -565,6 +581,8 @@ export type InspectPhase = {
   last?: { iteration: number; text: string; errors?: string };
   hist: PhaseReport[];
   files: { file: string; title: string; session?: string }[];
+  /** Блок-вызов: вызываемый flow и его дочерние запуски по итерациям, последний — внизу; у идущего статуса ещё нет. */
+  call?: { flow: string; runs: { iteration: number; runId: string; status?: RunStatus }[] };
 };
 export type InspectCond = {
   kind: 'cond';
@@ -613,6 +631,9 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
       f?.transcript ? { file: f.transcript, title: t('Транскрипт · {name}', { name: String(sel.name) }), session: rep && !run ? rep.sessionId || '' : '' } : null,
       !run && f?.output ? { file: f.output, title: t('Вывод · {name}', { name: String(sel.name) }) } : null,
     ].filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const flow = specBlock?.flow ?? rep?.call?.flow ?? run?.call?.flow;
+    const calls: NonNullable<InspectPhase['call']>['runs'] = done.flatMap((p) => (p.call ? [{ iteration: p.iteration, runId: p.call.runId, status: p.call.status }] : []));
+    if (run?.call) calls.push({ iteration: run.iteration, runId: run.call.runId });
     return {
       where,
       kind: 'phase',
@@ -627,6 +648,7 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
         : undefined,
       hist: done.length > 1 ? done.slice(-6) : [],
       files,
+      ...(flow ? { call: { flow, runs: calls.slice(-6) } } : {}),
     };
   }
   if (sel.kind === 'cond') {

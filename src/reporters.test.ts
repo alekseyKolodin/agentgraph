@@ -33,3 +33,20 @@ test('консольный вывод дочернего запуска: пре�
   const plain = capture(() => events.forEach(consoleReporter(false)));
   assert.equal(plain, out.replace(/^│ /gm, ''));
 });
+
+test('консольный вывод связки: «▶ блок … вызов flow» кончает строку, развилка и пропущенный блок — своими строками', () => {
+  const call: RunEvent[] = [
+    { ...events[0], phase: 'review', title: 'review' } as RunEvent,
+    { type: 'call', block: 'main', iteration: 1, phase: 'review', runId: 'kid-1', flow: 'child' },
+    { type: 'next', block: 'main', next: { to: 'ship', rule: 0, checks: [] } },
+    { type: 'block_end', block: { name: 'slogan', title: 'Слоган', status: 'pending', bypassed: true } as never },
+    { type: 'next', block: 'ship', next: { to: 'end', checks: [] } },
+  ];
+  const lines = capture(() => call.forEach(consoleReporter(false))).split('\n').filter(Boolean);
+  assert.deepEqual(lines, [
+    '▶ review [без инструментов] … вызов flow child · запуск kid-1',
+    '⤷ После блока main: блок ship (правило 1)',
+    '↷ Блок Слоган: пропущен развилкой',
+    '⤷ После блока ship: конец запуска (ни одно правило не выполнилось — по порядку)',
+  ]);
+});

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RunSummary } from '@server/api-types';
-import { deleteRunText, projKey, runListView, runManageable, runRowSub, runRowTitle, statusChips } from './runs';
+import { deleteRunText, nestRuns, projKey, runDepths, runListView, runManageable, runRowSub, runRowTitle, statusChips } from './runs';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
   id, flow: 'f', status: 'done', iterations: 1, totalCostUsd: 0.5, startedAt: '2026-10-24T10:00:00Z', input: '', hidden: false, ...over,
@@ -62,4 +62,19 @@ test('строка запуска: подсказка, подстрока с flo
   assert.equal(runManageable(run('a'), false), false);
   assert.match(deleteRunText('x', run('x')), /^Удалить запуск «f» от .+\?\nПапка runs\/x с промптами/);
   assert.match(deleteRunText('x', undefined), /^Удалить запуск x\?/);
+});
+
+test('дочерние запуски — под родителем в порядке вызова, вложенные — под своим, без родителя в списке — на месте', () => {
+  const parent = (runId: string) => ({ parent: { runId, flow: 'p', block: 'b', iteration: 1 } });
+  // от новых к старым, как приходят с сервера
+  const list = [run('k2', parent('p1')), run('g1', parent('k1')), run('k1', parent('p1')), run('p1'), run('lost', parent('gone')), run('p0')];
+  const nested = nestRuns(list);
+  assert.deepEqual(nested.map((r) => r.id), ['p1', 'k1', 'g1', 'k2', 'lost', 'p0']);
+  assert.deepEqual([...runDepths(nested)], [['p1', 0], ['k1', 1], ['g1', 2], ['k2', 1], ['lost', 0], ['p0', 0]]);
+  // без дочерних — тот же массив
+  const plain = [run('a'), run('b')];
+  assert.equal(nestRuns(plain), plain);
+  // в списке сайдбара — так же, и подсказка строки говорит, откуда вызван
+  assert.deepEqual(runListView(list, opts(), false, new Set()).runs.map((r) => r.id), ['p1', 'k1', 'g1', 'k2', 'lost', 'p0']);
+  assert.match(runRowTitle(list[0]!), /вызван блоком b запуска p1/);
 });

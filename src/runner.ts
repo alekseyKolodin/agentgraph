@@ -464,6 +464,8 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   let stopped: { open: boolean; restarted?: boolean } | null = null;
   /** Повтор итерации, заказанный посреди неё: раннер обрывает её сразу после контрольной точки. */
   let cut = false;
+  /** Идёт дочерний запуск блока-вызова: раннер ждёт его, а не стоит в контрольной точке. */
+  let calling: { flow: string; runId: string } | undefined;
   /** Граница шага: здесь запуск встаёт на паузу. true — запуск остановлен, дальше не идём. */
   const checkpoint = async (open = false): Promise<boolean> => {
     if (opts.control) {
@@ -511,6 +513,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   const fixLimit = (b: Block) => blockMaxIterations(b, opts);
   /** Блок, на котором стоит раннер; вне контрольной точки — RunFixError not_paused. */
   const stoppedAt = (): { br: BlockReport; open: boolean; restarted?: boolean } => {
+    if (!stopped && calling) {
+      throw new RunFixError(`Сейчас идёт вызванный flow ${calling.flow} (запуск ${calling.runId}): правь его на его странице — этот запуск встанет на паузу после него`, 'not_paused');
+    }
     if (!stopped || !current) throw new RunFixError('Запуск не на паузе: править flow и повторять итерацию можно только на паузе', 'not_paused');
     return { br: current, ...stopped };
   };
@@ -785,6 +790,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       };
       emit({ type: 'call', block: block.name, iteration: iter, phase: phase.name, runId: path.basename(childDir), flow: block.flow });
       log(`↪ вызов flow ${block.flow}: запуск ${path.basename(childDir)}${resume ? `, продолжение ${resume.from.runId}` : ''}`);
+      calling = { flow: block.flow, runId: path.basename(childDir) };
       child = await (opts.runChild ?? runFlow)(callee, childOpts);
       lastCall.set(block.name, { runId: child.id, runDir: child.runDir });
       const done = child;
@@ -798,6 +804,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       log(`ошибка: ${message}`);
       res = { ok: false, subtype: 'exception', text: message, costUsd: child?.totalCostUsd ?? 0, turns: 0, durationMs: Date.now() - startedAt, errors: [message] };
     } finally {
+      calling = undefined;
       opts.abort?.signal.removeEventListener('abort', stop);
     }
     fs.writeFileSync(path.join(runDir, files.transcript), lines.join('\n') + '\n');

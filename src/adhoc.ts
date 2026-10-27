@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertFlowName, checkCalls, flowExists, flowFileName, flowFolder, flowToYaml, loadFlow, parseFlow, saveFlowYaml, validateSpec } from './flows.js';
 import { compactSpec, flowBlocks, type Block, type FlowSpec } from './schema.js';
-import { assertRunnable } from './compose.js';
 import type { ApiReply } from './artifact-api.js';
 import type { RunReport } from './runner.js';
 
@@ -44,12 +43,11 @@ export function specFromRunBody(
     if (typeof body.flow !== 'string') throw new Error('flow — имя flow');
     assertFlowName(body.flow);
     const spec = load(body.flow);
-    assertRunnable(spec);
+    // вызываемые flow могли удалить или поменять после сохранения: ошибка — до папки запуска, а не первым шагом
+    checkCalls(spec, load);
     return { spec, adhoc: false };
   }
-  const spec = draftSpec(body);
-  assertRunnable(spec);
-  return { spec, adhoc: true };
+  return { spec: draftSpec(body), adhoc: true };
 }
 
 /**

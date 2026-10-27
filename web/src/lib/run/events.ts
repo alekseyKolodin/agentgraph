@@ -21,6 +21,8 @@ export type PendingPhase = {
   effort?: string;
   at: number;
   ctx?: { peak: number; requests: number; window?: number };
+  /** Блок-вызов: идущий дочерний запуск (событие call). */
+  call?: { runId: string; flow: string };
 };
 export type PendingCond = { block: string; iteration: number; kind: UntilType; detail: string; file?: string };
 
@@ -97,6 +99,17 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       const cur = st.pending.get(pendingKey(e));
       if (!cur) return { render: false };
       cur.ctx = { peak: e.contextPeak, requests: e.requests, ...(e.contextWindow ? { window: e.contextWindow } : {}) };
+      break;
+    }
+    case 'call': {
+      // дочерний запуск блока-вызова стартовал: ссылка на него — у идущего этапа, а в списке запусков он появится сам
+      const cur = st.pending.get(pendingKey(e));
+      if (cur) cur.call = { runId: e.runId, flow: e.flow };
+      return { render: true, runsSoon: true };
+    }
+    case 'next': {
+      const b = r.blocks?.find((x) => x.name === e.block);
+      if (b) b.next = e.next;
       break;
     }
     case 'log':

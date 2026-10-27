@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parse as parseYaml } from 'yaml';
-import { assertRunnable, CALL_DEPTH_MAX, callInput, callOutcome, callProblems, calledFlows, describeNext, pickNext } from './compose.js';
+import { CALL_DEPTH_MAX, callInput, callOutcome, callProblems, calledFlows, describeNext, pickNext } from './compose.js';
 import { flowToYaml, parseFlow, summarize, validateSpec } from './flows.js';
 import { specFromRunBody } from './adhoc.js';
 import { compactSpec, flowBlocks, flowJsonSchema, flowPhases, GeneratedFlowSchema, type FlowSpec } from './schema.js';
@@ -212,13 +212,12 @@ test('flow без вызовов и next разбирается как рань�
   assert.deepEqual(spec, raw);
 });
 
-test('до подключения в раннер flow с вызовом или next не запускается, остальные — как раньше', () => {
-  assert.throws(() => assertRunnable(flow(chain)), /раннер пока не исполняет вызов flow \(блоки spec, implement, review\)/);
-  assert.throws(() => assertRunnable(flow('name: n\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n')), /развилку next \(блоки a\)/);
-  assert.doesNotThrow(() => assertRunnable(flow('name: n\nphases: [{ name: p, tools: [], prompt: x }]\n')));
-});
-
-test('запуск из UI и скилла: flow с вызовом отклоняется до создания папки запуска, и сохранённый, и черновик', () => {
-  assert.throws(() => specFromRunBody({ flow: 'pipeline' }, () => flow(chain)), /раннер пока не исполняет вызов flow/);
-  assert.throws(() => specFromRunBody({ yaml: 'name: d\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n' }), /развилку next/);
+test('запуск из UI и скилла: вызов несуществующего flow отклоняется до создания папки запуска, и у сохранённого, и у черновика', () => {
+  const load = (name: string) => (name === 'pipeline' ? flow(chain) : assert.fail(`нет flow ${name}`));
+  assert.throws(() => specFromRunBody({ flow: 'pipeline' }, load), /нет flow write-spec/);
+  const ok = (name: string) => (name === 'pipeline' ? flow(chain) : flow(`name: ${name}\nphases: [{ name: p, tools: [], prompt: x }]\n`));
+  assert.equal(specFromRunBody({ flow: 'pipeline' }, ok).spec.name, 'pipeline');
+  // развилка без вызовов запускается как есть
+  const branch = 'name: d\nblocks:\n  - name: a\n    next: end\n    phases: [{ name: p, tools: [], prompt: x }]\n';
+  assert.equal(specFromRunBody({ yaml: branch }).adhoc, true);
 });

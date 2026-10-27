@@ -14,7 +14,7 @@ export type RunPhaseLike = {
   tokens?: { contextPeak?: number; contextWindow?: number };
 };
 export type RunCondLike = { block?: string; iteration: number; type?: string; done?: boolean; costUsd?: number };
-export type RunBlockLike = { name: string; status?: string; skipped?: boolean; iterations?: number; maxIterations?: number };
+export type RunBlockLike = { name: string; status?: string; skipped?: boolean; bypassed?: boolean; iterations?: number; maxIterations?: number };
 /** RunReport (+ live): то, что граф берёт из отчёта запуска. */
 export type RunReportLike = {
   live?: boolean;
@@ -93,7 +93,8 @@ export function graphRunState(
   blocks.forEach((b, bi) => {
     const br = (r.blocks || []).find((x) => x.name === b.name) || (sole !== null ? r.blocks?.[0] || legacy : null);
     const status = br?.status || 'pending';
-    const skipped = Boolean(br?.skipped);
+    // через блок перешла развилка next — он тоже не выполнялся
+    const skipped = Boolean(br?.skipped || br?.bypassed);
     // у пропущенного продолжением блока maxIterations = 0: лимит тогда из снимка, иначе на дуге «до 0»
     const max = (!skipped && (br?.maxIterations ?? 0) > 0 ? br!.maxIterations! : 0) || b.loop?.max_iterations || 1;
     const phases = (r.phases || []).filter((p) => inBlock(p, b.name));
@@ -105,7 +106,7 @@ export function graphRunState(
     out.blocks[b.name] = { index: bi, status, skipped, iteration: iter, max, looped: Boolean(b.loop), untilType: b.loop?.until?.type };
     out.nodes[`b:${b.name}`] = {
       status: skipped ? 'skipped' : status === 'pending' ? 'pending' : active ? 'running' : status === 'done' ? 'done' : 'failed',
-      label: skipped ? t('пропущен') : b.loop && iter ? t('итер. {i}/{max}', { i: iter, max }) : '',
+      label: br?.bypassed ? t('не выбран') : skipped ? t('пропущен') : b.loop && iter ? t('итер. {i}/{max}', { i: iter, max }) : '',
     };
     for (const p of b.phases) {
       const mine = phases.filter((x) => x.phase === p.name);
