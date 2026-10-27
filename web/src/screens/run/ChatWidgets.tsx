@@ -159,8 +159,15 @@ function ActionRow({ a, disabled, onAct }: { a: ChatAction; disabled: boolean; o
           <pre>{preview}</pre>
         </details>
       )}
-      {!st && a.kind === 'save_flow' && <p className={styles.warn}>{t('Общий файл: правка подействует на все следующие запуски и продолжения этого flow.')}</p>}
-      {!st && a.kind === 'apply_flow' && (
+      {!st && a.kind === 'save_flow' && (
+        <p className={styles.warn}>
+          {a.keepsSnapshot
+            ? t('Общий файл: правка подействует на следующие запуски этого flow. Продолжение этого запуска останется на его снимке.')
+            : t('Общий файл: правка подействует на все следующие запуски и продолжения этого flow.')}
+        </p>
+      )}
+      {/* у разового запуска файла в flows/ нет: галочка только потратила бы кнопку */}
+      {!st && a.kind === 'apply_flow' && !runState.st?.run.adhoc && (
         <label className={styles.check} title={t('Записать ту же правку и в flows/: её возьмут следующие запуски')}>
           <input type="checkbox" checked={saveToFlows} onChange={(e) => setSaveToFlows(e.target.checked)} /> {t('сохранить и в flow')}
         </label>

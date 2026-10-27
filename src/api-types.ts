@@ -826,7 +826,7 @@ export type ChatLink = { kind: 'run_file' | 'artifact' | 'phase' | 'path'; ref: 
 export type ChatActionKind = 'abort' | 'write_artifact' | 'answer_pause' | 'save_flow' | 'continue' | 'rerun' | 'apply_flow' | 'reload_flow' | 'restart_iteration';
 
 export type ChatAction = {
-  /** Номер в сообщении: a1, a2… */
+  /** Уникален на всю историю чата: a-<uuid>. */
   id: string;
   kind: ChatActionKind;
   /** Текст кнопки от агента. */
@@ -842,6 +842,16 @@ export type ChatAction = {
   maxBudgetUsd?: number;
   /** Состояние, при котором действие предложено (хэш артефакта или файла flow, пауза): другое при клике — expired. */
   base?: string;
+  /**
+   * apply_flow — версия снимка flow запуска (flowEdits.length), которую прочёл агент; reload_flow — при которой предложена.
+   * Снимок правили после — expired: кнопка не откатит более новую правку.
+   */
+  flowVersion?: number;
+  /**
+   * save_flow, rerun — последнюю правку flow на ходу в flows/ не сохраняли: продолжение этого запуска пойдёт по его снимку,
+   * а flows/ и перезапуск этой правки не знают.
+   */
+  keepsSnapshot?: boolean;
   /** Итог клика; нет — ещё не нажимали. */
   state?: 'done' | 'failed' | 'expired';
   /** Что вышло или почему нет. */
