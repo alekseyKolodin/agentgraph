@@ -4,6 +4,7 @@ import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
 import { cleanTitle } from './auto-tag.js';
 import { wrapData, type RunSource } from './intake.js';
+import { replyIn, taskLang } from './lang.js';
 import { stripTagBlocks } from './tags.js';
 
 export const RUN_TITLE_MODEL = 'haiku';
@@ -29,7 +30,7 @@ export type RunTitleDeps = {
 const SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    title: { type: 'string', description: `Имя запуска на языке задачи: 3–7 слов, до ${TITLE_MAX} знаков.` },
+    title: { type: 'string', description: `Имя запуска: 3–7 слов, до ${TITLE_MAX} знаков.` },
   },
   required: ['title'],
   additionalProperties: false,
@@ -51,7 +52,7 @@ export function runTitlePrompt(input: string, ctx: RunTitleContext): string {
   lines.push('Задача:', wrapData(clipped));
   lines.push(
     '',
-    `Верни title — имя запуска на языке задачи: 3–7 слов, до ${TITLE_MAX} знаков, суть задачи. ` +
+    `Верни title — имя запуска ${replyIn(taskLang(task))}: 3–7 слов, до ${TITLE_MAX} знаков, суть задачи. ` +
       'Имя flow в него не включай: оно и так показано рядом. Без кавычек и точки в конце.',
   );
   return lines.join('\n');

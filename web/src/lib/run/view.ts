@@ -6,6 +6,7 @@ import { t } from '../i18n';
 import { markdownFits } from '../md';
 import { ctxLabel, ctxLevel, tokensShort } from '../graph/text';
 import type { LiveState, PendingCond, PendingPhase, RunView } from './events';
+import { runnerText } from './runner-text';
 
 /** Блок для страницы запуска; у старых запусков (до блоков) — один неявный блок без имени. */
 export type RunBlockView = {
@@ -339,7 +340,7 @@ export function blockIters(st: LiveState, bi: number, spec: SpecBlocks): BlockIt
       item.st = ok ? 'ok' : 'fail';
       item.mark = `${ok ? '✓' : '✕'} ${COND_LABEL[c.type] || c.type}`;
       // итог модели, пока его нет — начало замечаний
-      item.text = c.summary || excerpt(ok ? c.detail || t('условие выполнено') : c.feedback || c.detail || t('условие не выполнено'), 120);
+      item.text = c.summary || excerpt(ok ? runnerText(c.detail, c.type) || t('условие выполнено') : runnerText(c.feedback || c.detail, c.type) || t('условие не выполнено'), 120);
       if (!ok) item.key = verdictKey(c);
     } else if (it <= iters) Object.assign(item, { st: 'stop', mark: t('прервана'), chain: chain(it) });
     items.push(item);
@@ -442,8 +443,8 @@ export function summaryView(st: LiveState, graphNow: string, spec: SpecBlocks, n
   const last = cur ? r.conditions.filter((c) => sole || c.block === cur.name).at(-1) : undefined;
   if (last && last.type !== 'none') {
     out.last = last.done
-      ? { ok: true, text: t('Итерация {it}: {text}', { it: last.iteration, text: last.summary || `${t('условие выполнено')}${last.detail ? ` — ${excerpt(last.detail)}` : ''}` }) }
-      : { ok: false, text: t('Итерация {it} не прошла: {text}', { it: last.iteration, text: last.summary || excerpt(last.feedback || last.detail) || t('условие не выполнено') }) };
+      ? { ok: true, text: t('Итерация {it}: {text}', { it: last.iteration, text: last.summary || `${t('условие выполнено')}${last.detail ? ` — ${excerpt(runnerText(last.detail, last.type))}` : ''}` }) }
+      : { ok: false, text: t('Итерация {it} не прошла: {text}', { it: last.iteration, text: last.summary || excerpt(runnerText(last.feedback || last.detail, last.type)) || t('условие не выполнено') }) };
   }
   const stuck = ci >= 0 && blocks[ci]!.looped ? blockIters(st, ci, spec).stuck : null;
   if (stuck) out.stuck = { from: stuck.from, to: stuck.to };
@@ -547,10 +548,10 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
     const input = prev
       ? {
         label: t('Получил на вход'),
-        title: excerpt(prev.feedback || prev.detail, 400),
+        title: excerpt(runnerText(prev.feedback || prev.detail, prev.type), 400),
         text: prev.summary
           ? t('Итог итерации {it}: {text}', { it: prev.iteration, text: prev.summary })
-          : t('Замечания итерации {it}: {text}', { it: prev.iteration, text: excerpt(prev.feedback || prev.detail, 260) }),
+          : t('Замечания итерации {it}: {text}', { it: prev.iteration, text: excerpt(runnerText(prev.feedback || prev.detail, prev.type), 260) }),
       }
       : spec?.handoff ? { label: t('Передаёт дальше'), text: spec.handoff } : undefined;
     const f = (run || rep)?.files;

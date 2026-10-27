@@ -16,6 +16,7 @@ import { toolsLabel } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { linkifyText } from '../../lib/md';
 import type { LiveState, PendingPhase } from '../../lib/run/events';
+import { runnerText } from '../../lib/run/runner-text';
 import {
   ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows, runBlocks,
   runFinished, runSteps, stepKey, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
@@ -274,7 +275,7 @@ function RunningCard({ x, doing, runId, implicit }: { x: PendingPhase; doing: st
 }
 
 /** Замечания судьи — markdown; у команды — хвост её вывода моноширинно. */
-export const Feedback = ({ c }: { c: ConditionReport }) => (feedbackIsMarkdown(c) ? <SafeMarkdown text={c.feedback} /> : <pre><PathText text={c.feedback} /></pre>);
+export const Feedback = ({ c }: { c: ConditionReport }) => (feedbackIsMarkdown(c) ? <SafeMarkdown text={runnerText(c.feedback, c.type)} /> : <pre><PathText text={runnerText(c.feedback, c.type)} /></pre>);
 
 function CondCard({ c, runId }: { c: ConditionReport; runId: string }) {
   const none = c.type === 'none';
@@ -286,7 +287,7 @@ function CondCard({ c, runId }: { c: ConditionReport; runId: string }) {
         <span className={styles.status}>{none ? <span className="muted">•</span> : c.done ? <span className="ok">✔</span> : <span className="warn">↻</span>}</span>
         <span className={styles.title}>{none ? t('Итерация завершена') : c.done ? t('Условие выполнено') : t('Условие не выполнено')}</span>
         <span className={styles.tools}>{`[${label}]`}</span>
-        <span className={styles.stats}>{`${c.detail || ''}${c.costUsd ? ` · ${usd(c.costUsd)}` : ''}`}</span>
+        <span className={styles.stats}>{`${runnerText(c.detail, c.type)}${c.costUsd ? ` · ${usd(c.costUsd)}` : ''}`}</span>
         {c.logFile && <button className="btn small" onClick={() => void openRunFile(runId, c.logFile!, t('Условие · итерация {it}', { it: c.iteration }))}>{t('лог')}</button>}
       </div>
       {c.summary && <div className={styles.condSum}>{c.summary}</div>}

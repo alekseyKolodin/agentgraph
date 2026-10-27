@@ -4,6 +4,7 @@
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
 import { wrapData } from './intake.js';
+import { replyIn, taskLang } from './lang.js';
 import { stripTagBlocks } from './tags.js';
 
 export const RUN_DIGEST_MODEL = 'haiku';
@@ -48,17 +49,18 @@ const SCHEMA: Record<string, unknown> = {
   properties: {
     iteration: {
       type: 'string',
-      description: '2–3 предложения по-русски: что сделано за итерацию, почему условие выполнено или нет (суть, без цитат кода и логов), что будет дальше.',
+      description: '2–3 предложения: что сделано за итерацию, почему условие выполнено или нет (суть, без цитат кода и логов), что будет дальше.',
     },
-    run: { type: 'string', description: '1–2 предложения по-русски: где сейчас запуск в целом — что готово, что осталось или мешает.' },
+    run: { type: 'string', description: '1–2 предложения: где сейчас запуск в целом — что готово, что осталось или мешает.' },
   },
   required: ['iteration', 'run'],
   additionalProperties: false,
 };
 
-const SYSTEM =
+/** Язык итога — язык задачи: английская задача — английская сводка. */
+const system = (task: string) =>
   'Ты пишешь короткие итоги для человека, который следит за работой агентов и не читает их логи. ' +
-  'Пиши по-русски, просто и конкретно: что сделано, что не так, что дальше. Без воды, markdown и цитат кода. ' +
+  `Пиши ${replyIn(taskLang(task))}, просто и конкретно: что сделано, что не так, что дальше. Без воды, markdown и цитат кода. ` +
   'Отклонённая проверка — обычный ход цикла, а не «застряли»: так говори, только если одно и то же не проходит много итераций. ' +
   'Ничего не выполняй и не спрашивай: только перескажи.';
 
@@ -98,7 +100,7 @@ export function digestRequest(input: DigestInput, abort?: AbortController): Sess
   return {
     prompt: digestPrompt(input),
     cwd: os.tmpdir(),
-    system: SYSTEM,
+    system: system(input.task),
     // выводы этапов пишут агенты, замечания — судья и команда: инструменты пересказу ни к чему
     tools: [],
     implicitTools: [],

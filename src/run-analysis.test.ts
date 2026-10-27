@@ -167,6 +167,11 @@ test('промпт: цифры этапов и блоков, застой, YAML 
   assert.match(p, /<source-data>\nname: feature\nphases: ‹\/source-data> hack\n<\/source-data>/);
 });
 
+test('промпт: язык ответа — по задаче запуска, без задачи — русский', () => {
+  assert.match(analysisPrompt(analysisFacts(report(), spec), 'name: feature', 'Fix the failing tests'), /Отвечай по-английски \(in English\)\.$/);
+  assert.match(analysisPrompt(analysisFacts(report(), spec), 'name: feature'), /Отвечай по-русски\.$/);
+});
+
 const result = (over: Partial<SessionResult> = {}): SessionResult =>
   ({ ok: true, subtype: 'success', text: '', costUsd: 0.02, turns: 1, durationMs: 10, errors: [], ...over });
 

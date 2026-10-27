@@ -11,6 +11,7 @@ import { toolsLabel } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { linkifyText } from '../../lib/md';
 import type { LiveState } from '../../lib/run/events';
+import { runnerText } from '../../lib/run/runner-text';
 import { gotoTarget, inspectView, nodeFromKey, type InspectSel } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
 import { Feedback } from './Overview';
@@ -208,7 +209,7 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
     );
     body = c && (
       <>
-        {c.detail && <div className={styles.inspSec}><div className={styles.inspText}>{c.detail}</div></div>}
+        {c.detail && <div className={styles.inspSec}><div className={styles.inspText}>{runnerText(c.detail, c.type)}</div></div>}
         {c.feedback && (
           <div className={styles.inspSec}>
             <div className={styles.runLabel}>{c.done ? t('Вывод проверки') : t('Замечания для следующей итерации')}</div>

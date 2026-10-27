@@ -5,6 +5,7 @@
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
 import { wrapData, type RunSource } from './intake.js';
+import { replyIn, taskLang } from './lang.js';
 import { createFreshTag, stripTagBlocks, TAG_SLUG_RE } from './tags.js';
 
 export const AUTO_TAG_MODEL = 'haiku';
@@ -30,7 +31,7 @@ const SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
     slug: { type: 'string', description: 'Слаг тега: 2–4 слова латиницей через дефис, строчные, суть фичи.' },
-    title: { type: 'string', description: `Заголовок фичи на языке задачи, до ${TITLE_MAX} знаков.` },
+    title: { type: 'string', description: `Заголовок фичи, до ${TITLE_MAX} знаков.` },
   },
   required: ['slug'],
   additionalProperties: false,
@@ -55,7 +56,7 @@ export function autoTagPrompt(input: string, ctx: AutoTagContext): string {
     'Верни поля:',
     '- slug — 2–4 слова латиницей через дефис, только строчные буквы, цифры и дефис (например loyalty-card, health-endpoint); ' +
       'суть фичи, без глаголов вроде fix, add, update; номер тикета не нужен;',
-    `- title — заголовок фичи на языке задачи, до ${TITLE_MAX} знаков.`,
+    `- title — заголовок фичи ${replyIn(taskLang(task))}, до ${TITLE_MAX} знаков.`,
   );
   return lines.join('\n');
 }

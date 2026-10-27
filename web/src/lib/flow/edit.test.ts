@@ -5,7 +5,8 @@ import {
   addPhaseAfter, advLabel, collectSpec, duplicatePhase, insertVar, movePhase, newBlock, newPhase, phaseInputs, renamePhase, setBlockMode, specChanges,
   SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
-import { schemeSummary } from './summary';
+import { conditionText, schemeSummary } from './summary';
+import { setLangForTest } from '../i18n';
 import { addConnTools, connChips, connManualError, connNote, connPick, connPicked, modelOptions } from './tools';
 
 const ph = (name: string, extra: Partial<EditPhase> = {}): EditPhase => ({ name, prompt: '{{input}}', tools: ['Read'], ...extra });
@@ -205,6 +206,23 @@ test('сводка «Схемы»: один блок — этапы и цикл,
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk(true, 3)] }), '3 этапа · до 5 итераций, пока команда npm test не вернёт 0');
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk(false, 1)] }), '1 этап · один проход');
   assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk(false, 1), blk(true, 4)] }), '2 блока · 5 этапов');
+});
+
+test('условие от сервера по-английски: команда, маркер, судья, пауза; русский и незнакомый текст — как есть', () => {
+  assert.equal(conditionText('пока команда `npm test` не вернёт 0'), 'пока команда `npm test` не вернёт 0');
+  setLangForTest('en');
+  try {
+    assert.equal(conditionText('пока команда `git diff --stat -- \'{a}\' && npm test` не вернёт 0'), "until `git diff --stat -- '{a}' && npm test` exits 0");
+    assert.equal(conditionText('пока в выводе этапа нет маркера <DONE>, пауза по маркеру <NEEDS_USER>'), 'until the phase outputs <DONE>, pause on marker <NEEDS_USER>');
+    assert.equal(conditionText('пока судья не скажет «готово»'), 'until the judge approves');
+    assert.equal(conditionText('что-то новое'), 'что-то новое');
+    assert.equal(conditionText('пока команда `npm test` не вернёт 0 → один проход → пока судья не скажет «готово»'), 'until `npm test` exits 0 → single pass → until the judge approves');
+    assert.equal(conditionText('пока в выводе этапа нет маркера <ALL DONE>, пауза по маркеру <NEEDS USER>'), 'until the phase outputs <ALL DONE>, pause on marker <NEEDS USER>');
+    const blk = { name: 'b', looped: true, maxIterations: 4, condition: 'пока команда `npm test` не вернёт 0', onFail: 'stop' as const, phases: [{ name: 'p', tools: [] }] };
+    assert.match(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: [blk] }), /, until npm test exits 0$/);
+  } finally {
+    setLangForTest('ru');
+  }
 });
 
 test('collectSpec: plugins этапа и блока сохраняются как есть, пустые — не сохраняются', () => {

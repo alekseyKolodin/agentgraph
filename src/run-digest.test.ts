@@ -39,6 +39,13 @@ test('итог: валидный ответ — итог итерации, св�
   assert.equal(req.cwd, os.tmpdir());
   assert.ok(req.abort);
   assert.ok(req.outputSchema);
+  assert.match(req.system ?? '', /Пиши по-русски,/);
+});
+
+test('итог: английская задача — итог по-английски', async () => {
+  const f = fake({ iteration: 'Done.', run: 'Done.' });
+  await writeDigest(input({ task: 'Make `npm test` pass. Fix the code, not the tests.' }), { session: f.session });
+  assert.match(f.reqs[0].system ?? '', /Пиши по-английски \(in English\),/);
 });
 
 test('итог: промпт — блок, итерация, что дальше; задача, выводы и замечания в source-data; блоки тегов сняты, длинное обрезано', () => {

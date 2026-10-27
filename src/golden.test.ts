@@ -132,6 +132,8 @@ test('золотой: запрос судьи — ровно эти поля', (
     abort: undefined,
   });
   assert.match(system, /^Ты строгий приёмщик результата/);
+  assert.match(system, /Пиши reason и feedback по-русски, если рубрика не требует другого языка\.$/);
+  assert.match(judgeRequest(spec(fullPhase), until, 'x', { cwd: '/work', runsDir: '/runs' }, undefined, undefined, 'Implement BILL-142').system, /Пиши reason и feedback по-английски \(in English\), если рубрика/);
   assert.deepStrictEqual(Object.keys(outputSchema), ['type', 'properties', 'required', 'additionalProperties']);
   const bare = judgeRequest(spec(fullPhase, { model: 'm-def' }), { type: 'judge', prompt: 'x' }, 'Оцени', { cwd: '/work', runsDir: '/runs' });
   assert.equal(bare.prompt, 'Оцени');

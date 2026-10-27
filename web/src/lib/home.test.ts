@@ -5,6 +5,7 @@ import {
   collectAnswers, docTitle, homeMeta, homeRunView, homeStuck, ignoredConfirmText, inbox, inboxCount, liveCount, liveRows, liveRowTitle,
   optionView, OTHER, questionLastCond, questionWhere, sideLiveInfo, withoutQuestion,
 } from './home';
+import { setLangForTest } from './i18n';
 
 const T0 = Date.parse('2026-10-24T10:00:00Z');
 const iso = (min: number) => new Date(T0 + min * 60_000).toISOString();
@@ -55,6 +56,21 @@ test('строка запуска: сейчас идёт этап, мини-ле
   assert.equal(v.cost, '12 мин · $0.40');
   assert.equal(v.costTitle, 'Идёт 12 мин · оценка по прайсу API');
   assert.equal(v.answer, false);
+});
+
+test('строка запуска: тексты раннера в итоге итерации — на языке интерфейса', () => {
+  setLangForTest('en');
+  try {
+    const v = homeRunView(run({ conds: [{ iteration: 2, type: 'marker', done: false, text: 'маркер <DONE> последней строкой вывода fix: нет' }] }), 'app', false, T0);
+    assert.match(v.sum, /iteration 2.*marker <DONE> as the last line of fix: no/i);
+  } finally {
+    setLangForTest('ru');
+  }
+});
+
+test('строка запуска: проверка условия — не «этап «проверка условия»»', () => {
+  const v = homeRunView(run({ current: { block: 'main', iteration: 3, title: 'проверка условия' }, running: [] }), 'app', false, T0);
+  assert.equal(v.sum, 'Сейчас проверка условия');
 });
 
 test('строка запуска: имя от модели, блоки, вердикт и сводка «где мы»', () => {
