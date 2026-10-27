@@ -19,7 +19,7 @@ import { FLOWS_DIR } from './paths.js';
 import type { BlockReport, QuestionRecord, RunReport } from './runner.js';
 
 export type { ChatLog, ChatMessage } from './api-types.js';
-import type { ArtifactListItem, ArtifactRead, ChatAction, ChatActionKind, ChatEffect, ChatLink, ChatLog, ChatMessage, ChatStep, ChatWidget } from './api-types.js';
+import type { ArtifactListItem, ArtifactRead, ChatAction, ChatActionKind, ChatEffect, ChatLink, ChatLog, ChatMessage, ChatStep, ChatWidget, RunFlowEdit } from './api-types.js';
 
 /** Запуск глазами чата: у идущего — из памяти сервера (статус ждёт ответа / на паузе, текущий шаг, открытые вопросы). */
 export type RunView = {
@@ -38,11 +38,20 @@ export type RunView = {
 export type FlowSnapshots = {
   name: string;
   adhoc: boolean;
+  /** Версия снимка: сколько раз flow запуска правили на ходу (flowEdits.length). База кнопки apply_flow. */
+  version: number;
+  /**
+   * Что возьмёт продолжение этого запуска: run — снимок (разовый запуск или последняя правка на ходу не сохранена в flows/),
+   * flows — файл в flows/. Перезапуск всегда берёт flows/ (разовый — снимок): правка на ходу живёт только в своём запуске.
+   */
+  continueFrom: 'run' | 'flows';
   run?: { file: string; yaml: string };
   flows?: { file: string; yaml: string };
 };
 
 type Via = { via?: 'ui' | 'skill' | 'chat' };
+/** Итог правки flow запуска: что поменялось (пусто — ничего), записан ли flows/ и почему нет. */
+export type FlowEditResult = Pick<RunFlowEdit, 'changed' | 'savedToFlows' | 'saveError'>;
 
 /** Управление запуском — те же функции, что у кнопок UI. Ошибки бросают с понятным текстом (и status, как HttpError сервера). */
 export type ChatControls = {
@@ -71,9 +80,9 @@ export type ChatControls = {
   // Правка идущего запуска (сервер умеет её не всегда): нет члена — нет и инструмента или кнопки.
   /** Указание этапам: next — следующему шагу, run — до конца запуска. */
   note?: (text: string, o?: { scope?: 'next' | 'run' } & Via) => unknown;
-  /** Только на паузе: 409 not_paused; 400 incompatible + problems. */
-  applyRunFlow?: (yaml: string, o?: { saveToFlows?: boolean } & Via) => unknown;
-  reloadRunFlow?: (o?: Via) => unknown;
+  /** Только на паузе: 409 not_paused; base — версия снимка, которую правили: с тех пор его сменили — 409 stale; 400 incompatible + problems. */
+  applyRunFlow?: (yaml: string, o?: { saveToFlows?: boolean; base?: number } & Via) => FlowEditResult;
+  reloadRunFlow?: (o?: Via) => FlowEditResult;
   restartIteration?: (o?: { note?: string } & Via) => { block: string; iteration: number };
 };
 
@@ -95,6 +104,9 @@ const MESSAGE_MAX = 20_000;
 const STEPS_MAX = 300;
 /** Текст артефакта в ответе инструмента: дальше — Read по пути. */
 const ARTIFACT_TEXT_MAX = 60_000;
+/** Как у сервера (NOTE_MAX, MAX_ITERATIONS_LIMIT раннера): кнопку, которая заведомо упрётся в них, не предлагаем. */
+const NOTE_MAX = 20_000;
+const ITERATIONS_MAX = 50;
 
 const STATUS: Record<string, string> = {
   running: 'выполняется', waiting: 'ждёт ответа на вопрос агента', paused: 'на паузе', done: 'готово',
@@ -220,30 +232,40 @@ export function chatSystemPrompt(r: RunReport, runDir: string, cwd: string, caps
 4. Инструментами Edit и Write в папку запуска не пиши: run.json, выводы и транскрипты пишут раннер и сервер. Артефакт меняется только кнопкой write_artifact: в том же ответе прочитай его (artifacts) и предложи весь новый текст. Если файл изменится до клика, кнопка устареет.
 5. Идущий запуск работает в той же директории проекта. Правка файлов или git-команды посреди этапа столкнутся с ним: предупреди и предложи сначала паузу (текущий этап доработает, следующий не начнётся).
 ${flowRule(r, caps)}
-${pauseRule(r)}
+${pauseRule(r, caps)}
 8. На вопрос агента (pendingQuestions) отвечай answer_question, когда пользователь дал ответ: ключ — текст вопроса, значение — label варианта или его текст. Ответ за пользователя не придумывай.
 9. Таблицы, списки файлов и выбор из вариантов показывай виджетами (show_table, show_links, offer_replies), а не текстом: они видны под ответом. Их содержимое в тексте не повторяй. Файлы папки запуска давай ссылкой run_file с путём от неё.`;
 }
 
-/** Правило 6: flow. Идущий запуск правок flow не видит, файл в flows/ — общий для всех следующих запусков. */
+/**
+ * Правило 6: flow. Файл в flows/ — общий для всех следующих запусков; правка на ходу (apply_flow) живёт в снимке этого
+ * запуска и его продолжений. Перезапуск берёт flows/, продолжение — снимок, если последнюю правку на ходу не сохранили.
+ */
 function flowRule(r: RunReport, caps: Caps): string {
   const save = r.adhoc
     ? 'У разового запуска файла в flows/ нет: сохранить его flow можно кнопкой «Сохранить как flow» на странице запуска.'
-    : `Правку flow предлагай кнопкой save_flow с полным YAML, прочитав flow_read в том же ответе; name не меняй. Кнопка запишет flows/ — общий файл, правка подействует на все следующие запуски и продолжения flow ${r.flow}; предупреди об этом.`;
-  const live = caps.runFlow
-    ? ' Идущий запуск на паузе может взять правку кнопкой apply_flow (только в этом запуске) или reload_flow (подхватить файл из flows/).'
-    : ' Идущий запуск правок flow не видит.';
-  return `6. Flow читай через flow_read.${live} Продолжение и перезапуск берут текущую версию из flows/, а если запуск правили на ходу и последнюю правку в flows/ не сохранили — его снимок. ${save}`;
+    : `Правку flow предлагай кнопкой save_flow с полным YAML, прочитав flow_read в том же ответе; name не меняй. Кнопка запишет flows/ — общий файл, правка подействует на все следующие запуски flow ${r.flow}; предупреди об этом.`;
+  const live = !caps.runFlow
+    ? ' Идущий запуск правок flow не видит.'
+    : ` Идущий запуск на паузе может взять правку кнопкой apply_flow (только в этом запуске и его продолжениях; тоже прочитав flow_read в том же ответе)${r.adhoc ? '' : ' или reload_flow (подхватить файл из flows/)'}.`;
+  const next = r.adhoc
+    ? ' Продолжение и перезапуск разового запуска берут его снимок.'
+    : ' Перезапуск берёт текущую версию из flows/. Продолжение — тоже её, но если запуск правили на ходу и последнюю правку в flows/ не сохранили — его снимок, и save_flow на продолжение этого запуска не подействует. Что возьмёт продолжение, говорит flow_read.';
+  return `6. Flow читай через flow_read.${live}${next} ${save}`;
 }
 
 /**
  * Правило 7: как отвечать на паузу по просьбе этапа. У flow с артефактом decisions ответ кнопкой answer_pause:
- * сервер запишет его в артефакт и в отчёт и возобновит запуск. Без decisions — туда, откуда flow его читает.
+ * сервер запишет его в артефакт и в отчёт и возобновит запуск. Без decisions — указанием следующему шагу (run_note), если
+ * сервер их умеет, иначе туда, откуда flow его читает.
  */
-function pauseRule(r: RunReport): string {
+function pauseRule(r: RunReport, caps: Caps): string {
   const decisions = r.artifacts?.items.find((a) => a.decisions);
   if (decisions) {
     return `7. Пауза по просьбе этапа (pauseReason): этап пишет в pauseReason.text, что ему нужно от пользователя. Ответы на такие паузы у этого flow хранятся в артефакте «${decisions.title}» (${decisions.file}) папки запуска. Когда пользователь дал ответ, предложи кнопку answer_pause с этим текстом: по клику ответ запишется в артефакт и в отчёт запуска, и запуск пойдёт дальше. Пользователь может ответить и сам — в поле «Ответ» карточки паузы. Ответ за пользователя не придумывай. resume_run возобновляет без ответа — вызывай его, только если пользователь хочет продолжить без ответа.`;
+  }
+  if (caps.note) {
+    return `7. Пауза по просьбе этапа (pauseReason): этап пишет в pauseReason.text, что ему нужно от пользователя. Когда пользователь ответил, передай ответ указанием следующему шагу (run_note, scope next) — он попадёт в промпт следующего этапа — и возобнови запуск (resume_run). Если пауза после последнего этапа последней итерации блока (iterations = maxIterations), следующего шага в блоке не будет: сначала подними лимит (set_max_iterations). Если flow читает ответ из файла директории проекта, который назвал этап (сверься с промптами в flow.yaml), с согласия пользователя запиши его и туда; если из артефакта — предложи кнопку write_artifact. Ответ за пользователя не придумывай.`;
   }
   return `7. Пауза по просьбе этапа (pauseReason): этап пишет в pauseReason.text, что ему нужно от пользователя. Следующая итерация увидит ответ, только если он лежит там, откуда flow его читает: чаще всего в файле директории проекта, который назвал этап (сверься с промптами в flow.yaml). Когда пользователь ответил, запиши ответ туда (с его согласия) и возобнови запуск (resume_run). Если место ответа — артефакт, предложи кнопку write_artifact. Если записать некуда — так и скажи: просто возобновлённый запуск ответа не передаст.`;
 }
@@ -275,7 +297,7 @@ type McpConfig = NonNullable<SessionRequest['mcpServers']>[string];
 /** Общее у инструментов одного хода: показанные виджеты, что агент прочёл (хэш — база кнопки), эффекты. */
 export type ChatTurnSink = {
   widgets: ChatWidget[];
-  /** Что агент видел в этом ходе: artifact:<key> — хэш артефакта, flow — хэш файла в flows/. */
+  /** Что агент видел в этом ходе: artifact:<key> — хэш артефакта, flow — хэш файла в flows/, run — версия снимка flow запуска. */
   seen: Map<string, string>;
   onWidget?: (w: ChatWidget) => void;
   onEffect?: (e: ChatEffect) => void;
@@ -311,7 +333,7 @@ export function runTools(ctl: ChatControls, sink: ChatTurnSink): ChatTool[] {
     tool('resume_run', 'Возобновить запуск после паузы без ответа: он пойдёт дальше.', {},
       changed(() => { ctl.resume(); return 'Запуск возобновлён: пауза снята.'; })),
     tool('set_max_iterations', 'Поменять лимит итераций блока с циклом у идущего запуска (1–50, не меньше текущей итерации). Подхватится со следующей итерации.',
-      { block: z.string().describe('имя блока (blocks[].name из run_status)'), value: z.number().int().min(1).max(50) },
+      { block: z.string().describe('имя блока (blocks[].name из run_status)'), value: z.number().int().min(1).max(ITERATIONS_MAX) },
       async ({ block, value }) => changed(() => {
         const b = ctl.setMaxIterations(block, value);
         return `Лимит итераций блока «${b.title}»: ${b.maxIterations}.`;
@@ -325,7 +347,7 @@ export function runTools(ctl: ChatControls, sink: ChatTurnSink): ChatTool[] {
     tool('artifacts', 'Артефакты запуска: без key — список (файл, кто менял последним, можно ли править сейчас), с key — текст одного.',
       { key: z.string().optional().describe('ключ артефакта') },
       async ({ key }) => act(() => (key ? artifactText(ctl, key, sink) : artifactList(ctl)))(), { annotations: { readOnlyHint: true } }),
-    tool('flow_read', 'Flow запуска: снимок runs/<id>/flow.yaml, с которым он идёт, и текущий файл в flows/ (его перезаписывает save_flow).', {},
+    tool('flow_read', 'Flow запуска: снимок runs/<id>/flow.yaml, с которым он идёт (его правит apply_flow), и текущий файл в flows/ (его перезаписывает save_flow); что из них возьмут продолжение и перезапуск.', {},
       act(() => flowText(ctl, sink)), { annotations: { readOnlyHint: true } }),
   ];
   const note = ctl.note;
@@ -365,15 +387,21 @@ function artifactText(ctl: ChatControls, key: string, sink: ChatTurnSink): strin
   return `${head}\n\n${a.text}`;
 }
 
+/** Оба flow запуска с подписью, что из них возьмут продолжение и перезапуск. Версия снимка и хэш файла — в seen: база кнопок. */
 function flowText(ctl: ChatControls, sink: ChatTurnSink): string {
   const f = ctl.readFlow();
   sink.seen.set('flow', f.flows ? sha(f.flows.yaml) : '');
-  const out = [`Flow ${f.name}${f.adhoc ? ' (разовый: файла в flows/ нет)' : ''}.`];
-  out.push(f.run ? `Снимок запуска ${f.run.file} — по нему идёт этот запуск:\n\`\`\`yaml\n${f.run.yaml}\n\`\`\`` : 'Снимка flow.yaml у запуска нет (старый запуск).');
+  sink.seen.set('run', String(f.version));
+  const keeps = !f.adhoc && f.continueFrom === 'run';
+  const out = [`Flow ${f.name}${f.adhoc ? ' (разовый: файла в flows/ нет — продолжение и перезапуск возьмут снимок)' : ''}.`];
+  const edits = f.version ? `, правок на ходу: ${f.version}` : '';
+  const snapTakes = keeps ? '; его же возьмёт продолжение: последнюю правку на ходу в flows/ не сохраняли' : '';
+  out.push(f.run ? `Снимок запуска ${f.run.file}${edits} — по нему идёт этот запуск${snapTakes}:\n\`\`\`yaml\n${f.run.yaml}\n\`\`\`` : 'Снимка flow.yaml у запуска нет (старый запуск).');
   if (!f.adhoc) {
+    const takes = keeps ? 'её возьмёт перезапуск, а продолжение этого запуска останется на снимке' : 'её возьмут продолжение и перезапуск';
     if (!f.flows) out.push('Файла в flows/ нет: его удалили или переименовали.');
     else if (f.run && f.flows.yaml === f.run.yaml) out.push(`Файл ${f.flows.file} совпадает со снимком.`);
-    else out.push(`Файл ${f.flows.file} (текущая версия, её возьмут продолжение и перезапуск):\n\`\`\`yaml\n${f.flows.yaml}\n\`\`\``);
+    else out.push(`Файл ${f.flows.file} (текущая версия: ${takes}):\n\`\`\`yaml\n${f.flows.yaml}\n\`\`\``);
   }
   return out.join('\n\n');
 }
@@ -467,20 +495,39 @@ export function proposeAction(ctl: ChatControls, it: ActionInput, seen: Map<stri
       const was = seen.get('flow');
       if (was === undefined) throw new Error('save_flow: сначала прочитай flow инструментом flow_read в этом ответе');
       if (was !== cur) throw new Error('save_flow: файл flow изменился после flow_read — прочитай заново');
-      return { ...a, text: y, base: cur, target: f.flows ? flowsRel(f.flows.file) : `flows/${f.name}.yaml` };
+      return { ...a, text: y, base: cur, target: f.flows ? flowsRel(f.flows.file) : `flows/${f.name}.yaml`, ...(f.continueFrom === 'run' ? { keepsSnapshot: true } : {}) };
     }
     case 'continue':
       if (v.status === 'done') throw new Error('continue: запуск завершён успешно — продолжать нечего, предложи rerun');
       return { ...a, ...newRun() };
-    case 'rerun':
-      return { ...a, ...newRun() };
-    case 'apply_flow':
-      return { ...a, text: yaml(), base: paused() };
+    case 'rerun': {
+      const o = newRun();
+      const f = ctl.readFlow();
+      return { ...a, ...o, ...(!f.adhoc && f.continueFrom === 'run' ? { keepsSnapshot: true } : {}) };
+    }
+    case 'apply_flow': {
+      const y = yaml();
+      const base = paused();
+      // версия снимка, которую агент прочёл: иначе кнопка молча откатила бы правку, сделанную на этой же паузе после чтения
+      const was = seen.get('run');
+      if (was === undefined) throw new Error('apply_flow: сначала прочитай flow инструментом flow_read в этом ответе');
+      const version = ctl.readFlow().version;
+      if (Number(was) !== version) throw new Error('apply_flow: flow запуска поправили после flow_read — прочитай заново');
+      return { ...a, text: y, base, flowVersion: version };
+    }
     case 'reload_flow':
       if (v.report.adhoc) throw new Error('reload_flow: у разового запуска нет файла в flows/');
-      return { ...a, base: paused() };
-    case 'restart_iteration':
-      return { ...a, base: paused(), ...(it.text?.trim() ? { text: it.text.trim() } : {}) };
+      return { ...a, base: paused(), flowVersion: ctl.readFlow().version };
+    case 'restart_iteration': {
+      const base = paused();
+      // те же отказы, что у раннера (not_started, limit): кнопка, которая заведомо не сработает, только потратит клик
+      const b = v.report.blocks?.find((x) => x.name === v.current?.block) ?? v.report.blocks?.find((x) => x.status === 'running');
+      if (b && !b.iterations) throw new Error(`restart_iteration: блок «${b.title}» ещё не начал итераций — повторять нечего, дай указание`);
+      if (b && b.maxIterations >= ITERATIONS_MAX) throw new Error(`restart_iteration: лимит итераций блока «${b.title}» уже ${ITERATIONS_MAX} — поднять его для повтора нельзя`);
+      const note = it.text?.trim();
+      if (note && note.length > NOTE_MAX) throw new Error(`restart_iteration: указание длиннее ${NOTE_MAX} знаков`);
+      return { ...a, base, ...(note ? { text: note } : {}) };
+    }
   }
 }
 
@@ -504,7 +551,7 @@ export function uiTools(ctl: ChatControls, sink: ChatTurnSink, runDir: string): 
   const title = z.string().max(200).optional();
   const kinds = actionKinds(ctl);
   const live = [
-    ...(ctl.applyRunFlow ? ['apply_flow — применить YAML text к этому запуску на паузе'] : []),
+    ...(ctl.applyRunFlow ? ['apply_flow — применить YAML text к этому запуску на паузе (прочитав flow_read в этом ответе)'] : []),
     ...(ctl.reloadRunFlow ? ['reload_flow — подхватить файл из flows/ в этот запуск на паузе'] : []),
     ...(ctl.restartIteration ? ['restart_iteration — перезапустить текущую итерацию на паузе (text — указание этапу)'] : []),
   ];
@@ -566,15 +613,30 @@ type Outcome = { state: NonNullable<ChatAction['state']>; result: string; openRu
 const done = (result: string, effects: ChatEffect[], openRun?: string): Outcome => ({ state: 'done', result, effects, ...(openRun ? { openRun } : {}) });
 const expired = (result: string): Outcome => ({ state: 'expired', result, effects: [] });
 const failed = (result: string): Outcome => ({ state: 'failed', result, effects: [] });
+/** 409, при которых кнопка не устарела, а не сработает вообще: разовый запуск, у блока нет итераций, лимит итераций. */
+const NEVER = new Set(['adhoc', 'not_started', 'limit']);
 /**
- * Ошибка функции сервера: 409 — состояние уже не то (кнопка устарела; кроме adhoc — у разового запуска так нельзя вообще),
- * остальное — не вышло; problems — почему flow не подходит.
+ * Ошибка функции сервера: 409 — состояние уже не то (кнопка устарела; кроме NEVER), остальное — не вышло. problems — почему
+ * flow не подходит; те, что уже есть в тексте ошибки («Правка не подходит…:» с перечнем), не повторяем.
  */
 function thrown(err: unknown): Outcome {
   const e = err as { status?: number; code?: unknown; problems?: unknown };
-  const problems = Array.isArray(e.problems) && e.problems.length ? `: ${e.problems.map(String).join('; ')}` : '';
-  return e.status === 409 && e.code !== 'adhoc' ? expired(errText(err)) : failed(errText(err) + problems);
+  const msg = errText(err);
+  const extra = Array.isArray(e.problems) ? e.problems.map(String).filter((p) => !msg.includes(p)) : [];
+  const text = extra.length ? `${msg}: ${extra.join('; ')}` : msg;
+  return e.status === 409 && !NEVER.has(String(e.code)) ? expired(text) : failed(text);
 }
+
+/** Итог правки flow запуска словами: что поменялось и что с flows/. */
+function editText(edit: FlowEditResult, head: string, same: string): string {
+  const out = edit.changed.length ? `${head}: ${edit.changed.join('; ')}.` : same;
+  if (edit.saveError) return `${out} ${edit.saveError}`;
+  return edit.savedToFlows ? `${out} Правка сохранена и в flows/.` : out;
+}
+const editEffects = (edit: FlowEditResult): ChatEffect[] => [
+  ...(edit.changed.length || edit.savedToFlows ? [{ kind: 'flow' as const }] : []),
+  ...(edit.changed.length ? [{ kind: 'artifacts' as const }] : []),
+];
 
 /**
  * Выполнить действие кнопки. Сначала сверка: то ли состояние, при котором оно предложено. Всё синхронно — между
@@ -609,7 +671,8 @@ function execute(ctl: ChatControls, a: ChatAction, opts: { saveToFlows?: boolean
         const f = ctl.readFlow();
         if ((f.flows ? sha(f.flows.yaml) : '') !== a.base) return expired(`Файл flow изменился после предложения: ничего не записано`);
         const { file } = ctl.saveFlow(a.text ?? '');
-        return done(`Flow сохранён в ${flowsRel(file)}.`, [{ kind: 'flow' }]);
+        const keeps = f.continueFrom === 'run' ? ' Продолжение этого запуска останется на его снимке: последнюю правку на ходу в flows/ не сохраняли.' : '';
+        return done(`Flow сохранён в ${flowsRel(file)}.${keeps}`, [{ kind: 'flow' }]);
       }
       case 'continue':
       case 'rerun': {
@@ -618,16 +681,23 @@ function execute(ctl: ChatControls, a: ChatAction, opts: { saveToFlows?: boolean
         const id = a.kind === 'continue' ? ctl.continueRun(o).id : ctl.rerun(o).id;
         return done(`Начат запуск ${id}.`, [{ kind: 'run', runId: id }], id);
       }
-      case 'apply_flow':
+      case 'apply_flow': {
         if (!ctl.applyRunFlow) return failed('Сервер не умеет менять flow идущего запуска');
         if (!samePause()) return expired('Запуск уже не на той паузе: flow не применён');
-        ctl.applyRunFlow(a.text ?? '', { saveToFlows: opts.saveToFlows === true, via: 'chat' });
-        return done(opts.saveToFlows ? 'Flow применён к запуску и сохранён в flows/.' : 'Flow применён к этому запуску.', [{ kind: 'flow' }, { kind: 'artifacts' }]);
-      case 'reload_flow':
+        // у разового запуска flows/ нет: галочку UI ему не показывает, а старая вкладка могла прислать
+        const saveToFlows = opts.saveToFlows === true && !v.report.adhoc;
+        // base — версия снимка, которую прочёл агент: правку на этой же паузе после чтения сервер не откатит (409 stale)
+        const edit = ctl.applyRunFlow(a.text ?? '', { saveToFlows, via: 'chat', ...(a.flowVersion !== undefined ? { base: a.flowVersion } : {}) });
+        return done(editText(edit, 'Flow запуска поменян', 'Изменений нет: flow запуска уже такой.'), editEffects(edit));
+      }
+      case 'reload_flow': {
         if (!ctl.reloadRunFlow) return failed('Сервер не умеет менять flow идущего запуска');
         if (!samePause()) return expired('Запуск уже не на той паузе: flow не перечитан');
-        ctl.reloadRunFlow({ via: 'chat' });
-        return done('Запуск взял flow из flows/.', [{ kind: 'flow' }, { kind: 'artifacts' }]);
+        // снимок поправили после предложения (диалог flow, кнопка apply_flow) — файл из flows/ молча откатил бы эту правку
+        if (a.flowVersion !== undefined && ctl.readFlow().version !== a.flowVersion) return expired('Flow запуска поправили после предложения: файл из flows/ не взят');
+        const edit = ctl.reloadRunFlow({ via: 'chat' });
+        return done(editText(edit, 'Запуск взял flow из flows/', 'Изменений нет: файл в flows/ совпадает с flow запуска.'), editEffects(edit));
+      }
       case 'restart_iteration': {
         if (!ctl.restartIteration) return failed('Сервер не умеет перезапускать итерацию');
         if (!samePause()) return expired('Запуск уже не на той паузе: итерация не перезапущена');

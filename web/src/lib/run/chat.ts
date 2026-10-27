@@ -96,9 +96,19 @@ export function actionConfirm(a: ChatAction, flow: string): { text: string; ok: 
     case 'abort': return { text: t('Остановить запуск? Текущая сессия будет прервана.'), ok: t('Остановить запуск'), danger: true };
     case 'write_artifact': return { text: t('Записать артефакт {what} текстом, который предложил агент? Прежняя версия останется в истории артефакта.', { what }), ok: t('Записать'), danger: false };
     case 'answer_pause': return { text: t('Записать ответ в {what} и возобновить запуск?', { what }), ok: t('Ответить и возобновить'), danger: false };
-    case 'save_flow': return { text: t('Сохранить flow в {what}? Это общий файл: правка подействует на все следующие запуски и продолжения flow {flow}.', { what, flow }), ok: t('Сохранить в flows/'), danger: false };
+    case 'save_flow': {
+      const text = a.keepsSnapshot
+        ? t('Сохранить flow в {what}? Это общий файл: правка подействует на все следующие запуски flow {flow}. Продолжение этого запуска останется на его снимке: правку на ходу в flows/ не сохраняли.', { what, flow })
+        : t('Сохранить flow в {what}? Это общий файл: правка подействует на все следующие запуски и продолжения flow {flow}.', { what, flow });
+      return { text, ok: t('Сохранить в flows/'), danger: false };
+    }
     case 'continue': return { text: t('Продолжить запуск с места остановки новым запуском{extra}?', { extra }), ok: t('Продолжить'), danger: false };
-    case 'rerun': return { text: t('Запустить flow {flow} заново с той же задачей{extra}?', { flow, extra }), ok: t('Запустить заново'), danger: false };
+    case 'rerun': {
+      const text = a.keepsSnapshot
+        ? t('Запустить flow {flow} заново с той же задачей{extra}? Возьмётся файл из flows/: правка flow на ходу этого запуска в него не войдёт.', { flow, extra })
+        : t('Запустить flow {flow} заново с той же задачей{extra}?', { flow, extra });
+      return { text, ok: t('Запустить заново'), danger: false };
+    }
     case 'apply_flow': return { text: t('Применить правку flow к этому запуску? Запуск продолжит по новой версии.'), ok: t('Применить'), danger: false };
     case 'reload_flow': return { text: t('Подхватить в этот запуск текущий файл flow из flows/?'), ok: t('Подхватить'), danger: false };
     case 'restart_iteration': return { text: t('Перезапустить текущую итерацию? Её этапы пойдут заново, когда запуск возобновят.'), ok: t('Перезапустить итерацию'), danger: true };

@@ -50,7 +50,7 @@ import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
 import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
-import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
+import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, snapshotOnly, specFromRunBody } from './adhoc.js';
 import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fix.js';
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
@@ -1409,12 +1409,20 @@ function chatControls(id: string, srv: ServerOptions): ChatControls {
   };
 }
 
-/** Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу. */
+/**
+ * Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу.
+ * continueFrom — что возьмёт продолжение (как specOf у continueRun): снимок у разового и после несохранённой правки на ходу.
+ */
 function runFlows(id: string): FlowSnapshots {
   const r = live.get(id)?.report ?? readReport(id);
   if (!r) throw new HttpError(404, 'Запуск не найден');
   const snap = path.join(RUNS_DIR, id, 'flow.yaml');
-  const out: FlowSnapshots = { name: r.flow, adhoc: Boolean(r.adhoc) };
+  const out: FlowSnapshots = {
+    name: r.flow,
+    adhoc: Boolean(r.adhoc),
+    version: r.flowEdits?.length ?? 0,
+    continueFrom: r.adhoc || snapshotOnly(r, readReport) ? 'run' : 'flows',
+  };
   if (fs.existsSync(snap)) out.run = { file: snap, yaml: fs.readFileSync(snap, 'utf8') };
   if (!r.adhoc) {
     try {
@@ -1427,8 +1435,10 @@ function runFlows(id: string): FlowSnapshots {
 }
 
 /**
- * Перезапуск из чата: тот же flow заново (текущая версия из flows/, у разового — снимок) с той же задачей, директорией,
- * тегами и вложениями. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной директории столкнутся.
+ * Перезапуск из чата: тот же flow заново с той же задачей, директорией, тегами и вложениями. Flow — текущая версия из
+ * flows/ (у разового — снимок), даже если этот запуск правили на ходу: такая правка живёт только в нём и его продолжениях,
+ * а перезапуск — новый запуск. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной
+ * директории столкнутся.
  */
 function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, srv: ServerOptions): { id: string } {
   const prev = readReport(prevId);
@@ -1438,7 +1448,12 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   let spec: FlowSpec;
   let addDirs: string[];
   try {
-    spec = specOf(prev);
+    // разовый — снимок, остальные — flows/: снимок правки на ходу (specOf) перезапуск не берёт
+    if (prev.adhoc) spec = readRunFlow(RUNS_DIR, prevId);
+    else {
+      assertFlowName(prev.flow);
+      spec = loadFlow(prev.flow);
+    }
     addDirs = runAddDirs(prev.addDirs, prev.cwd);
     // удалённый с тех пор тег знаний — отказ до создания папки запуска, как у POST /api/runs
     resolveKnowledge(spec, prev.knowledge ?? []);
