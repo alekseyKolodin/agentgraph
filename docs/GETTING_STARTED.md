@@ -162,6 +162,13 @@ The **Run** tab:
 - "Open" on a CLAUDE.md or rule opens an editor with a preview; "Save" writes the file to disk. Skills, plugins and managed policies are view-only.
 - The listing is cached for a minute: after editing files outside, click "Refresh".
 
+### Work in a Claude Code session with tags
+
+- Open **Sessions** on the left (there's no tab if the server couldn't load the terminal, `node-pty`), click **New session**, pick a folder and tags, and click **Open terminal**. It's an ordinary Claude Code session — slash commands, permission prompts, `/resume` — in a terminal inside agentgraph; the task tags' notes and summaries and the knowledge tag lines arrive in its context at the start.
+- Add or remove a tag in the tag row while the session runs: the model sees the change with its next step or your next message (until then the chip is dashed). Reading the new tag's folders doesn't ask for permission.
+- Reloading the page doesn't stop the session: the screen comes back. Live sessions are listed under "Now" in the sidebar. "End" stops claude; in the desktop app Cmd+Q asks first if sessions are running.
+- Shift+Enter is a new line, a file dragged onto the terminal is inserted as a path.
+
 ### Run from a Jira issue, MR or branch
 
 On Home, the **Tasks and code** section shows Jira issues, as well as open MRs and local branches of your projects. The first 5 rows of each list are shown; "N more" opens the rest. Each row has a **Run…** button: you pick a flow, and its "Run" tab opens with the task ready. The run itself doesn't start: you can check and edit the task.
@@ -387,6 +394,10 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/lang.ts` | language of the helper models' text (run name, iteration summaries, flow analysis, auto-tag title): `taskLang` counts Latin vs Cyrillic letters in the task, and the prompt names the language explicitly; tests `lang.test.ts` |
 | `src/run-title.ts` | run name: a session without tools (haiku) comes up with a short name from the task text; the runner calls it through `nameRun` in parallel with the phases and waits for it before the end; on failure — `{ error }`, and the flow stays as the title; tests `run-title.test.ts`, `runner.title.test.ts` |
 | `src/auto-tag.ts` | auto-tag: a session without tools (haiku) comes up with a slug and title from the task text, and a new task tag is created on a free slug (`createFreshTag`, suffix `-2`…); on failure — `{ error }`, and the run goes without a tag; tests `auto-tag.test.ts` |
+| `src/sessions.ts` | "Sessions" tab, pure logic: finding `claude`, its arguments, hooks and `permissions.deny` in `--settings`, the `agentgraph` MCP config, the environment, the tag context (full on SessionStart, the change on UserPromptSubmit/PostToolBatch) with the hook budget, hook handling, PermissionRequest for tag folders, "resume or start anew"; tests `sessions.test.ts` |
+| `src/sessions-mcp.ts` | the session's HTTP MCP server (JSON-RPC without state): `knowledge_read` and `tag_read` over the session's current tags; tests `sessions-mcp.test.ts` |
+| `src/sessions-pty.ts` | `node-pty` loaded on demand (optional dependency; no package — no feature), the headless screen mirror and the snapshot for a new client, stopping claude with SIGHUP and a timeout |
+| `src/sessions-server.ts` | session registry, the `/api/sessions*` routes, hooks and MCP by the session token, the WebSocket upgrade with `Host`/`Origin` checks, stopping on server stop, `session.json`; tests `sessions-server.test.ts` (fake pty, real HTTP and WebSocket) |
 | `src/tag-summary.ts` | the tag summary session after a `done` run: prompt, request (read-only, haiku), response parsing, cleanup of inaccessible paths (`dropRunPaths`) |
 | `src/attachments.ts` | task attachments: type and size checks, writing to `runs/<id>/attachments/`, copying on continuation |
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
@@ -394,8 +405,9 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs |
 | `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, continuation), history in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
-| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, stopping runs and the server (`stopServer`) on quit |
-| `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked, dmg and zip targets |
+| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, confirming Cmd+Q while terminal sessions are live, stopping runs, sessions and the server (`stopServer`) on quit |
+| `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked (the Claude Code CLI and `node-pty`), dmg and zip targets |
+| `scripts/pty-helper.mts` | before `electron-builder`: makes `node-pty`'s `spawn-helper` executable (1.1.0 ships it without the bit) |
 | `src/feed.ts` | the Home events feed from `run.json`: questions, pauses, run endings |
 | `src/limits.ts` | Claude subscription limits for Home (5 hours, week) through the Agent SDK |
 | `src/context.ts` | the "Context" page: listing a phase session's context through the Agent SDK, reading and writing CLAUDE.md and rules from an allowlist, phase prompt by source (`promptParts`) with warnings about full tags and the number of instruction sources |
@@ -413,7 +425,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `web/src/lib/` | pure logic without React or the DOM, with `*.test.ts` tests next to it: formatting, markdown (`md.ts`), sidebar search (`search.ts`), the graph model and layout (`graph/`), the builder (`flow/`), the run form (`run-form.ts`), run page events and view, and artifacts (`run/`), Home, tags, context, parsing old `/#…` addresses (`legacy-url.ts`) |
 | `web/src/lib/i18n.ts`, `web/src/i18n/en/` | interface language: `t()` takes the Russian text as the key and looks up the English in the dictionaries split by area; the EN / RU switch is in the sidebar |
 | `web/src/components/` | shared components: the shell and sidebar (`shell/`), the flow graph on `@xyflow/react` (`graph/`), the file window, the agent question card, the confirmation dialog, the popover, markdown |
-| `web/src/screens/` | screens: Home (`home/`), flow and the builder with the run form (`flow/`), the run page with artifacts and chat (`run/`), "Tags" (`tags/`), "Context" (`context/`) |
+| `web/src/screens/` | screens: Home (`home/`), flow and the builder with the run form (`flow/`), the run page with artifacts and chat (`run/`), "Tags" (`tags/`), "Context" (`context/`), "Sessions" with the xterm.js terminal (`sessions/`) |
 | `web/src/styles/` | the "Pult" tokens (`tokens.css`, rationale in `.interface-design/system.md`) and global primitives (`base.css`); other styles are CSS Modules next to the components |
 | `scripts/ensure-web.mts` | before `npm run ui`: builds `dist/web` if there is no build or `web/` and `package-lock.json` are newer |
 | `.claude/skills/agentgraph/` | the `/agentgraph` skill and its helper `agentgraph.mjs` (a client for the server API) |

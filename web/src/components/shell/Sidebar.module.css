@@ -121,3 +121,7 @@
 .run-filter .st:global(.on.waiting), .run-filter .st:global(.on.max_iterations) { background: color-mix(in srgb, var(--st-wait) 18%, transparent); border-color: var(--st-wait); }
 .run-filter .st:global(.on.done) { background: color-mix(in srgb, var(--st-ok) 18%, transparent); border-color: var(--st-ok); }
 .run-filter .st:global(.on.failed), .run-filter .st:global(.on.budget_exceeded), .run-filter .st:global(.on.aborted), .run-filter .st:global(.on.interrupted) { background: color-mix(in srgb, var(--st-fail) 16%, transparent); border-color: var(--st-fail); }
+
+/* сессии терминала в «Сейчас»: работает — синяя точка с ореолом, запускается — серая; ждёт тебя — общий тон .wait */
+.lrun.session-working .lrun-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+.lrun.session-starting .lrun-dot { background: var(--ink-3); }

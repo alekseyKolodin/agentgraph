@@ -31,6 +31,11 @@ export const TAG_DIRS_MAX = 20;
 export const RUN_TAGS_MAX = 10;
 /** Сколько последних запусков помнит тег. */
 export const TAG_RUNS_MAX = 20;
+/**
+ * Сколько последних сессий терминала (sessions.ts) помнит тег — отдельно от запусков: сессии не вытесняют запуски,
+ * у которых tagReadDirs берёт папки артефактов.
+ */
+export const TAG_SESSIONS_MAX = 10;
 const PREVIEW_MAX = 200;
 const TRUNCATED_NOTE = '\n\n…(саммари обрезано по лимиту)';
 
@@ -219,9 +224,31 @@ export function writeTagSummary(slug: string, text: string, run: TagRun): Tag {
   const meta = readMeta(slug) ?? { slug, kind: 'task' as const, createdAt: new Date().toISOString(), updatedAt: '', runs: [] };
   fs.mkdirSync(tagDir(slug), { recursive: true });
   writeAtomic(summaryFile(slug), clampSummary(text) + '\n');
-  const runs = [run, ...meta.runs.filter((r) => r.id !== run.id)].slice(0, TAG_RUNS_MAX);
-  writeMeta({ ...meta, updatedAt: new Date().toISOString(), runs });
+  writeMeta({ ...meta, updatedAt: new Date().toISOString(), runs: keepRuns([run, ...meta.runs.filter((r) => r.id !== run.id)]) });
   return readTag(slug)!;
+}
+
+/** Свежие сверху: запусков не больше TAG_RUNS_MAX, сессий — не больше TAG_SESSIONS_MAX, лимиты раздельные. */
+function keepRuns(list: TagRun[]): TagRun[] {
+  let runs = 0;
+  let sessions = 0;
+  return list.filter((r) => (r.kind === 'session' ? ++sessions <= TAG_SESSIONS_MAX : ++runs <= TAG_RUNS_MAX));
+}
+
+const summaryQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Запись саммари тега по очереди внутри процесса: сессия саммари читает прошлое саммари и через минуту пишет новое,
+ * две одновременные по одному тегу затёрли бы друг друга. fn стартует, когда закончилась предыдущая по этому тегу.
+ */
+export function queueTagSummary<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+  const next = (summaryQueues.get(slug) ?? Promise.resolve()).then(fn, fn);
+  const tail = next.catch(() => undefined);
+  summaryQueues.set(slug, tail);
+  void tail.then(() => {
+    if (summaryQueues.get(slug) === tail) summaryQueues.delete(slug);
+  });
+  return next;
 }
 
 /**
@@ -426,6 +453,19 @@ export function knowledgeBlock(tags: KnowledgeTag[]): string {
  * саммари — текст модели, как данные в обёртке.
  */
 export function tagInputBlock(tag: TagForInput): string {
+  return `${blockStart(tag.slug)}\n${tagBlockBody(tag, 'Тег новый, саммари ещё нет: опиши задачу ниже.')}\n${BLOCK_END}`;
+}
+
+/**
+ * Тот же текст тега задачи для интерактивной сессии (sessions.ts): без маркеров замены — поля задачи там нет — и без
+ * подсказки «опиши задачу ниже».
+ */
+export function sessionTagBlock(tag: TagForInput): string {
+  return tagBlockBody(tag, 'Тег новый: заметок и саммари ещё нет.');
+}
+
+/** Тело блока тега задачи; empty — строка для тега без заметок и саммари. */
+function tagBlockBody(tag: TagForInput, empty: string): string {
   const body = [`Тег задачи: ${tag.slug}${titleSuffix(tag)}`];
   const notes = tag.notes?.trim();
   if (notes) body.push('Заметки к тегу:', defuseMarkers(notes));
@@ -436,8 +476,8 @@ export function tagInputBlock(tag: TagForInput): string {
   }
   const summary = tag.summary.trim();
   if (summary) body.push(TAG_DATA_NOTE, wrapData(defuseMarkers(summary)));
-  else if (!notes) body.push('Тег новый, саммари ещё нет: опиши задачу ниже.');
-  return `${blockStart(tag.slug)}\n${body.join('\n')}\n${BLOCK_END}`;
+  else if (!notes) body.push(empty);
+  return body.join('\n');
 }
 
 /**
@@ -459,7 +499,8 @@ export function tagReadDirs(tag: Pick<TagMeta, 'runs'> | undefined, runsDir: str
   const out: string[] = [];
   for (const r of tag.runs) {
     if (out.length >= limit) break;
-    if (!/^[A-Za-z0-9_-]+$/.test(r.id)) continue;
+    // у сессии терминала папки артефактов нет
+    if (r.kind === 'session' || !/^[A-Za-z0-9_-]+$/.test(r.id)) continue;
     const dir = path.join(runsDir, r.id, ARTIFACTS_DIR);
     if (fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) out.push(dir);
   }

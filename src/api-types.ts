@@ -220,7 +220,11 @@ export type TagListItem = { slug: string; kind: TagKind; title?: string; updated
 /** interrupted раннер не пишет: так сервер показывает running-запуск, чей процесс умер, не дописав run.json. */
 export type RunStatus = 'running' | 'done' | 'max_iterations' | 'failed' | 'budget_exceeded' | 'aborted' | 'interrupted';
 
-export type TagRun = { id: string; flow: string; finishedAt: string; status: RunStatus };
+/**
+ * Запуск или сессия терминала, обновившие саммари тега. У сессии (kind: 'session') id — id сессии agentgraph
+ * (/sessions/<id>), flow — 'session', title — её название; папки артефактов у неё нет.
+ */
+export type TagRun = { id: string; flow: string; finishedAt: string; status: RunStatus; kind?: 'session'; title?: string };
 
 export type TagMeta = {
   slug: string;
@@ -253,6 +257,59 @@ export type Tag = TagMeta & { summary: string; notes: string; attachments: strin
 
 /** GET /api/tags/:slug: тег и блок, который сервер вставит в запуск (input). */
 export type TagDetail = Tag & { input: string };
+
+// ---------- сессии: интерактивный claude в терминале с тегами (src/sessions*.ts)
+
+/** starting — claude запущен, SessionStart ещё не было; working — модель отвечает; waiting — ход за человеком; ended — процесс вышел. */
+export type SessionStatus = 'starting' | 'working' | 'waiting' | 'ended';
+/** Режимы разрешений claude, которые предлагает форма; bypassPermissions и dontAsk не принимаются. */
+export type SessionPermissionMode = 'acceptEdits' | 'auto' | 'manual' | 'plan';
+
+/** Тег в строке тегов сессии: on — модель его видела; pending — добавлен, придёт со следующим шагом; removed — снят, снятие ещё не дошло. */
+export type SessionTagChip = { slug: string; kind: TagKind; state: 'on' | 'pending' | 'removed' };
+
+/** Сессия в списке, в шапке и в потоке WebSocket. */
+export type SessionView = {
+  id: string;
+  name: string;
+  cwd: string;
+  status: SessionStatus;
+  /** Процесс claude жив в этом сервере. */
+  live: boolean;
+  /** Текущие теги (слаги), порядок как выбрали. */
+  tags: string[];
+  chips: SessionTagChip[];
+  model?: string;
+  permissionMode?: SessionPermissionMode;
+  /** Обновлять саммари тегов задач при выходе. */
+  saveTag: boolean;
+  createdAt: string;
+  lastActivityAt: string;
+  endedAt?: string;
+  exitCode?: number;
+  /** Ходов: сообщений пользователя (UserPromptSubmit). */
+  turns: number;
+  /** Вышел без единого SessionStart: untrusted — код 0 (доверие к папке не принято), failed — claude не запустился. */
+  outcome?: 'untrusted' | 'failed';
+  /** Живая сессия без SessionStart дольше нескольких секунд: trust — на экране диалог доверия, missing — теги не доставлены. */
+  delivery?: 'trust' | 'missing';
+  /** Версия claude, на которой идёт сессия: «2.1.311». */
+  claudeVersion?: string;
+  /** Транскрипт Claude Code последнего разговора (из хука). */
+  transcriptPath?: string;
+};
+
+/** GET /api/sessions. */
+export type SessionList = { sessions: SessionView[]; max: number };
+
+/** Сообщения WebSocket /api/sessions/:id/ws от сервера: снимок экрана, вывод, состояние, выход процесса. */
+export type SessionWsServer =
+  | { t: 'snap'; d: string; cols: number; rows: number }
+  | { t: 'o'; d: string }
+  | { t: 's'; session: SessionView }
+  | { t: 'x'; code: number };
+/** От клиента: ввод и размер терминала. */
+export type SessionWsClient = { t: 'i'; d: string } | { t: 'r'; cols: number; rows: number };
 
 // ---------- форма запуска: недавние папки, worktree, ответ POST /api/runs
 

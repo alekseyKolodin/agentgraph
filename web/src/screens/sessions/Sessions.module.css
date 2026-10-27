@@ -1,0 +1,49 @@
+/* Страница «Сессии» (макет Sessions): форма новой сессии карточкой, ниже — таблица строками с разделителями. */
+.page { max-width: 1120px; }
+
+.form { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px 18px; margin-bottom: 22px; }
+.form h2 { margin: 0; font-size: var(--fs-h3); font-weight: 600; }
+.recent { align-items: center; margin-top: -4px; }
+.recent :global(.chip) { padding: 2px 9px; }
+.tags { display: flex; flex-direction: column; gap: 8px; }
+.tags p { margin: 0; }
+.more { border-top: 1px solid var(--line); padding-top: 10px; }
+.more > summary { cursor: pointer; color: var(--ink-2); font-weight: 500; font-size: var(--fs-small); width: max-content; }
+.more > summary:hover { color: var(--ink); }
+.more-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 10px 0 12px; }
+.check { flex-direction: row !important; align-items: flex-start; gap: 8px !important; }
+.check input { width: auto; margin: 2px 0 0; }
+.check > span { display: flex; flex-direction: column; gap: 2px; color: var(--ink) !important; font-size: var(--fs-body) !important; }
+.prompt { font-family: var(--font-mono); font-weight: 600; margin-right: 6px; }
+
+.all h2 { margin: 0 0 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
+.table th { text-align: left; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table tbody tr:hover { background: var(--hover); }
+.ended .name a { color: var(--ink-2); }
+.name { max-width: 320px; }
+.name a { color: var(--ink); font-weight: 500; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name a:hover { text-decoration: underline; }
+.tag-list { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.tag-list :global(.badge) { margin-left: 0; }
+.dir { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
+.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.when { color: var(--ink-2); white-space: nowrap; font-size: var(--fs-meta); }
+.act { text-align: right; white-space: nowrap; }
+.act a { color: var(--live); text-decoration: none; font-size: var(--fs-meta); }
+.act a:hover { text-decoration: underline; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* статус в таблице — та же пилюля, что в шапке сессии */
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 500; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-2); flex: none; }
+.status.live { background: color-mix(in srgb, var(--live) 14%, transparent); color: var(--ink); }
+.status.live .dot { background: var(--live); border-color: var(--live); }
+.status.wait { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
+.status.wait .dot { background: var(--st-wait); border-color: var(--st-wait); }
+.status.fail { color: var(--st-fail); }
+.status.fail .dot { border-color: var(--st-fail); }

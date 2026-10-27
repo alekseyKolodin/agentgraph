@@ -23,6 +23,9 @@ const RunScreen = lazy(() => import('./screens/run/RunScreen').then((m) => ({ de
 // «Теги» и «Контекст» открывают реже главной: тоже своими файлами
 const TagsScreen = lazy(() => import('./screens/tags/TagsScreen').then((m) => ({ default: m.TagsScreen })));
 const ContextScreen = lazy(() => import('./screens/context/ContextScreen').then((m) => ({ default: m.ContextScreen })));
+// «Сессии»: список с формой и экран терминала; терминал (xterm) — отдельным файлом, только экрану сессии
+const SessionsScreen = lazy(() => import('./screens/sessions/SessionsScreen').then((m) => ({ default: m.SessionsScreen })));
+const SessionScreen = lazy(() => import('./screens/sessions/SessionScreen').then((m) => ({ default: m.SessionScreen })));
 
 // старые ссылки /#run/<id>, /#flow/<имя>, /#tags/<slug>, /#context — до создания роутера: он читает адрес сразу
 const legacy = legacyLocation(location);
@@ -37,6 +40,8 @@ const router = createBrowserRouter(
         { index: true, element: <HomeScreen /> },
         { path: 'tags/:slug?', element: <Suspense><TagsScreen /></Suspense> },
         { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
+        { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },
+        { path: 'sessions/:id', element: <Suspense><SessionScreen /></Suspense> },
         { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },
         // черновик разового запуска: живёт только в памяти вкладки, после перезагрузки — на главную
         { path: 'draft', element: <Suspense><FlowScreen draft /></Suspense> },

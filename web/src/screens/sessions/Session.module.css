@@ -1,0 +1,77 @@
+/* Экран сессии терминала (макет Main): шапка, строка тегов, терминал на всю оставшуюся высоту, подвал. Страница не
+   прокручивается — прокрутка внутри терминала. Отступы .main (Shell.module.css: 22px 28px 40px) сняты, чтобы шапка и
+   линии шли от края до края, а терминал занял высоту окна. */
+.screen { display: flex; flex-direction: column; height: 100vh; margin: -22px -28px -40px; min-width: 0; }
+@media (max-width: 800px) { .screen { margin: -16px; } }
+
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+.back { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); text-decoration: none; font-size: var(--fs-small); }
+.back:hover { color: var(--ink); }
+.title { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.title h1 { margin: 0; font-size: var(--fs-h2); font-weight: 600; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42vw; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-3); cursor: pointer; }
+.icon-btn:hover { color: var(--ink); background: var(--hover); }
+.rename { font: inherit; font-size: var(--fs-h3); font-weight: 600; color: var(--ink); background: var(--well); border: 1px solid var(--live); border-radius: var(--r-sm); padding: 3px 8px; min-width: 260px; }
+.rename:focus { outline: none; box-shadow: var(--focus); }
+
+/* статус: пилюля с точкой, цвет — только смысл: идёт, ждёт тебя, не запустилась; завершена — тихая */
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 500; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-2); flex: none; }
+.status.live { background: color-mix(in srgb, var(--live) 14%, transparent); color: var(--ink); }
+.status.live .dot { background: var(--live); border-color: var(--live); }
+.status.wait { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
+.status.wait .dot { background: var(--st-wait); border-color: var(--st-wait); }
+.status.fail { background: color-mix(in srgb, var(--st-fail) 14%, transparent); color: var(--st-fail); }
+.status.fail .dot { border-color: var(--st-fail); }
+.pulse .dot { animation: pulse 1.6s cubic-bezier(.23, 1, .32, 1) infinite; }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent); }
+  100% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--live) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse .dot { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+}
+
+.cwd { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 2px 4px; border-radius: var(--r-xs); font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); cursor: default; max-width: 36vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.cwd { cursor: pointer; }
+button.cwd:hover { color: var(--ink); background: var(--hover); }
+.spacer { flex: 1 1 auto; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions :global(.btn) { display: inline-flex; align-items: center; gap: 6px; }
+
+/* строка тегов: залитый чип — тег задачи, контурный с книгой — тег знаний; пунктир с часами — ещё не дошло до модели */
+.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 20px; border-bottom: 1px solid var(--line); min-height: 28px; }
+.tags-label { font-size: var(--fs-meta); color: var(--ink-2); margin-right: 2px; }
+.none { font-size: var(--fs-meta); color: var(--ink-3); }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); color: var(--ink); font-size: var(--fs-meta); }
+.chip:has(.chip-x) { padding-right: 2px; }
+.chip.task { background: color-mix(in srgb, var(--live) 16%, transparent); border-color: var(--live); font-weight: 600; }
+.chip.knowledge svg { color: var(--ink-2); }
+.chip.pending { border-style: dashed; }
+.chip.task.pending { background: color-mix(in srgb, var(--live) 8%, transparent); }
+.chip.removed { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--ink-2); font-weight: 400; text-decoration: line-through; }
+.chip.pending > svg:first-child, .chip.removed > svg:first-child { color: var(--st-wait); }
+.chip svg { width: 12px; height: 12px; flex: none; }
+.chip-x { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--ink-2); cursor: pointer; }
+.chip-x:hover { color: var(--ink); background: var(--hover); }
+.add-tag { width: 120px; height: 24px; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); background: var(--well); color: var(--ink); font: inherit; font-size: var(--fs-meta); }
+.add-tag:focus { outline: none; border-color: var(--live); width: 200px; }
+.note { flex: 1 1 100%; margin: 0; display: flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-2); }
+.note svg { width: 12px; height: 12px; color: var(--st-wait); flex: none; }
+.note.warn { color: var(--st-wait); }
+
+/* терминал: колодец на всю высоту, xterm внутри подгоняется fit-аддоном */
+.term-section { flex: 1 1 auto; min-height: 0; display: flex; padding: 12px 20px 8px; }
+.term-box { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 6px 10px 12px; }
+.term-box.dropping { border-color: var(--live); }
+.term { width: 100%; height: 100%; }
+.term :global(.xterm) { height: 100%; }
+.term :global(.xterm-viewport) { background-color: var(--well) !important; }
+.reconnect { position: absolute; top: 10px; right: 14px; padding: 3px 10px; border-radius: var(--r-pill); background: color-mix(in srgb, var(--st-wait) 18%, var(--panel)); color: var(--st-wait); font-size: var(--fs-meta); font-weight: 500; }
+.overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; border-radius: inherit; background: color-mix(in srgb, var(--well) 62%, transparent); }
+.end-card { width: 100%; max-width: 460px; box-sizing: border-box; padding: 22px 24px; border-radius: var(--r-lg); background: var(--panel); border: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 12px; }
+.end-card h2 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
+.end-card p { margin: 0; }
+.end-card .hint { font-size: var(--fs-meta); }
+
+.foot { padding: 0 20px 10px; font-size: var(--fs-meta); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

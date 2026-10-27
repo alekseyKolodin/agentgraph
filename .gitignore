@@ -1,6 +1,7 @@
 node_modules/
 dist/
 runs/
+/sessions/
 .DS_Store
 release/
 

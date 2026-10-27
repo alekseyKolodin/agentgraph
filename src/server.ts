@@ -71,6 +71,7 @@ import {
 } from './tags.js';
 import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
+import { sessionsAvailable, sessionsRoute, sessionsUpgrade, stopSessions } from './sessions-server.js';
 
 export type ServerOptions = {
   port: number;
@@ -153,6 +154,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
     });
   });
   servers.add(server);
+  // WebSocket экрана сессии терминала: upgrade обходит handle(), проверки Host и Origin — в sessions-server.ts
+  server.on('upgrade', sessionsUpgrade);
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -165,16 +168,21 @@ export function startServer(opts: ServerOptions): Promise<string> {
  * Ждёт конца запусков и ходов не дольше timeoutMs: завис — процесс всё равно выходит.
  */
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
+  // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
+  const sessionsStopped = stopSessions();
   for (const id of live.keys()) abortRun(id);
   for (const turn of chats.values()) turn.abort.abort();
   const deadline = Date.now() + timeoutMs;
   while ((live.size || chats.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  await sessionsStopped;
   await Promise.all(
     [...servers].map(
       (server) =>
         new Promise<void>((resolve) => {
           server.close(() => resolve());
           server.closeAllConnections();
+          // сокет, который close не дождался, не держит выход приложения
+          setTimeout(resolve, 2000).unref();
         }),
     ),
   );
@@ -201,7 +209,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable()) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -432,6 +440,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
     return reply(res, deleteTagAttachmentReply(m[1], name));
   }
+
+  // --- сессии терминала (sessions-server.ts): claude в pty с тегами, хуки и MCP дочернего claude
+  if (await sessionsRoute(req, res, url, { readJson: (max) => readJson(req, max), defaultCwd: opts.defaultCwd })) return;
 
   // --- запуски
   if (method === 'GET' && p === '/api/runs') return sendJson(res, 200, listRuns());
