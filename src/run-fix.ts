@@ -1,8 +1,10 @@
 // «Починить и продолжить»: правка flow идущего запуска на паузе. Чистые функции без fs и сервера: что поменять нельзя
 // (flowEditProblems) и что поменялось (flowChanges). Раннер зовёт их в остановленной контрольной точке, а директории,
-// плагины и теги знаний новой версии проверяет сам — теми же функциями, что на старте.
-import { parseDocument } from 'yaml';
-import { flowBlocks, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
+// плагины и теги знаний новой версии проверяет сам — теми же функциями, что на старте. Запись правки и в flows/ (галочка
+// «сохранить и в flow») — flowsSync: сверка с файлом и наложение правки поверх него (patchFlowYaml); файл — через deps.
+import { createHash } from 'node:crypto';
+import { isMap, isScalar, isSeq, parseDocument, type Document } from 'yaml';
+import { compactSpec, flowBlocks, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
 
 /** Где стоит запуск: block — индекс идущего блока (все до него завершены), iterations — сколько итераций он начал. */
 export type FixPoint = {
@@ -139,4 +141,125 @@ export function withFlowInput(yamlText: string, base: string | undefined): strin
   if (base === undefined) doc.delete('input');
   else doc.set('input', base);
   return doc.toString({ lineWidth: 0 });
+}
+
+/** Тот же flow, если не считать задачи: так сверяются flows/<имя>.yaml и flow, по которому идёт запуск. */
+export function sameFlow(a: FlowSpec, b: FlowSpec): boolean {
+  return flowKey(a) === flowKey(b);
+}
+
+/** Смысл flow без задачи — для сверки: формат, комментарии и перевод строк не в счёт. */
+const flowKey = (spec: FlowSpec): string => createHash('sha256').update(canon({ ...compactSpec(spec), input: undefined })).digest('hex');
+
+/** Файл flows/<имя>.yaml для flowsSync: чтение (нет файла — null), запись и разбор с проверкой схемы. Шов для тестов. */
+export type FlowsFile = {
+  read: () => string | null;
+  write: (text: string) => void;
+  parse: (text: string) => FlowSpec;
+};
+
+/**
+ * Галочка «сохранить и в flow» у идущего запуска: правка ложится в flows/<name>.yaml, только если файл по смыслу тот,
+ * с которым сверен запуск, — со старта (если запуск шёл ровно по нему), после «взять из flows/» (took), после прошлой
+ * записи. Файл поменяли мимо запуска (конструктор, другой запуск) или flow запуска на старте был другим (продолжение
+ * по снимку) — error: перезапись потеряла бы чужие правки. Правка ложится поверх файла (patchFlowYaml) с input
+ * сохранённого flow; undo возвращает файл и сверку, если запуск правку так и не принял.
+ */
+export function flowsSync(name: string, file: FlowsFile, start: FlowSpec) {
+  const keyOf = (text: string | null): string | undefined => {
+    if (text === null) return undefined;
+    try {
+      return flowKey(file.parse(text));
+    } catch {
+      return undefined;
+    }
+  };
+  let base = keyOf(file.read()) === flowKey(start) ? flowKey(start) : undefined;
+  const manual = 'правка только в запуске, в flows/ перенеси её вручную';
+  return {
+    /** Запуск взял flow из файла: дальше сверка с ним. */
+    took: (spec: FlowSpec): void => {
+      base = flowKey(spec);
+    },
+    save: (yamlText: string): { undo: () => void } | { error: string } => {
+      if (base === undefined) return { error: `Flow запуска уже на старте отличался от flows/${name}.yaml — ${manual}` };
+      try {
+        const cur = file.read();
+        if (cur === null || keyOf(cur) !== base) return { error: `flows/${name}.yaml поменяли после старта запуска — ${manual}` };
+        const input: unknown = (parseDocument(cur).toJS() as { input?: unknown } | null)?.input;
+        const text = patchFlowYaml(cur, withFlowInput(yamlText, typeof input === 'string' ? input : undefined));
+        file.write(text);
+        const prev = base;
+        base = keyOf(text);
+        return {
+          undo: () => {
+            file.write(cur);
+            base = prev;
+          },
+        };
+      } catch (err) {
+        return { error: `flows/${name}.yaml не записан: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    },
+  };
+}
+
+export type FlowsSync = ReturnType<typeof flowsSync>;
+
+/**
+ * YAML правки (nextText) поверх текста файла: узлы, которые правка не поменяла, остаются как были — с комментариями;
+ * у поменянной строки остаётся её стиль (блок |, кавычки). Элементы списков с name (блоки, этапы) сопоставляются по
+ * имени, остальные — по месту. Вышло не ровно то, что в правке (якоря, ссылки), или файл не читается — текст правки.
+ */
+export function patchFlowYaml(fileText: string, nextText: string): string {
+  const next = parseDocument(nextText);
+  const doc = parseDocument(fileText);
+  if (next.errors.length || doc.errors.length) return nextText;
+  const want: unknown = next.toJS();
+  doc.contents = syncNode(doc, doc.contents, want) as typeof doc.contents;
+  const out = doc.toString({ lineWidth: 0, flowCollectionPadding: false });
+  return canon(parseDocument(out).toJS()) === canon(want) ? out : nextText;
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+function syncNode(doc: Document, node: unknown, value: unknown): unknown {
+  if (isMap(node) && isPlain(value)) {
+    const keyOf = (k: unknown) => (isScalar(k) ? String(k.value) : undefined);
+    node.items = node.items.filter((p) => {
+      const k = keyOf(p.key);
+      return k !== undefined && Object.hasOwn(value, k);
+    });
+    for (const [k, v] of Object.entries(value)) {
+      const pair = node.items.find((p) => keyOf(p.key) === k);
+      if (pair) pair.value = syncNode(doc, pair.value, v);
+      else node.items.push(doc.createPair(k, v));
+    }
+    return node;
+  }
+  if (isSeq(node) && Array.isArray(value)) {
+    const old = node.items;
+    const used = new Set<unknown>();
+    const nameOf = (n: unknown) => (isMap(n) ? n.get('name') : undefined);
+    // с name — по имени; строка или число — тот же неиспользованный узел (комментарий не переезжает к чужому значению);
+    // прочее — по месту
+    const pick = (v: unknown, i: number): unknown => {
+      const free = (n: unknown) => n !== undefined && !used.has(n);
+      if (isPlain(v) && v.name !== undefined) return old.find((n) => free(n) && nameOf(n) === v.name);
+      if (v === null || typeof v !== 'object') return old.find((n) => free(n) && isScalar(n) && n.value === v);
+      return free(old[i]) && !isScalar(old[i]) ? old[i] : undefined;
+    };
+    node.items = value.map((v, i) => {
+      const match = pick(v, i);
+      if (match === undefined) return doc.createNode(v);
+      used.add(match);
+      return syncNode(doc, match, v);
+    });
+    return node;
+  }
+  if (isScalar(node) && value !== null && typeof value !== 'object' && typeof value === typeof node.value) {
+    node.value = value;
+    return node;
+  }
+  return doc.createNode(value);
 }

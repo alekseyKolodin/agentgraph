@@ -44,7 +44,7 @@ export type EventEffect = {
   close?: boolean;
   /** Запуск закончился: спросить сервер, можно ли его продолжить. */
   ended?: boolean;
-  /** Flow запуска поправили на паузе: перечитать снимок (граф) и отчёты будущих блоков. */
+  /** Flow запуска поправили на паузе: перечитать снимок для графа (отчёты блоков принесло само событие). */
   flow?: boolean;
 };
 
@@ -190,6 +190,9 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
     case 'flow': {
       const list = (r.flowEdits ||= []);
       if (!list.some((x) => x.version === e.edit.version)) list.push(e.edit);
+      // будущие блоки правка могла заменить: отчёты — из события, а не запросом (его ответ при переигрывании опоздал бы)
+      r.blocks = e.blocks.map((b) => ({ ...b }));
+      r.maxIterations = e.maxIterations;
       return { render: true, flow: true };
     }
     case 'end':

@@ -51,7 +51,7 @@ import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './ar
 import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
 import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
-import { RunFixError, withFlowInput } from './run-fix.js';
+import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fix.js';
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
   addTagAttachmentReply,
@@ -121,6 +121,8 @@ type LiveRun = {
   notes: RunNote[];
   /** Правка запуска на паузе (runner.ts RunFix): flow и повтор итерации. Раннер отдаёт её до первой контрольной точки. */
   fix?: RunFix;
+  /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
+  flows?: FlowsSync;
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
@@ -968,6 +970,7 @@ function startRun(
   };
   const onFix = (fix: RunFix) => {
     lr.fix = fix;
+    if (!o.adhoc) lr.flows = flowsSync(spec.name, flowsFile(spec.name), spec);
   };
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
@@ -1153,7 +1156,7 @@ function addRunNote(id: string, text: string, o: { scope?: 'next' | 'run'; via?:
  * снимка, который правили (flowEdits.length): с тех пор его сменили — 409 stale, чтобы не откатить чужую правку молча.
  */
 function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?: RunFixVia; base?: number } = {}): RunFlowEdit {
-  const { report, fix } = pausedRun(id);
+  const { lr, report, fix } = pausedRun(id);
   const via = fixVia(o.via);
   if (o.saveToFlows && report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
   const version = report.flowEdits?.length ?? 0;
@@ -1169,12 +1172,12 @@ function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?
   }
   // задача — запуска: без input в правке берётся она, другая — несовместимая правка (run-fix.ts)
   next.input ??= report.input;
-  return applyRunSpec(report, fix, next, 'edit', via, o.saveToFlows ? yaml : undefined);
+  return applyRunSpec(lr, report, fix, next, 'edit', via, o.saveToFlows ? yaml : undefined);
 }
 
 /** «Починил в Claude Code»: flow запуска на паузе — текущая версия flows/<имя>.yaml, задача остаётся своя. */
 function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
-  const { report, fix } = pausedRun(id);
+  const { lr, report, fix } = pausedRun(id);
   const via = fixVia(o.via);
   if (report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
   let next: FlowSpec;
@@ -1185,34 +1188,46 @@ function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
     throw new RunFixHttp(400, `Flow ${report.flow} не загружается: ${errMsg(err)}`, 'incompatible', [errMsg(err)]);
   }
   next.input = report.input;
-  return applyRunSpec(report, fix, next, 'reload', via);
+  const edit = applyRunSpec(lr, report, fix, next, 'reload', via);
+  // запуск теперь идёт ровно по этому файлу
+  lr.flows?.took(next);
+  return edit;
 }
 
 /**
- * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Сначала запуск, потом flows/: неподходящая
- * или упавшая правка flows/ не трогает. Сбой записи в flows/ правку запуска не отменяет — он в edit.saveError.
+ * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Порядок: совместимость, flows/, запуск —
+ * событие flow уходит уже с savedToFlows. Неподходящая правка flows/ не трогает, упавшая правка запуска возвращает файл.
+ * Файл поменяли мимо запуска или записать не вышло — правка только в запуске, причина в edit.saveError.
  */
-function applyRunSpec(report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
+function applyRunSpec(lr: LiveRun, report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
   const problems = callFix(() => fix.checkFlow(next));
   if (problems.length) throw new RunFixHttp(400, `Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
-  const edit = callFix(() => fix.applyFlow(next, { source, via }));
-  if (flowsYaml === undefined) return edit;
-  // в flows/ — без задачи этого запуска: input — как у сохранённого flow
-  let base: string | undefined;
+  const saved = flowsYaml !== undefined && lr.flows ? lr.flows.save(flowsYaml) : undefined;
+  const edits = report.flowEdits?.length ?? 0;
   try {
-    base = loadFlow(report.flow).input;
-  } catch {
-    base = undefined;
-  }
-  try {
-    saveFlowYaml(report.flow, withFlowInput(flowsYaml, base), flowFolder(report.flow));
-    edit.savedToFlows = true;
+    return callFix(() => fix.applyFlow(next, { source, via, ...(saved && 'error' in saved ? { saveError: saved.error } : saved ? { savedToFlows: true } : {}) }));
   } catch (err) {
-    edit.saveError = `flows/${report.flow}.yaml не записан: ${errMsg(err)}`;
+    // flows/ возвращаем, только если запуск на правку не перешёл (упал снимок); упал уже run.json — правка действует
+    if (saved && 'undo' in saved && (report.flowEdits?.length ?? 0) === edits) saved.undo();
+    throw err;
   }
-  // edit — тот же объект, что в report.flowEdits (если правка что-то поменяла): дописываем отметку и в run.json
-  fs.writeFileSync(path.join(report.runDir, 'run.json'), JSON.stringify(report, null, 2));
-  return edit;
+}
+
+/** flows/<имя>.yaml для сверки и записи правки запуска (run-fix.ts flowsSync). */
+function flowsFile(name: string): FlowsFile {
+  return {
+    read: () => {
+      try {
+        return readFlowYaml(name);
+      } catch {
+        return null;
+      }
+    },
+    write: (text) => {
+      saveFlowYaml(name, text, flowFolder(name));
+    },
+    parse: parseFlow,
+  };
 }
 
 /**

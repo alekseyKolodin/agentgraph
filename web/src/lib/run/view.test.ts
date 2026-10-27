@@ -190,6 +190,13 @@ test('переход из графа: ещё не выполнялся, карт
   assert.deepEqual(gotoTarget(s, { kind: 'phase', key: '', block: 'a', name: 'x' }, false), { open: ['b:0', 'i:0:2'], target: 'a|2|x', bi: 0 });
   assert.deepEqual(gotoTarget(s, { kind: 'cond', key: '', block: 'a' }, false), { msg: 'Условие ещё не проверялось' });
   assert.deepEqual(gotoTarget(s, { kind: 'block', key: '', block: 'b' }, false), { open: ['b:1'], target: null, bi: 1 });
+  // блок без цикла: заголовков итераций нет, пока итерацию не повторили (fix.restart) — тогда раскрыть и её
+  const once = (iterations: number) => st({
+    blocks: [block('a', { looped: false, condition: 'none', iterations, maxIterations: iterations }), block('b', { index: 1, status: 'pending' })],
+    phases: Array.from({ length: iterations }, (_, i) => phase('x', i + 1, { block: 'a' })),
+  });
+  assert.deepEqual(gotoTarget(once(1), { kind: 'phase', key: '', block: 'a', name: 'x' }, false), { open: ['b:0'], target: 'a|1|x', bi: 0 });
+  assert.deepEqual(gotoTarget(once(2), { kind: 'phase', key: '', block: 'a', name: 'x' }, false), { open: ['b:0', 'i:0:2'], target: 'a|2|x', bi: 0 });
   assert.deepEqual(nodeFromKey('p:main:build'), { kind: 'phase', block: 'main', name: 'build', key: 'p:main:build' });
   assert.deepEqual(nodeFromKey('c:'), { kind: 'cond', block: '', key: 'c:' });
   assert.equal(nodeFromKey('start'), null);
