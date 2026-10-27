@@ -124,3 +124,28 @@ test('старый запуск без блоков: итерации — общ
   applyRunEvent(st, { type: 'block_start', block: block('main', { status: 'running' }), total: 1 });
   assert.equal(st.run.blocks[0]?.status, 'running');
 });
+
+test('указания: добавленное появляется, применённое заменяет прежнее по id; правка flow — без дублей и с перечитыванием', () => {
+  const st = liveState(detail());
+  const note = { id: 'n1', text: 'проверь null', scope: 'next' as const, at: '2026-10-27T10:00:00Z', via: 'ui' as const };
+  applyRunEvent(st, { type: 'note', note });
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [{ block: 'main', iteration: 1, phase: 'b', at: '2026-10-27T10:01:00Z' }] } });
+  assert.equal(st.run.notes?.length, 1);
+  assert.equal(st.run.notes![0]!.applied?.[0]?.phase, 'b');
+  const edit = { version: 1, at: '2026-10-27T10:02:00Z', source: 'edit' as const, via: 'ui' as const, changed: ['этап b: prompt'] };
+  assert.deepEqual(applyRunEvent(st, { type: 'flow', edit }), { render: true, flow: true });
+  applyRunEvent(st, { type: 'flow', edit });
+  assert.deepEqual(st.run.flowEdits, [edit]);
+});
+
+test('указание run: события несут только новые applied — клиент дописывает их без дублей', () => {
+  const st = liveState(detail());
+  const note = { id: 'n1', text: 'всегда', scope: 'run' as const, at: '2026-10-27T10:00:00Z', via: 'ui' as const };
+  const at = (phase: string) => ({ block: 'main', iteration: 1, phase, at: '2026-10-27T10:01:00Z' });
+  applyRunEvent(st, { type: 'note', note });
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('b')] } });
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('c')] } });
+  // переигрывание при переподключении
+  applyRunEvent(st, { type: 'note', note: { ...note, applied: [at('b')] } });
+  assert.deepEqual(st.run.notes![0]!.applied?.map((a) => a.phase), ['b', 'c']);
+});

@@ -74,6 +74,8 @@ export async function streamNdjson<E>(
       if (line.trim()) onEvent(JSON.parse(line) as E);
     }
   }
+  // последняя строка без перевода строки (или ответ одним JSON от сервера, который потока не знает)
+  if (buf.trim()) onEvent(JSON.parse(buf) as E);
 }
 
 /** Текст ошибки для показа: у ApiError — сообщение сервера. */

@@ -212,6 +212,22 @@ export type FlowSummary = {
 /** Элемент GET /api/flows: сводка flow (у невалидного — только имя, папка и ошибка). */
 export type FlowListItem = FlowSummary;
 
+/** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
+export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
+/** Что done потока добавляет к обычному телу ответа: фактическая модель (нет — init не пришёл) и длительность всего запроса. */
+export type FlowAiDone = { model?: string; durationMs: number };
+/**
+ * POST /api/flows/generate и /api/flows/:name/edit с Accept: application/x-ndjson — ход ИИ-сессии построчно.
+ * progress — модель (как только её назвал system/init), повтор запроса к API, шаг; log — строка хода (текст агента,
+ * вызов инструмента); done — тело, которое без заголовка пришло бы одним JSON, плюс FlowAiDone; error — ошибка, поток закрыт.
+ * B — тело маршрута: в web/ — FlowGenerated или FlowEdited (spec типизирован там).
+ */
+export type FlowAiStreamEvent<B = Record<string, unknown>> =
+  | { type: 'progress'; model?: string; retry?: { attempt: number; maxRetries: number; delayMs: number }; stage?: FlowAiStage }
+  | { type: 'log'; line: string }
+  | { type: 'done'; body: B & FlowAiDone }
+  | { type: 'error'; error: string };
+
 /** GET /api/connectors: коннекторы claude.ai аккаунта и их инструменты. read — только читает; write — меняет что-то снаружи. */
 export type ConnectorToolView = { name: string; tool: string; description?: string; readOnly: boolean };
 /** name — запись для tools этапа, которая разрешает весь коннектор: mcp__claude_ai_<Коннектор>. */
@@ -385,7 +401,7 @@ export type SessionTokens = {
 
 export type ArtifactAuthor =
   | { kind: 'phase' | 'unknown'; block: string; iteration: number; phase: string; at: string }
-  | { kind: 'user'; via: 'ui' | 'skill'; at: string }
+  | { kind: 'user'; via: 'ui' | 'skill' | 'chat'; at: string }
   | { kind: 'outside'; at: string }
   | { kind: 'condition'; block: string; iteration: number; at: string }
   | { kind: 'initial' }
@@ -492,7 +508,7 @@ export type ArtifactRead = Editability & {
 export type ArtifactSaved = { ok: true; hash: string; author: ArtifactAuthor; readers: string[]; resumed: boolean };
 
 /** Ответ пользователя на паузу, дописанный в артефакт decisions. */
-export type PauseAnswer = { text: string; via: 'ui' | 'skill'; at: string };
+export type PauseAnswer = { text: string; via: 'ui' | 'skill' | 'chat'; at: string };
 
 /** Тип условия остановки блока (until.type во flow.yaml). */
 export type UntilType = 'judge' | 'command' | 'marker' | 'none';
@@ -657,10 +673,41 @@ export type RunReport = {
   digest?: RunDigest;
   /** Сессии итогов: вызовы, стоимость (входит в totalCostUsd), сбои с последней ошибкой, повторы без вызова. */
   digestSession?: DigestSession;
+  /** Указания пользователя по ходу запуска: ждущие и применённые (где — в applied). У запусков без указаний поля нет. */
+  notes?: RunNote[];
+  /** Правки flow этого запуска на паузе, по порядку; снимок flow.yaml — последняя версия. Есть — продолжение берёт снимок. */
+  flowEdits?: RunFlowEdit[];
 };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };
+
+// ---------- «Починить и продолжить» (src/run-fix.ts): указания, правка flow идущего запуска, повтор итерации
+
+/** Откуда пришли указание или правка: кнопки UI, хелпер скилла, чат запуска. */
+export type RunFixVia = 'ui' | 'skill' | 'chat';
+
+/**
+ * Указание идущему запуску (POST /api/runs/:id/note): хвост «Указание пользователя» в промпте. next — только следующему
+ * шагу (этапу, всем участникам группы или судье), run — каждому шагу до конца запуска. applied — где уже применено:
+ * phase — имя этапа, у судьи — '#cond'.
+ */
+export type RunNote = {
+  id: string;
+  text: string;
+  scope: 'next' | 'run';
+  at: string;
+  via: RunFixVia;
+  applied?: { block: string; iteration: number; phase: string; at: string }[];
+};
+
+/**
+ * Правка flow идущего запуска на паузе: PUT /api/runs/:id/flow (source edit) или POST …/flow/reload (reload — из flows/).
+ * version — номер нового снимка flow.yaml (исходный — 0; прошлые версии лежат рядом как flow.N.yaml). changed — что
+ * поменялось, по-человечески. savedToFlows — правку записали и в flows/<имя>.yaml; saveError — записать не вышло
+ * (правка запуска при этом действует).
+ */
+export type RunFlowEdit = { version: number; at: string; source: 'edit' | 'reload'; via: RunFixVia; changed: string[]; savedToFlows?: boolean; saveError?: string };
 
 export type RunEvent =
   | { type: 'start'; report: RunReport }
@@ -701,6 +748,10 @@ export type RunEvent =
    * его не обновили. totalCostUsd — итог запуска уже со стоимостью вызова.
    */
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
+  /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
+  | { type: 'note'; note: RunNote }
+  /** Flow запуска поправили на паузе: снимок flow.yaml и отчёты будущих блоков уже новые — клиент перечитывает их. */
+  | { type: 'flow'; edit: RunFlowEdit }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */
@@ -715,8 +766,12 @@ export type ChatMessage = {
   /** Стоимость ответа (у assistant). */
   costUsd?: number;
   error?: boolean;
-  /** Чат продолжил запуск: id нового, UI покажет ссылку. */
+  /** Чат продолжил запуск: id нового, UI покажет ссылку. Так было до кнопок propose_actions — в старых историях. */
   openRun?: string;
+  /** Что агент делал за ход (у assistant): вызовы инструментов по порядку. В старых историях нет. */
+  steps?: ChatStep[];
+  /** Виджеты под ответом (у assistant) в порядке вызова: таблицы, ссылки, кнопки, варианты ответа. */
+  widgets?: ChatWidget[];
 };
 
 export type ChatLog = {
@@ -731,15 +786,90 @@ export type ChatLog = {
   totalCostUsd: number;
 };
 
-/** GET и DELETE /api/runs/:id/chat: история и идущий ход ответа (busy, activity — последние строки хода). */
-export type ChatPayload = { messages: ChatMessage[]; totalCostUsd: number; sessionId?: string; busy: boolean; activity: string[] };
+/** GET и DELETE /api/runs/:id/chat: история и идущий ход ответа (busy; live — его шаги, текст и виджеты). */
+export type ChatPayload = { messages: ChatMessage[]; totalCostUsd: number; sessionId?: string; busy: boolean; live?: ChatLive };
 
-/** Строка NDJSON-ответа POST /api/runs/:id/chat. */
+/**
+ * Строка NDJSON-ответа POST /api/runs/:id/chat. step — новый шаг или тот же с ошибкой (по index), text — текст агента
+ * по ходу ответа, widget — виджет под ответом, effect — ход что-то поменял: UI перечитывает артефакты, flow или список запусков.
+ */
 export type ChatStreamEvent =
   | { type: 'saved'; chat: ChatPayload }
-  | { type: 'log'; line: string }
+  | { type: 'step'; index: number; step: ChatStep }
+  | { type: 'text'; text: string }
+  | { type: 'widget'; widget: ChatWidget }
+  | ({ type: 'effect' } & ChatEffect)
   | { type: 'done'; chat: ChatPayload }
   | { type: 'error'; error: string };
+
+/** Шаг хода чата — вызов инструмента. Подпись («Читает …», «Поставил на паузу») строит UI по tool и target. */
+export type ChatStep = {
+  /** Инструмент как вызван: Read, Bash, mcp__run__pause_run… */
+  tool: string;
+  /** Главный аргумент коротко: путь, команда, шаблон поиска, ключ артефакта, «блок → лимит». */
+  target?: string;
+  /** Файл папки запуска, путь от неё: UI откроет его в окне файла. */
+  runFile?: string;
+  /** Файл вне папки запуска, абсолютный путь: ссылка «показать в Finder». */
+  path?: string;
+  /** Инструмент вернул ошибку: её начало. */
+  error?: string;
+  /** Вызов сабагента. */
+  sub?: true;
+};
+
+/** Идущий ход: шаги, последний текст агента, показанные виджеты. */
+export type ChatLive = { steps: ChatStep[]; text?: string; widgets: ChatWidget[] };
+
+/** Ссылка show_links: run_file — файл папки запуска (путь от неё), artifact — ключ, phase — этап (карточка в «Обзоре»), path — путь в проекте. */
+export type ChatLink = { kind: 'run_file' | 'artifact' | 'phase' | 'path'; ref: string; block?: string; label?: string };
+
+/**
+ * Действие кнопки propose_actions — опасное или общее, выполняется только кликом с подтверждением и один раз.
+ * apply_flow, reload_flow, restart_iteration — правка flow идущего запуска (на паузе), есть, только когда сервер их умеет.
+ */
+export type ChatActionKind = 'abort' | 'write_artifact' | 'answer_pause' | 'save_flow' | 'continue' | 'rerun' | 'apply_flow' | 'reload_flow' | 'restart_iteration';
+
+export type ChatAction = {
+  /** Номер в сообщении: a1, a2… */
+  id: string;
+  kind: ChatActionKind;
+  /** Текст кнопки от агента. */
+  label: string;
+  /** Что именно будет сделано, словами сервера: артефакт «План» (plan.md), flows/x.yaml. */
+  target?: string;
+  /** write_artifact — ключ артефакта. */
+  key?: string;
+  /** write_artifact — весь новый текст; answer_pause — ответ; save_flow, apply_flow — YAML flow; restart_iteration — указание этапу. */
+  text?: string;
+  /** continue, rerun — модель и лимит стоимости нового запуска. */
+  model?: string;
+  maxBudgetUsd?: number;
+  /** Состояние, при котором действие предложено (хэш артефакта или файла flow, пауза): другое при клике — expired. */
+  base?: string;
+  /** Итог клика; нет — ещё не нажимали. */
+  state?: 'done' | 'failed' | 'expired';
+  /** Что вышло или почему нет. */
+  result?: string;
+  at?: string;
+  /** continue, rerun — id нового запуска. */
+  openRun?: string;
+};
+
+export type ChatWidget =
+  | { type: 'table'; title?: string; columns: string[]; rows: string[][] }
+  | { type: 'links'; title?: string; items: ChatLink[] }
+  | { type: 'actions'; title?: string; items: ChatAction[] }
+  | { type: 'replies'; items: string[] };
+
+/** Что поменялось: artifacts — артефакты запуска, flow — flow (снимок запуска или файл в flows/), run — запуск (runId — новый). */
+export type ChatEffect = { kind: 'artifacts' | 'flow' | 'run'; runId?: string };
+
+/**
+ * POST /api/runs/:id/chat/action { msgIndex, actionId, saveToFlows? } → действие после клика (state done | failed | expired),
+ * история и что поменялось. 409 busy — идёт ход чата, 409 used — уже нажимали, 404 not_found, 423 locked — артефакт пишет этап (кнопка остаётся).
+ */
+export type ChatActionReply = { action: ChatAction; chat: ChatPayload; effects: ChatEffect[] };
 
 // ---------- страница «Контекст»: GET /api/context, GET|PUT /api/context/file (src/context.ts)
 

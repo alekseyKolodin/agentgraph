@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringify as toYaml } from 'yaml';
 import { compactSpec, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { CLAUDEAI_TOOL_PREFIX, runSession, type SessionResult } from './agent.js';
+import { CLAUDEAI_TOOL_PREFIX, runSession, type LogFn, type SessionEvent, type SessionResult } from './agent.js';
+import type { FlowAiStage } from './api-types.js';
 import { describeDir, DESIGN_RULES, ORCHESTRATOR_RULES } from './generate.js';
 import { flowToYaml, parseFlow, validateSpec } from './flows.js';
 
@@ -45,6 +46,16 @@ export type EditOptions = {
   cwd?: string;
   model?: string;
   abort?: AbortController;
+  /** Строки хода сессий (поток в UI); нет — молча. */
+  log?: LogFn;
+  /** Ход сессий событиями: отсюда повторы запроса к API. */
+  onEvent?: (e: SessionEvent) => void;
+  /** Фактическая модель из system/init (у каждой сессии правки). */
+  onModel?: (model: string) => void;
+  /** Начался шаг: правка или починка после неё. */
+  onStage?: (stage: FlowAiStage) => void;
+  /** Подмена сессии в тестах. */
+  deps?: { session: typeof runSession };
 };
 
 export type EditResult = {
@@ -55,6 +66,10 @@ export type EditResult = {
   summary: string;
   changed: boolean;
   costUsd: number;
+  /** Фактическая модель сессий правки; нет — init не пришёл. */
+  model?: string;
+  /** Весь вызов: правка и починки. */
+  durationMs: number;
 };
 
 const FILE = 'flow.yaml';
@@ -87,9 +102,15 @@ export async function editFlow(name: string, instruction: string, base: EditBase
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-edit-')));
   const file = path.join(dir, FILE);
   fs.writeFileSync(file, base.yaml);
+  const started = Date.now();
   let costUsd = 0;
-  const session = async (prompt: string): Promise<SessionResult> => {
-    const r = await runSession(
+  let model: string | undefined;
+  const run = opts.deps?.session ?? runSession;
+  const session = async (prompt: string, stage: FlowAiStage): Promise<SessionResult> => {
+    // прервали между сессиями — следующую (платную) не начинаем
+    if (opts.abort?.signal.aborted) throw new Error('Правка прервана');
+    opts.onStage?.(stage);
+    const r = await run(
       {
         prompt,
         cwd: dir,
@@ -99,10 +120,13 @@ export async function editFlow(name: string, instruction: string, base: EditBase
         maxTurns: 40,
         persist: false,
         abort: opts.abort,
+        onEvent: opts.onEvent,
+        onModel: opts.onModel,
       },
-      () => {},
+      opts.log ?? (() => {}),
     );
     costUsd += r.costUsd;
+    model ??= r.model;
     if (opts.abort?.signal.aborted) throw new Error('Правка прервана');
     if (!r.ok) throw new Error(`Редактор не справился (${r.subtype}${r.errors.length ? ': ' + r.errors.join('; ') : ''})`);
     return r;
@@ -112,7 +136,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
   try {
     const broken = base.problems ? `\n\nСейчас flow не проходит валидацию, исправь заодно и это:\n<errors>\n${base.problems}\n</errors>` : '';
     const context = opts.cwd ? `\n\nДиректория проекта: ${opts.cwd}\nВерхний уровень директории:\n${describeDir(opts.cwd)}` : '';
-    const first = await session(`Flow «${name}» лежит в файле ${file}. Измени его по запросу пользователя:\n${request}${broken}${context}`);
+    const first = await session(`Flow «${name}» лежит в файле ${file}. Измени его по запросу пользователя:\n${request}${broken}${context}`, { kind: 'edit' });
 
     let yaml = fs.readFileSync(file, 'utf8');
     let spec: FlowSpec;
@@ -125,6 +149,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
         await session(
           `После правки файл ${file} не проходит валидацию:\n<errors>\n${errMsg(err)}\n</errors>\n` +
             `Исправь только эти ошибки, остальное не трогай. Исходный запрос пользователя:\n${request}`,
+          { kind: 'repair', attempt: attempt + 1, of: MAX_REPAIRS },
         );
         yaml = fs.readFileSync(file, 'utf8');
       }
@@ -134,7 +159,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
       spec = { ...spec, name };
       yaml = flowToYaml(compactSpec(spec));
     }
-    return { spec: compactSpec(spec), yaml, summary: first.text.trim(), changed: yaml !== base.yaml, costUsd };
+    return { spec: compactSpec(spec), yaml, summary: first.text.trim(), changed: yaml !== base.yaml, costUsd, model, durationMs: Date.now() - started };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

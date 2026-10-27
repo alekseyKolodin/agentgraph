@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import type { BlockReport, ConditionReport, PhaseReport, RunDetail, RunReport } from '@server/api-types';
 import { liveState, type LiveState, type PendingPhase } from './events';
 import {
-  blockIters, chatMeta, chatText, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, gotoTarget, headerStatus, inspectView,
-  iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, ribbonRows, runBlocks, runMeta, runSteps, summaryView, tagFinalLines,
-  type RunFold,
+  blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
+  inspectView, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
+  summaryView, tagFinalLines, waitingNotes, type RunFold,
 } from './view';
 
 const block = (name: string, over: Partial<BlockReport> = {}): BlockReport => ({
@@ -195,8 +195,44 @@ test('переход из графа: ещё не выполнялся, карт
   assert.equal(nodeFromKey('start'), null);
 });
 
-test('чат: разметка с экранированием, строка над чатом', () => {
-  assert.equal(chatText('a <b> `x` **ж**\n```js\ncode\n```'), 'a &lt;b&gt; <code>x</code> <b>ж</b>\n<pre>code</pre>');
-  assert.equal(chatMeta([{ role: 'user' }, { role: 'note' }, { role: 'assistant' }], 0.5, true), 'сообщений 2 · потрачено $0.50 · агент отвечает…');
-  assert.equal(chatMeta([], 0, false), '');
+// --- «починить и продолжить»
+
+const note = (id: string, scope: 'next' | 'run', applied: string[] = []) => ({
+  id, text: id, scope, at: '2026-10-27T10:00:00Z', via: 'ui' as const,
+  ...(applied.length ? { applied: applied.map((phase) => ({ block: 'main', iteration: 1, phase, at: '2026-10-27T10:01:00Z' })) } : {}),
+});
+
+test('указания: на карточке — применённые к этому шагу; ждут — next без применения и все run', () => {
+  const r = report({ notes: [note('a', 'next', ['b']), note('b', 'run', ['b', 'c']), note('c', 'next')] });
+  assert.deepEqual(stepNotes(r, 'main', 1, 'b').map((n) => n.id), ['a', 'b']);
+  assert.deepEqual(stepNotes(r, 'main', 1, 'c').map((n) => n.id), ['b']);
+  assert.deepEqual(stepNotes(r, 'main', 2, 'b'), []);
+  assert.deepEqual(waitingNotes(r).map((n) => n.id), ['b', 'c']);
+});
+
+test('действия на паузе: только на паузе; из flows/ — не у разового; повтор — когда блок начал итерацию и лимит не 50', () => {
+  const view = (over: Partial<RunReport>) => st(over).run;
+  assert.equal(fixActions(view({ pause: 'requested' })), null);
+  assert.deepEqual(fixActions(view({ pause: 'paused' })), { reload: true, restart: { block: block('main'), next: 2, max: 4 } });
+  assert.equal(fixActions(view({ pause: 'paused', adhoc: true }))!.reload, false);
+  assert.equal(fixActions(view({ pause: 'paused', blocks: [block('main', { iterations: 0 })] }))!.restart, null);
+  assert.equal(fixActions(view({ pause: 'paused', blocks: [block('main', { maxIterations: 50 })] }))!.restart, null);
+  assert.equal(fixActions(st({ pause: 'paused' }, false).run), null);
+});
+
+test('повтор итерации: в сводке итерации и в ленте — «перезапущена», у блока без цикла появляются заголовки итераций', () => {
+  const cut = cond(1, { type: 'none', detail: RESTART_DETAIL, feedback: 'иди другим путём' });
+  assert.deepEqual(iterSummary([phase('a', 1)], cut, false).at(-1), { text: '↺ перезапущена', cls: 'warn' });
+  const s = st({ blocks: [block('main', { looped: false, condition: 'none', iterations: 2, maxIterations: 2 })], phases: [phase('a', 1), phase('a', 2)], conditions: [cut] });
+  assert.equal(blockIters(s, 0, null).items[0]!.mark, '↺ перезапущена');
+  assert.deepEqual(runSteps(s, fold()).items.filter((x) => x.kind === 'iter').map((x) => x.kind === 'iter' && x.it), [1, 2]);
+});
+
+test('правки flow в шапке: число и что поменяла каждая', () => {
+  assert.equal(flowEditsLine(report()), null);
+  const line = flowEditsLine(report({ flowEdits: [
+    { version: 1, at: '', source: 'edit', via: 'ui', changed: ['этап b: prompt'], savedToFlows: true },
+    { version: 2, at: '', source: 'reload', via: 'skill', changed: ['+ этап c'] },
+  ] }));
+  assert.deepEqual(line, { text: 'flow правили на ходу: 2', title: '1. правка снимка · и в flows/: этап b: prompt\n2. из flows/: + этап c' });
 });

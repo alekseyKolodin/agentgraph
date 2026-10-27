@@ -24,5 +24,7 @@ export function runnerText(s: string | undefined, type?: string): string {
     if (s === 'ошибка судьи') return t(s);
   }
   if (is('none') && s === 'фиксированное число итераций') return t(s);
+  // итерация оборвана повтором (src/run-fix.ts RESTART_DETAIL) — у условия любого типа
+  if (s === 'перезапущено пользователем') return t(s);
   return s;
 }

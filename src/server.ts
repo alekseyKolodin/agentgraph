@@ -3,6 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { FLOWS_DIR, RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import {
   assertFlowName,
@@ -10,7 +11,6 @@ import {
   deleteFlow,
   flowCallers,
   flowExists,
-  flowFileName,
   flowFolder,
   flowToYaml,
   listFlows,
@@ -24,11 +24,11 @@ import {
   summarize,
 } from './flows.js';
 import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { truncate, type AskAnswers } from './agent.js';
-import { generateFlow } from './generate.js';
-import { editBase, editFlow } from './edit.js';
+import { type AskAnswers } from './agent.js';
+import { editBase } from './edit.js';
+import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunReport } from './runner.js';
-import { chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type RunView } from './chat.js';
+import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
 import { pickRunTitle } from './run-title.js';
 import { writeDigest } from './run-digest.js';
@@ -42,7 +42,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent } from './api-types.js';
+import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -53,6 +53,8 @@ import { ArtifactStore } from './artifact-store.js';
 import { answerPause, homePauseFields, listArtifacts, readArtifact, writeArtifact, type ApiReply, type ArtifactRun } from './artifact-api.js';
 import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, specFromRunBody } from './adhoc.js';
 import { assertRunnable } from './compose.js';
+import { RunFixError, withFlowInput } from './run-fix.js';
+import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
   addTagAttachmentReply,
   createTag,
@@ -117,22 +119,30 @@ type LiveRun = {
    * SSE-строка. По событию на каждый запрос к модели в ленту не копим: переигрывание получает только последний.
    */
   contexts: Map<string, string>;
+  /** Указания, ждущие шага: раннер забирает их control.takeNotes(); next уходят одному шагу, run остаются до конца. */
+  notes: RunNote[];
+  /** Правка запуска на паузе (runner.ts RunFix): flow и повтор итерации. Раннер отдаёт её до первой контрольной точки. */
+  fix?: RunFix;
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
 type HomeEvent = HomeEventOf<RunEvent['type']>;
 
-/** Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю. */
-type ChatTurnState = { abort: AbortController; lines: string[]; clients: Set<http.ServerResponse> };
+/**
+ * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
+ * live — шаги, последний текст и виджеты хода: их видит вкладка, которая подключилась посреди ответа.
+ */
+type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http.ServerResponse> };
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
+/** Идущие генерации и правки flow ИИ: живут, пока живо соединение; stopServer прерывает их. */
+const generations = new Set<AbortController>();
 /** Идущие анализы flow (POST /api/runs/:id/analysis): один на запуск, второй одновременно — 409 busy. */
 const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
 const homeClients = new Map<http.ServerResponse, boolean>();
 const LOG_REPLAY_MAX = 3000;
-const CHAT_ACTIVITY_MAX = 200;
 
 /** Ошибка с HTTP-кодом: функции управления запуском бросают её, а отвечает обработчик запроса. */
 class HttpError extends Error {
@@ -169,8 +179,9 @@ export function startServer(opts: ServerOptions): Promise<string> {
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
   for (const id of live.keys()) abortRun(id);
   for (const turn of chats.values()) turn.abort.abort();
+  for (const abort of generations) abort.abort();
   const deadline = Date.now() + timeoutMs;
-  while ((live.size || chats.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  while ((live.size || chats.size || generations.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await Promise.all(
     [...servers].map(
       (server) =>
@@ -260,14 +271,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const task = (body.task ?? '').trim();
     if (!task) return sendJson(res, 400, { error: 'Опиши задачу' });
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
-    const { spec, result } = await generateFlow(task, { cwd, model: body.model || undefined });
-    if (body.save === false) {
-      return sendJson(res, 200, { name: spec.name, spec, yaml: flowToYaml(spec), summary: summarize(spec.name, '', spec), costUsd: result.costUsd });
-    }
-    const { name, file } = flowFileName(spec.name, (body.folder ?? '').trim());
-    spec.name = name;
-    fs.writeFileSync(file, flowToYaml(spec));
-    return sendJson(res, 201, { name, yaml: flowToYaml(spec), summary: summarize(name, file, spec), costUsd: result.costUsd });
+    // тело — как было; с Accept: application/x-ndjson — поток хода сессии (src/flow-ai.ts)
+    return respondFlowAi(req, res, generations, (ai) =>
+      generateReply(task, { cwd, model: body.model || undefined, folder: (body.folder ?? '').trim(), save: body.save !== false }, ai),
+    );
   }
 
   // Проверка черновика разового запуска ({ spec } из конструктора или { yaml }): ничего не пишет.
@@ -314,15 +321,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const instruction = (body.instruction ?? '').trim();
     if (!instruction) return sendJson(res, 400, { error: 'Опиши, что поменять' });
     const base = editBase(name, body.spec || typeof body.yaml === 'string' ? body : { yaml: readFlowYaml(name) });
-    // закрыли вкладку или нажали «Остановить» — останавливаем и сессию
-    const abort = new AbortController();
-    res.on('close', () => { if (!res.writableEnded) abort.abort(); });
-    const r = await editFlow(name, instruction, base, {
-      cwd: path.resolve((body.cwd ?? '').trim() || opts.defaultCwd),
-      model: body.model || undefined,
-      abort,
-    });
-    return sendJson(res, 200, { name, spec: r.spec, summary: r.summary, changed: r.changed, costUsd: r.costUsd });
+    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию
+    const cwd = path.resolve((body.cwd ?? '').trim() || opts.defaultCwd);
+    return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
   }
 
   if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/folder$/)) && method === 'PUT') {
@@ -596,6 +597,18 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return sendJson(res, 200, { ok: true });
   }
 
+  // Клик по кнопке под ответом чата: опасное действие выполняется здесь, один раз, после сверки с состоянием запуска
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/chat\/action$/)) && method === 'POST') {
+    const id = m[1];
+    const body = await readJson(req);
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'Тело — объект { msgIndex, actionId }', code: 'bad_request' });
+    if (!runView(id)) return sendJson(res, 404, { error: 'Запуск не найден' });
+    // после чтения тела — без await до записи итога: занятость чата и сверка состояния не устареют
+    const r = chatAction({ runDir: path.join(RUNS_DIR, id), controls: chatControls(id, opts), busy: chats.has(id), body: body as Record<string, unknown> });
+    if (r.status !== 200 || !r.chat) return sendJson(res, r.status, r.chat ? { ...r.body, chat: chatPayload(id, r.chat) } : r.body);
+    return sendJson(res, 200, { action: r.action!, chat: chatPayload(id, r.chat), effects: r.effects ?? [] } satisfies ChatActionReply);
+  }
+
   // Удаление из истории: вся папка запуска. Идущий запуск не трогаем.
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)$/)) && method === 'DELETE') {
     if (chats.has(m[1])) return sendJson(res, 409, { error: 'В чате запуска агент ещё отвечает: прерви ответ или дождись его' });
@@ -628,7 +641,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return sendJson(res, 200, { ...(lr ? report : withFinal(report)), live: Boolean(lr), ...continuability(report, Boolean(lr)) } satisfies RunDetail);
   }
 
-  // Схема запуска для UI: снимок runs/<id>/flow.yaml, по которому запуск идёт (за время запуска не меняется). Нет снимка — 404.
+  // Схема запуска для UI: снимок runs/<id>/flow.yaml, по которому запуск идёт (меняет его только правка на паузе — событие flow). Нет снимка — 404.
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/flow$/)) && method === 'GET') {
     if (!RUN_ID_RE.test(m[1])) return sendJson(res, 400, { error: `Неверный id запуска: ${m[1]}` });
     try {
@@ -728,6 +741,42 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const body = (await readJson(req)) as { questionId?: string; answers?: Record<string, unknown> };
     answerQuestion(id, body.questionId, body.answers ?? {});
     return sendJson(res, 200, { ok: true });
+  }
+
+  // «Починить и продолжить»: указание следующему шагу (идёт или на паузе), правка flow запуска, повтор итерации (на паузе).
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/note$/)) && method === 'POST') {
+    const id = m[1];
+    liveRun(id);
+    const body = (await readJson(req)) as { text?: unknown; scope?: unknown; via?: unknown };
+    if (typeof body.text !== 'string') return sendJson(res, 400, { error: 'text — строка', code: 'bad_request' });
+    return fixReply(res, () => ({ note: addRunNote(id, body.text as string, { scope: body.scope as RunNote['scope'] | undefined, via: body.via as RunFixVia | undefined }) }));
+  }
+
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/flow$/)) && method === 'PUT') {
+    const id = m[1];
+    liveRun(id);
+    const body = (await readJson(req)) as { yaml?: unknown; saveToFlows?: unknown; via?: unknown; base?: unknown };
+    if (typeof body.yaml !== 'string') return sendJson(res, 400, { error: 'yaml — строка', code: 'bad_request' });
+    if (body.saveToFlows !== undefined && typeof body.saveToFlows !== 'boolean') return sendJson(res, 400, { error: 'saveToFlows — true или false', code: 'bad_request' });
+    if (body.base !== undefined && !Number.isInteger(body.base)) return sendJson(res, 400, { error: 'base — число правок снимка (flowEdits.length)', code: 'bad_request' });
+    return fixReply(res, () => ({
+      edit: applyRunFlow(id, body.yaml as string, { saveToFlows: body.saveToFlows === true, via: body.via as RunFixVia | undefined, base: body.base as number | undefined }),
+    }));
+  }
+
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/flow\/reload$/)) && method === 'POST') {
+    const id = m[1];
+    liveRun(id);
+    const body = (await readJson(req)) as { via?: unknown };
+    return fixReply(res, () => ({ edit: reloadRunFlow(id, { via: body.via as RunFixVia | undefined }) }));
+  }
+
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/restart-iteration$/)) && method === 'POST') {
+    const id = m[1];
+    liveRun(id);
+    const body = (await readJson(req)) as { note?: unknown; via?: unknown };
+    if (body.note !== undefined && body.note !== null && typeof body.note !== 'string') return sendJson(res, 400, { error: 'note — строка', code: 'bad_request' });
+    return fixReply(res, () => restartIteration(id, { note: (body.note as string | null) ?? undefined, via: body.via as RunFixVia | undefined }));
   }
 
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/file$/)) && method === 'GET') {
@@ -832,6 +881,7 @@ function startRun(
     artifactItems: null,
     artifactSteps: new Map(),
     contexts: new Map(),
+    notes: [],
   };
   live.set(id, lr);
 
@@ -845,6 +895,11 @@ function startRun(
       if (!lr.pause) setPause(lr, 'requested');
       const reason = lr.report?.pauseReason;
       if (reason) notifyPause(srv, id, runLabel(spec.name, lr.report?.title), reason);
+    },
+    takeNotes: () => {
+      const all = lr.notes;
+      lr.notes = all.filter((n) => n.scope === 'run');
+      return all;
     },
   };
 
@@ -916,11 +971,14 @@ function startRun(
   const onArtifactStore = (store: ArtifactStore) => {
     lr.artifacts = store;
   };
+  const onFix = (fix: RunFix) => {
+    lr.fix = fix;
+  };
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
   // итоги итераций и сводка «где мы сейчас» — для UI; у CLI их нет: смотреть их там некому
   const digest = (input: Parameters<typeof writeDigest>[0], signal: AbortSignal) => writeDigest(input, { signal });
-  runFlow(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, digest, ...(nameRun ? { nameRun } : {}) }).catch((err) => {
+  runFlow(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, ...(nameRun ? { nameRun } : {}) }).catch((err) => {
     const report: RunReport = lr.report ?? {
       id,
       flow: spec.name,
@@ -1028,7 +1086,169 @@ function answerQuestion(id: string, questionId: string | undefined, raw: Record<
   pnd.resolve(answers);
 }
 
-/** Flow запуска: у разового — снимок из его папки, у обычного — текущая версия из flows/ по имени. */
+// --- «починить и продолжить» (run-fix.ts): указания этапам, правка flow запуска на паузе, повтор итерации
+
+/** Ошибка правки запуска с кодом для клиента (not_paused, incompatible + problems…): маршруты отдают её телом целиком. */
+class RunFixHttp extends HttpError {
+  constructor(status: number, message: string, readonly code: string, readonly problems?: string[]) {
+    super(status, message);
+  }
+}
+
+const FIX_STATUS: Record<RunFixError['code'], number> = { not_paused: 409, incompatible: 400, not_started: 409, limit: 400, restarted: 409 };
+const NOTE_MAX = 20_000;
+
+/** Вызов RunFix: его ошибка — в RunFixHttp с тем же кодом. */
+function callFix<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof RunFixError) throw new RunFixHttp(FIX_STATUS[err.code], err.message, err.code, err.problems);
+    throw err;
+  }
+}
+
+const fixVia = (via: unknown): RunFixVia => {
+  if (via === undefined || via === null) return 'ui';
+  if (via === 'ui' || via === 'skill' || via === 'chat') return via;
+  throw new RunFixHttp(400, 'via — ui, skill или chat', 'bad_request');
+};
+
+/** Текст указания: строка, не пустая и не длиннее NOTE_MAX. */
+function noteText(text: unknown): string {
+  const t = typeof text === 'string' ? text.trim() : '';
+  if (!t) throw new RunFixHttp(400, 'Пустое указание', 'bad_request');
+  if (t.length > NOTE_MAX) throw new RunFixHttp(400, `Указание длиннее ${NOTE_MAX} знаков`, 'bad_request');
+  return t;
+}
+
+const ADHOC_FLOWS = 'Разовый запуск: его flow нет в flows/ — правь снимок запуска, а в flows/ его кладёт «Сохранить как flow»';
+
+/** Запуск на паузе в этом сервере: раннер стоит в контрольной точке. Иначе — 409 not_paused. */
+function pausedRun(id: string): { lr: LiveRun; report: RunReport; fix: RunFix } {
+  const lr = liveRun(id);
+  if (lr.pause !== 'paused' || !lr.fix || !lr.report || lr.abort.signal.aborted) {
+    throw new RunFixHttp(409, 'Запуск не на паузе: править flow и повторять итерацию можно только на паузе', 'not_paused');
+  }
+  return { lr, report: lr.report, fix: lr.fix };
+}
+
+/**
+ * Указание идущему запуску (идёт или на паузе): хвостом в промпт следующего шага (next) или каждого до конца (run).
+ * Сразу в run.json и событием note; где применено, допишет раннер.
+ */
+function addRunNote(id: string, text: string, o: { scope?: 'next' | 'run'; via?: RunFixVia } = {}): RunNote {
+  const lr = liveRun(id);
+  if (!lr.report) throw new HttpError(409, 'Запуск ещё не начался');
+  if (lr.abort.signal.aborted) throw new HttpError(409, 'Запуск останавливается');
+  const body = noteText(text);
+  const scope = o.scope ?? 'next';
+  if (scope !== 'next' && scope !== 'run') throw new RunFixHttp(400, 'scope — next или run', 'bad_request');
+  const note: RunNote = { id: randomUUID(), text: body, scope, at: new Date().toISOString(), via: fixVia(o.via) };
+  lr.notes.push(note);
+  (lr.report.notes ??= []).push(note);
+  fs.writeFileSync(path.join(lr.report.runDir, 'run.json'), JSON.stringify(lr.report, null, 2));
+  lr.broadcast({ type: 'note', note });
+  return note;
+}
+
+/**
+ * Правка flow запуска на паузе (снимок, поправленный в YamlEditor): действует в этом запуске, в flows/<имя>.yaml — только
+ * с saveToFlows. Несовместимая правка — 400 incompatible с problems, запуск идёт по-старому. base — сколько правок было у
+ * снимка, который правили (flowEdits.length): с тех пор его сменили — 409 stale, чтобы не откатить чужую правку молча.
+ */
+function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?: RunFixVia; base?: number } = {}): RunFlowEdit {
+  const { report, fix } = pausedRun(id);
+  const via = fixVia(o.via);
+  if (o.saveToFlows && report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
+  const version = report.flowEdits?.length ?? 0;
+  if (o.base !== undefined && o.base !== version) {
+    throw new RunFixHttp(409, `Снимок flow запуска сменился, пока его правили (версия ${version}, а правили ${o.base}): перечитай и повтори`, 'stale');
+  }
+  let next: FlowSpec;
+  try {
+    if (typeof yaml !== 'string') throw new Error('yaml — строка');
+    next = draftSpec({ yaml });
+  } catch (err) {
+    throw new RunFixHttp(400, errMsg(err), 'incompatible', [errMsg(err)]);
+  }
+  // задача — запуска: без input в правке берётся она, другая — несовместимая правка (run-fix.ts)
+  next.input ??= report.input;
+  return applyRunSpec(report, fix, next, 'edit', via, o.saveToFlows ? yaml : undefined);
+}
+
+/** «Починил в Claude Code»: flow запуска на паузе — текущая версия flows/<имя>.yaml, задача остаётся своя. */
+function reloadRunFlow(id: string, o: { via?: RunFixVia } = {}): RunFlowEdit {
+  const { report, fix } = pausedRun(id);
+  const via = fixVia(o.via);
+  if (report.adhoc) throw new RunFixHttp(409, ADHOC_FLOWS, 'adhoc');
+  let next: FlowSpec;
+  try {
+    assertFlowName(report.flow);
+    next = loadFlow(report.flow);
+  } catch (err) {
+    throw new RunFixHttp(400, `Flow ${report.flow} не загружается: ${errMsg(err)}`, 'incompatible', [errMsg(err)]);
+  }
+  next.input = report.input;
+  return applyRunSpec(report, fix, next, 'reload', via);
+}
+
+/**
+ * Подменить flow запуска; flowsYaml — текст правки, который ляжет и в flows/. Сначала запуск, потом flows/: неподходящая
+ * или упавшая правка flows/ не трогает. Сбой записи в flows/ правку запуска не отменяет — он в edit.saveError.
+ */
+function applyRunSpec(report: RunReport, fix: RunFix, next: FlowSpec, source: RunFlowEdit['source'], via: RunFixVia, flowsYaml?: string): RunFlowEdit {
+  const problems = callFix(() => fix.checkFlow(next));
+  if (problems.length) throw new RunFixHttp(400, `Правка не подходит идущему запуску:\n${problems.join('\n')}`, 'incompatible', problems);
+  const edit = callFix(() => fix.applyFlow(next, { source, via }));
+  if (flowsYaml === undefined) return edit;
+  // в flows/ — без задачи этого запуска: input — как у сохранённого flow
+  let base: string | undefined;
+  try {
+    base = loadFlow(report.flow).input;
+  } catch {
+    base = undefined;
+  }
+  try {
+    saveFlowYaml(report.flow, withFlowInput(flowsYaml, base), flowFolder(report.flow));
+    edit.savedToFlows = true;
+  } catch (err) {
+    edit.saveError = `flows/${report.flow}.yaml не записан: ${errMsg(err)}`;
+  }
+  // edit — тот же объект, что в report.flowEdits (если правка что-то поменяла): дописываем отметку и в run.json
+  fs.writeFileSync(path.join(report.runDir, 'run.json'), JSON.stringify(report, null, 2));
+  return edit;
+}
+
+/**
+ * Повторить итерацию на паузе: остаток шагов отбрасывается, следующая — N+1, лимит блока +1. note — в {{feedback}} и
+ * указанием next первому шагу новой итерации. Запуск остаётся на паузе: дальше — resumeRun.
+ */
+function restartIteration(id: string, o: { note?: string; via?: RunFixVia } = {}): { block: string; iteration: number } {
+  const { fix } = pausedRun(id);
+  const via = fixVia(o.via);
+  const note = o.note?.trim() ? noteText(o.note) : '';
+  const r = callFix(() => fix.restart({ note }));
+  if (note) addRunNote(id, note, { scope: 'next', via });
+  return r;
+}
+
+/** Ответ маршрута правки: ошибка с кодом (RunFixHttp) — телом { error, code, problems? }, остальные — как обычно. */
+function fixReply(res: http.ServerResponse, fn: () => unknown): void {
+  let body: unknown;
+  try {
+    body = fn();
+  } catch (err) {
+    if (!(err instanceof RunFixHttp)) throw err;
+    return sendJson(res, err.status, { error: err.message, code: err.code, ...(err.problems ? { problems: err.problems } : {}) });
+  }
+  sendJson(res, 200, body);
+}
+
+/**
+ * Flow запуска: у разового — снимок из его папки; у запуска, чей flow правили на ходу (flowEdits, и у его продолжений), —
+ * тоже снимок; у обычного — текущая версия из flows/ по имени.
+ */
 function specOf(report: RunReport): FlowSpec {
   return runSpec(report, {
     flow: (name) => {
@@ -1036,6 +1256,7 @@ function specOf(report: RunReport): FlowSpec {
       return loadFlow(name);
     },
     snapshot: (id) => readRunFlow(RUNS_DIR, id),
+    report: readReport,
   });
 }
 
@@ -1143,11 +1364,101 @@ function chatControls(id: string, srv: ServerOptions): ChatControls {
     abort: () => abortRun(id),
     setMaxIterations: (block, value) => changeMaxIterations(id, block, value),
     answer: (questionId, answers) => answerQuestion(id, questionId, answers),
-    continueRun: () => continueRun(id, {}, srv),
+    continueRun: (o) => continueRun(id, { model: o?.model, maxBudgetUsd: o?.maxBudgetUsd }, srv),
+    rerun: (o) => rerunRun(id, { model: o?.model, maxBudgetUsd: o?.maxBudgetUsd }, srv),
+    // артефакты — тем же API, что у панели; запись и ответ на паузу — от имени пользователя через чат
+    artifacts: {
+      list: () => {
+        const run = artifactRun(id);
+        return run ? listArtifacts(run) : NO_ARTIFACTS;
+      },
+      read: (key) => {
+        const run = artifactRun(id);
+        return run ? readArtifact(run, key) : NO_ARTIFACTS;
+      },
+      write: (key, text, base) => {
+        const run = artifactRun(id);
+        return run ? writeArtifact(run, key, { text, base }, 'chat') : NO_ARTIFACTS;
+      },
+    },
+    answerPause: (text) => {
+      const lr = live.get(id);
+      if (!lr) return { status: 409, body: { error: 'Запуск не на паузе в этом сервере: ответ не записан', code: 'not_paused' } };
+      return answerPause(lr.pause, artifactRun(id), text, 'chat');
+    },
+    readFlow: () => runFlows(id),
+    saveFlow: (yaml) => {
+      const r = readReport(id);
+      if (!r) throw new HttpError(404, 'Запуск не найден');
+      if (r.adhoc) throw new HttpError(400, 'У разового запуска нет файла в flows/');
+      try {
+        return { file: saveFlowYaml(r.flow, yaml).file };
+      } catch (err) {
+        throw new HttpError(400, errMsg(err));
+      }
+    },
+    // «починить и продолжить» — те же функции, что у кнопок на паузе
+    note: (text, o) => addRunNote(id, text, o),
+    applyRunFlow: (yaml, o) => applyRunFlow(id, yaml, o),
+    reloadRunFlow: (o) => reloadRunFlow(id, o),
+    restartIteration: (o) => restartIteration(id, o),
   };
 }
 
-/** История чата для UI; busy и activity — идущий ход (его видно и из другой вкладки, и после возврата на запуск). */
+/** Flow запуска для чата: снимок из папки запуска и файл в flows/ — с диска на каждый вызов, правка в конструкторе видна сразу. */
+function runFlows(id: string): FlowSnapshots {
+  const r = live.get(id)?.report ?? readReport(id);
+  if (!r) throw new HttpError(404, 'Запуск не найден');
+  const snap = path.join(RUNS_DIR, id, 'flow.yaml');
+  const out: FlowSnapshots = { name: r.flow, adhoc: Boolean(r.adhoc) };
+  if (fs.existsSync(snap)) out.run = { file: snap, yaml: fs.readFileSync(snap, 'utf8') };
+  if (!r.adhoc) {
+    try {
+      out.flows = { file: resolveFlowFile(r.flow), yaml: readFlowYaml(r.flow) };
+    } catch {
+      // файла нет: flow удалили или переименовали после запуска
+    }
+  }
+  return out;
+}
+
+/**
+ * Перезапуск из чата: тот же flow заново (текущая версия из flows/, у разового — снимок) с той же задачей, директорией,
+ * тегами и вложениями. Имя наследуется, как у продолжения. Идущий запуск не перезапускаем: два запуска в одной директории столкнутся.
+ */
+function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, srv: ServerOptions): { id: string } {
+  const prev = readReport(prevId);
+  if (!prev) throw new HttpError(404, 'Запуск не найден');
+  if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: перезапустить можно только завершённый');
+  if (!prev.cwd || !fs.existsSync(prev.cwd)) throw new HttpError(400, 'Директории проекта запуска больше нет');
+  let spec: FlowSpec;
+  let addDirs: string[];
+  try {
+    spec = specOf(prev);
+    addDirs = runAddDirs(prev.addDirs, prev.cwd);
+    // удалённый с тех пор тег знаний — отказ до создания папки запуска, как у POST /api/runs
+    resolveKnowledge(spec, prev.knowledge ?? []);
+  } catch (err) {
+    throw new HttpError(400, errMsg(err));
+  }
+  spec.input = prev.input;
+  const id = startRun(spec, {
+    cwd: prev.cwd,
+    maxBudgetUsd: o.maxBudgetUsd,
+    model: o.model,
+    source: prev.source,
+    worktree: prev.worktree,
+    addDirs,
+    attachmentsFrom: path.join(RUNS_DIR, prevId),
+    adhoc: prev.adhoc,
+    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
+    ...(prev.title ? { title: prev.title } : {}),
+  }, srv);
+  return { id };
+}
+
+/** История чата для UI; busy и live — идущий ход (его видно и из другой вкладки, и после возврата на запуск). */
 function chatPayload(id: string, chat: ChatLog): ChatPayload {
   const turn = chats.get(id);
   return {
@@ -1155,12 +1466,13 @@ function chatPayload(id: string, chat: ChatLog): ChatPayload {
     totalCostUsd: chat.totalCostUsd,
     sessionId: chat.sessionId,
     busy: Boolean(turn),
-    activity: turn?.lines.slice(-30) ?? [],
+    ...(turn ? { live: turn.live } : {}),
   };
 }
 
 /**
- * Сообщение в чат запуска. Ответ — поток NDJSON: saved (сообщение записано), log (ход ответа), done (история после ответа) или error.
+ * Сообщение в чат запуска. Ответ — поток NDJSON: saved (сообщение записано), step, text, widget и effect (ход ответа),
+ * done (история после ответа) или error.
  * Ход не зависит от соединения: закрыли вкладку — агент доотвечает, ответ ляжет в историю. Остановка — POST …/chat/stop.
  */
 async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id: string, srv: ServerOptions): Promise<void> {
@@ -1171,7 +1483,7 @@ async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id:
   const view = runView(id);
   if (!view) return sendJson(res, 404, { error: 'Запуск не найден' });
 
-  const turn: ChatTurnState = { abort: new AbortController(), lines: [], clients: new Set([res]) };
+  const turn: ChatTurnState = { abort: new AbortController(), live: { steps: [], widgets: [] }, clients: new Set([res]) };
   chats.set(id, turn);
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache' });
   res.on('close', () => turn.clients.delete(res));
@@ -1188,11 +1500,19 @@ async function chatPost(req: http.IncomingMessage, res: http.ServerResponse, id:
       model: body.model || undefined,
       controls: chatControls(id, srv),
       abort: turn.abort,
-      log: (line) => {
-        const l = truncate(line, 400);
-        if (turn.lines.push(l) > CHAT_ACTIVITY_MAX) turn.lines.splice(0, turn.lines.length - CHAT_ACTIVITY_MAX / 2);
-        send({ type: 'log', line: l });
+      onStep: (index, step) => {
+        turn.live.steps[index] = step;
+        send({ type: 'step', index, step });
       },
+      onText: (text) => {
+        turn.live.text = text;
+        send({ type: 'text', text });
+      },
+      onWidget: (widget) => {
+        turn.live.widgets.push(widget);
+        send({ type: 'widget', widget });
+      },
+      onEffect: (e) => send({ type: 'effect', ...e }),
       onSaved: (chat) => send({ type: 'saved', chat: chatPayload(id, chat) }),
     });
     // до done: в истории, которую он несёт, ответ уже не «идёт»

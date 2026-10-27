@@ -1,12 +1,13 @@
 // Главная (ui/index.html #view-home, ui/app.js renderHome): вопросы агентов с ответом, идущие запуски, мои MR, которым
 // нужно внимание, задачи и код, лента событий справа. «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeResponse } from '@server/api-types';
 import { keys, useFeature, useFlows, useHome, type IntakeTarget } from '../../api';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
 import { QuestionCard } from '../../components/question/QuestionCard';
+import { useNow } from '../../components/useNow';
 import { homeMeta, inbox, withoutQuestion } from '../../lib/home';
 import { t } from '../../lib/i18n';
 import { Attention } from './Attention';
@@ -19,16 +20,6 @@ import { Limits } from './Limits';
 import styles from './Home.module.css';
 
 const TICK_MS = 30_000;
-
-/** Текущее время, обновляется раз в period: подписи «N мин назад» без перезапроса данных. */
-function useNow(period: number): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), period);
-    return () => clearInterval(timer);
-  }, [period]);
-  return now;
-}
 
 export function HomeScreen() {
   const qc = useQueryClient();
