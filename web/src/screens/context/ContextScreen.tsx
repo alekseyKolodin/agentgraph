@@ -8,6 +8,7 @@ import type { ContextView } from '@server/api-types';
 import { ApiError, errorText, fetchContext, fetchContextFile, fetchFlow, saveContextFile, useConfig, useFeature, useFlows, useRecentDirs } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SafeMarkdown } from '../../components/MdText';
+import { PathLink } from '../../components/PathLink';
 import { PickDirButton } from '../../components/PickDirButton';
 import { useToast } from '../../components/Toast';
 import {
@@ -333,7 +334,7 @@ export function ContextScreen() {
       {e && es && (
         <section ref={editorRef} className={styles.ctxEditor}>
           <div className={styles.ctxEditHead}>
-            <span className="mono" title={e.path}>{ctxHome(e.path, home)}</span>
+            <PathLink className="mono" path={e.path}>{ctxHome(e.path, home)}</PathLink>
             <span className={cx('row', styles.push)}>
               <span className={es.msgClass}>{es.msg}</span>
               <button type="button" className="btn small" hidden={!es.reload} onClick={() => void reloadFile()}>{t('Перечитать')}</button>
@@ -396,7 +397,7 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
           {d.memoryFiles.length
             ? d.memoryFiles.map((f) => (
               <li key={f.path} className={styles.ctxRow}>
-                <span className={cx(styles.ctxName, 'mono')} title={f.path}>{ctxHome(f.path, home)}</span>
+                <PathLink className={cx(styles.ctxName, 'mono')} path={f.path}>{ctxHome(f.path, home)}</PathLink>
                 <span className="chip">{f.type}</span>
                 <span className={styles.ctxTok}>{ctxTokens(f.tokens)}</span>
                 <button type="button" className="btn small" title={ctxOpenTitle(f.editable)} onClick={() => open(f.path)}>{f.editable ? t('Открыть') : t('Смотреть')}</button>

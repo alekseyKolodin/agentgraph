@@ -12,6 +12,7 @@ import {
 import { AdhocBadge, Badge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { MdText } from '../../components/MdText';
+import { PathLink } from '../../components/PathLink';
 import { QuestionCard } from '../../components/question/QuestionCard';
 import { setDocRunTitle } from '../../components/shell/docTitle';
 import { useToast } from '../../components/Toast';
@@ -261,7 +262,7 @@ function RunPage({ id }: { id: string }) {
   const fromKnown = from && runs?.some((x) => x.id === from);
   const sub = [
     <span key="when">{when(r.startedAt)}</span>,
-    r.cwd && <span key="cwd" className={styles.subPath} title={r.cwd}>{r.cwd}</span>,
+    r.cwd && <PathLink key="cwd" className={styles.subPath} path={r.cwd} />,
     r.hidden && <span key="hidden">{t('скрыт из списка')}</span>,
     from && (fromKnown ? <Link key="from" to={`/run/${from}`} title={from}>{t('продолжение запуска')}</Link> : <span key="from" title={from}>{t('продолжение запуска')}</span>),
   ].filter(Boolean);
@@ -277,7 +278,7 @@ function RunPage({ id }: { id: string }) {
     r.addDirs?.length ? (
       <span key="dirs">
         {t('Доп. директории:')}{' '}
-        {r.addDirs.map((d, i) => <span key={d}>{i > 0 && ', '}<span className={styles.subPath} title={d}>{d}</span></span>)}
+        {r.addDirs.map((d, i) => <span key={d}>{i > 0 && ', '}<PathLink className={styles.subPath} path={d} /></span>)}
       </span>
     ) : null,
     // только в новом UI: откуда запуск — задача Jira, MR (GitLab, !N) или PR (GitHub, #N), ветка; и его worktree
@@ -288,7 +289,7 @@ function RunPage({ id }: { id: string }) {
         {r.source.title ? ` — ${r.source.title}` : ''}
       </span>
     ) : null,
-    r.worktree ? <span key="wt" title={r.worktree.path}>{`worktree${r.worktree.branch ? ` · ${r.worktree.branch}` : ''}`}</span> : null,
+    r.worktree ? <PathLink key="wt" path={r.worktree.path}>{`worktree${r.worktree.branch ? ` · ${r.worktree.branch}` : ''}`}</PathLink> : null,
   ].filter(Boolean);
   const openQuestions = r.live ? r.questions.filter((q) => !q.answers) : [];
   const shownTabs = RUN_TABS.filter((t) => available.has(t));
@@ -301,7 +302,8 @@ function RunPage({ id }: { id: string }) {
   };
 
   return (
-    <>
+    // data-run — база для относительных путей в выводе (components/PathLink): сервер ищет их от cwd запуска
+    <div className={styles.runRoot} data-run={id}>
       <header className={cx('view-head', styles.viewHead)}>
         <div>
           <h1>
@@ -424,7 +426,7 @@ function RunPage({ id }: { id: string }) {
       </section>
       {artOn && <ArtifactWindow onContinue={() => void cont()} />}
       {r.adhoc && <SaveFlowDialog runId={id} flow={r.flow} open={saveOpen} onClose={() => setSaveOpen(false)} />}
-    </>
+    </div>
   );
 }
 

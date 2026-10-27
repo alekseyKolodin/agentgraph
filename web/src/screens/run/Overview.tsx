@@ -8,6 +8,7 @@ import { Badge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { openRunFile, openTagSummary } from '../../components/file/FileDialog';
 import { SafeMarkdown } from '../../components/MdText';
+import { PathText } from '../../components/PathLink';
 import { AnsweredCard } from '../../components/question/QuestionCard';
 import { ICON } from '../../components/shell/FlowList';
 import { dur, usd } from '../../lib/format';
@@ -273,7 +274,7 @@ function RunningCard({ x, doing, runId, implicit }: { x: PendingPhase; doing: st
 }
 
 /** Замечания судьи — markdown; у команды — хвост её вывода моноширинно. */
-export const Feedback = ({ c }: { c: ConditionReport }) => (feedbackIsMarkdown(c) ? <SafeMarkdown text={c.feedback} /> : <pre>{c.feedback}</pre>);
+export const Feedback = ({ c }: { c: ConditionReport }) => (feedbackIsMarkdown(c) ? <SafeMarkdown text={c.feedback} /> : <pre><PathText text={c.feedback} /></pre>);
 
 function CondCard({ c, runId }: { c: ConditionReport; runId: string }) {
   const none = c.type === 'none';
@@ -338,7 +339,7 @@ function FinalOut({ runId, f, multi }: { runId: string; f: NonNullable<RunReport
         {f.output && <button className="btn small" onClick={() => void openRunFile(runId, f.output, t('Вывод · {name}', { name: f.phase }))}>{t('вывод')}</button>}
       </div>
       <div className={styles.finalBody}>
-        {!shown ? <div className="muted small">{t('Загружаю…')}</div> : shown.md ? <SafeMarkdown text={shown.text} /> : <pre>{shown.text}</pre>}
+        {!shown ? <div className="muted small">{t('Загружаю…')}</div> : shown.md ? <SafeMarkdown text={shown.text} /> : <pre><PathText text={shown.text} /></pre>}
       </div>
     </div>
   );
