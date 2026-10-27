@@ -1,8 +1,9 @@
 // Markdown для вопросов агента, окна файлов и замечаний условия (порт ui/md.js один в один).
 // В выводах бывает чужой текст (Jira, MR, цитаты агента), а сервер без авторизации запускает агентов с Bash,
 // поэтому XSS здесь равен выполнению кода на машине. Правила: сначала экранируем весь текст, сырой HTML не пропускаем,
-// ссылки — только http/https. Результат renderMarkdown — единственное, что можно класть в dangerouslySetInnerHTML.
+// ссылки — только http/https, пути к файлам — без href, по data-path (lib/paths.ts). Результат renderMarkdown — единственное, что можно класть в dangerouslySetInnerHTML.
 // Чистые функции без DOM.
+import { findPaths, isPath, pathLinkHtml } from './paths';
 
 /** Выше порогов не размечаем: огромный вывод или одну гигантскую строку показываем как есть, чтобы не подвесить вкладку. */
 const MAX_CHARS = 300_000;
@@ -295,16 +296,18 @@ function inline(s: string): string {
   const keep: Keep = (html) => `${PH_OPEN}${saved.push(html) - 1}${PH_CLOSE}`;
   const restore = (str: string) => str.replace(/\u0001(\d+)\u0002/g, (_, n: string) => saved[Number(n)]!);
 
+  // ссылка в ссылке не работает: путь из `кода` в подписи остаётся текстом
+  const labelHtml = (label: string) => restore(emphasis(label)).replace(/<a class="path-link"[^>]*>([^<]*)<\/a>/g, '$1');
   s = codeSpans(s, keep);
   s = s.replace(/\\([\\`*_{}[\]()#+\-.!|~])/g, (_, ch: string) => keep(ch));
   // в подписи нет «[»: до «]» доходит только ближайшая «[», а не каждая из тысячи подряд
   s = s.replace(/\[([^[\]\n]{1,500})\]\(([^()\s\u0001\u0002]{1,2000})\)/g, (all, label: string, url: string) => {
-    // url уже экранирован (без " < >), так что из атрибута не выйти; протокол — только http/https
-    if (!/^https?:\/\//i.test(url)) return all;
+    // url уже экранирован (без " < >), так что из атрибута не выйти; протокол — только http/https, остальное — путь или текст
+    if (!/^https?:\/\//i.test(url)) return isPath(url, true) ? keep(pathLinkHtml(url, labelHtml(label))) : all;
     // `код` в подписи уже заменён плейсхолдером: раскрываем его здесь, внешний restore вложенные не видит
-    return keep(`<a href="${url}" target="_blank" rel="noopener noreferrer">${restore(emphasis(label))}</a>`);
+    return keep(`<a href="${url}" target="_blank" rel="noopener noreferrer">${labelHtml(label)}</a>`);
   });
-  s = autolink(s, keep);
+  s = linkPaths(autolink(s, keep), keep);
   return restore(emphasis(s));
 }
 
@@ -338,11 +341,22 @@ function autolink(s: string, keep: Keep): string {
   });
 }
 
-/** Обычный текст без разметки, но с кликабельными адресами: для полей, где markdown неуместен. */
+/** Пути к файлам — в ссылки «показать в Finder»; адреса и `код` уже стоят плейсхолдерами и сюда не попадают. */
+function linkPaths(s: string, keep: Keep): string {
+  let out = '';
+  let at = 0;
+  for (const h of findPaths(s)) {
+    out += s.slice(at, h.start) + keep(pathLinkHtml(h.path, h.path));
+    at = h.end;
+  }
+  return at ? out + s.slice(at) : s;
+}
+
+/** Обычный текст без разметки, но с кликабельными адресами и путями: для полей, где markdown неуместен. */
 export function linkifyText(src: unknown): string {
   const saved: string[] = [];
   const keep: Keep = (html) => `${PH_OPEN}${saved.push(html) - 1}${PH_CLOSE}`;
-  return autolink(esc(String(src ?? '').replace(/[\u0001\u0002]/g, '�')), keep).replace(
+  return linkPaths(autolink(esc(String(src ?? '').replace(/[\u0001\u0002]/g, '�')), keep), keep).replace(
     /\u0001(\d+)\u0002/g,
     (_, n: string) => saved[Number(n)]!,
   );
@@ -378,7 +392,8 @@ function codeSpans(s: string, keep: Keep): string {
     const close = runs[b]!;
     let body = s.slice(open.at + open.len, close.at);
     if (/^ [^\n]* $/.test(body) && body.trim()) body = body.slice(1, -1);
-    out += s.slice(pos, open.at) + keep(`<code>${body}</code>`);
+    // `src/a.ts:42` или `README.md` целиком — путь: в коде голое имя файла почти всегда файл
+    out += s.slice(pos, open.at) + keep(`<code>${isPath(body, true) ? pathLinkHtml(body, body) : body}</code>`);
     pos = close.at + close.len;
     a = b;
   }

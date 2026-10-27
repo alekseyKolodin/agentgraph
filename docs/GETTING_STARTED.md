@@ -415,6 +415,7 @@ So that an MR can't be merged with red tests, enable Settings → Merge requests
 | `src/jira.ts` | Jira Cloud REST v3 client, ADF → markdown |
 | `src/git.ts` | git and `glab` through `execFile`: remote, branches, MRs, worktree |
 | `src/projects.ts` | the project list: auto-discovery from runs and manual editing; recent directories for the run form |
+| `src/reveal.ts` | "Show in Finder" for file paths in the UI and in agent output (`POST /api/reveal`, macOS): a relative path is resolved from the run's cwd, extra dirs, run folder and its artifacts; files and folders are only selected (`open -R`), never opened or executed |
 | `src/intake.ts` | task text from an issue, MR or branch |
 | `src/attention.ts` | "My MRs: need attention": reasons (CI, discussions, conflicts), collection across projects, flow selection via haiku |
 | `src/reporters.ts`, `src/ui.ts` | console output |

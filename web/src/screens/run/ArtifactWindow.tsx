@@ -5,6 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { fileRaw, setFileRaw } from '../../components/file/FileDialog';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { PathLink, PathText } from '../../components/PathLink';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
 import { markdownFits, renderMarkdown } from '../../lib/md';
@@ -150,7 +151,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
     else if (!view.text) bodyNode = <p className="muted">{st === 'version' ? t('Пока пусто: в этой версии файл был пустым.') : t('Пока пусто: файл ещё не заполнялся.')}</p>;
     else {
       const html = isMd && !fileRaw() && markdownFits(view.text) ? mdHtml(view.text) : null;
-      bodyNode = html !== null ? <div className="md" dangerouslySetInnerHTML={{ __html: html }} /> : <pre>{view.text}</pre>;
+      bodyNode = html !== null ? <div className="md" dangerouslySetInnerHTML={{ __html: html }} /> : <pre><PathText text={view.text} /></pre>;
     }
   }
   const pv = showPreview && preview?.id === d?.id ? preview : null;
@@ -200,7 +201,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
           cur.tasks ? <span key="t" className={cx(styles.artMark, styles.tasks, tasksBadge(cur.tasks).done && styles.done)} title={tasksBadge(cur.tasks).title}>{tasksBadge(cur.tasks).text}</span> : null,
           fileSize(cur.size ?? 0),
           t('последний автор: {author}', { author: `${artAuthor(cur.author, multi)}${cur.at ? `, ${artClock(cur.at)}` : ''}` }),
-          cur.path ? <span key="p" className={cx('mono', styles.artPath)} title={t('Путь к файлу')}>{cur.path}</span> : null,
+          cur.path ? <PathLink key="p" className={cx('mono', styles.artPath)} path={cur.path} /> : null,
         ].filter(Boolean).reduce<ReactNode[]>((out, x, i) => {
           const last = out[out.length - 1];
           const sep = i ? ' · ' : '';

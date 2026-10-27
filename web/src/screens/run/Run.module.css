@@ -1,6 +1,8 @@
 /* Страница запуска: правила ui/style.css в том же порядке, с поздними перебивками «Пульта» (system.md → «Страницы»).
    #view-run, #run-sub, #run-limit и другие id старого UI здесь — классы; глобальные примитивы (.btn, .badge, .tab, .md,
    .caret, .fold-head, .link-btn, .insp-close, .run-paused, .error) — в base.css. */
+/* обёртка страницы только ради data-run (база путей в выводе): в раскладке её нет */
+.run-root { display: contents; }
 .view-head { flex-wrap: wrap; }
 .view-head > div:first-child { flex: 1 1 320px; min-width: 0; }
 .view-head > :global(.row) { flex: 0 1 auto; max-width: 100%; flex-wrap: wrap; }
