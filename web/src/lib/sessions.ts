@@ -1,5 +1,5 @@
 // Логика экранов «Сессии» без React и DOM: подписи статуса, строка сессии в «Сейчас», чипы тегов на ходу, адрес
-// WebSocket, путь перетащенного файла для командной строки claude.
+// WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52.
 import type { SessionTagChip, SessionView } from '@server/api-types';
 import { baseName, clock } from './format';
 import { t } from './i18n';
@@ -82,6 +82,21 @@ export function fileUris(list: string): string[] {
 
 /** Перевод строки в поле ввода claude без отправки: Shift+Enter шлёт то же, что Option+Enter (ESC CR). */
 export const NEWLINE_SEQ = '\x1b\r';
+
+/**
+ * Тело OSC 52 («c;<base64>») → текст для буфера обмена. Так копирует claude: выделение мышью в его полноэкранном
+ * интерфейсе. Запрос содержимого буфера («?»), пустое и не base64 — null: читать буфер программе в терминале не даём.
+ */
+export function osc52Text(data: string): string | null {
+  const i = data.indexOf(';');
+  const b64 = i < 0 ? '' : data.slice(i + 1);
+  if (!b64 || b64 === '?') return null;
+  try {
+    return new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+}
 
 const hasTaskTag = (s: Pick<SessionView, 'chips'>) => s.chips.some((c) => c.kind === 'task' && c.state !== 'removed');
 

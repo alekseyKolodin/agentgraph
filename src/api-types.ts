@@ -341,12 +341,14 @@ export type SessionView = {
 /** GET /api/sessions. */
 export type SessionList = { sessions: SessionView[]; max: number };
 
-/** Сообщения WebSocket /api/sessions/:id/ws от сервера: снимок экрана, вывод, состояние, выход процесса. */
+/** Сообщения WebSocket /api/sessions/:id/ws от сервера: снимок экрана, вывод, состояние, выход процесса, открытая отсюда сессия. */
 export type SessionWsServer =
   | { t: 'snap'; d: string; cols: number; rows: number }
   | { t: 'o'; d: string }
   | { t: 's'; session: SessionView }
-  | { t: 'x'; code: number };
+  | { t: 'x'; code: number }
+  /** Claude этой сессии открыл новую (инструмент session_new): экран показывает ссылку на неё. */
+  | { t: 'opened'; session: SessionView };
 /** От клиента: ввод и размер терминала. */
 export type SessionWsClient = { t: 'i'; d: string } | { t: 'r'; cols: number; rows: number };
 

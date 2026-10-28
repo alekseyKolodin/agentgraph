@@ -1,6 +1,8 @@
 // Терминал сессии: xterm.js в окне, процесс claude — на сервере (sessions-pty.ts), между ними WebSocket. При подключении
 // сервер шлёт снимок экрана, дальше — живой вывод; обрыв — переподключение с новым снимком, процесс при этом живёт.
 // Клавиатура: Shift+Enter — перевод строки в поле claude, Option — Meta; перетащенный файл — путь в командную строку.
+// Копирование: claude сам выделяет мышью и шлёт текст через OSC 52 — он уходит в буфер обмена; Option+мышь (Shift — не
+// на Mac) выделяет средствами терминала, мимо claude, дальше — ⌘C.
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -11,10 +13,18 @@ import { uploadSessionFile } from '../../api/sessions';
 import { readBase64 } from '../../components/readBase64';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
-import { fileUris, NEWLINE_SEQ, sessionWsUrl, shellPath } from '../../lib/sessions';
+import { fileUris, NEWLINE_SEQ, osc52Text, sessionWsUrl, shellPath } from '../../lib/sessions';
 import styles from './Session.module.css';
 
 const RECONNECT_MS = 1000;
+/**
+ * OSC 52 принимаем, только если в этом терминале только что отпустили мышь или нажали клавишу (выделение, /copy):
+ * иначе любой вывод мог бы молча подменить буфер, а второе окно той же сессии — тоже писать в него. 5 с — столько
+ * браузер держит жест пользователя для записи в буфер.
+ */
+const OSC52_AFTER_INPUT_MS = 5000;
+/** Клавиша, с которой мышь выделяет средствами терминала, а не claude (macOptionClickForcesSelection; не на Mac — Shift). */
+export const SELECT_KEY = /Mac/.test(navigator.platform) ? 'Option' : 'Shift';
 
 /** Цвета терминала — из токенов «Пульта»: фон колодца, текст, выделение в цвет фокуса. */
 function theme() {
@@ -27,17 +37,21 @@ type Props = {
   id: string;
   /** Состояние сессии из потока: шапка и строка тегов обновляются без опроса. */
   onState: (s: SessionView) => void;
+  /** Claude этой сессии открыл новую (session_new). */
+  onOpened: (s: SessionView) => void;
   /** Процесс живой: иначе ввод не шлём и оверлей переподключения не показываем. */
   live: boolean;
   /** Поверх экрана: карточка завершённой сессии. */
   overlay?: ReactNode;
 };
 
-export function SessionTerminal({ id, onState, live, overlay }: Props) {
+export function SessionTerminal({ id, onState, onOpened, live, overlay }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const onStateRef = useRef(onState);
   onStateRef.current = onState;
+  const onOpenedRef = useRef(onOpened);
+  onOpenedRef.current = onOpened;
   const [conn, setConn] = useState<'connecting' | 'open' | 'lost'>('connecting');
   const [drop, setDrop] = useState(false);
   const toast = useToast();
@@ -50,6 +64,10 @@ export function SessionTerminal({ id, onState, live, overlay }: Props) {
       fontSize: 13,
       cursorBlink: true,
       macOptionIsMeta: true,
+      // claude включает мышь (выделяет сам): Option+мышь — выделение терминала, как в iTerm2; короткий Option+клик
+      // при этом не должен слать claude стрелки до клетки клика
+      macOptionClickForcesSelection: true,
+      altClickMovesCursor: false,
       scrollback: 5000,
       theme: theme(),
       // ссылки OSC 8 из вывода модели и инструментов: только http(s) и в новой вкладке — javascript: и прочие схемы не открываем
@@ -92,6 +110,7 @@ export function SessionTerminal({ id, onState, live, overlay }: Props) {
           term.reset();
           term.write(m.d);
         } else if (m.t === 's') onStateRef.current(m.session);
+        else if (m.t === 'opened') onOpenedRef.current(m.session);
       };
       sock.onclose = () => {
         if (stopped || ws !== sock) return;
@@ -101,6 +120,18 @@ export function SessionTerminal({ id, onState, live, overlay }: Props) {
     };
     connect();
 
+    // OSC 52 — буфер обмена от claude (без обработчика xterm его молча выбрасывает). Только запись: запрос содержимого
+    // буфера osc52Text отсекает. Снимок экрана при переподключении OSC не повторяет — старое выделение не вернётся
+    let inputAt = 0;
+    const mark = () => (inputAt = Date.now());
+    el.addEventListener('mouseup', mark, true);
+    el.addEventListener('keydown', mark, true);
+    term.parser.registerOscHandler(52, (data) => {
+      const text = osc52Text(data);
+      if (text === null || !document.hasFocus() || Date.now() - inputAt > OSC52_AFTER_INPUT_MS) return true;
+      navigator.clipboard.writeText(text).catch(() => toast(t('Не скопировалось: браузер не дал доступа к буферу обмена. Выдели текст с {key} и скопируй', { key: SELECT_KEY })));
+      return true;
+    });
     term.onData((d) => send({ t: 'i', d }));
     term.onResize(({ cols, rows }) => send({ t: 'r', cols, rows }));
     // Shift+Enter: перевод строки в поле claude, как Option+Enter; keypress и keyup того же нажатия тоже глушим,
@@ -121,6 +152,8 @@ export function SessionTerminal({ id, onState, live, overlay }: Props) {
       clearTimeout(retry);
       ws?.close();
       ro.disconnect();
+      el.removeEventListener('mouseup', mark, true);
+      el.removeEventListener('keydown', mark, true);
       term.dispose();
       termRef.current = null;
     };
