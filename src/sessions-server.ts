@@ -139,13 +139,21 @@ export class SessionManager {
   /** Сервер останавливается: новых сессий и подключений не принимаем — их claude никто бы не погасил. */
   private stopping = false;
   private loaded = false;
+  /** Идущие саммари тегов: остановка сервера прерывает их и ждёт, пока запишется пометка. */
+  private readonly summaries = new Map<Promise<void>, AbortController>();
 
   constructor(readonly deps: SessionDeps) {}
 
   /** Фича есть, если node-pty и зеркало загрузились. Заодно — сессии прошлых запусков сервера с диска. */
   async available(): Promise<boolean> {
     const ok = (await this.deps.kit()) !== null;
-    if (ok) this.load();
+    if (ok) {
+      try {
+        this.load();
+      } catch (err) {
+        console.error('сессии: не прочитались с диска —', errMsg(err));
+      }
+    }
     return ok;
   }
 
@@ -170,7 +178,12 @@ export class SessionManager {
       if (!rec.endedAt) {
         rec.endedAt = rec.lastActivityAt;
         if (this.wantsSummary(s)) rec.summaryPending = 'app-closed';
-        this.save(s);
+        // не записалось (нет прав, нет места) — сессия всё равно в списке, остальные тоже
+        try {
+          this.save(s);
+        } catch (err) {
+          console.error(`сессия ${name}: не записалась —`, errMsg(err));
+        }
       }
       this.sessions.set(name, s);
     }
@@ -465,6 +478,7 @@ export class SessionManager {
   startSummary(id: string): SessionView {
     const s = this.get(id);
     if (s.summarizing) throw new SessionError(409, 'Саммари уже пишется');
+    if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
     if (!newTurns(s.rec)) throw new SessionError(409, 'Новых ходов с прошлого саммари нет');
     if (!readSessionTags(s.rec.tags, readTag).task.length) throw new SessionError(409, 'У сессии нет тегов задач: саммари есть только у них');
     void this.summarize(s).catch((err: unknown) => console.error('сессия: саммари —', errMsg(err)));
@@ -476,7 +490,18 @@ export class SessionManager {
    * Записи тега идут через queueTagSummary: две сессии одного тега не затрут друг друга. Ошибка одного тега не мешает
    * остальным; ходы считаются учтёнными, только если записались все теги.
    */
-  private async summarize(s: Live): Promise<void> {
+  private summarize(s: Live): Promise<void> {
+    const abort = new AbortController();
+    const p: Promise<void> = this.runSummary(s, abort).finally(() => this.summaries.delete(p));
+    this.summaries.set(p, abort);
+    return p;
+  }
+
+  /**
+   * Прерывание (остановка сервера): идущая сессия саммари гасится, ждущие в очереди тега не начинаются; ходы не
+   * считаются учтёнными, у сессии — пометка «приложение закрыли».
+   */
+  private async runSummary(s: Live, abort: AbortController): Promise<void> {
     if (s.summarizing) return;
     const all = readTurns(this.turnsFile(s.rec.id));
     const from = Math.min(s.rec.summarizedTurns ?? 0, all.length);
@@ -489,33 +514,44 @@ export class SessionManager {
     const errors: Record<string, string> = {};
     try {
       for (const tag of task) {
+        if (abort.signal.aborted) break;
         try {
-          summary.costUsd += await queueTagSummary(tag.slug, () => this.summarizeTag(s, tag.slug, turns));
+          // в очереди тега могли ждать долго: за это время сервер начал останавливаться
+          summary.costUsd += await queueTagSummary(tag.slug, () => (abort.signal.aborted ? Promise.reject(new Error('остановлено')) : this.summarizeTag(s, tag.slug, turns, abort)));
           summary.tags.push(tag.slug);
         } catch (err) {
-          errors[tag.slug] = errMsg(err);
+          if (!abort.signal.aborted) errors[tag.slug] = errMsg(err);
         }
       }
     } finally {
       s.summarizing = false;
       summary.at = new Date().toISOString();
-      if (Object.keys(errors).length) summary.errors = errors;
-      else {
-        s.rec.summarizedTurns = from + turns.length;
-        delete s.rec.summaryPending;
+      if (abort.signal.aborted) {
+        s.rec.summaryPending = 'app-closed';
+        if (summary.tags.length) s.rec.summary = summary;
+      } else {
+        if (Object.keys(errors).length) summary.errors = errors;
+        else {
+          s.rec.summarizedTurns = from + turns.length;
+          delete s.rec.summaryPending;
+        }
+        s.rec.summary = summary;
       }
-      s.rec.summary = summary;
-      this.save(s);
-      this.changed(s);
+      try {
+        this.save(s);
+      } finally {
+        this.changed(s);
+      }
     }
   }
 
   /** Одно саммари тега; пока шла сессия, саммари переписал запуск — считаем ещё раз от нового. Возвращает стоимость. */
-  private async summarizeTag(s: Live, slug: string, turns: SessionTurn[]): Promise<number> {
+  private async summarizeTag(s: Live, slug: string, turns: SessionTurn[], abort: AbortController): Promise<number> {
     let cost = 0;
     for (let attempt = 0; ; attempt++) {
       const prev = readTag(slug)?.summary ?? '';
-      const res = await this.deps.summarize(sessionTagSummaryRequest(s.rec, slug, prev, turns, { model: 'haiku' }));
+      const res = await this.deps.summarize(sessionTagSummaryRequest(s.rec, slug, prev, turns, { model: 'haiku', abort }));
+      if (abort.signal.aborted) throw new Error('остановлено');
       cost += res.costUsd;
       const text = dropRunPaths(parseTagSummary(res), this.deps.runsDir);
       if (attempt === 0 && (readTag(slug)?.summary ?? '') !== prev) continue;
@@ -605,14 +641,23 @@ export class SessionManager {
    */
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     socket.on('error', () => socket.destroy());
+    // отказ — и сокет закрыт целиком (как у ws): полуоткрытый висел бы и держал server.close
     const deny = (status: number) => {
+      socket.once('finish', () => socket.destroy());
       socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status] ?? ''}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
     };
     const bad = requestProblem('GET', req.headers);
     if (bad) return deny(bad.status);
     if (!req.headers.origin || req.headers.origin !== `http://${req.headers.host}`) return deny(403);
     if (this.stopping) return deny(503);
-    const m = new URL(req.url ?? '/', 'http://localhost').pathname.match(/^\/api\/sessions\/([^/]+)\/ws$/);
+    let pathname: string;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      // кривой request-target (//[ и подобные): URL бросает, а upgrade — вне handle(), исключение уронило бы сервер
+      return deny(400);
+    }
+    const m = pathname.match(/^\/api\/sessions\/([^/]+)\/ws$/);
     const s = m && ID_RE.test(m[1]) ? this.sessions.get(m[1]) : undefined;
     if (!s) return deny(404);
     this.wss ??= new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
@@ -748,7 +793,10 @@ export class SessionManager {
       s.sockets.clear();
       if (s.pty?.alive) s.appClosed = true;
     }
+    // саммари: идущие гасим, ждущие в очереди тега не начнутся — иначе держали бы и запуски в той же очереди
+    for (const abort of this.summaries.values()) abort.abort();
     await Promise.all([...this.sessions.values()].map((s) => s.pty?.stop(timeoutMs)));
+    await Promise.race([Promise.allSettled([...this.summaries.keys()]), new Promise((r) => setTimeout(r, timeoutMs).unref())]);
     if (this.poller) clearInterval(this.poller);
     this.poller = null;
     this.wss?.close();

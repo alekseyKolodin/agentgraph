@@ -198,12 +198,21 @@ export function sessionArgs(l: SessionLaunch): string[] {
   return args;
 }
 
-/** Маркеры хоста и чужой сессии: унаследованные, они выключают транскрипт и хуки у дочернего claude. */
+/**
+ * Маркеры хоста и чужой сессии: их выставляет Claude Code или Claude desktop, из которого запущен сервер agentgraph.
+ * Унаследованные, они выключают транскрипт, хуки, cron и заголовок терминала у дочернего claude, включают режим SDK
+ * и т. п. Чёрный список, а не белый: пользовательские CLAUDE_CODE_* (Bedrock, Vertex, OAuth-токен, MAX_OUTPUT_TOKENS)
+ * остаются как есть.
+ */
 const ENV_DROP = new Set([
   'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_HOST_SESSION_ID',
   'CLAUDE_CODE_SIMPLE', 'CLAUDE_CODE_SAFE_MODE', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_PID', 'CLAUDE_EFFORT',
+  'CLAUDE_CODE_DISABLE_CRON', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE', 'CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH', 'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_TERMINAL_MCP_TOOLS', 'CLAUDE_CODE_REPORT_FINDINGS', 'CLAUDE_CODE_STARTUP_FAILURE_RESULTS', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING',
+  'CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL', 'CLAUDE_CODE_DESKTOP_APP_VERSION', 'CLAUDE_CODE_OAUTH_SCOPES',
+  'MCP_CONNECTION_NONBLOCKING', 'MCP_SERVER_CONNECTION_BATCH_SIZE',
 ]);
-const ENV_DROP_PREFIX = ['CLAUDE_CODE_MESSAGING_', 'CLAUDE_AGENT_SDK_', 'CLAUDE_PREVIEW_'];
+const ENV_DROP_PREFIX = ['CLAUDE_CODE_MESSAGING_', 'CLAUDE_CODE_EMIT_', 'CLAUDE_AGENT_SDK_', 'CLAUDE_PREVIEW_'];
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
 
 const withLocal = (list: string | undefined) => [...new Set([...(list ?? '').split(',').map((s) => s.trim()).filter(Boolean), ...LOCAL_HOSTS])].join(',');

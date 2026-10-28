@@ -50,3 +50,36 @@ test('саммари после запуска ждёт идущую запис�
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('«Стоп», пока саммари запуска ждало в очереди тега: ни файла промпта, ни сессии саммари, тег — «остановлено»', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-tagqueue-')));
+  const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+  process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, 'cfg');
+  try {
+    createTag('p');
+    let release!: () => void;
+    const held = queueTagSummary('p', () => new Promise<void>((r) => (release = r)));
+    let summaries = 0;
+    const session = async (req: SessionRequest): Promise<SessionResult> => {
+      if (isSummary(req)) summaries++;
+      return isSummary(req) ? result({ structured: { summary: 'Суть' } }) : result();
+    };
+    const abort = new AbortController();
+    const runDir = path.join(root, 'run');
+    const run = runFlow(spec, { cwd: root, runsDir: root, runDir, tags: ['p'], saveTag: true, session, abort });
+    await new Promise((r) => setTimeout(r, 50));
+    abort.abort();
+    release();
+    await held;
+    const r = await run;
+    assert.equal(r.status, 'done');
+    assert.equal(summaries, 0);
+    assert.deepEqual(r.tagSummaries, [{ tag: 'p', ok: false, costUsd: 0, skipped: 'остановлено' }]);
+    assert.equal(fs.existsSync(path.join(runDir, 'tag-summary.p.prompt.md')), false);
+    assert.equal(readTag('p')!.runs.length, 0);
+  } finally {
+    if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+    else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

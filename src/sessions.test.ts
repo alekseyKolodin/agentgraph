@@ -109,7 +109,24 @@ test('sessionEnv: вычищает только маркеры хоста и с�
       CLAUDE_PID: '1',
       CLAUDE_EFFORT: 'xhigh',
       CLAUDE_PREVIEW_PORT: '1',
+      // маркеры, которые выставляют Claude Code и Claude desktop, если сервер запущен из них
+      CLAUDE_CODE_DISABLE_CRON: '1',
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1',
+      CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH: '1',
+      CLAUDE_CODE_SESSION_ATTENDED: '1',
+      CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES: '1',
+      CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
+      CLAUDE_CODE_TERMINAL_MCP_TOOLS: '1',
+      CLAUDE_CODE_REPORT_FINDINGS: '1',
+      CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1',
+      CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
+      CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL: '1',
+      CLAUDE_CODE_DESKTOP_APP_VERSION: '1.0',
+      CLAUDE_CODE_OAUTH_SCOPES: 'user:inference',
+      MCP_CONNECTION_NONBLOCKING: '1',
+      MCP_SERVER_CONNECTION_BATCH_SIZE: '5',
       CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_USE_VERTEX: '1',
       CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: '9000',
       ANTHROPIC_BASE_URL: 'https://proxy',
@@ -119,8 +136,8 @@ test('sessionEnv: вычищает только маркеры хоста и с�
     },
     true,
   );
-  assert.deepEqual(Object.keys(env).filter((k) => k.startsWith('CLAUDE')).sort(), [
-    'CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK',
+  assert.deepEqual(Object.keys(env).filter((k) => k.startsWith('CLAUDE') || k.startsWith('MCP_')).sort(), [
+    'CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
   ]);
   assert.equal(env.ANTHROPIC_BASE_URL, 'https://proxy');
   assert.equal(env.HTTPS_PROXY, 'http://corp:3128');

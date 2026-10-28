@@ -2,6 +2,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +12,7 @@ import { startServer, stopServer } from './server.js';
 import { SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
-import { createTag, readTag, updateTag } from './tags.js';
+import { createTag, queueTagSummary, readTag, updateTag } from './tags.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 
 class FakePty implements PtyProcess {
@@ -433,4 +434,76 @@ test('выход приложения: саммари не пишется, у с
   await until(() => next.view(next.get(v.id)).summary !== undefined);
   assert.equal(next.view(next.get(v.id)).summaryPending, undefined);
   assert.ok(summaries.at(-1)!.prompt.includes('шаг'));
+});
+
+test('остановка сервера прерывает идущее саммари сессии: сессия haiku гасится, ходы не учтены, пометка «приложение закрыли»', async () => {
+  const seen: SessionRequest[] = [];
+  // сессия саммари, которая кончается только прерыванием
+  const slow = (req: SessionRequest) =>
+    new Promise<SessionResult>((resolve) => {
+      seen.push(req);
+      req.abort!.signal.addEventListener('abort', () => resolve({ ok: false, subtype: 'error_during_execution', text: '', costUsd: 0.002, turns: 0, durationMs: 1, errors: ['aborted'] }));
+    });
+  const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-abort'), summarize: slow });
+  await mgr.available();
+  createTag('abort-task');
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), tags: ['abort-task'] }, port, root);
+  const live = mgr.sessions.get(v.id)!;
+  const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
+  mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(7), prompt: 'шаг' }, res);
+  await mgr.end(v.id);
+  await until(() => seen.length === 1 && mgr.view(live).summarizing === true);
+  await mgr.stopAll(1000);
+  assert.equal(seen[0].abort?.signal.aborted, true);
+  const after = mgr.view(live);
+  assert.deepEqual([after.summarizing, after.summaryPending, after.newTurns, after.summary], [undefined, 'app-closed', 1, undefined]);
+  assert.equal(readTag('abort-task')!.runs.length, 0);
+  // очередь тега свободна: запуск за этим саммари не ждёт
+  assert.equal(await Promise.race([queueTagSummary('abort-task', async () => 'дождался'), new Promise((r) => setTimeout(() => r('висит'), 500))]), 'дождался');
+  // и новое саммари после остановки не начинается
+  assert.throws(() => mgr.startSummary(v.id), (err: unknown) => err instanceof SessionError && err.status === 503);
+});
+
+test('WebSocket upgrade: кривой request-target — 400 без падения сервера; отклонённый сокет закрыт целиком и не держит server.close', async () => {
+  const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-upgrade') });
+  const srv = http.createServer((_q, r) => r.end());
+  srv.on('upgrade', (req, socket, head) => mgr.upgrade(req, socket, head));
+  const p = await new Promise<number>((resolve) => srv.listen(0, '127.0.0.1', () => resolve((srv.address() as net.AddressInfo).port)));
+  // клиент полуоткрытый: сам соединение не закрывает, как зависшая страница
+  const raw = (target: string, origin: string) =>
+    new Promise<{ text: string; closed: boolean }>((resolve) => {
+      const s = net.connect({ port: p, host: '127.0.0.1', allowHalfOpen: true });
+      let text = '';
+      s.on('data', (d) => (text += String(d)));
+      s.on('error', () => {});
+      s.on('end', () => setTimeout(() => resolve({ text, closed: s.destroyed || s.readyState === 'writeOnly' }), 50));
+      s.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${p}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+    });
+  const own = `http://127.0.0.1:${p}`;
+  assert.match((await raw('//[', own)).text, /^HTTP\/1\.1 400 /);
+  assert.match((await raw(`/api/sessions/${uuid(8)}/ws`, 'http://evil.example')).text, /^HTTP\/1\.1 403 /);
+  assert.match((await raw(`/api/sessions/${uuid(8)}/ws`, own)).text, /^HTTP\/1\.1 404 /);
+  // полуоткрытый отклонённый сокет держал бы close бесконечно: ждём не дольше 1,5 с, чтобы тест падал, а не висел
+  const t = Date.now();
+  const closed = await Promise.race([new Promise((r) => srv.close(() => r(true))), new Promise((r) => setTimeout(() => r(false), 1500))]);
+  assert.ok(closed && Date.now() - t < 1000, `server.close ждал ${Date.now() - t} мс`);
+});
+
+test('сессии с диска: не записалась одна (нет прав) — остальные загружаются, фича есть', async () => {
+  const dir = path.join(root, 'sessions-ro');
+  const ok = uuid(9);
+  const ro = uuid(10);
+  for (const id of [ok, ro]) {
+    fs.mkdirSync(path.join(dir, id), { recursive: true });
+    fs.writeFileSync(path.join(dir, id, 'session.json'), JSON.stringify({ id, name: id.slice(0, 8), cwd: root, tags: [], saveTag: true, claudeSessionIds: [], createdAt: '2026-10-27T10:00:00.000Z', lastActivityAt: '2026-10-27T11:00:00.000Z', turns: 0 }));
+  }
+  // без endedAt загрузка дописывает session.json — в папку только для чтения не получится
+  fs.chmodSync(path.join(dir, ro), 0o500);
+  try {
+    const mgr = new SessionManager({ ...sessionManager().deps, dir });
+    assert.equal(await mgr.available(), true);
+    assert.deepEqual(mgr.list().sessions.map((s) => s.id).sort(), [ok, ro].sort());
+  } finally {
+    fs.chmodSync(path.join(dir, ro), 0o700);
+  }
 });
