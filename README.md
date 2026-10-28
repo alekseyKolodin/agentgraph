@@ -212,6 +212,7 @@ When an agent needs a decision only you can make, it asks with `AskUserQuestion`
 
 - **Codebase-wide migrations.** Put the finish line into the check: `! grep -rn "from 'moment'" src && npx tsc --noEmit && npm test`. While old imports remain, `grep` prints them, and that list is the next iteration's feedback. `max_budget_usd` stops a migration that goes sideways.
 - **One feature over many runs.** Implementation, then QA bugs, then review comments, then a rebase: give the runs the same **task tag** (`--tag loyalty-card`). After every successful run a cheap model rewrites the tag's summary (where the code is, key decisions, what's left), and the next run starts from it.
+- **Interactive sessions with the same context.** The **Sessions** tab runs the regular Claude Code TUI in a terminal inside agentgraph (desktop app or browser) with your tags: task tag summaries and knowledge tags arrive through hooks, a tag added mid-session reaches the model on its next step, the task tags' summaries are rewritten when claude exits, and **Continue** reopens the conversation with `--resume`. See [Sessions](docs/REFERENCE.md#sessions-claude-code-in-a-terminal-with-tags).
 - **Your team's process, in git.** Flows are YAML files that get reviewed like code. `/session-to-flow` turns a good Claude Code session into a flow, keeping the commands that worked and the pitfalls you hit. **Knowledge tags** give phases your team's rules: the prompt gets a one-line description of each, and the agent reads the full text only when the task touches that area.
 - **Measure, don't guess.** **Analyze flow** on a finished run says which phases to merge or split, based on peak context, repeating feedback and unused permissions. `agentgraph eval` runs a task set through two variants of a flow and shows which tasks flipped.
 
@@ -221,7 +222,7 @@ Every phase has its prompt, transcript, output, cost, model and context use, and
 
 <p align="center"><img src="docs/assets/run-graph-inspector.png" width="900" alt="Run graph of the ticket run with the judge's verdict open in the inspector"></p>
 
-While a run is going you can pause or stop it, change the iteration limit, edit artifacts, ask the run's chat "why is it stuck?", and open any phase in regular Claude Code with `claude --resume <sessionId>`. A run that failed or hit a limit continues from where it stopped, and blocks that were already accepted don't run again.
+While a run is going you can pause or stop it, change the iteration limit, edit artifacts, and open any phase in regular Claude Code with `claude --resume <sessionId>`. If it's going wrong, fix it in place: give the next step (or the rest of the run) an instruction, or pause, edit the run's flow and continue the same run, or repeat the iteration with a note. The run's chat answers "why is it stuck?" with tables, links and buttons, and can act on the run: safe steps right away, stopping it, writing artifacts or saving the flow only after you confirm a button. A run that failed or hit a limit continues from where it stopped, and blocks that were already accepted don't run again.
 
 <p align="center"><img src="docs/assets/run-overview.png" width="900" alt="Overview of the finished fix-ci run: the summary, two iterations and the result"></p>
 
@@ -260,6 +261,7 @@ To get the same interface as a macOS app, run `npm run desktop:dev`. Integration
 - **Phase**: a fresh Claude Code session with its own prompt, tools, model and reasoning level. The next phase gets the previous phase's output, not the whole conversation. That keeps the context clean but loses details, so one phase is the default. Split only where contexts must not mix: an independent review, parallel work, or a context too large to carry.
 - **Acceptance condition**: `command` (the exit code of a shell command), `judge` (an LLM with your rubric that can read the project), `marker` (the phase ends its output with a given line) or `none` (a fixed number of iterations).
 - **Parallel groups**: phases of a block with a shared `group` run at the same time.
+- **Calls and branching**: a block can also call another flow (`flow: <name>`), which runs as a child run with its own page and passes its result on, and `next` rules (`marker`, `command` or `judge`) jump forward to a later block or end the run. See [Calling another flow and branching](docs/REFERENCE.md#calling-another-flow-and-branching).
 - **Artifacts**: run files with explicit read and write permissions per phase. You can edit them between steps.
 - **Tags**: context from outside the flow. **Task tags** carry a feature across runs, and **knowledge tags** give phases your team's rules on demand. See [Tags](docs/REFERENCE.md#tags-tasks-and-knowledge-areas).
 
@@ -272,6 +274,7 @@ You can write a flow by hand, build it in the visual builder, generate it from a
 - Artifact permissions (`reads`, `writes`) are enforced by a hook before every tool call, including in subagents.
 - Text from agents and external systems (tickets, PR descriptions) is shown as text and passed to agents marked as data, not instructions.
 - Settings and integration tokens are stored in `~/.agentgraph`, outside the repository and outside run logs.
+- The run chat does safe things (pause, resume, the iteration limit) right away, but stops a run, writes artifacts, saves a flow or continues a run only after you click its button and confirm. The Sessions terminal's WebSocket accepts only the page's own `Origin`, and hooks and MCP calls from its `claude` need a random per-session token.
 
 ## Technologies
 
@@ -282,6 +285,7 @@ You can write a flow by hand, build it in the visual builder, generate it from a
 | Flow schema | YAML + zod validation |
 | Web interface | React 19, TypeScript, Vite, React Router, TanStack Query, React Flow (`@xyflow/react`), CodeMirror 6 |
 | Desktop | Electron: the same server and the same interface in a native macOS window |
+| Terminal (Sessions tab) | `node-pty` (optional native dependency) on the server, xterm.js in the UI, connected over a WebSocket (`ws`); `@xterm/headless` keeps the screen for a reloaded page |
 | Tests and CI | `node:test`, server and UI typecheck, UI build in CI |
 
 <details>
@@ -291,13 +295,13 @@ You can write a flow by hand, build it in the visual builder, generate it from a
 src/            core: flow schema, runner, Agent SDK sessions, API server, integrations (Jira, GitLab, GitHub, git)
 src/desktop/    Electron main process
 web/            React web interface
-flows/example/  example flows: blocks, agent questions, pause, parallel groups, artifacts
+flows/example/  example flows: blocks, agent questions, pause, parallel groups, flow calls and branching
 docs/           guide and reference
 scripts/        UI build, zip archive, releases, SDK hook check
 .claude/        /agentgraph and /session-to-flow skills, development rules (agentgraph-core, -web, -tests, flow-author skills), code-reviewer subagent
 ```
 
-The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`; tags are stored in `~/.agentgraph/tags/`.
+The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`, terminal sessions to `sessions/<id>/`; tags are stored in `~/.agentgraph/tags/`.
 
 | Command | What it does |
 |---|---|
