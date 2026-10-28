@@ -30,7 +30,7 @@ import {
   type StepDelta,
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
-import { knowledgeBlock, knowledgeDirs, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
+import { knowledgeBlock, knowledgeDirs, queueTagSummary, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
 import { dropRunPaths, parseTagSummary, tagSummaryPromptFile, tagSummaryRequest } from './tag-summary.js';
 import type { AutoTagReport } from './auto-tag.js';
 import type { RunTitleReport } from './run-title.js';
@@ -1248,14 +1248,14 @@ async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: 
     else if (report.status !== 'done') r = { tag, ok: false, costUsd: 0, skipped: `запуск не завершён (${report.status})` };
     // «Остановить» во время саммари прерывает оставшиеся сессии, запуск остаётся done
     else if (opts.abort?.signal.aborted) r = { tag, ok: false, costUsd: 0, skipped: 'остановлено' };
-    else r = await updateTagSummary(report, final, tag, opts, emit);
+    else r = await queueTagSummary(tag, () => updateTagSummary(report, final, tag, opts, emit));
     out.push(r);
   }
   return out;
 }
 
-// TODO(F5): тело — в queueTagSummary(tag, …) из tags.ts, когда она появится со слиянием F5: иначе запуск и сессия
-// по одному тегу пишут саммари одновременно и затирают друг друга.
+// Зовётся через queueTagSummary (tags.ts): саммари запуска и сессии терминала по одному тегу пишутся по очереди —
+// иначе вторая перезаписала бы первое, считав прошлое саммари до его записи.
 async function updateTagSummary(report: RunReport, final: FinalPhase[], tag: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport> {
   let out: TagSummaryReport;
   try {

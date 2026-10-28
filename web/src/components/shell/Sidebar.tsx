@@ -2,9 +2,12 @@
 // Список flow — FlowList.tsx, список запусков — RunList.tsx. Свёрнутость секций, папок и проектов — fold.ts, ключи как в старом UI.
 import type { ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router';
+import type { SessionView } from '@server/api-types';
 import { useFeature, useHome, useRuns } from '../../api';
+import { useSessions } from '../../api/sessions';
 import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
 import { getLang, saveLang, t } from '../../lib/i18n';
+import { sessionSub } from '../../lib/sessions';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
@@ -48,7 +51,8 @@ function LiveSection() {
   const homeRuns = home.data?.runs ?? [];
   const src = !home.isError && homeRuns.length ? homeRuns : (runs.data ?? []).filter((r) => LIVE_STATUSES.includes(r.status));
   const rows = liveRows(src);
-  if (!rows.length) return null;
+  const sessions = useLiveSessions();
+  if (!rows.length && !sessions.length) return null;
   const count = liveCount(rows);
   const open = (id: string) => void navigate(`/run/${id}`);
   return (
@@ -56,7 +60,7 @@ function LiveSection() {
       title={t('Сейчас')}
       secKey="sec:live"
       className={styles.sideLive}
-      extra={<span className={`${styles.sideCount} ${count.wait ? styles.wait : ''}`}>{count.text}</span>}
+      extra={rows.length > 0 && <span className={`${styles.sideCount} ${count.wait ? styles.wait : ''}`}>{count.text}</span>}
     >
       <ul className={`${styles.sideBody} ${styles.liveList}`}>
         {rows.map((row) => (
@@ -79,7 +83,48 @@ function LiveSection() {
           </li>
         ))}
       </ul>
+      <LiveSessions sessions={sessions} />
     </Section>
+  );
+}
+
+/** Живые сессии терминала (фича sessions). */
+function useLiveSessions(): SessionView[] {
+  const on = useFeature('sessions');
+  return (useSessions(on).data?.sessions ?? []).filter((s) => s.live);
+}
+
+/**
+ * Живые сессии терминала в «Сейчас» — под запусками и не в счётчике «ждут»: сессия в простое ждёт человека всегда,
+ * и счётчик горел бы без конца. Точка: работает — синяя с ореолом, ждёт тебя — янтарная, запускается — серая.
+ */
+function LiveSessions({ sessions }: { sessions: SessionView[] }) {
+  const navigate = useNavigate();
+  const activeId = useMatch('/sessions/:id')?.params.id;
+  if (!sessions.length) return null;
+  const open = (id: string) => void navigate(`/sessions/${id}`);
+  return (
+    <ul className={`${styles.sideBody} ${styles.liveList}`} aria-label={t('Сессии терминала')}>
+      {sessions.map((s) => (
+        <li
+          key={s.id}
+          className={[styles.lrun, s.status === 'waiting' ? styles.wait : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : ''].filter(Boolean).join(' ')}
+          tabIndex={0}
+          title={`${s.name}\n${sessionSub(s)}`}
+          onClick={() => open(s.id)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && e.target === e.currentTarget) open(s.id);
+          }}
+        >
+          <span className={styles.lrunDot} aria-hidden="true" />
+          <span className={styles.lrunMain}>
+            <span className={styles.lrunTitle}>{s.name}</span>
+            <span className={styles.lrunSub}>{sessionSub(s)}</span>
+          </span>
+          <span className={styles.lrunIt} title={t('Сессия Claude Code в терминале')}>›_</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -104,6 +149,7 @@ function LangSwitch() {
 export function Sidebar() {
   const tags = useFeature('tags');
   const context = useFeature('context');
+  const sessions = useFeature('sessions');
   const questions = inboxCount(useHome().data?.runs ?? []);
   return (
     <aside className={styles.sidebar}>
@@ -124,6 +170,9 @@ export function Sidebar() {
         )}
         {context && (
           <li><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
+        )}
+        {sessions && (
+          <li><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, с контекстом тегов')}>{t('Сессии')}</NavLink></li>
         )}
       </ul>
       <LiveSection />

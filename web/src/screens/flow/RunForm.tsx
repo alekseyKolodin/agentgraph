@@ -12,6 +12,7 @@ import {
 import { TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
+import { TagInput } from '../../components/TagInput';
 import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
 import { collectSpec } from '../../lib/flow/edit';
@@ -20,7 +21,7 @@ import { modelOptions } from '../../lib/flow/tools';
 import {
   appendDir, ATTACH_ACCEPT, attachName, attachOverLimit, attachTypeError, attachWarn, CONN_WARN_TEXT, connWarn, dirLines, fileSize,
   KIND_LABEL, recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagContext,
-  tagNewMsg, tagOptionLabel, wantsAutoTag, withWorktreeNote, worktreeProject, worktreeRequest, type RunLink,
+  tagNewMsg, wantsAutoTag, withWorktreeNote, worktreeProject, worktreeRequest, type RunLink,
 } from '../../lib/run-form';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
@@ -342,9 +343,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         addAttachments([...e.dataTransfer.files]);
       }}
     >
-      <datalist id="run-tag-list">
-        {tagList.map((tag) => <option key={tag.slug} value={tag.slug}>{tagOptionLabel(tag)}</option>)}
-      </datalist>
       <label>
         <span title={t('Подставится в {{input}}')}>{t('Задача')}</span>
         <textarea
@@ -407,38 +405,20 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         <div className={styles.runMoreBody}>
           {can.tags && (
             <div className={styles.runTag}>
-              <label>
-                <span title={t('Тег задачи — саммари фичи из прошлых запусков: встанет в начало задачи, описывать фичу заново не нужно. Тег знаний — что должны знать этапы (фронтенд, бэкенд, QA): уйдёт в промпты этапов каждого блока. Тегов может быть несколько. Новый слаг — новый тег задачи. Править теги — на странице «Теги»')}>{t('Теги')}</span>
-                <input
-                  name="tag"
-                  list="run-tag-list"
-                  placeholder={t('без тегов — или выбери из списка, или впиши новый и нажми Enter: loyalty-card')}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={f.tagText}
-                  onChange={(e) => {
-                    setForm({ tagText: e.target.value });
-                    // выбор из списка (datalist): как change старого поля — сразу добавить
-                    if ((e.nativeEvent as InputEvent).inputType === 'insertReplacementText' || !(e.nativeEvent instanceof InputEvent)) void addTag();
-                  }}
-                  // уход с поля — как change; input не берём, чтобы не дёргать сервер на каждую букву
-                  onBlur={() => void addTag()}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return;
-                    e.preventDefault();
-                    void addTag();
-                  }}
-                />
-              </label>
-              <div className="chips">
-                {f.tags.map((tag) => (
-                  <span key={tag} className="chip attach-chip">
-                    <TagBadge slug={tag} kind={kindOf(tag)} />
-                    <span className="muted small">{KIND_LABEL[kindOf(tag)]}</span>
-                    <button type="button" className="attach-x" title={t('Убрать тег из запуска')} onClick={() => removeTag(tag)}>×</button>
-                  </span>
-                ))}
-              </div>
+              <TagInput
+                label={t('Теги')}
+                labelTitle={t('Тег задачи — саммари фичи из прошлых запусков: встанет в начало задачи, описывать фичу заново не нужно. Тег знаний — что должны знать этапы (фронтенд, бэкенд, QA): уйдёт в промпты этапов каждого блока. Тегов может быть несколько. Новый слаг — новый тег задачи. Править теги — на странице «Теги»')}
+                listId="run-tag-list"
+                options={tagList}
+                placeholder={t('без тегов — или выбери из списка, или впиши новый и нажми Enter: loyalty-card')}
+                text={f.tagText}
+                onText={(tagText) => setForm({ tagText })}
+                onAdd={() => void addTag()}
+                tags={f.tags}
+                kindOf={kindOf}
+                onRemove={removeTag}
+                removeTitle={t('Убрать тег из запуска')}
+              />
               {f.tags.length > 0 && (
                 <div className={styles.runTagContext} title={t('Что сервер вставит от выбранных тегов: тег задачи — в начало задачи, тег знаний — в конец промптов этапов. Поле «Задача» остаётся только задачей')}>
                   {f.tags.map((tag) => {

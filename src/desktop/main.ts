@@ -188,6 +188,33 @@ let home = '';
 /** Есть, когда сервер поднят: выход сначала гасит его. */
 let stopServer: (() => Promise<void>) | null = null;
 let stopping: Promise<void> | null = null;
+/** Названия живых сессий терминала (src/sessions-server.ts): выход при них спрашивает подтверждение. */
+let liveSessions: () => string[] = () => [];
+let quitConfirmed = false;
+let quitAsking = false;
+
+/** «Идут 2 сессии Claude: «a» и «b».» */
+function sessionsLine(names: string[]): string {
+  const n = names.length;
+  const word = n % 10 === 1 && n % 100 !== 11 ? 'сессия' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'сессии' : 'сессий';
+  const list = names.map((x) => `«${x}»`);
+  const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} и ${list.at(-1)}` : list[0];
+  return `${n === 1 ? 'Идёт' : 'Идут'} ${n} ${word} Claude: ${joined}.`;
+}
+
+/** Подтверждение выхода при живых сессиях терминала (макет QuitDialog): они завершатся, разговор сохранится. */
+async function confirmQuit(names: string[]): Promise<boolean> {
+  const opts = {
+    type: 'question' as const,
+    buttons: ['Завершить сессии и закрыть', 'Отмена'],
+    defaultId: 0,
+    cancelId: 1,
+    message: 'Закрыть agentgraph?',
+    detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСаммари тегов задач при таком выходе не пишется — его можно обновить позже.`,
+  };
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  return r.response === 0;
+}
 
 async function main(): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
@@ -216,6 +243,8 @@ async function main(): Promise<void> {
   const port = await pickPort();
   await server.startServer({ port, host: HOST, defaultCwd: os.homedir() });
   stopServer = () => server.stopServer();
+  const sessions = await import('../sessions-server.js');
+  liveSessions = () => sessions.liveSessionNames();
   origin = `http://localhost:${port}`;
   console.log(`agentgraph desktop: ${origin} (данные: ${ROOT})`);
 
@@ -227,6 +256,30 @@ async function main(): Promise<void> {
   });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+}
+
+// Cmd+Q при живых сессиях терминала: claude завершатся вместе с приложением — сначала спрашиваем. Сигналы (kill, Ctrl-C
+// у desktop:dev) выходят без вопроса: отвечать на диалог некому.
+app.on('before-quit', (e) => {
+  if (quitConfirmed || stopping) return;
+  const names = liveSessions();
+  if (!names.length) return;
+  e.preventDefault();
+  if (quitAsking) return;
+  quitAsking = true;
+  void confirmQuit(names)
+    .then((ok) => {
+      if (!ok) return;
+      quitConfirmed = true;
+      app.quit();
+    })
+    .finally(() => (quitAsking = false));
+});
+for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(sig, () => {
+    quitConfirmed = true;
+    app.quit();
   });
 }
 

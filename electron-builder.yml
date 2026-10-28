@@ -10,11 +10,17 @@ files:
   - dist/**/*
   - "!dist/**/*.map"
   - "!dist/**/*.test.js"
+  # node-pty (терминал вкладки «Сессии»): исходники и сборки под Windows (~60 МБ) приложению под macOS не нужны
+  - "!node_modules/node-pty/prebuilds/win32-*"
+  - "!node_modules/node-pty/{deps,src,third_party,scripts}"
 # Agent SDK запускает CLI Claude Code — нативный бинарник из пакета под платформу — дочерним процессом.
 # Изнутри app.asar exec невозможен: пакет лежит рядом, в app.asar.unpacked.
+# node-pty — нативный модуль терминала: pty.node и spawn-helper тоже запускаются только снаружи asar
+# (путь к spawn-helper node-pty сам переписывает на app.asar.unpacked).
 asarUnpack:
   - node_modules/@anthropic-ai/claude-agent-sdk-*/**
-# нативных модулей нет: пересобирать под Electron нечего
+  - node_modules/node-pty/**
+# пересобирать под Electron нечего: node-pty 1.1.0 — N-API со сборками под darwin-arm64 и darwin-x64 в пакете
 npmRebuild: false
 mac:
   category: public.app-category.developer-tools
