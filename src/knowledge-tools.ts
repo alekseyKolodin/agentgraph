@@ -14,13 +14,18 @@ export const KNOWLEDGE_TOOLS_ALLOW = [`mcp__${KNOWLEDGE_TOOLS_SERVER}__${KNOWLED
 /**
  * Текст ответа knowledge_read: шапка со слагом и заголовком, описание, заметки (инструкции пользователя — без обёртки
  * source-data, как в промпте), существующие пути и вложения абсолютными путями. Слаг не из списка блока — ошибка с
- * перечнем доступных; тег, удалённый во время запуска, — тоже ошибка.
+ * перечнем доступных; тег, удалённый во время запуска, — тоже ошибка. where — кто спрашивает: этап запуска или
+ * интерактивная сессия (sessions-mcp.ts), у неё тексты ошибок без «этапа» и «запуска».
  */
-export function knowledgeReadText(slugs: string[], slug: string): string {
+export function knowledgeReadText(slugs: string[], slug: string, where: 'phase' | 'session' = 'phase'): string {
   const available = slugs.join(', ') || 'ничего';
-  if (!slugs.includes(slug)) throw new Error(`Области знаний ${slug} у этапа нет. Доступны: ${available}`);
+  if (!slugs.includes(slug)) {
+    throw new Error(where === 'session' ? `Области знаний ${slug} среди тегов сессии нет. Доступны: ${available}` : `Области знаний ${slug} у этапа нет. Доступны: ${available}`);
+  }
   const tag = readTag(slug);
-  if (!tag || tag.kind !== 'knowledge') throw new Error(`Тега знаний ${slug} больше нет: его удалили, пока шёл запуск. Доступны: ${available}`);
+  if (!tag || tag.kind !== 'knowledge') {
+    throw new Error(where === 'session' ? `Тега знаний ${slug} больше нет: его удалили. Доступны: ${available}` : `Тега знаний ${slug} больше нет: его удалили, пока шёл запуск. Доступны: ${available}`);
+  }
   const body = [`Область знаний ${slug}${titleSuffix(tag)}`];
   if (tag.description) body.push(`Когда нужна: ${defuseMarkers(tag.description)}`);
   const notes = tag.notes.trim();

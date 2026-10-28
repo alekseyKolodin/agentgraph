@@ -3,13 +3,16 @@
 // выбрано, ниже — «Все поля списком».
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, type FormEvent, type RefObject } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { checkFlow, editFlow, errorText, keys, saveFlowSpec, useConfig, useFeature } from '../../api';
+import { checkFlow, editFlow, errorText, keys, saveFlowSpec, useConfig, useFeature, useFlows } from '../../api';
+import { AiModelSelect, AiProgress, aiModel, noteAiModel } from '../../components/AiProgress';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
 import { usd } from '../../lib/format';
+import { aiFacts, aiProgressStep, startProgress } from '../../lib/flow/ai-progress';
 import {
   addPhaseAfter, blockHeading, collectSpec, isMulti, newBlock, phaseInputs, phaseNum, specChanges, SpecError, toEditable, type EditSpec,
 } from '../../lib/flow/edit';
+import { callSubOf } from '../../lib/flow/summary';
 import { toolsLabel } from '../../lib/flow/tools';
 import { flowGraphModel, type GraphNode } from '../../lib/graph/model';
 import { LS } from '../../lib/storage';
@@ -21,6 +24,7 @@ import { PhaseCard } from './PhaseCard';
 import {
   applySaved, emit, flowState, saveStart, knowledgeDraft, markDirty, msgClass, NO_MSG, revealNode, selBlockAt, selPhaseAt, set, useFlowStore, type FieldKey,
 } from './store';
+import { setAiProgress, useAiProgress } from './store';
 import styles from './Flow.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -34,9 +38,11 @@ export function Builder({ hidden }: { hidden: boolean }) {
   // рабочая копия правится на месте: модель — заново на каждую правку, но с низким приоритетом (как задержка 250 мс в старом),
   // чтобы ввод в промпт не ждал раскладки графа
   const editSeq = useDeferredValue(st.editSeq);
+  // узел вызова подписан составом вызываемого flow — из списка flow
+  const flows = useFlows().data;
   const graphModel = useMemo(
-    () => (spec ? flowGraphModel(spec, { inputsOf: (bi, i) => phaseInputs(spec, bi, i), artifacts }) : null),
-    [spec, artifacts, editSeq],
+    () => (spec ? flowGraphModel(spec, { inputsOf: (bi, i) => phaseInputs(spec, bi, i), artifacts, callSub: callSubOf(flows) }) : null),
+    [spec, artifacts, editSeq, flows],
   );
   const toolsOf = useCallback((n: GraphNode) => toolsLabel(flowState.spec?.blocks[n.b!]?.phases[n.i!]?.tools, config.implicitTools), [config.implicitTools]);
 
@@ -100,6 +106,7 @@ export function Builder({ hidden }: { hidden: boolean }) {
                 selectedName={st.graphSel}
                 selectedBlock={selBlock}
                 changed={st.ai?.diff.phases}
+                changedBlocks={st.ai?.diff.blocks}
                 chip={knowledgeChip}
                 toolsOf={toolsOf}
                 onNode={pick}
@@ -124,7 +131,7 @@ export function graphPick(n: GraphHit) {
   const spec = flowState.spec;
   if (!spec) return;
   if (n.kind === 'phase') openPhasePane(n.b!, n.i!, styles.flash!);
-  else if (n.kind === 'block' || n.kind === 'cond') {
+  else if (n.kind === 'block' || n.kind === 'cond' || n.kind === 'call') {
     if (paneShown()) return openBlockPane(n.b!);
     const panel = document.querySelector(`#bblock-${n.b} [data-bpanel]`);
     panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -170,13 +177,18 @@ function BuilderBar() {
     const ctl = new AbortController();
     // правка, которая идёт сейчас: чтение через функцию — после await она может быть уже другой
     const current = () => flowState.aiAbort;
-    set({ aiAbort: ctl, aiMsg: { text: t('ИИ правит flow… обычно 20–90 секунд'), tone: '' } });
+    const model = aiModel();
+    set({ aiAbort: ctl, aiProgress: startProgress('edit', Date.now()), aiMsg: NO_MSG });
     try {
       const cwd = LS.raw('agentgraph.cwd') || defaultCwd;
-      const r = await editFlow(flow.name, { instruction, ...base, cwd }, ctl.signal);
+      const r = await editFlow(flow.name, { instruction, ...base, cwd, model }, (e) => {
+        if (current() !== ctl || !flowState.aiProgress) return;
+        if (e.type === 'progress' && e.model) noteAiModel(model, e.model);
+        setAiProgress(aiProgressStep(flowState.aiProgress, e, Date.now()));
+      }, ctl.signal);
       if (current() !== ctl) return;
       if (!r.changed) {
-        set({ aiMsg: { text: `${t('ИИ ничего не поменял')}${r.summary ? `:\n${r.summary}` : ''}`, tone: '' } });
+        set({ aiMsg: { text: `${t('ИИ ничего не поменял')} · ${aiFacts(r.model, r.durationMs, r.costUsd)}${r.summary ? `:\n${r.summary}` : ''}`, tone: '' } });
         return;
       }
       const after = toEditable(r.spec);
@@ -186,6 +198,8 @@ function BuilderBar() {
         diff: specChanges('spec' in base ? toEditable(base.spec as never) : null, after),
         stale: flowState.editSeq !== seq,
         cost: r.costUsd,
+        model: r.model,
+        durationMs: r.durationMs,
         seq: 0,
       };
       Object.assign(flowState, { ai, spec: after, aiText: '', aiMsg: NO_MSG, sel: null, graphSel: null });
@@ -195,7 +209,7 @@ function BuilderBar() {
       if (current() !== ctl) return;
       set({ aiMsg: ctl.signal.aborted ? { text: t('Правка прервана'), tone: '' } : { text: errorText(err), tone: 'err' } });
     } finally {
-      if (current() === ctl) set({ aiAbort: null });
+      if (current() === ctl) set({ aiAbort: null, aiProgress: null });
     }
   };
 
@@ -242,8 +256,11 @@ function BuilderBar() {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void aiEdit(e);
           }}
         />
-        <button type="submit" className="btn" disabled={busy} title={t('Правки лягут в конструктор несохранёнными. ⌘/Ctrl+Enter')}>{t('Изменить')}</button>
-        {busy && <button type="button" className="btn ghost" onClick={() => flowState.aiAbort?.abort()}>{t('Прервать')}</button>}
+        <AiModelSelect disabled={busy} />
+        {/* «Прервать» — здесь, в липкой панели: видна и когда ход правки уехал вверх при прокрутке */}
+        {busy
+          ? <button type="button" className="btn ghost" title={t('Остановить сессию: траты прекратятся, flow не изменится')} onClick={() => flowState.aiAbort?.abort()}>{t('Прервать')}</button>
+          : <button type="submit" className="btn" title={t('Правки лягут в конструктор несохранёнными. ⌘/Ctrl+Enter')}>{t('Изменить')}</button>}
       </form>
       <div className={styles.builderSave} hidden={!st.spec}>
         <span className={styles.dirty}>{st.dirty ? (draft ? t('есть неприменённые изменения') : t('есть несохранённые изменения')) : ''}</span>
@@ -261,11 +278,13 @@ function BuilderBar() {
   );
 }
 
-/** Результат правки ИИ: что поменялось, цена, «Отменить правку». */
+/** Правка ИИ: пока идёт — её ход и «Прервать»; потом — что поменялось, модель, длительность, цена, «Отменить правку». */
 function AiResult() {
   const st = useFlowStore();
   const { askConfirm } = useConfirm();
+  const progress = useAiProgress();
   const ai = st.ai;
+  if (progress) return <AiProgress className={styles.builderNote} progress={progress} />;
   if (!ai) return null;
   const undo = async () => {
     if (flowState.editSeq !== ai.seq && !(await askConfirm(t('После правки ИИ ты менял конструктор. Отменить правку ИИ вместе с этими изменениями?'), { ok: t('Отменить', undefined, 'undo') }))) return;
@@ -289,7 +308,7 @@ function AiResult() {
       <div>
         <b>{t('ИИ поменял flow')}</b>{' '}
         <span className="muted small">
-          · ≈{usd(ai.cost)} · {st.flow?.draft
+          · <span className="mono" title={ai.model ? t('Модель: {model}', { model: ai.model }) : undefined}>{aiFacts(ai.model, ai.durationMs, ai.cost)}</span> · {st.flow?.draft
             ? t('не применено: проверь изменения (подсвечены зелёным на графе) и нажми «Применить» или сразу «Запустить»')
             : t('не сохранено: проверь изменения (подсвечены зелёным на графе) и нажми «Сохранить»')}
         </span>
@@ -343,6 +362,18 @@ function BuilderList({ spec }: { spec: EditSpec }) {
           }}
         >
           {t('Добавить блок')}
+        </button>
+        <button
+          className="btn"
+          title={t('Блок, который запускает другой flow отдельным запуском и передаёт дальше его итог')}
+          onClick={() => {
+            newBlock(spec, '');
+            markDirty();
+            openBlockPane(spec.blocks.length - 1);
+            afterRender(() => document.getElementById(`bblock-${spec.blocks.length - 1}`)?.scrollIntoView({ behavior: 'smooth' }));
+          }}
+        >
+          {t('Добавить вызов flow')}
         </button>
         <span className="muted small" title={t('Например, ещё один цикл со своим условием')}>{t('начнётся, когда закончится предыдущий блок')}</span>
       </div>

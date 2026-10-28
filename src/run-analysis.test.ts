@@ -95,7 +95,7 @@ test('факты: по этапам — сводка через итерации
   assert.equal(i.contextPct, 80);
   assert.equal(i.denials, 2);
   assert.equal(i.handoff, true);
-  assert.equal(i.promptChars, spec.blocks![0].phases[1].prompt.length);
+  assert.equal(i.promptChars, spec.blocks![0].phases![1].prompt.length);
   assert.deepEqual(i.uses, { prev: true, feedback: true, phases: [], artifacts: [] });
   assert.equal(i.costUsd, 0.1 + 0.3 + 0.1);
   assert.equal(i.last?.contextPct, undefined);
@@ -277,4 +277,33 @@ test('факты: старый run.json без blocks, conditions и phases — 
   const facts = analysisFacts(legacy as unknown as RunReport, spec);
   assert.deepEqual(facts.blocks.map((b) => b.iterations), facts.blocks.map(() => 0));
   assert.deepEqual(facts.phases.filter((p) => p.runs > 0), []);
+});
+
+test('блок-вызов в анализе: факты вызова без ходов и контекста, развилка у блока, правило про вызовы только у такого flow', () => {
+  const composed: FlowSpec = {
+    name: 'pipeline',
+    blocks: [
+      { name: 'spec', flow: 'write-spec', next: [{ if: { type: 'marker', marker: '<SKIP>' }, goto: 'end' }] },
+      { name: 'review', phases: [{ name: 'check', tools: ['Read'], prompt: 'Проверь {{phases.spec}}' }] },
+    ],
+  };
+  const r = report({
+    flow: 'pipeline',
+    blocks: [
+      { index: 0, name: 'spec', title: 'spec', status: 'done', iterations: 1, maxIterations: 1, condition: 'none', looped: false, onFail: 'stop' },
+      { index: 1, name: 'review', title: '', status: 'done', iterations: 1, maxIterations: 1, condition: 'none', looped: false, onFail: 'stop' },
+    ],
+    phases: [phase('spec', 1, { block: 'spec', costUsd: 0.8, turns: 0 }), phase('check', 1, { block: 'review' })],
+    conditions: [],
+  });
+  const facts = analysisFacts(r, composed);
+  assert.deepEqual(facts.blocks.map((b) => [b.flow, b.next]), [['write-spec', 'маркер <SKIP> → конец'], [undefined, undefined]]);
+  const call = facts.phases.find((p) => p.name === 'spec')!;
+  assert.equal(call.call, 'write-spec');
+  const prompt = analysisPrompt(facts, 'name: pipeline');
+  assert.match(prompt, /- spec «spec»: без цикла, один проход, статус done\. Вызов flow write-spec; после блока: маркер <SKIP> → конец/);
+  assert.match(prompt, /### spec — вызов flow write-spec \(блок spec\)\nдочерних запусков 1; стоимость вместе с ними \$0\.80/);
+  assert.match(prompt, /Блок-вызов \(вызов flow X\) запускает другой flow/);
+  // у flow без вызовов и развилки этого правила в промпте нет
+  assert.doesNotMatch(analysisPrompt(analysisFacts(report(), spec), 'name: feature'), /Блок-вызов/);
 });

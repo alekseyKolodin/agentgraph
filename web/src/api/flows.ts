@@ -1,9 +1,11 @@
 // Запросы конструктора flow: файл flow, сохранение (YAML и spec), проверка черновика, создание, правка с ИИ, папки, удаление.
+// Генерация и правка с ИИ идут потоком NDJSON (FlowAiStreamEvent): модель, повторы, шаги и строки хода — по мере прихода.
 // Ответы со spec типизируются здесь: spec — FlowSpec из src/schema.ts (тип zod), его нет в src/api-types.ts без импортов.
 import { useQuery } from '@tanstack/react-query';
-import type { ConnectorsView, FlowSummary, TagListItem } from '@server/api-types';
+import type { ConnectorsView, FlowAiDone, FlowAiStreamEvent, FlowSummary, TagListItem } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
-import { api } from './client';
+import { t } from '../lib/i18n';
+import { api, streamNdjson } from './client';
 import { keys } from './queries';
 
 /** GET /api/flows/:name: файл flow; невалидный — без summary и spec, с error. */
@@ -14,6 +16,8 @@ export type FlowSaved = { name: string; spec: FlowSpec; summary: FlowSummary; ya
 export type FlowGenerated = { name: string; yaml: string; summary: FlowSummary; spec?: FlowSpec; costUsd?: number };
 /** POST /api/flows/:name/edit: правка ИИ не записывается, changed: false — ИИ ничего не поменял. */
 export type FlowEdited = { name: string; spec: FlowSpec; summary: string; changed: boolean; costUsd: number };
+/** Событие хода ИИ без done: done — результат вызова. */
+export type FlowAiProgressEvent = Exclude<FlowAiStreamEvent, { type: 'done' }>;
 
 const enc = encodeURIComponent;
 
@@ -25,9 +29,33 @@ export const checkFlow = (body: { spec: unknown } | { yaml: string }) => api<Flo
 export const moveFlow = (name: string, folder: string) => api<{ name: string; folder: string }>('PUT', `/api/flows/${enc(name)}/folder`, { folder });
 export const deleteFlow = (name: string) => api<{ ok: true }>('DELETE', `/api/flows/${enc(name)}`);
 export const blankFlow = (name: string, folder: string) => api<{ name: string; yaml: string }>('POST', '/api/flows/blank', { name, folder });
-export const generateFlow = (body: { task: string; cwd: string; folder?: string; save?: false }) => api<FlowGenerated>('POST', '/api/flows/generate', body);
-export const editFlow = (name: string, body: { instruction: string; spec?: unknown; yaml?: string; cwd: string }, signal: AbortSignal) =>
-  api<FlowEdited>('POST', `/api/flows/${enc(name)}/edit`, body, signal);
+
+/**
+ * ИИ над flow потоком: onEvent — ход сессии (progress, log, error), результат — тело done с моделью и длительностью.
+ * signal обрывает запрос, сервер прерывает сессию вместе с соединением. Ошибка сессии — исключение с её текстом.
+ */
+async function flowAi<B>(url: string, body: unknown, onEvent: (e: FlowAiProgressEvent) => void, signal?: AbortSignal): Promise<B & FlowAiDone> {
+  let done: (B & FlowAiDone) | undefined;
+  let error: string | undefined;
+  await streamNdjson<FlowAiStreamEvent<B>>(url, body, (e) => {
+    // сервер старше UI отвечает одним JSON-телом без type: это и есть результат
+    if (!('type' in e)) done = e as B & FlowAiDone;
+    else if (e.type === 'done') done = e.body;
+    else {
+      if (e.type === 'error') error = e.error;
+      onEvent(e);
+    }
+  }, { signal, headers: { Accept: 'application/x-ndjson' } });
+  if (error !== undefined) throw new Error(error);
+  if (!done) throw new Error(t('Сервер оборвал ответ без результата'));
+  return done;
+}
+
+/** model: '' — модель по умолчанию (её назовёт событие progress). */
+export const generateFlow = (body: { task: string; cwd: string; model?: string; folder?: string; save?: false }, onEvent: (e: FlowAiProgressEvent) => void, signal?: AbortSignal) =>
+  flowAi<FlowGenerated>('/api/flows/generate', body, onEvent, signal);
+export const editFlow = (name: string, body: { instruction: string; spec?: unknown; yaml?: string; cwd: string; model?: string }, onEvent: (e: FlowAiProgressEvent) => void, signal: AbortSignal) =>
+  flowAi<FlowEdited>(`/api/flows/${enc(name)}/edit`, body, onEvent, signal);
 export const fetchConnectors = (force: boolean) => api<ConnectorsView>('GET', `/api/connectors${force ? '?force=1' : ''}`);
 
 /** GET /api/tags: теги для подсказки «Теги знаний» блока. Без списка тег можно вписать руками. */

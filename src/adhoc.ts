@@ -3,7 +3,7 @@
 // разбирает тело и отвечает, решения — здесь.
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertFlowName, flowExists, flowFileName, flowFolder, flowToYaml, loadFlow, parseFlow, saveFlowYaml, validateSpec } from './flows.js';
+import { assertFlowName, checkCalls, flowExists, flowFileName, flowFolder, flowToYaml, loadFlow, parseFlow, saveFlowYaml, validateSpec } from './flows.js';
 import { compactSpec, flowBlocks, type Block, type FlowSpec } from './schema.js';
 import type { ApiReply } from './artifact-api.js';
 import type { RunReport } from './runner.js';
@@ -11,8 +11,11 @@ import type { RunReport } from './runner.js';
 /** Id запуска — имя папки в runs/: без точек и слэшей. */
 export const RUN_ID_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Черновик из конструктора (spec — объект) или из скилла (yaml — строка): валидный spec в короткой форме. */
-export function draftSpec(body: { spec?: unknown; yaml?: unknown }): FlowSpec {
+/**
+ * Черновик из конструктора (spec — объект) или из скилла (yaml — строка): валидный spec в короткой форме.
+ * calls: false — вызовы не проверять (правка идущего запуска: раннер проверяет их только у блоков впереди).
+ */
+export function draftSpec(body: { spec?: unknown; yaml?: unknown }, o: { calls?: boolean } = {}): FlowSpec {
   let spec: FlowSpec;
   if (body.yaml !== undefined) {
     if (typeof body.yaml !== 'string') throw new Error('yaml — строка');
@@ -23,6 +26,8 @@ export function draftSpec(body: { spec?: unknown; yaml?: unknown }): FlowSpec {
   }
   // имя уходит в путь папки запуска: проверяем и здесь, а не только регэкспом схемы
   assertFlowName(spec.name);
+  // черновик вызывает только сохранённые flow: их и проверяем
+  if (o.calls !== false) checkCalls(spec);
   return spec;
 }
 
@@ -40,7 +45,10 @@ export function specFromRunBody(
   if (given[0] === 'flow') {
     if (typeof body.flow !== 'string') throw new Error('flow — имя flow');
     assertFlowName(body.flow);
-    return { spec: load(body.flow), adhoc: false };
+    const spec = load(body.flow);
+    // вызываемые flow могли удалить или поменять после сохранения: ошибка — до папки запуска, а не первым шагом
+    checkCalls(spec, load);
+    return { spec, adhoc: false };
   }
   return { spec: draftSpec(body), adhoc: true };
 }
@@ -62,15 +70,31 @@ export function runFlowView(runsDir: string, id: string): { name: string; blocks
   return { name: spec.name, blocks: flowBlocks(spec), ...(spec.artifacts ? { artifacts: spec.artifacts } : {}) };
 }
 
+type SpecReport = Pick<RunReport, 'id' | 'flow' | 'adhoc' | 'flowEdits' | 'continuedFrom'>;
+
+/** Как в CONTINUE_DEPTH_MAX раннера: дальше по цепочке продолжений не идём. */
+const EDITED_DEPTH_MAX = 50;
+
 /**
- * По какому spec идёт запуск: у разового — его снимок (в flows/ может лежать чужой flow с тем же именем),
- * у обычного — текущая версия сохранённого flow по имени.
+ * По какому spec идёт запуск: у разового — его снимок (в flows/ может лежать чужой flow с тем же именем); у запуска,
+ * чей flow поправили на ходу только в нём (последняя правка — снимка, без «сохранить и в flow»), — тоже снимок: правка
+ * живёт в нём и в его продолжениях (report читает прошлые запуски цепочки continuedFrom); у обычного — текущая версия
+ * сохранённого flow по имени, в том числе после правки, сохранённой в flows/, или взятой оттуда.
  */
 export function runSpec(
-  report: Pick<RunReport, 'id' | 'flow' | 'adhoc'>,
-  load: { flow: (name: string) => FlowSpec; snapshot: (id: string) => FlowSpec },
+  report: SpecReport,
+  load: { flow: (name: string) => FlowSpec; snapshot: (id: string) => FlowSpec; report?: (id: string) => SpecReport | undefined },
 ): FlowSpec {
-  return report.adhoc ? load.snapshot(report.id) : load.flow(report.flow);
+  return report.adhoc || snapshotOnly(report, load.report) ? load.snapshot(report.id) : load.flow(report.flow);
+}
+
+/** Последняя правка flow на ходу в цепочке продолжений (ближайший запуск с flowEdits) — только в снимке, не в flows/. */
+export function snapshotOnly(report: SpecReport, read?: (id: string) => SpecReport | undefined, depth = 0): boolean {
+  const last = report.flowEdits?.at(-1);
+  if (last) return last.source === 'edit' && !last.savedToFlows;
+  if (!read || !report.continuedFrom || depth >= EDITED_DEPTH_MAX) return false;
+  const prev = read(report.continuedFrom);
+  return prev ? snapshotOnly(prev, read, depth + 1) : false;
 }
 
 export type SaveFlowDeps = {

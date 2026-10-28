@@ -7,6 +7,12 @@ import react from '@vitejs/plugin-react';
 /** Адрес UI-сервера для dev-прокси. По умолчанию — `npm run ui` на стандартном порту. */
 const API = process.env.AGENTGRAPH_API ?? 'http://127.0.0.1:4747';
 
+/**
+ * Host страницы Vite — только этот компьютер. HTTP Vite проверяет сам (allowedHosts), а upgrade прокси — нет: страница
+ * evil.com:5173 после DNS rebinding на 127.0.0.1 прислала бы Origin, совпадающий с её Host, и прокси открыл бы ей терминал.
+ */
+const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
+
 /** Код сервера: из web/ в него можно только `import type`. */
 const SERVER_SRC = path.resolve(import.meta.dirname, '..', 'src');
 
@@ -56,10 +62,22 @@ export default defineConfig({
       '/api': {
         target: API,
         changeOrigin: true,
+        // WebSocket терминала сессии (/api/sessions/:id/ws)
+        ws: true,
         configure(proxy) {
           // только свой Origin (страница самого Vite): чужой уходит как есть, и guard сервера отвечает 403 — иначе любая
           // открытая страница могла бы через прокси дёрнуть POST без тела (abort, pause), а сервер принял бы его за свой
           proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.origin !== undefined && req.headers.origin === `http://${req.headers.host}`) proxyReq.setHeader('origin', new URL(API).origin);
+          });
+          // то же для WebSocket: сервер требует Origin строго http://<Host>, чужая страница получит его отказ; чужой Host
+          // (DNS rebinding) дальше прокси не идёт вовсе
+          proxy.on('proxyReqWs', (proxyReq, req, socket) => {
+            if (!LOCAL_HOST.test(req.headers.host ?? '')) {
+              proxyReq.destroy();
+              socket.destroy();
+              return;
+            }
             if (req.headers.origin !== undefined && req.headers.origin === `http://${req.headers.host}`) proxyReq.setHeader('origin', new URL(API).origin);
           });
         },

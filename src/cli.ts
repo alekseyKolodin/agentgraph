@@ -5,10 +5,11 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import readline from 'node:readline/promises';
 import { parse as parseYaml } from 'yaml';
-import { flowBlocks, type FlowSpec, type Phase } from './schema.js';
+import { flowBlocks, isCallBlock, type FlowSpec, type Phase } from './schema.js';
+import { describeNext } from './compose.js';
 import { artifactAccess, declaredArtifacts } from './artifacts.js';
 import { generateFlow } from './generate.js';
-import { describeCondition, flowFileName, flowToYaml, loadFlow, resolveFlowFile } from './flows.js';
+import { checkCalls, describeCondition, flowFileName, flowToYaml, loadFlow, resolveFlowFile } from './flows.js';
 import { editBase, editFlow } from './edit.js';
 import { runFlow, type QuestionRecord, type RunOptions } from './runner.js';
 import type { AskAnswers } from './agent.js';
@@ -118,6 +119,7 @@ async function main(): Promise<number> {
     abort,
     onEvent: consoleReporter(values.verbose),
     onQuestion: askInTerminal,
+    runChild: childInTerminal(values.verbose, 1),
   };
 
   const [cmd, ...rest] = positionals;
@@ -172,6 +174,8 @@ async function main(): Promise<number> {
         console.log(c.dim('\nФайл не изменился'));
         return 0;
       }
+      // как сохранение в UI: вызываемые flow есть, без круга и не глубже лимита
+      checkCalls(r.spec);
       fs.writeFileSync(file, r.yaml.endsWith('\n') ? r.yaml : r.yaml + '\n');
       console.log(`\n${c.green('✓')} Сохранил ${c.bold(file)}`);
       printPlan(r.spec);
@@ -319,14 +323,26 @@ function printPlan(spec: FlowSpec, full = false): void {
       : 'один проход';
     if (multi) console.log(`  ${c.bold(`Блок ${bi + 1}. ${b.title ?? b.name}`)} ${c.dim(`— ${loop}`)}`);
     else console.log(`  ${loop}`);
-    b.phases.forEach((p, i) => {
-      console.log(`${pad}${i + 1}. ${c.bold(p.title ?? p.name)} ${c.dim(`[${p.tools.join(', ') || 'без инструментов'}]${arts.length ? accessLine(p) : ''}`)}`);
-      if (full) console.log(c.dim(indent(p.prompt.trim(), pad + '   ')));
-    });
+    // блок-вызов: его этапы — в вызываемом flow; задача вызова — шаблон input
+    if (isCallBlock(b)) {
+      console.log(`${pad}↪ ${c.bold(`вызов flow ${b.flow}`)} ${c.dim('— отдельный запуск, итог уходит дальше в {{prev}}')}`);
+      if (full && b.input !== undefined) console.log(c.dim(indent(b.input.trim(), pad + '   ')));
+    } else {
+      b.phases.forEach((p, i) => {
+        console.log(`${pad}${i + 1}. ${c.bold(p.title ?? p.name)} ${c.dim(`[${p.tools.join(', ') || 'без инструментов'}]${arts.length ? accessLine(p) : ''}`)}`);
+        if (full) console.log(c.dim(indent(p.prompt.trim(), pad + '   ')));
+      });
+    }
     const until = b.loop?.until;
     if (full && until?.type === 'judge') console.log(`${pad}судья:\n${c.dim(indent(until.prompt.trim(), pad + '   '))}`);
+    if (b.next !== undefined) console.log(`${pad}${c.dim(`после блока: ${describeNext(b)}`)}`);
   });
   console.log();
+}
+
+/** Дочерний запуск блока-вызова в терминале: его ход печатается под строкой блока, с отступом «│ » на уровень вызова. */
+function childInTerminal(verbose: boolean, depth: number): NonNullable<RunOptions['runChild']> {
+  return (spec, o) => runFlow(spec, { ...o, onEvent: consoleReporter(verbose, '│ '.repeat(depth)), runChild: childInTerminal(verbose, depth + 1) });
 }
 
 /** Вопросы агента в терминале: номер варианта (через запятую для multiSelect) или свой текст. */

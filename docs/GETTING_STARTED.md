@@ -17,7 +17,7 @@ A few words you will see below:
 - **Flow** — a YAML file in `flows/`: which blocks and phases it consists of, what each phase does (its prompt), which tools it has, and when the result counts as done.
 - **Phase** (the `phases` field in YAML) — a fresh Claude Code session with its own prompt. The prompt gets the task (`{{input}}`) and the output of the previous phase (`{{prev}}`). A phase sees only this text, not what the previous one read and thought, so every boundary between phases is a loss. Most often there is a single phase: it figures things out, does the work and checks it, and the block's condition does the acceptance. A separate phase is justified at a context boundary: a read-only review after a writing phase, parallel independent work, a step with a huge context that must be compressed before the next one.
 - **Group** (the `group` field of a phase in YAML) — adjacent phases of one block that run at the same time. They all see the same `{{prev}}` — the output from before the group — and the next phase gets their outputs joined together. Good for independent reviews and research.
-- **Block** — a set of phases: either a loop until a condition, or a single pass. A flow can consist of several blocks in a row. For example: "write the spec until the judge accepts it" → "split into tasks in one pass" → "implement until the tests are green".
+- **Block** — a set of phases: either a loop until a condition, or a single pass. A flow can consist of several blocks in a row. For example: "write the spec until the judge accepts it" → "split into tasks in one pass" → "implement until the tests are green". A block can also call another flow instead of having phases (`flow: <name>`: it runs as a separate child run, and its result goes on as `{{prev}}`), and a block's `next` can jump forward to a later block or end the run depending on a marker, a command or a judge; see ["Calling another flow and branching"](REFERENCE.md#calling-another-flow-and-branching).
 - **Condition** — checked after all phases of the block have run. Types: **command** (a shell command returned 0, e.g. `npm test`), **judge** (a Claude session evaluates the result against a rubric) and **marker** (the phase output contains a given string). If the condition is not met, a new iteration starts.
 - **Feedback** — what the condition reported: the output of the failed command or the judge's feedback. It goes into the next iteration's prompts as `{{feedback}}`.
 - **Artifact** (the `artifacts` field in YAML) — a named run file: a plan, a checklist, decisions. It lives for the whole run, survives iterations and blocks, and carries over when the run is continued. A phase gets it through `reads`, `writes` or `{{artifacts.KEY}}` and writes only to its own `writes`. You can edit it in the UI between steps, and the next phase will see the edit. Unlike `{{prev}}`, which lives until the next phase, an artifact has one current copy.
@@ -47,6 +47,8 @@ npm install
 ```
 
 `npm install` also downloads the Claude Code binary for your platform. That is why you can't copy `node_modules` from someone else's machine: install the dependencies yourself.
+
+`node-pty`, the terminal of the Sessions tab, is an optional dependency with ready builds for macOS; on Linux it is compiled with node-gyp (Python 3, make, a C++ compiler). If that fails, `npm install` still succeeds and there is simply no Sessions tab.
 
 Check that everything is in place:
 
@@ -90,9 +92,10 @@ What you should know:
 - **Where the data is.** In `desktop:dev`, the project root. The built app needs an external folder with `flows/` and `runs/`: `AGENTGRAPH_HOME` (including from `~/.zshrc` — the app picks up the login-shell environment); otherwise on first launch it asks for a folder (for example, an agentgraph checkout) and remembers it; cancelling uses an empty folder inside the app. To change it: the "File → Data folder…" menu. What it remembers (folder, port) is in `~/Library/Application Support/agentgraph/desktop.json`.
 - **Access to "Documents".** If the data or project folder is in `~/Documents`, `~/Desktop` or `~/Downloads`, macOS asks for permission on first access. Until you answer, the window doesn't respond: the system dialog may end up behind the app window.
 - **The port** is its own, not 4747: the app and `npm run ui` can run at the same time. But over the same `runs/`, a run started in one is shown by the other as "running in another process", and it can only be controlled from there. The `/agentgraph` skill gets the app's address through `AGENTGRAPH_URL` (the port is in `desktop.json`).
-- **Closing the window** — runs continue; clicking the Dock icon opens the window again. **Quitting (Cmd+Q)** — running runs stop as with the "Stop" button (agents are shut down, the run gets the "aborted" result and can be continued), then the app closes.
+- **Closing the window** — runs continue; clicking the Dock icon opens the window again. **Quitting (Cmd+Q)** — running runs stop as with the "Stop" button (agents are shut down, the run gets the "aborted" result and can be continued), then the app closes. If terminal sessions are live, it asks first ("Close agentgraph?"); their claude processes get SIGHUP, and task tag summaries aren't written: such a session waits for "Update summary".
 - **Claude Code inside.** The Agent SDK launches the Claude Code CLI from the platform package; in the app it lives in `app.asar.unpacked` (a process can't be launched from inside an asar), and the SDK gets the path through `AGENTGRAPH_CLAUDE_EXECUTABLE`. Authentication is shared with `claude` in the terminal.
-- **Packaging is electron-builder** (`electron-builder.yml`), not Electron Forge: we already have our own build (`tsc` for the server, Vite for the UI), and electron-builder simply packages the ready `dist/` with the `dependencies` from `package.json`, while unpacking the SDK binary from asar and the dmg/zip targets take a couple of config lines. Forge wants to run the build itself through its Vite/webpack plugins.
+- **The Sessions terminal inside.** `node-pty` is a native module: `pty.node` and its `spawn-helper` can't run from inside an asar either, so `electron-builder.yml` unpacks `node_modules/node-pty` to `app.asar.unpacked` (without its Windows builds and sources). It isn't rebuilt for Electron (`npmRebuild: false`): node-pty 1.1.0 is N-API and ships builds for darwin-arm64 and darwin-x64. Before packaging, `desktop:build` runs `scripts/pty-helper.mts` (after the UI and server builds, right before electron-builder), which makes `spawn-helper` executable (1.1.0 ships it without the bit).
+- **Packaging is electron-builder** (`electron-builder.yml`), not Electron Forge: we already have our own build (`tsc` for the server, Vite for the UI), and electron-builder simply packages the ready `dist/` with the `dependencies` from `package.json`, while unpacking the SDK binary and `node-pty` from asar and the dmg/zip targets take a couple of config lines. Forge wants to run the build itself through its Vite/webpack plugins.
 - **Limitations.** The app is not signed: on another Mac, open it via right-click → "Open" (or `xattr -dr com.apple.quarantine agentgraph.app`). The build targets only the architecture of the machine it was built on: the Claude Code binary in `node_modules` is installed for it, and there is no universal build.
 
 ## First run (costs cents)
@@ -102,11 +105,12 @@ What you should know:
 3. Go back to **Run** → **Run**. The task is already filled in, and the phases have no tools, so no files will be touched.
 4. On the run page you can see the phases go through iterations, what the judge answered and how much it cost. The "prompt / transcript / output" buttons on each phase show exactly what went to the agent and what it returned.
 
-Three more examples in `flows/example/`:
+Four more examples in `flows/example/`:
 
 - **example-ask** — the agent asks the user a question (the `AskUserQuestion` tool). The question pops up in the UI, and you answer it there.
 - **example-pause** — the agent pauses the run itself when it can't do without a human (`loop.pause_marker`).
 - **example-parallel** — three phases run at the same time (the `group` parallel group), and a fourth combines their outputs. On the run page you can see several phases "running" at once.
+- **example-compose** — connecting flows: a phase decides what to do and ends with a marker, `next` leads to a call of `example-parallel` or of `example-blocks` (repeated until the judge approves), and each call runs as its own child run with its own page.
 
 ## Everyday use
 
@@ -140,7 +144,7 @@ The **Run** tab:
 - **Status filter** above the run list on the left: show, for example, only failed runs or only those waiting for a reply.
 - **Run name**: a few seconds after the start, the model gives the run a short name based on the task. It is the title in the list, on the run page and on Home, with the flow name in small text under it. Old runs have the flow as the title.
 - **Search** in the sidebar: "Find flow…" searches by flow name, folder and description; "Find run…" by name, flow, task, tags, project folder and run id. It works together with the status filter; Esc clears the field.
-- **Run chat** at the top of the run page (collapsed by default, expands by clicking the header): ask the agent what is going on and why, or ask it to pause, resume, raise the iteration limit, answer a phase's question, or continue from where it stopped. "Clear context" or `/clear` starts the conversation over.
+- **Run chat** — a dock on the right edge of the run page, on every tab (open by default for a running run; "Collapse" or Esc folds it into a strip): ask the agent what is going on and why, or ask it to pause, resume, raise the iteration limit, answer a phase's question or give the next step an instruction, and it does that right away. Stopping the run, writing an artifact, answering a pause, applying or saving a flow edit, repeating an iteration, continuing (with a model and a cost limit) or running again it only offers as buttons under the reply, and they run after you confirm. The reply is markdown with a collapsed list of the agent's steps, plus tables, links and reply chips. "Clear context" or `/clear` starts the conversation over.
 - **Agent questions and the pause reason** are shown as formatted markdown, with the question header as a badge; for an answered question, the answer is shown under it.
 - **Prompt of a running phase**: on a ⏳ card the "prompt" and "transcript" buttons appear as soon as the phase starts, and a judge check has "judge prompt". The prompt and output open as formatted markdown; "as text" in the window header shows the source. Text longer than 300,000 characters or with a line longer than 10,000 characters is shown in monospace without formatting. The transcript is re-read every time it is opened.
 - **Phase model and effort**: each phase card (running and past) has a "model · effort" chip. The model is the actual one, from `system/init`: for a running phase without a set model it appears a second after the start. The effort is the configured one (phase → `defaults`): the SDK doesn't report the actual one, and without a value there is no effort chip. The data is in `run.json` (`phases[].model`, `phases[].effort`); old runs have no chip.
@@ -148,10 +152,11 @@ The **Run** tab:
 - **Run scheme** above the phase blocks: the flow graph, showing which phase and iteration the run is on now, what has been completed and how much it cost; clicking a node leads to the phase card or opens the artifact; the phase node badge shows the percentage of the context window in use.
 - **Collapse iterations**: on the run page, blocks and iterations collapse when you click their header, and the "Collapse all" / "Expand all" button does it all at once; by default only the current one is open. The live log is open only for a running run.
 - **Pause**: the current phase finishes, and the next one doesn't start until "Resume". This is the best time to edit artifacts: while paused, nobody writes to them.
+- **Fix and continue**: the instruction field on the running phase's card and on the pause card adds your text to the next step's prompt (with "for the rest of the run", to every following step). On a pause you can also edit the run's flow ("Apply to the run", optionally "Also save to flows/<name>.yaml"), take the current `flows/<name>.yaml` into the run, or repeat the iteration with an instruction, and the same run goes on under the same id. Changes to finished blocks, the name, the task or artifact declarations are rejected with the reasons. More in [REFERENCE.md](REFERENCE.md), "Fix and continue".
 - **Artifacts** (a panel on the run page, only for flows with `artifacts`): the collapsed row tells how many artifacts there are, which was changed last and by whom, and whether a phase is writing them right now. Expand it and click a name: a window opens with the text, a markdown preview and versions. "Edit" → "Save" (or "Save and resume" while paused); every step that starts after saving gets the edit, marked "the last edit was made by the user". While a phase that writes this artifact is running, editing is blocked with a reason. If you close the window without saving, the text stays as a draft ("unsaved"), and "Resume" asks whether to save it. Warnings (a phase wrote to the wrong place, a foreign file appeared in the folder) are shown with a ⚠ icon on the iteration and on the artifact. A markdown artifact with a checklist (`- [ ]`, `- [x]`) has an "N of M open" badge in its row and in the window header: it updates as the run goes on and after an edit is saved.
 - **Reply to a pause**: if the agent asked for a decision and the flow has a decisions artifact (`decisions: true`), there is a "Reply" field under the pause card. Write a reply and click "Resume with reply" (the same button is in the header): the reply is appended to the decisions artifact together with the agent's questions, and the run continues. On Home, the "Reply on the run page" button leads to the same place. If there is no decisions artifact, the card offers "Open artifacts" or, for a flow without artifacts, to write the decision where the agent asks.
 - **Stop run**: aborts the current session immediately.
-- **Continue from where it stopped**: a multi-block run that hit a limit, failed or was stopped can be continued. Blocks already accepted are not run again, and artifacts move to the new run together with your edits made after the stop. A single-block flow can't be continued this way: it is run again from scratch.
+- **Continue from where it stopped**: a run that hit a limit, failed or was stopped can be continued if its first block was accepted, or if the first block itself hit the iteration limit (it starts again from its first iteration with the limit from the flow; the code and artifacts stay), or if the first block is a flow call that already started its child run. Blocks already accepted are not run again, and artifacts move to the new run together with your edits made after the stop. A run that failed or was stopped inside its first block of phases, single-block or not, can't be continued: run it again from scratch.
 - **Enable notifications** (a button on Home, shown until the browser has asked for permission): browser notifications about questions and run endings. If permission is denied, Home shows "Notifications off". If the UI is closed, the server sends a system notification.
 
 ### See what goes into the context
@@ -161,6 +166,16 @@ The **Run** tab:
 - The "Phase prompt by source" section shows what the runner will assemble the phase's first message from: the prompt template, the handoff, the list of additional directories, the knowledge tag lines and the tags inserted in full, with the size and share of each. If full tags take up more than half the prompt, or instructions come from four or more places (CLAUDE.md and rule files, full tags, its own system prompt), the page warns you: such prompts contradict themselves more often than it seems.
 - "Open" on a CLAUDE.md or rule opens an editor with a preview; "Save" writes the file to disk. Skills, plugins and managed policies are view-only.
 - The listing is cached for a minute: after editing files outside, click "Refresh".
+
+### Work in a Claude Code session with tags
+
+- Open **Sessions** on the left (there's no tab if the server couldn't load the terminal, `node-pty`), click **New session**, pick a folder and tags, and click **Open terminal**. It's an ordinary Claude Code session — slash commands, permission prompts, `/resume` — in a terminal inside agentgraph; the task tags' notes and summaries and the knowledge tag lines arrive in its context at the start.
+- Add or remove a tag in the tag row while the session runs: the model sees the change with its next step or your next message (until then the chip is dashed). Reading the new tag's folders doesn't ask for permission.
+- Reloading the page doesn't stop the session: the screen comes back. Live sessions are listed under "Now" in the sidebar. "End" stops claude; in the desktop app Cmd+Q asks first if sessions are running.
+- When claude exits, the task tags get a new summary from the session's turns (a short haiku session per tag; the checkbox in "Advanced" of the form, on by default). "Update summary" does it at any time; after Cmd+Q the session is marked and waits for the button.
+- "Continue" on an ended session opens the same conversation (`claude --resume`) in the same folder with the current tags; "Restart with tags" in the `⋯` menu does it for a running session, so the folders of tags added on the fly open without asking. Sessions stay in the list after a restart of agentgraph.
+- On a tag's page, "Open a session with this tag" starts the form with the tag; sessions that updated the tag's summary are listed next to its runs.
+- Shift+Enter is a new line, a file dragged onto the terminal is inserted as a path.
 
 ### Run from a Jira issue, MR or branch
 
@@ -323,7 +338,7 @@ agentgraph is a **local tool**: everyone has their own copy on their own machine
 
 | Variable | Purpose |
 |---|---|
-| `AGENTGRAPH_HOME` | where `flows/` and `runs/` live; the project root by default (the `dist/web` UI build is always next to the code) |
+| `AGENTGRAPH_HOME` | where `flows/`, `runs/` and `sessions/` live; the project root by default (the `dist/web` UI build is always next to the code) |
 | `AGENTGRAPH_URL` | server address for the `/agentgraph` skill; `http://127.0.0.1:4747` by default |
 | `AGENTGRAPH_NOTIFY` | `off` — no system notifications, `log` — write them to the server log |
 | `AGENTGRAPH_CONFIG_DIR` | Jira, project and worktree settings, the Jira token; `~/.agentgraph` by default |
@@ -369,12 +384,15 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/cli.ts` | entry point: the `gen`, `edit`, `run`, `show`, `tags`, `eval`, `ui` commands |
 | `src/eval.ts` | end-to-end flow eval from the CLI (`agentgraph eval`): `tasks.yaml` → setup / runFlow / check for each run, pass by `done` and the check exit code, aggregates per (flow, task), flipped tasks with `--compare`, a table in the console, `results.json` in `runs/evals/<date>-<flow>[-vs-<flow2>]/`; the runs are ordinary ones in `runs/`, named "eval <flow> · <task> #<n>" |
 | `src/run-analysis.ts` | "Analyze flow" for a finished run: facts from `run.json` (context window share per phase, feedback stagnation, turns, denials, what the prompt uses), a prompt with "boundary between phases only by context" heuristics, a session without tools (sonnet) with structured output, `runs/<id>/analysis.json`; the `GET|POST /api/runs/:id/analysis` route in `server.ts` |
-| `src/schema.ts` | the `flow.yaml` schema (zod): phases, blocks, conditions, the tool list |
-| `src/flows.ts` | reading, saving and finding flows in `flows/`, folders |
+| `src/schema.ts` | the `flow.yaml` schema (zod): phases, blocks, call blocks (`flow:`), branching (`next`), conditions, the tool list |
+| `src/compose.ts` | connecting flows: the call graph check (callee exists, no cycles, depth), the called flow's task, picking the next block by `next`, the call result for the parent; the runner and server call it at their entry points |
+| `src/flows.ts` | reading, saving and finding flows in `flows/`, folders; calls are checked on save, a called flow can't be deleted |
 | `src/adhoc.ts` | one-off run: a draft from the request body (`spec`/`yaml`), the run's flow snapshot, which flow to continue from (the snapshot or `flows/`), "Save as flow" |
 | `src/generate.ts` | the generator: task → flow (a Claude session without tools) |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
-| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/` |
+| `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
+| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`); call blocks as child runs (`runChild`) and branching by `next` |
+| `src/run-fix.ts` | "fix and continue": what an edit of a running run's flow may not change and what it changed (pure functions; the runner applies the edit at a checkpoint) |
 | `src/artifacts.ts` | run artifacts without the file system: phase permissions (`reads`, `writes`, substitutions), validation, the map of a large artifact, the "Run artifacts" prompt section, the guard decision, whether an artifact may be edited |
 | `src/artifact-store.ts` | run artifact store: files and versions, quarantine and reconciliation with disk before a step, locking during a writing step, authorship, user edits and replies to a pause |
 | `src/artifact-tools.ts` | tools for reading an artifact by section for phases and the judge (`artifact_map`, `artifact_read`, `artifact_search`, in-process MCP) |
@@ -387,15 +405,20 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/lang.ts` | language of the helper models' text (run name, iteration summaries, flow analysis, auto-tag title): `taskLang` counts Latin vs Cyrillic letters in the task, and the prompt names the language explicitly; tests `lang.test.ts` |
 | `src/run-title.ts` | run name: a session without tools (haiku) comes up with a short name from the task text; the runner calls it through `nameRun` in parallel with the phases and waits for it before the end; on failure — `{ error }`, and the flow stays as the title; tests `run-title.test.ts`, `runner.title.test.ts` |
 | `src/auto-tag.ts` | auto-tag: a session without tools (haiku) comes up with a slug and title from the task text, and a new task tag is created on a free slug (`createFreshTag`, suffix `-2`…); on failure — `{ error }`, and the run goes without a tag; tests `auto-tag.test.ts` |
-| `src/tag-summary.ts` | the tag summary session after a `done` run: prompt, request (read-only, haiku), response parsing, cleanup of inaccessible paths (`dropRunPaths`) |
+| `src/sessions.ts` | "Sessions" tab, pure logic: finding `claude`, its arguments, hooks and `permissions.deny` in `--settings`, the `agentgraph` MCP config, the environment, the tag context (full on SessionStart, the change on UserPromptSubmit/PostToolBatch) with the hook budget, hook handling, PermissionRequest for tag folders, "resume or start anew"; tests `sessions.test.ts` |
+| `src/sessions-mcp.ts` | the session's HTTP MCP server (JSON-RPC without state): `knowledge_read` and `tag_read` over the session's current tags; tests `sessions-mcp.test.ts` |
+| `src/sessions-pty.ts` | `node-pty` loaded on demand (optional dependency; no package — no feature), the headless screen mirror and the snapshot for a new client, stopping claude with SIGHUP and a timeout |
+| `src/sessions-server.ts` | session registry, the `/api/sessions*` routes, hooks and MCP by the session token, the WebSocket upgrade with `Host`/`Origin` checks, stopping on server stop; on disk — `session.json`, the turn log `turns.jsonl`, the last screen; task tag summaries on exit and by the button, "Continue" (`--resume`), "Restart with tags", deleting; tests `sessions-server.test.ts` (fake pty and summary session, real HTTP and WebSocket) |
+| `src/tag-summary.ts` | the tag summary session after a `done` run: prompt, request (read-only, haiku), response parsing, cleanup of inaccessible paths (`dropRunPaths`); the same for a terminal session from its turn log (`sessionTagSummaryRequest`, `turnsDigest`); tests `tag-summary.session.test.ts` |
 | `src/attachments.ts` | task attachments: type and size checks, writing to `runs/<id>/attachments/`, copying on continuation |
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
 | `src/template.ts` | substituting `{{variables}}` into prompts |
-| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs |
-| `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, continuation), history in `chat.json` |
+| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs (a call block's child run is a live run of its own; pause, resume and stop reach it from the parent) |
+| `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, artifacts, flow) and the `ui` widget tools (table, links, action buttons, reply chips); dangerous actions run only on a confirmed click (`chatAction`); history with steps and widgets in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
-| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, stopping runs and the server (`stopServer`) on quit |
-| `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked, dmg and zip targets |
+| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, confirming Cmd+Q while terminal sessions are live, stopping runs, sessions and the server (`stopServer`) on quit |
+| `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked (the Claude Code CLI and `node-pty`), dmg and zip targets |
+| `scripts/pty-helper.mts` | before `electron-builder`: makes `node-pty`'s `spawn-helper` executable (1.1.0 ships it without the bit) |
 | `src/feed.ts` | the Home events feed from `run.json`: questions, pauses, run endings |
 | `src/limits.ts` | Claude subscription limits for Home (5 hours, week) through the Agent SDK |
 | `src/context.ts` | the "Context" page: listing a phase session's context through the Agent SDK, reading and writing CLAUDE.md and rules from an allowlist, phase prompt by source (`promptParts`) with warnings about full tags and the number of instruction sources |
@@ -413,7 +436,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `web/src/lib/` | pure logic without React or the DOM, with `*.test.ts` tests next to it: formatting, markdown (`md.ts`), sidebar search (`search.ts`), the graph model and layout (`graph/`), the builder (`flow/`), the run form (`run-form.ts`), run page events and view, and artifacts (`run/`), Home, tags, context, parsing old `/#…` addresses (`legacy-url.ts`) |
 | `web/src/lib/i18n.ts`, `web/src/i18n/en/` | interface language: `t()` takes the Russian text as the key and looks up the English in the dictionaries split by area; the EN / RU switch is in the sidebar |
 | `web/src/components/` | shared components: the shell and sidebar (`shell/`), the flow graph on `@xyflow/react` (`graph/`), the file window, the agent question card, the confirmation dialog, the popover, markdown |
-| `web/src/screens/` | screens: Home (`home/`), flow and the builder with the run form (`flow/`), the run page with artifacts and chat (`run/`), "Tags" (`tags/`), "Context" (`context/`) |
+| `web/src/screens/` | screens: Home (`home/`), flow and the builder with the run form (`flow/`), the run page with artifacts and chat (`run/`), "Tags" (`tags/`), "Context" (`context/`), "Sessions" with the xterm.js terminal (`sessions/`) |
 | `web/src/styles/` | the "Pult" tokens (`tokens.css`, rationale in `.interface-design/system.md`) and global primitives (`base.css`); other styles are CSS Modules next to the components |
 | `scripts/ensure-web.mts` | before `npm run ui`: builds `dist/web` if there is no build or `web/` and `package-lock.json` are newer |
 | `.claude/skills/agentgraph/` | the `/agentgraph` skill and its helper `agentgraph.mjs` (a client for the server API) |
@@ -448,3 +471,4 @@ After updating the Agent SDK, run `npx tsx scripts/check-sdk-hooks.mts` (spends 
 | An artifact can't be edited: "phase X is writing" | a running step is writing this artifact right now; click "Pause" and edit it when the step finishes |
 | "Save" rejected: the file changed after you opened it | a phase or another tab changed the artifact; "Reload" takes the version from disk, "Overwrite" writes your text |
 | A phase with artifacts fails with "Reached maximum number of turns" | even with `tools: []` the model often opens the artifact with a tool first; remove `max_turns` 1–3 from such a phase or raise it to 5 or more |
+| There is no "Sessions" item on the left | the server couldn't load `node-pty` (an optional dependency): `node -e "require('node-pty')"` in the agentgraph folder shows why; run `npm install` again (on Linux it is compiled: Python 3, make and a C++ compiler are needed) and restart `npm run ui` |

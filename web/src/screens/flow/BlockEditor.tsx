@@ -4,11 +4,12 @@ import { useFeature } from '../../api';
 import { TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
-  blockHeading, blockLabel, isMulti, moveBlock, newPhase, phaseNum, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
+  blockHeading, blockLabel, isCall, isMulti, moveBlock, newPhase, phaseNum, removeBlock, renameBlock, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
 } from '../../lib/flow/edit';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { bindField, dropStaleSel, openPhasePane, sameField } from './actions';
+import { CallFields, CallPaneInfo, NextFields } from './CallEditor';
 import { DraftInput, PluginsField } from './fields';
 import { PhaseCard } from './PhaseCard';
 import { emit, flowState, knowledgeDraft, markDirty, useFlowStore, type BlockField, type FieldKey } from './store';
@@ -47,17 +48,18 @@ export function BlockHead({ bi, inPane = false }: { bi: number; inPane?: boolean
         await notify(t('Нужен хотя бы один блок'));
         return;
       }
-      if (!(await askConfirm(t('Удалить блок «{block}» вместе с этапами ({n})?', { block: blockLabel(b, bi), n: b.phases.length }), { ok: t('Удалить'), danger: true }))) return;
+      const ask = isCall(b) ? t('Удалить блок «{block}» — вызов flow {flow}?', { block: blockLabel(b, bi), flow: b.flow || '…' }) : t('Удалить блок «{block}» вместе с этапами ({n})?', { block: blockLabel(b, bi), n: b.phases.length });
+      if (!(await askConfirm(ask, { ok: t('Удалить'), danger: true }))) return;
       // за время вопроса рабочую копию могла заменить правка ИИ или сохранение
       if (flowState.spec !== spec) return;
-      spec.blocks.splice(bi, 1);
+      removeBlock(spec, bi);
     } else moveBlock(spec, bi, what === 'up');
     markDirty();
     dropStaleSel();
   };
   return (
     <div className={styles.bblockHead}>
-      <span className={styles.bnum}>{t('Блок {n}', { n: bi + 1 })}</span>
+      <span className={styles.bnum}>{isCall(b) ? t('Блок {n} · вызов', { n: bi + 1 }) : t('Блок {n}', { n: bi + 1 })}</span>
       <input
         className={cx(styles.bTitle, field.className)}
         value={b.title || ''}
@@ -81,9 +83,11 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
   const spec = st.spec!;
   const b = spec.blocks[bi]!;
   const multi = isMulti(spec);
+  const call = isCall(b);
   const loop = b.loop;
   const u = loop?.until;
-  const kinds = useFeature('tag-kinds');
+  // у блока-вызова этапов нет: теги знаний, плагины и выбор этапа для маркера — в вызываемом flow
+  const kinds = useFeature('tag-kinds') && !call;
   const { notify } = useConfirm();
   const field = useBlockField(b, bi, inPane);
   const dirty = () => markDirty();
@@ -107,7 +111,8 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
 
   return (
     <div className={cx('panel', styles.bpanel)} data-bpanel={bi}>
-      <h3>{multi ? t('Как выполнять блок') : t('Цикл')}</h3>
+      <h3>{call ? t('Вызов flow') : multi ? t('Как выполнять блок') : t('Цикл')}</h3>
+      {call && <CallFields bi={bi} />}
       <div className="row">
         {multi && (
           <label style={{ maxWidth: 200 }}>
@@ -118,11 +123,12 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               placeholder="slug"
               onCommit={(raw) => {
                 const v = slug(raw) || b.name;
-                if (v !== b.name && spec.blocks.some((x) => x.name === v)) {
-                  void notify(t('Блок {name} уже есть', { name: v }));
+                // переходы next и ссылки на итог вызова идут следом
+                const err = renameBlock(spec, b.name, v);
+                if (err) {
+                  void notify(err);
                   return;
                 }
-                b.name = v;
                 dirty();
               }}
             />
@@ -137,7 +143,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               dirty();
             }}
           >
-            <option value="loop">{t('цикл до условия')}</option>
+            <option value="loop">{call ? t('повторять до условия') : t('цикл до условия')}</option>
             <option value="once">{t('один проход')}</option>
           </select>
         </label>
@@ -207,7 +213,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       )}
       {u?.type === 'judge' && (
         <label>
-          <span title={t('Судья видит {{input}} и {{outputs}} и отвечает: готово или нет, и замечания')}>{t('Рубрика судьи')}</span>
+          <span title={call ? t('Судья видит {{input}} и в {{outputs}} итог вызванного flow и отвечает: готово или нет, и замечания') : t('Судья видит {{input}} и {{outputs}} и отвечает: готово или нет, и замечания')}>{t('Рубрика судьи')}</span>
           <textarea
             {...field('until-prompt')}
             className={cx(styles.bUntilPrompt, field('until-prompt').className)}
@@ -234,7 +240,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               }}
             />
           </label>
-          <label>
+          {!call && <label>
             <span>{t('В выводе какого этапа')}</span>
             <select
               value={u.phase || ''}
@@ -247,7 +253,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
               <option value="">{t('последний этап блока')}</option>
               {b.phases.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
             </select>
-          </label>
+          </label>}
         </div>
       )}
       {multi && loop && u && u.type !== 'none' && (
@@ -313,7 +319,9 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
           </div>
         </div>
       )}
-      <PluginsField
+      {/* у одиночного блока переходить некуда, но оставшиеся от удалённых блоков правила должно быть видно и можно убрать */}
+      {(multi || b.next !== undefined) && <NextFields bi={bi} />}
+      {!call && <PluginsField
         value={b.plugins}
         hint={t('Плагины для всех этапов блока, по папке на строку (как --plugin-dir): скиллы, агенты, хуки и MCP плагина будут только в сессиях этого блока. Несуществующая папка роняет запуск до старта')}
         onChange={(plugins) => {
@@ -321,7 +329,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
           else delete b.plugins;
           dirty();
         }}
-      />
+      />}
     </div>
   );
 }
@@ -337,6 +345,19 @@ export function BlockSection({ bi }: { bi: number }) {
     <section className={cx(styles.bblock, multi && styles.multi, st.ai?.diff.blocks.has(b.name) && styles.aiChanged)} data-b={bi} id={`bblock-${bi}`}>
       <BlockHead bi={bi} />
       <BlockPanel bi={bi} />
+      {!isCall(b) && <BlockPhases bi={bi} groups={groups} />}
+    </section>
+  );
+}
+
+/** Этапы блока в ленте: карточки и «Добавить этап». У блока-вызова их нет. */
+function BlockPhases({ bi, groups }: { bi: number; groups: string[] }) {
+  const st = useFlowStore();
+  const spec = st.spec!;
+  const b = spec.blocks[bi]!;
+  const multi = isMulti(spec);
+  return (
+    <>
       <h3>{multi ? t('Этапы блока {n}', { n: bi + 1 }) : t('Этапы')}</h3>
       <datalist id={`b-groups-${bi}`}>
         {groups.map((g) => <option key={g} value={g} />)}
@@ -354,7 +375,7 @@ export function BlockSection({ bi }: { bi: number }) {
       >
         {t('Добавить этап')}
       </button>
-    </section>
+    </>
   );
 }
 
@@ -369,13 +390,15 @@ export function BlockPane({ bi }: { bi: number }) {
       <BlockPanel bi={bi} inPane />
       <div className={styles.panePhases}>
         <div className={styles.pLabel}>{t('Этапы блока')}</div>
-        <div className="chips">
-          {b.phases.map((p, i) => (
-            <button key={phaseKey(p)} type="button" className="chip" onClick={() => openPhasePane(bi, i, styles.flash!)}>
-              {phaseNum(spec, bi, i)} {p.title || p.name}
-            </button>
-          ))}
-        </div>
+        {isCall(b) ? <CallPaneInfo b={b} /> : (
+          <div className="chips">
+            {b.phases.map((p, i) => (
+              <button key={phaseKey(p)} type="button" className="chip" onClick={() => openPhasePane(bi, i, styles.flash!)}>
+                {phaseNum(spec, bi, i)} {p.title || p.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -384,7 +407,8 @@ export function BlockPane({ bi }: { bi: number }) {
 /** Заголовки инспектора для блока: контекст и что открыто. */
 export const blockPaneTitles = (spec: NonNullable<ReturnType<typeof useFlowStore>['spec']>, bi: number) => {
   const b = spec.blocks[bi]!;
-  return { ctx: isMulti(spec) ? blockHeading(b, bi) : 'Flow', label: b.loop ? t('Цикл и условие остановки') : t('Блок: один проход') };
+  const label = isCall(b) ? t('Вызов flow {flow}', { flow: b.flow || '…' }) : b.loop ? t('Цикл и условие остановки') : t('Блок: один проход');
+  return { ctx: isMulti(spec) ? blockHeading(b, bi) : 'Flow', label };
 };
 
 // ключ карточки — сам объект этапа: после ↑/↓ React переставляет карточки, а не переписывает поля чужих этапов

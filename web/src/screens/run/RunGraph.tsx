@@ -1,6 +1,7 @@
 // Вкладка «Граф» страницы запуска (ui/app.js loadRunGraph, applyRunGraph, inspectNode, renderInspector, followCurrent, runGraphGoto):
 // граф по снимку flow.yaml со статусами узлов, строка «Сейчас», «следовать за текущим» и инспектор выбранного узла.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Link } from 'react-router';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
 import { Badge, TagBadge } from '../../components/Badge';
 import { openRunFile } from '../../components/file/FileDialog';
@@ -90,7 +91,8 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
       if (artifacts) void openWin(n.art!, document.activeElement instanceof HTMLElement ? document.activeElement : null);
       return;
     }
-    inspectNode({ kind: n.kind, name: n.name, block: n.block, key: n.key });
+    // узел вызова — этап своего блока: инспектор показывает его итерации и ссылки на дочерние запуски
+    inspectNode({ kind: n.kind === 'call' ? 'phase' : n.kind, name: n.name, block: n.block, key: n.key });
   };
   const sel = runState.inspect;
   const startChips = [...(r.tags || []).map((t) => <TagBadge key={`t${t}`} slug={t} />), ...(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)];
@@ -161,11 +163,29 @@ function Inspector({ st, sel, spec, implicit, onGoto }: { st: LiveState; sel: In
       <>
         <div className={styles.inspTitle}>{v.title}</div>
         <span className={cx(styles.inspSt, styles[v.status.cls])}>{v.status.text}</span>
-        <div className={styles.inspMeta}>{[...v.meta, `[${toolsLabel(v.tools, implicit)}]`].join(' · ')}</div>
+        <div className={styles.inspMeta}>{[...v.meta, v.call ? t('вызов flow {flow}', { flow: v.call.flow }) : `[${toolsLabel(v.tools, implicit)}]`].join(' · ')}</div>
       </>
     );
     body = (
       <>
+        {v.call && (
+          <div className={styles.inspSec}>
+            <div className={styles.runLabel}>{t('Вызванные запуски')}</div>
+            {v.call.runs.length ? (
+              <ul className={styles.inspCalls}>
+                {v.call.runs.map((c) => (
+                  <li key={c.runId}>
+                    <span>{c.iteration}</span>
+                    <Link to={`/run/${c.runId}`} title={c.runId}>{t('Открыть запуск {flow} →', { flow: v.call!.flow })}</Link>
+                    <Badge status={c.status ?? 'running'} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="muted small">{t('Flow {flow} ещё не вызывался', { flow: v.call.flow })}</div>
+            )}
+          </div>
+        )}
         {v.input && (
           <div className={styles.inspSec}>
             <div className={styles.runLabel}>{v.input.label}</div>

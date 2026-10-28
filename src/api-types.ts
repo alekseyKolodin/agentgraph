@@ -99,6 +99,8 @@ export type RunSummary = {
   tags?: string[];
   /** Теги знаний запуска: чипы рядом с тегами задачи. */
   knowledge?: string[];
+  /** Дочерний запуск блока-вызова: список показывает его под родителем. */
+  parent?: RunParent;
 };
 
 /** Идущий этап: у параллельной группы их несколько. */
@@ -132,6 +134,8 @@ export type HomeRun = {
   pauseReason?: { phase: string; iteration: number; at?: string };
   /** У flow есть артефакт решений: ответ на паузу пишется на странице запуска. */
   decisions?: true;
+  /** Дочерний запуск блока-вызова: кто его вызвал. */
+  parent?: RunParent;
 };
 
 export type HomeResponse = { runs: HomeRun[] };
@@ -148,6 +152,8 @@ export type HomeEvent<T extends string = string> = {
   costUsd?: number;
   /** Только у title: имя запуска от модели. */
   title?: string;
+  /** Только у end дочернего запуска блока-вызова: о его конце не уведомляют — скажет конец родителя. */
+  parent?: RunParent;
 };
 
 /** Событие ленты главной (GET /api/feed): вопрос агента, пауза по его просьбе, конец запуска. */
@@ -184,7 +190,12 @@ export type BlockSummary = {
   maxIterations: number;
   condition: string;
   onFail: 'stop' | 'continue';
+  /** Этапы блока; у блока-вызова пусто — его этапы в вызываемом flow. */
   phases: PhaseSummary[];
+  /** Блок-вызов: имя вызываемого flow. */
+  flow?: string;
+  /** Развилка после блока для людей (describeNext): «маркер <BUG> → fix; иначе → build». */
+  next?: string;
 };
 
 export type FlowSummary = {
@@ -207,6 +218,22 @@ export type FlowSummary = {
 /** Элемент GET /api/flows: сводка flow (у невалидного — только имя, папка и ошибка). */
 export type FlowListItem = FlowSummary;
 
+/** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
+export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
+/** Что done потока добавляет к обычному телу ответа: фактическая модель (нет — init не пришёл) и длительность всего запроса. */
+export type FlowAiDone = { model?: string; durationMs: number };
+/**
+ * POST /api/flows/generate и /api/flows/:name/edit с Accept: application/x-ndjson — ход ИИ-сессии построчно.
+ * progress — модель (как только её назвал system/init), повтор запроса к API, шаг; log — строка хода (текст агента,
+ * вызов инструмента); done — тело, которое без заголовка пришло бы одним JSON, плюс FlowAiDone; error — ошибка, поток закрыт.
+ * B — тело маршрута: в web/ — FlowGenerated или FlowEdited (spec типизирован там).
+ */
+export type FlowAiStreamEvent<B = Record<string, unknown>> =
+  | { type: 'progress'; model?: string; retry?: { attempt: number; maxRetries: number; delayMs: number }; stage?: FlowAiStage }
+  | { type: 'log'; line: string }
+  | { type: 'done'; body: B & FlowAiDone }
+  | { type: 'error'; error: string };
+
 /** GET /api/connectors: коннекторы claude.ai аккаунта и их инструменты. read — только читает; write — меняет что-то снаружи. */
 export type ConnectorToolView = { name: string; tool: string; description?: string; readOnly: boolean };
 /** name — запись для tools этапа, которая разрешает весь коннектор: mcp__claude_ai_<Коннектор>. */
@@ -220,7 +247,11 @@ export type TagListItem = { slug: string; kind: TagKind; title?: string; updated
 /** interrupted раннер не пишет: так сервер показывает running-запуск, чей процесс умер, не дописав run.json. */
 export type RunStatus = 'running' | 'done' | 'max_iterations' | 'failed' | 'budget_exceeded' | 'aborted' | 'interrupted';
 
-export type TagRun = { id: string; flow: string; finishedAt: string; status: RunStatus };
+/**
+ * Запуск или сессия терминала, обновившие саммари тега. У сессии (kind: 'session') id — id сессии agentgraph
+ * (/sessions/<id>), flow — 'session', title — её название; папки артефактов у неё нет.
+ */
+export type TagRun = { id: string; flow: string; finishedAt: string; status: RunStatus; kind?: 'session'; title?: string };
 
 export type TagMeta = {
   slug: string;
@@ -253,6 +284,71 @@ export type Tag = TagMeta & { summary: string; notes: string; attachments: strin
 
 /** GET /api/tags/:slug: тег и блок, который сервер вставит в запуск (input). */
 export type TagDetail = Tag & { input: string };
+
+// ---------- сессии: интерактивный claude в терминале с тегами (src/sessions*.ts)
+
+/** starting — claude запущен, SessionStart ещё не было; working — модель отвечает; waiting — ход за человеком; ended — процесс вышел. */
+export type SessionStatus = 'starting' | 'working' | 'waiting' | 'ended';
+/** Режимы разрешений claude, которые предлагает форма; bypassPermissions и dontAsk не принимаются. */
+export type SessionPermissionMode = 'acceptEdits' | 'auto' | 'manual' | 'plan';
+
+/** Тег в строке тегов сессии: on — модель его видела; pending — добавлен, придёт со следующим шагом; removed — снят, снятие ещё не дошло. */
+export type SessionTagChip = { slug: string; kind: TagKind; state: 'on' | 'pending' | 'removed' };
+
+/** Последнее обновление саммари тегов задач по сессии: когда, в какие теги записано, ошибки по тегам, стоимость. */
+export type SessionSummary = { at: string; tags: string[]; errors?: Record<string, string>; costUsd: number };
+
+/** Сессия в списке, в шапке и в потоке WebSocket. */
+export type SessionView = {
+  id: string;
+  name: string;
+  cwd: string;
+  status: SessionStatus;
+  /** Процесс claude жив в этом сервере. */
+  live: boolean;
+  /** Текущие теги (слаги), порядок как выбрали. */
+  tags: string[];
+  chips: SessionTagChip[];
+  model?: string;
+  permissionMode?: SessionPermissionMode;
+  /** Обновлять саммари тегов задач при выходе. */
+  saveTag: boolean;
+  createdAt: string;
+  lastActivityAt: string;
+  endedAt?: string;
+  exitCode?: number;
+  /** Ходов: сообщений пользователя (UserPromptSubmit). */
+  turns: number;
+  /** Вышел без единого SessionStart: untrusted — код 0 (доверие к папке не принято), failed — claude не запустился. */
+  outcome?: 'untrusted' | 'failed';
+  /** Живая сессия без SessionStart дольше нескольких секунд: trust — на экране диалог доверия, missing — теги не доставлены. */
+  delivery?: 'trust' | 'missing';
+  /** Версия claude, на которой идёт сессия: «2.1.311». */
+  claudeVersion?: string;
+  /** Транскрипт Claude Code последнего разговора (из хука). */
+  transcriptPath?: string;
+  /** Ходов после прошлого саммари тегов задач: им есть что обновлять. */
+  newTurns: number;
+  summary?: SessionSummary;
+  /** Саммари тегов задач пишется прямо сейчас. */
+  summarizing?: true;
+  /** Саммари при выходе не записано: приложение закрыли (или сервер остановился), пока сессия шла. */
+  summaryPending?: 'app-closed';
+  /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
+  resumable?: boolean;
+};
+
+/** GET /api/sessions. */
+export type SessionList = { sessions: SessionView[]; max: number };
+
+/** Сообщения WebSocket /api/sessions/:id/ws от сервера: снимок экрана, вывод, состояние, выход процесса. */
+export type SessionWsServer =
+  | { t: 'snap'; d: string; cols: number; rows: number }
+  | { t: 'o'; d: string }
+  | { t: 's'; session: SessionView }
+  | { t: 'x'; code: number };
+/** От клиента: ввод и размер терминала. */
+export type SessionWsClient = { t: 'i'; d: string } | { t: 'r'; cols: number; rows: number };
 
 // ---------- форма запуска: недавние папки, worktree, ответ POST /api/runs
 
@@ -380,7 +476,7 @@ export type SessionTokens = {
 
 export type ArtifactAuthor =
   | { kind: 'phase' | 'unknown'; block: string; iteration: number; phase: string; at: string }
-  | { kind: 'user'; via: 'ui' | 'skill'; at: string }
+  | { kind: 'user'; via: 'ui' | 'skill' | 'chat'; at: string }
   | { kind: 'outside'; at: string }
   | { kind: 'condition'; block: string; iteration: number; at: string }
   | { kind: 'initial' }
@@ -487,7 +583,7 @@ export type ArtifactRead = Editability & {
 export type ArtifactSaved = { ok: true; hash: string; author: ArtifactAuthor; readers: string[]; resumed: boolean };
 
 /** Ответ пользователя на паузу, дописанный в артефакт decisions. */
-export type PauseAnswer = { text: string; via: 'ui' | 'skill'; at: string };
+export type PauseAnswer = { text: string; via: 'ui' | 'skill' | 'chat'; at: string };
 
 /** Тип условия остановки блока (until.type во flow.yaml). */
 export type UntilType = 'judge' | 'command' | 'marker' | 'none';
@@ -540,7 +636,18 @@ export type PhaseReport = {
   effort?: EffortLevel;
   /** Токены сессии этапа: контекст первого и самого большого запроса, итог input/output/кэша, окно модели главного цикла (contextWindow, нет — неизвестно); нет — SDK не прислал usage. */
   tokens?: SessionTokens;
+  /** Этап блока-вызова: дочерний запуск вызванного flow и чем он кончился. Стоимость этапа — его итог. */
+  call?: { runId: string; flow: string; status: RunStatus };
 };
+
+/** Кто вызвал запуск (блок-вызов, flow: X): родитель, его блок и итерация. */
+export type RunParent = { runId: string; flow: string; block: string; iteration: number };
+
+/** Проверка правила развилки next: номер правила, условие, вердикт. Стоимость (у судьи) входит в итог запуска. */
+export type NextCheck = { rule: number; type: 'judge' | 'command' | 'marker'; done: boolean; detail?: string; costUsd: number; logFile?: string };
+
+/** Развилка после блока: куда пошли (блок или end), какое правило решило (нет — следующий по порядку) и проверки. */
+export type BlockNext = { to: string; rule?: number; checks: NextCheck[] };
 
 export type ConditionReport = {
   block: string;
@@ -577,6 +684,15 @@ export type BlockReport = {
   onFail: 'stop' | 'continue';
   /** Пройден в запуске, который этот продолжает (continuedFrom), и не повторялся. */
   skipped?: boolean;
+  /** Развилка перешла через блок: он не выполнялся (status pending). */
+  bypassed?: boolean;
+  /** Куда пошла развилка после блока (только у блока с next, который завершился; у пропущенного продолжением — прошлое решение). */
+  next?: BlockNext;
+  /**
+   * Блок-вызов: последний начатый дочерний запуск — пишется сразу при старте вызова, ещё до его конца. По нему
+   * продолжение находит дочерний, даже если этот запуск прервался, пока ждал его.
+   */
+  call?: { runId: string; iteration: number };
 };
 
 /** reused — провал с теми же замечаниями, что и прошлый: итог взят у прошлой итерации, модель не звали. */
@@ -652,10 +768,43 @@ export type RunReport = {
   digest?: RunDigest;
   /** Сессии итогов: вызовы, стоимость (входит в totalCostUsd), сбои с последней ошибкой, повторы без вызова. */
   digestSession?: DigestSession;
+  /** Указания пользователя по ходу запуска: ждущие и применённые (где — в applied). У запусков без указаний поля нет. */
+  notes?: RunNote[];
+  /** Правки flow этого запуска на паузе, по порядку; снимок flow.yaml — последняя версия. Есть — продолжение берёт снимок. */
+  flowEdits?: RunFlowEdit[];
+  /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
+  parent?: RunParent;
 };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };
+
+// ---------- «Починить и продолжить» (src/run-fix.ts): указания, правка flow идущего запуска, повтор итерации
+
+/** Откуда пришли указание или правка: кнопки UI, хелпер скилла, чат запуска. */
+export type RunFixVia = 'ui' | 'skill' | 'chat';
+
+/**
+ * Указание идущему запуску (POST /api/runs/:id/note): хвост «Указание пользователя» в промпте. next — только следующему
+ * шагу (этапу, всем участникам группы или судье), run — каждому шагу до конца запуска. applied — где уже применено:
+ * phase — имя этапа, у судьи — '#cond'.
+ */
+export type RunNote = {
+  id: string;
+  text: string;
+  scope: 'next' | 'run';
+  at: string;
+  via: RunFixVia;
+  applied?: { block: string; iteration: number; phase: string; at: string }[];
+};
+
+/**
+ * Правка flow идущего запуска на паузе: PUT /api/runs/:id/flow (source edit) или POST …/flow/reload (reload — из flows/).
+ * version — номер нового снимка flow.yaml (исходный — 0; прошлые версии лежат рядом как flow.N.yaml). changed — что
+ * поменялось, по-человечески. savedToFlows — правку записали и в flows/<имя>.yaml; saveError — записать не вышло
+ * (правка запуска при этом действует).
+ */
+export type RunFlowEdit = { version: number; at: string; source: 'edit' | 'reload'; via: RunFixVia; changed: string[]; savedToFlows?: boolean; saveError?: string };
 
 export type RunEvent =
   | { type: 'start'; report: RunReport }
@@ -696,6 +845,17 @@ export type RunEvent =
    * его не обновили. totalCostUsd — итог запуска уже со стоимостью вызова.
    */
   | { type: 'digest'; block: string; iteration: number; summary?: string; digest?: RunDigest; totalCostUsd: number }
+  /** Указание добавлено (applied нет) или применено к шагу: в applied — только новые записи, клиент дописывает их к прежним. */
+  | { type: 'note'; note: RunNote }
+  /**
+   * Flow запуска поправили на паузе: снимок flow.yaml уже новый (граф его перечитывает), blocks и maxIterations — отчёты
+   * блоков и лимит после правки. Событие самодостаточно: при переигрывании оно идёт по порядку с остальными.
+   */
+  | { type: 'flow'; edit: RunFlowEdit; blocks: BlockReport[]; maxIterations: number }
+  /** Блок-вызов начал дочерний запуск runId вызванного flow: этап phase (имя блока) идёт, пока идёт он. */
+  | { type: 'call'; block: string; iteration: number; phase: string; runId: string; flow: string }
+  /** Развилка после блока решила: next — куда, total — лимит итераций запуска без пропущенных блоков; они придут следом своими block_end с bypassed. */
+  | { type: 'next'; block: string; next: BlockNext; total: number }
   | { type: 'end'; report: RunReport };
 
 /** Что сервер шлёт в поток запуска: события раннера и ошибка «запуск не найден» (запуска нет ни живого, ни на диске). */
@@ -710,8 +870,12 @@ export type ChatMessage = {
   /** Стоимость ответа (у assistant). */
   costUsd?: number;
   error?: boolean;
-  /** Чат продолжил запуск: id нового, UI покажет ссылку. */
+  /** Чат продолжил запуск: id нового, UI покажет ссылку. Так было до кнопок propose_actions — в старых историях. */
   openRun?: string;
+  /** Что агент делал за ход (у assistant): вызовы инструментов по порядку. В старых историях нет. */
+  steps?: ChatStep[];
+  /** Виджеты под ответом (у assistant) в порядке вызова: таблицы, ссылки, кнопки, варианты ответа. */
+  widgets?: ChatWidget[];
 };
 
 export type ChatLog = {
@@ -726,15 +890,100 @@ export type ChatLog = {
   totalCostUsd: number;
 };
 
-/** GET и DELETE /api/runs/:id/chat: история и идущий ход ответа (busy, activity — последние строки хода). */
-export type ChatPayload = { messages: ChatMessage[]; totalCostUsd: number; sessionId?: string; busy: boolean; activity: string[] };
+/** GET и DELETE /api/runs/:id/chat: история и идущий ход ответа (busy; live — его шаги, текст и виджеты). */
+export type ChatPayload = { messages: ChatMessage[]; totalCostUsd: number; sessionId?: string; busy: boolean; live?: ChatLive };
 
-/** Строка NDJSON-ответа POST /api/runs/:id/chat. */
+/**
+ * Строка NDJSON-ответа POST /api/runs/:id/chat. step — новый шаг или тот же с ошибкой (по index), text — текст агента
+ * по ходу ответа, widget — виджет под ответом, effect — ход что-то поменял: UI перечитывает артефакты, flow или список запусков.
+ */
 export type ChatStreamEvent =
   | { type: 'saved'; chat: ChatPayload }
-  | { type: 'log'; line: string }
+  | { type: 'step'; index: number; step: ChatStep }
+  | { type: 'text'; text: string }
+  | { type: 'widget'; widget: ChatWidget }
+  | ({ type: 'effect' } & ChatEffect)
   | { type: 'done'; chat: ChatPayload }
   | { type: 'error'; error: string };
+
+/** Шаг хода чата — вызов инструмента. Подпись («Читает …», «Поставил на паузу») строит UI по tool и target. */
+export type ChatStep = {
+  /** Инструмент как вызван: Read, Bash, mcp__run__pause_run… */
+  tool: string;
+  /** Главный аргумент коротко: путь, команда, шаблон поиска, ключ артефакта, «блок → лимит». */
+  target?: string;
+  /** Файл папки запуска, путь от неё: UI откроет его в окне файла. */
+  runFile?: string;
+  /** Файл вне папки запуска, абсолютный путь: ссылка «показать в Finder». */
+  path?: string;
+  /** Инструмент вернул ошибку: её начало. */
+  error?: string;
+  /** Вызов сабагента. */
+  sub?: true;
+};
+
+/** Идущий ход: шаги, последний текст агента, показанные виджеты. */
+export type ChatLive = { steps: ChatStep[]; text?: string; widgets: ChatWidget[] };
+
+/** Ссылка show_links: run_file — файл папки запуска (путь от неё), artifact — ключ, phase — этап (карточка в «Обзоре»), path — путь в проекте. */
+export type ChatLink = { kind: 'run_file' | 'artifact' | 'phase' | 'path'; ref: string; block?: string; label?: string };
+
+/**
+ * Действие кнопки propose_actions — опасное или общее, выполняется только кликом с подтверждением и один раз.
+ * apply_flow, reload_flow, restart_iteration — правка flow идущего запуска (на паузе), есть, только когда сервер их умеет.
+ */
+export type ChatActionKind = 'abort' | 'write_artifact' | 'answer_pause' | 'save_flow' | 'continue' | 'rerun' | 'apply_flow' | 'reload_flow' | 'restart_iteration';
+
+export type ChatAction = {
+  /** Уникален на всю историю чата: a-<uuid>. */
+  id: string;
+  kind: ChatActionKind;
+  /** Текст кнопки от агента. */
+  label: string;
+  /** Что именно будет сделано, словами сервера: артефакт «План» (plan.md), flows/x.yaml. */
+  target?: string;
+  /** write_artifact — ключ артефакта. */
+  key?: string;
+  /** write_artifact — весь новый текст; answer_pause — ответ; save_flow, apply_flow — YAML flow; restart_iteration — указание этапу. */
+  text?: string;
+  /** continue, rerun — модель и лимит стоимости нового запуска. */
+  model?: string;
+  maxBudgetUsd?: number;
+  /** Состояние, при котором действие предложено (хэш артефакта или файла flow, пауза): другое при клике — expired. */
+  base?: string;
+  /**
+   * apply_flow — версия снимка flow запуска (flowEdits.length), которую прочёл агент; reload_flow — при которой предложена.
+   * Снимок правили после — expired: кнопка не откатит более новую правку.
+   */
+  flowVersion?: number;
+  /**
+   * save_flow, rerun — последнюю правку flow на ходу в flows/ не сохраняли: продолжение этого запуска пойдёт по его снимку,
+   * а flows/ и перезапуск этой правки не знают.
+   */
+  keepsSnapshot?: boolean;
+  /** Итог клика; нет — ещё не нажимали. */
+  state?: 'done' | 'failed' | 'expired';
+  /** Что вышло или почему нет. */
+  result?: string;
+  at?: string;
+  /** continue, rerun — id нового запуска. */
+  openRun?: string;
+};
+
+export type ChatWidget =
+  | { type: 'table'; title?: string; columns: string[]; rows: string[][] }
+  | { type: 'links'; title?: string; items: ChatLink[] }
+  | { type: 'actions'; title?: string; items: ChatAction[] }
+  | { type: 'replies'; items: string[] };
+
+/** Что поменялось: artifacts — артефакты запуска, flow — flow (снимок запуска или файл в flows/), run — запуск (runId — новый). */
+export type ChatEffect = { kind: 'artifacts' | 'flow' | 'run'; runId?: string };
+
+/**
+ * POST /api/runs/:id/chat/action { msgIndex, actionId, saveToFlows? } → действие после клика (state done | failed | expired),
+ * история и что поменялось. 409 busy — идёт ход чата, 409 used — уже нажимали, 404 not_found, 423 locked — артефакт пишет этап (кнопка остаётся).
+ */
+export type ChatActionReply = { action: ChatAction; chat: ChatPayload; effects: ChatEffect[] };
 
 // ---------- страница «Контекст»: GET /api/context, GET|PUT /api/context/file (src/context.ts)
 
@@ -824,8 +1073,12 @@ export type AnalysisBlock = {
   iterations: number;
   /** Теги знаний блока из flow. */
   knowledge: string[];
-  /** Этапы блока по порядку объявления во flow. */
+  /** Этапы блока по порядку объявления во flow; у блока-вызова — один этап с именем блока, сам вызов. */
   phases: string[];
+  /** Блок-вызов: имя вызываемого flow. */
+  flow?: string;
+  /** Развилка после блока словами (describeNext). */
+  next?: string;
   /** Застой: сколько итераций подряд (включая первую из серии) провалились с теми же замечаниями, максимум по блоку. */
   stuck: number;
   log: AnalysisIteration[];
@@ -883,6 +1136,8 @@ export type AnalysisPhase = {
   reads: string[];
   writes: string[];
   last?: AnalysisPhaseRun;
+  /** Этап блока-вызова: имя вызываемого flow. Его запуск — дочерний запуск, стоимость — вместе с ним, ходов и контекста нет. */
+  call?: string;
 };
 
 /** Детерминированный дайджест запуска для анализа: без модели, из run.json и flow. */

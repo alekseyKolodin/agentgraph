@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react';
 import type { FlowSummary } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
 import type { FlowSaved } from '../../api';
+import type { AiProgress } from '../../lib/flow/ai-progress';
 import { toEditable, type EditBlock, type EditPhase, type EditSpec, type SpecChanges } from '../../lib/flow/edit';
 
 export type Tab = 'builder' | 'run' | 'yaml';
@@ -15,8 +16,14 @@ export const msgClass = (m: Msg, base = 'msg') => `${base}${m.tone ? ` ${m.tone}
 /** Открытый flow: файл из flows/ или черновик разового запуска (draft: файла нет, живёт только в этой вкладке). */
 export type FlowDoc = { name: string; folder?: string; yaml: string; summary?: FlowSummary; spec?: FlowSpec; error?: string; draft?: boolean };
 
-/** Последняя правка ИИ: что вернуть по «Отменить», что поменялось, цена; stale — пока ИИ работал, конструктор правили. */
-export type AiResult = { undo: { spec: EditSpec | null; dirty: boolean }; summary: string; diff: SpecChanges; stale: boolean; cost: number; seq: number };
+/**
+ * Последняя правка ИИ: что вернуть по «Отменить», что поменялось, цена, модель и длительность; stale — пока ИИ работал,
+ * конструктор правили.
+ */
+export type AiResult = {
+  undo: { spec: EditSpec | null; dirty: boolean }; summary: string; diff: SpecChanges; stale: boolean; cost: number; seq: number;
+  model?: string; durationMs?: number;
+};
 
 /** Поле flow или блока, открытое в крупном редакторе справа (режим «поле»). */
 export type BlockField = 'title' | 'until-run' | 'until-prompt' | 'until-marker' | 'knowledge';
@@ -41,6 +48,8 @@ type State = {
   ai: AiResult | null;
   /** AbortController идущей правки ИИ. */
   aiAbort: AbortController | null;
+  /** Ход идущей правки ИИ: модель, шаг, строки, повторы. */
+  aiProgress: AiProgress | null;
   /** Текст в поле «Правка с ИИ». */
   aiText: string;
   aiMsg: Msg;
@@ -67,7 +76,7 @@ type State = {
 };
 
 export const flowState: State = {
-  flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
+  flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiProgress: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
   sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, openSeq: 0, reveal: null, approved: false, formSeq: 0, extrasSeq: 0,
 };
 
@@ -107,10 +116,30 @@ export function revealNode(key: string): void {
   set({ reveal: { key, seq: ++revealSeq } });
 }
 
+const progressListeners = new Set<() => void>();
+let progressVersion = 0;
+const subscribeProgress = (fn: () => void) => {
+  progressListeners.add(fn);
+  return () => progressListeners.delete(fn);
+};
+
+/** Событие хода правки ИИ: перерисовывает только панель хода, а не весь конструктор с графом. */
+export function setAiProgress(p: AiProgress | null): void {
+  flowState.aiProgress = p;
+  progressVersion++;
+  for (const fn of progressListeners) fn();
+}
+
+/** Ход идущей правки ИИ; перерисовка на каждое событие потока (и на emit() — через useFlowStore рядом). */
+export function useAiProgress(): AiProgress | null {
+  useSyncExternalStore(subscribeProgress, () => progressVersion);
+  return flowState.aiProgress;
+}
+
 /** Прервать идущую правку ИИ и забыть результат прошлой. */
 export function resetAi(): void {
   flowState.aiAbort?.abort();
-  Object.assign(flowState, { aiAbort: null, ai: null, aiText: '', aiMsg: NO_MSG });
+  Object.assign(flowState, { aiAbort: null, aiProgress: null, ai: null, aiText: '', aiMsg: NO_MSG });
 }
 
 /** Открыть flow, прочитанный с сервера: рабочая копия заново, правки и выбор сбрасываются. */

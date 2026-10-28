@@ -2,7 +2,7 @@
 // код ответа и тело. server.ts только собирает ArtifactRun и отправляет ответ; логика и коды ошибок — здесь.
 // Ошибки: тело { error, code, ... } — error читают UI и хелпер скилла, code — машинная причина.
 import { artifactEditability, artifactTasks, isArtifactKey, type Editability } from './artifacts.js';
-import { ANSWER_MAX, type ArtifactStore } from './artifact-store.js';
+import { ANSWER_MAX, type ArtifactStore, type UserVia } from './artifact-store.js';
 import type { ArtifactList, ArtifactRead, ArtifactSaved } from './api-types.js';
 
 export type ApiReply = { status: number; body: Record<string, unknown> };
@@ -122,16 +122,17 @@ export function readArtifact(run: ArtifactRun, rawKey: string, version?: string 
 }
 
 /**
- * PUT /api/runs/:id/artifacts/:key { text, base, resume?, via? } — запись пользователем.
+ * PUT /api/runs/:id/artifacts/:key { text, base, resume?, via? } — запись пользователем. via тела — ui или skill;
+ * кнопка в чате запуска передаёт via отдельно (chat), а не телом: клиент HTTP чатом не назовётся.
  * 200 { hash, author, readers, resumed }; 400 bad_request; 404 unknown_key/missing; 409 not_paused (resume не на паузе, до записи)
  * или conflict (+ hash, author, at); 423 locked (+ phases); 403 readonly (+ reason); 413 too_big.
  */
-export function writeArtifact(run: ArtifactRun, rawKey: string, body: Record<string, unknown>): ApiReply {
+export function writeArtifact(run: ArtifactRun, rawKey: string, body: Record<string, unknown>, chat?: 'chat'): ApiReply {
   const key = knownKey(run, rawKey);
   if (!key) return unknownKey(run, rawKey);
   if (typeof body.text !== 'string' || typeof body.base !== 'string') return fail(400, 'bad_request', 'Нужны поля text и base (хэш версии, которую правили)');
   if (body.resume !== undefined && typeof body.resume !== 'boolean') return fail(400, 'bad_request', 'Поле resume — true или false');
-  const via = body.via === 'skill' ? 'skill' : 'ui';
+  const via: UserVia = chat ?? (body.via === 'skill' ? 'skill' : 'ui');
   if (body.resume && !(run.live && run.pause === 'paused')) {
     return fail(409, 'not_paused', 'Запуск не на паузе: «Сохранить и возобновить» недоступно, ничего не записано');
   }
@@ -163,7 +164,7 @@ export function writeArtifact(run: ArtifactRun, rawKey: string, body: Record<str
  * и в report.pauses[].answer, затем возобновление. Ошибка записи — пауза остаётся, ответ не потерян (он у клиента).
  * 409 not_paused, 400 no_decisions/bad_request, 413 too_big, 423 locked, 404 missing.
  */
-export function answerPause(pause: ArtifactRun['pause'], run: ArtifactRun | undefined, answer: string, via: 'ui' | 'skill'): ApiReply {
+export function answerPause(pause: ArtifactRun['pause'], run: ArtifactRun | undefined, answer: string, via: UserVia): ApiReply {
   if (pause !== 'paused') return fail(409, 'not_paused', 'Запуск не на паузе: ответ не записан');
   if (!run || !run.view.hasDecisions()) return fail(400, 'no_decisions', 'Во flow нет артефакта с decisions: true — ответ некуда записать. Возобнови без ответа');
   if (Buffer.byteLength(answer) > ANSWER_MAX) return fail(413, 'too_big', 'Ответ больше 64 КБ');

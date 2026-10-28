@@ -160,6 +160,13 @@
 .fg-node.is-running.fg-cond { background: transparent; }
 .fg-cond-label { font-family: var(--font-mono); color: var(--ink-3); }
 
+/* узел вызова flow: ячейка «стопкой» — внутри целый flow; «Конец» — капсула, куда ведут правила next с goto: end */
+.fg-call { box-shadow: 3px 3px 0 -1px var(--panel), 3px 3px 0 0 var(--line-strong); }
+.fg-call.is-selected { box-shadow: 0 0 0 1px var(--ink), 3px 3px 0 0 var(--line-strong); }
+.fg-call-mark { color: var(--ink-3); margin-right: 6px; }
+.fg-end { cursor: default; align-items: center; justify-content: center; border-radius: var(--r-pill); background: var(--raised); }
+.fg-end:hover { border-color: var(--line-strong); }
+
 /* обёртки xyflow: рёбра и узлы без своих стилей и событий, кроме наших */
 .fg :global(.react-flow__edge) { pointer-events: none; }
 .fg :global(.react-flow__node) { cursor: default; }

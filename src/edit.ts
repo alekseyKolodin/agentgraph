@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringify as toYaml } from 'yaml';
 import { compactSpec, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { CLAUDEAI_TOOL_PREFIX, runSession, type SessionResult } from './agent.js';
+import { CLAUDEAI_TOOL_PREFIX, runSession, type LogFn, type SessionEvent, type SessionResult } from './agent.js';
+import type { FlowAiStage } from './api-types.js';
 import { describeDir, DESIGN_RULES, ORCHESTRATOR_RULES } from './generate.js';
 import { flowToYaml, parseFlow, validateSpec } from './flows.js';
 
@@ -17,6 +18,7 @@ File format. The server validates the file after you and normalizes it, so both 
 - Top level: name, description?, input?, defaults? {model?, effort?, max_turns?, permission_mode?, max_budget_usd?}, artifacts?, then EITHER the short form "loop?" + "phases" (a single block) OR "blocks". Never both. To add a second block to a short-form flow, convert it: the existing loop and phases become blocks[0] (name: main), unchanged except for indentation, and the new block goes after it.
 - Block: name (slug [a-z0-9_-]), title?, loop? {max_iterations: 1-50, until}, on_fail? (stop | continue), plugins? (local Claude Code plugin folders for every phase of the block, like --plugin-dir; keep them as the user wrote them, never invent — a missing folder fails the run), knowledge? (list of knowledge tag slugs from the user's "Tags" page: every phase of the block gets one line per tag and the knowledge_read tool to fetch its notes, paths and attachments on demand; keep them as the user wrote them, never invent — a missing tag fails the run), phases (at least one).
 - until: {type: command, run, timeout_sec?} | {type: judge, prompt, model?} | {type: marker, marker, phase?} | {type: none}.
+- Call block: instead of phases a block may have "flow" (the name of another saved flow) and "input" (the task for that flow, a template); every iteration runs that flow as a child run, and its final answer becomes the block's output ({{prev}}, {{phases.BLOCK}}). A call block has no phases. Any block may have "next": a list of rules {if: until-like condition, goto: a block BELOW this one or "end"} plus an optional final {goto} without "if" — a branch chosen after the block finishes; blocks it jumps over do not run.
 - Phase: name (slug [a-z0-9_-], unique across the whole flow), title?, prompt, handoff?, tools (required list; [] = no tools; any of ${KNOWN_TOOLS.join(', ')}, plus tools of the user's claude.ai connectors named ${CLAUDEAI_TOOL_PREFIX}<Connector>__<tool>, or ${CLAUDEAI_TOOL_PREFIX}<Connector> for the whole connector including tools that change data — keep the ones a phase already has, add them only when the request asks for Jira, Confluence or Slack; also keep plugin MCP tool names (mcp__plugin_<plugin>_<server>__<tool>) a phase already has; Agent and Skill are added automatically, never list them), add_dirs? (extra directories the phase may access besides the working dir, like --add-dir: absolute, ~ or relative to the working dir; their CLAUDE.md and skills are loaded — keep them as the user wrote them), plugins? (local Claude Code plugin folders only this phase gets, like --plugin-dir: absolute, ~ or relative to the working dir; the plugin brings its skills, agents, hooks and MCP servers; keep them as the user wrote them, never invent — a missing folder fails the run), system?, model?, effort? (low | medium | high | xhigh | max), max_turns?, permission_mode? (default | acceptEdits | bypassPermissions | dontAsk | plan | auto), max_budget_usd?, output_schema? (JSON Schema object), group? (slug [a-z0-9_-]; adjacent phases of one block with the same group run in parallel, see design rule 8 below), reads? (list of artifact keys the phase reads), writes? (list of artifact keys the phase edits; includes reading).
 - artifacts: a map key -> {title?, file?, initial?, decisions?}. Key: [a-zA-Z0-9_-]. file: a bare file name (no directories) with extension md, txt, json, yaml or yml, unique ignoring case, never CLAUDE.md or CLAUDE.local.md; default <key>.md. initial: starting text as is. decisions: true marks the one artifact where the user's answers to pauses are appended. Artifacts are files of the run that survive iterations and blocks; the user can edit them between steps. A phase gets read access to an artifact via reads, writes or {{artifacts.KEY}} / {{artifacts.KEY.path}} in its prompt or handoff, and write access only via writes (no Edit or Write in tools is needed for that). In a parallel group two members never write the same artifact, and a member never reads an artifact a sibling writes. The judge reads all artifacts and may use {{artifacts.KEY}} in its rubric. Keep artifacts, reads and writes exactly as they are unless the request is about them; when you rename or remove an artifact key, update every reads, writes and {{artifacts.KEY}} that refers to it.
 
@@ -27,8 +29,9 @@ How to edit:
 4. When you add, remove or move a phase, fix what depends on it: {{prev}} and {{phases.NAME}} in neighbouring prompts, handoff contracts, judge rubrics, until.phase. Keep the phases of a group adjacent within one block (a phase moved out of its group or to another block loses "group"), and never introduce {{phases.NAME}} between members of one group.
 5. Keep the YAML valid: block scalars (|, |-, >) and their indentation, quoting of strings that contain ": " or start with special characters.
 6. New prompts are written in the language of the existing flow.
-7. If the request is unclear or cannot be expressed in this format, change nothing and say why.
-8. Your final message is shown to the user as the summary of the edit: a short bulleted list in the language of the request, naming the phases and blocks you changed and how. When the summary is in Russian, call phases «этапы» and flows «flow» (never «фазы» or «флоу»); the stop condition is «условие». No preamble.
+7. Keep call blocks ("flow", "input") and every "next" exactly as they are unless the request is about them; never add phases to a call block. If a block you rename or remove is a "goto" target, update that "next".
+8. If the request is unclear or cannot be expressed in this format, change nothing and say why.
+9. Your final message is shown to the user as the summary of the edit: a short bulleted list in the language of the request, naming the phases and blocks you changed and how. When the summary is in Russian, call phases «этапы» and flows «flow» (never «фазы» or «флоу»); the stop condition is «условие». No preamble.
 
 Design rules for the parts you add or rewrite. Existing parts the request does not touch stay as they are, even if they break these rules:
 
@@ -45,6 +48,16 @@ export type EditOptions = {
   cwd?: string;
   model?: string;
   abort?: AbortController;
+  /** Строки хода сессий (поток в UI); нет — молча. */
+  log?: LogFn;
+  /** Ход сессий событиями: отсюда повторы запроса к API. */
+  onEvent?: (e: SessionEvent) => void;
+  /** Фактическая модель из system/init (у каждой сессии правки). */
+  onModel?: (model: string) => void;
+  /** Начался шаг: правка или починка после неё. */
+  onStage?: (stage: FlowAiStage) => void;
+  /** Подмена сессии в тестах. */
+  deps?: { session: typeof runSession };
 };
 
 export type EditResult = {
@@ -55,6 +68,10 @@ export type EditResult = {
   summary: string;
   changed: boolean;
   costUsd: number;
+  /** Фактическая модель сессий правки; нет — init не пришёл. */
+  model?: string;
+  /** Весь вызов: правка и починки. */
+  durationMs: number;
 };
 
 const FILE = 'flow.yaml';
@@ -87,9 +104,15 @@ export async function editFlow(name: string, instruction: string, base: EditBase
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-edit-')));
   const file = path.join(dir, FILE);
   fs.writeFileSync(file, base.yaml);
+  const started = Date.now();
   let costUsd = 0;
-  const session = async (prompt: string): Promise<SessionResult> => {
-    const r = await runSession(
+  let model: string | undefined;
+  const run = opts.deps?.session ?? runSession;
+  const session = async (prompt: string, stage: FlowAiStage): Promise<SessionResult> => {
+    // прервали между сессиями — следующую (платную) не начинаем
+    if (opts.abort?.signal.aborted) throw new Error('Правка прервана');
+    opts.onStage?.(stage);
+    const r = await run(
       {
         prompt,
         cwd: dir,
@@ -99,10 +122,13 @@ export async function editFlow(name: string, instruction: string, base: EditBase
         maxTurns: 40,
         persist: false,
         abort: opts.abort,
+        onEvent: opts.onEvent,
+        onModel: opts.onModel,
       },
-      () => {},
+      opts.log ?? (() => {}),
     );
     costUsd += r.costUsd;
+    model ??= r.model;
     if (opts.abort?.signal.aborted) throw new Error('Правка прервана');
     if (!r.ok) throw new Error(`Редактор не справился (${r.subtype}${r.errors.length ? ': ' + r.errors.join('; ') : ''})`);
     return r;
@@ -112,7 +138,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
   try {
     const broken = base.problems ? `\n\nСейчас flow не проходит валидацию, исправь заодно и это:\n<errors>\n${base.problems}\n</errors>` : '';
     const context = opts.cwd ? `\n\nДиректория проекта: ${opts.cwd}\nВерхний уровень директории:\n${describeDir(opts.cwd)}` : '';
-    const first = await session(`Flow «${name}» лежит в файле ${file}. Измени его по запросу пользователя:\n${request}${broken}${context}`);
+    const first = await session(`Flow «${name}» лежит в файле ${file}. Измени его по запросу пользователя:\n${request}${broken}${context}`, { kind: 'edit' });
 
     let yaml = fs.readFileSync(file, 'utf8');
     let spec: FlowSpec;
@@ -125,6 +151,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
         await session(
           `После правки файл ${file} не проходит валидацию:\n<errors>\n${errMsg(err)}\n</errors>\n` +
             `Исправь только эти ошибки, остальное не трогай. Исходный запрос пользователя:\n${request}`,
+          { kind: 'repair', attempt: attempt + 1, of: MAX_REPAIRS },
         );
         yaml = fs.readFileSync(file, 'utf8');
       }
@@ -134,7 +161,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
       spec = { ...spec, name };
       yaml = flowToYaml(compactSpec(spec));
     }
-    return { spec: compactSpec(spec), yaml, summary: first.text.trim(), changed: yaml !== base.yaml, costUsd };
+    return { spec: compactSpec(spec), yaml, summary: first.text.trim(), changed: yaml !== base.yaml, costUsd, model, durationMs: Date.now() - started };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

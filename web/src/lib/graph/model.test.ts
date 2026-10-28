@@ -195,3 +195,66 @@ test('inputsOf: с колбэком на узле строка «получае�
   const plain = of(model(spec), 'phase');
   assert.ok(plain.every((n) => n.inputs === undefined && n.warn === undefined));
 });
+
+test('блок-вызов: один узел вызова с ключом этапа p:<блок>:<блок>, подпись — состав вызываемого flow', () => {
+  const m = model(
+    { blocks: [{ name: 'spec', flow: 'write-spec', phases: [] }, { name: 'impl', phases: [ph('a')] }] },
+    { callSub: (f) => (f === 'write-spec' ? '2 блока · 3 этапа' : undefined), inputsOf: () => ['задача'] },
+  );
+  const call = of(m, 'call');
+  assert.equal(call.length, 1);
+  assert.deepEqual([call[0]!.key, call[0]!.title, call[0]!.sub, call[0]!.flow, call[0]!.block], ['p:spec:spec', 'write-spec', '2 блока · 3 этапа', 'write-spec', 'spec']);
+  assert.deepEqual(call[0]!.inputs, ['задача']);
+  // снимок запуска (flowBlocks) отдаёт блоку-вызову этап-вызов — узел тот же
+  const run = model({ blocks: [{ name: 'spec', flow: 'write-spec', title: 'Спека', phases: [{ name: 'spec', prompt: '', tools: [] }] }, { name: 'impl', phases: [ph('a')] }] });
+  assert.deepEqual(of(run, 'call').map((n) => [n.key, n.title, n.sub]), [['p:spec:spec', 'Спека', 'вызов flow']]);
+  assert.deepEqual(of(run, 'phase').map((n) => n.key), ['p:impl:a']);
+  // в следующий блок — «итог вызванного flow»
+  assert.equal(edges(run, 'next')[0]!.label, 'итог вызванного flow');
+});
+
+test('развилка: рёбра к блокам по правилам next с подписями условий, «иначе», переход через блок и «Конец»', () => {
+  const m = model({
+    blocks: [
+      { name: 'triage', flow: 'triage', phases: [], next: [{ if: { type: 'marker', marker: '<BUG>' }, goto: 'fix' }, { goto: 'build' }] },
+      { name: 'fix', flow: 'fix-bug', phases: [], loop: judge(), next: 'end' },
+      { name: 'build', phases: [ph('a')] },
+    ],
+  });
+  const next = edges(m, 'next').map((e) => [e.from, e.to, e.label ?? '']);
+  assert.deepEqual(next, [
+    ['p:triage:triage', 'p:fix:fix', '<BUG> →'],
+    ['p:triage:triage', 'p:build:a', 'иначе →'],
+    ['c:fix', 'end', 'выполнено →'],
+    // последний блок тоже кончается «Концом»
+    ['p:build:a', 'end', 'весь ответ'],
+  ]);
+  const end = of(m, 'end');
+  assert.equal(end.length, 1);
+  // «Конец» — ниже всех блоков; ребро через блок fix идёт левее канала обычных рёбер и не задевает рамку fix
+  const frames = m.frames.filter((f) => f.kind === 'block');
+  assert.ok(end[0]!.y >= Math.max(...frames.map((f) => f.y + f.h)));
+  const skip = m.edges.find((e) => e.to === 'p:build:a')!;
+  const near = m.edges.find((e) => e.to === 'p:fix:fix')!;
+  assert.ok(skip.points[2]![0] < near.points[2]![0]);
+  assert.ok(skip.points[2]![0] < frames[1]!.x);
+  // из последнего блока в «Конец» — по обычному каналу, не по обходной вертикали
+  const last = m.edges.find((e) => e.from === 'p:build:a' && e.to === 'end')!;
+  assert.ok(last.points[2]![0] > skip.points[2]![0]);
+});
+
+test('развилка без перехода в конец: «Конца» нет, у блока без next — прежнее ребро в следующий', () => {
+  const m = model({
+    blocks: [
+      { name: 'a', phases: [ph('x')], next: [{ if: { type: 'command', run: 'test -f x' }, goto: 'c' }] },
+      { name: 'b', phases: [ph('y')] },
+      { name: 'c', phases: [ph('z')] },
+    ],
+  });
+  assert.equal(of(m, 'end').length, 0);
+  assert.deepEqual(edges(m, 'next').map((e) => [e.from, e.to, e.label ?? '']), [
+    ['p:a:x', 'p:b:y', 'иначе →'],
+    ['p:b:y', 'p:c:z', 'весь ответ'],
+    ['p:a:x', 'p:c:z', '$ test -f x →'],
+  ]);
+});

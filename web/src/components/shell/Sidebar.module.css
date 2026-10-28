@@ -105,6 +105,8 @@
 .list li.more { color: var(--live); font-size: var(--fs-meta); padding: 4px 8px; }
 .list li { position: relative; }
 .list li.hidden-run { opacity: .6; }
+/* дочерний запуск блока-вызова: под родителем, с отступом и линией слева */
+.list li.child-run { margin-left: calc(var(--depth, 1) * 12px); border-left: 1px solid var(--line-strong); border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .list li .li-acts { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; background: var(--hover); border-radius: var(--r-sm); }
 .list li:hover .li-acts { display: flex; }
 .li-acts :global(.icon-btn) { border: 0; background: transparent; color: var(--ink-2); padding: 3px; border-radius: var(--r-xs); cursor: pointer; display: flex; }
@@ -121,3 +123,7 @@
 .run-filter .st:global(.on.waiting), .run-filter .st:global(.on.max_iterations) { background: color-mix(in srgb, var(--st-wait) 18%, transparent); border-color: var(--st-wait); }
 .run-filter .st:global(.on.done) { background: color-mix(in srgb, var(--st-ok) 18%, transparent); border-color: var(--st-ok); }
 .run-filter .st:global(.on.failed), .run-filter .st:global(.on.budget_exceeded), .run-filter .st:global(.on.aborted), .run-filter .st:global(.on.interrupted) { background: color-mix(in srgb, var(--st-fail) 16%, transparent); border-color: var(--st-fail); }
+
+/* сессии терминала в «Сейчас»: работает — синяя точка с ореолом, запускается — серая; ждёт тебя — общий тон .wait */
+.lrun.session-working .lrun-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+.lrun.session-starting .lrun-dot { background: var(--ink-3); }

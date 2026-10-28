@@ -1,6 +1,6 @@
 // Что показывает страница запуска (порт renderRun, renderRunSummary, blockIters, renderRunRibbons, renderRunFinal,
 // renderInspector, runGraphGoto из ui/app.js) — без React и DOM: компоненты только раскладывают готовые данные.
-import type { ConditionReport, PhaseReport, QuestionRecord, RunReport, SessionTokens } from '@server/api-types';
+import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens } from '@server/api-types';
 import { dur, excerpt, usd } from '../format';
 import { t } from '../i18n';
 import { markdownFits } from '../md';
@@ -17,6 +17,10 @@ export type RunBlockView = {
   maxIterations: number;
   looped: boolean;
   skipped?: boolean;
+  /** Развилка next перешла через блок: он не выполнялся. */
+  bypassed?: boolean;
+  /** Куда развилка после блока повела запуск. */
+  next?: BlockNext;
   onFail?: string;
 };
 
@@ -38,6 +42,18 @@ export const runPause = (r: RunView): 'requested' | 'paused' | undefined => (r.l
 export function currentBlockIndex(blocks: RunBlockView[]): number {
   const running = blocks.findIndex((b) => b.status === 'running');
   return running >= 0 ? running : blocks.findLastIndex((b) => b.status !== 'pending' && !b.skipped);
+}
+
+/** «Блок не выбран развилкой» или «пропущен» (продолжение) — подпись блока, который не выполнялся; иначе пусто. */
+export const blockSkipNote = (b: Pick<RunBlockView, 'skipped' | 'bypassed'>): string =>
+  b.bypassed ? t('не выбран развилкой') : b.skipped ? t('пропущен') : '';
+
+/** «дальше: блок X» или «дальше: конец» после блока с развилкой next; пусто — развилки нет или она ещё не решена. */
+export function blockNextNote(b: Pick<RunBlockView, 'next'>, blocks: Pick<RunBlockView, 'name' | 'title'>[]): string {
+  if (!b.next) return '';
+  if (b.next.to === 'end') return t('дальше: конец запуска');
+  const to = blocks.find((x) => x.name === b.next!.to);
+  return t('дальше: блок «{title}»', { title: to?.title || b.next.to });
 }
 
 export const COND_LABEL: Record<string, string> = { command: t('команда'), judge: t('судья'), marker: t('маркер'), none: t('без условия') };
@@ -112,6 +128,55 @@ export function pauseHint(r: RunView, artifacts: boolean): { text: string; openA
 
 /** Ответ на паузу — до 64 КБ в байтах, как на сервере. */
 export const PAUSE_ANSWER_MAX = 64 * 1024;
+
+// ---------- «починить и продолжить»: указания, правка flow на паузе, повтор итерации (src/run-fix.ts)
+
+/** Пометка проверки у итерации, оборванной повтором: как RESTART_DETAIL в src/run-fix.ts. */
+export const RESTART_DETAIL = 'перезапущено пользователем';
+export const isRestart = (c: Pick<ConditionReport, 'detail'>): boolean => c.detail === RESTART_DETAIL;
+
+/** Шаг проверки условия в applied указаний (судья): как COND_STEP в src/runner.ts. */
+export const COND_STEP = '#cond';
+
+/** Указания, применённые к шагу: этапу (phase — его имя) или проверке условия (COND_STEP). */
+export function stepNotes(r: Pick<RunReport, 'notes'>, block: string | undefined, iteration: number, phase: string): RunNote[] {
+  return (r.notes ?? []).filter((n) => n.applied?.some((a) => a.block === block && a.iteration === iteration && a.phase === phase));
+}
+
+/** Указания, которые ещё дойдут до этапов: next, пока его не применили, и run — до конца запуска. */
+export const waitingNotes = (r: Pick<RunReport, 'notes'>): RunNote[] => (r.notes ?? []).filter((n) => n.scope === 'run' || !n.applied?.length);
+
+/**
+ * Что можно сделать на паузе: править снимок flow, взять flow из flows/ (у разового его там нет), повторить итерацию
+ * идущего блока (если он её начал и лимит ещё можно поднять). Не на паузе — null.
+ */
+export function fixActions(r: RunView): { reload: boolean; restart: { block: RunBlockView; next: number; max: number } | null } | null {
+  if (runPause(r) !== 'paused') return null;
+  const cur = runBlocks(r).find((b) => b.status === 'running');
+  const restart = cur && cur.name !== undefined && cur.iterations > 0 && cur.maxIterations < LIMIT_MAX
+    ? { block: cur, next: cur.iterations + 1, max: cur.maxIterations + 1 }
+    : null;
+  return { reload: !r.adhoc, restart };
+}
+
+/**
+ * Подсказка «Продолжить с места остановки»: по снимку, если flow этого запуска последней правкой поменяли только в нём
+ * (как snapshotOnly в src/adhoc.ts; у продолжения такой цепочки сервер решает так же, а подсказка — общая).
+ */
+export function continueTitle(r: Pick<RunReport, 'flowEdits' | 'adhoc'>): string {
+  const last = r.flowEdits?.at(-1);
+  if (!r.adhoc && last?.source === 'edit' && !last.savedToFlows) return t('Новый запуск по снимку flow этого запуска (его правили на ходу): пройденные блоки не повторяются');
+  return t('Новый запуск текущей версией flow: пройденные блоки не повторяются');
+}
+
+/** Строка шапки о правках flow на ходу: сколько их; в подсказке — что поменяла каждая. */
+export function flowEditsLine(r: Pick<RunReport, 'flowEdits'>): { text: string; title: string } | null {
+  const edits = r.flowEdits ?? [];
+  if (!edits.length) return null;
+  const how = (e: RunFlowEdit) =>
+    `${e.version}. ${e.source === 'reload' ? t('из flows/') : t('правка снимка')}${e.savedToFlows ? ` · ${t('и в flows/')}` : ''}: ${e.changed.join('; ')}`;
+  return { text: t('flow правили на ходу: {n}', { n: edits.length }), title: edits.map(how).join('\n') };
+}
 export const textBytes = (s: string): number => new TextEncoder().encode(s).length;
 
 // ---------- этапы по итерациям
@@ -140,6 +205,7 @@ export function iterSummary(phases: PhaseReport[], cond: ConditionReport | undef
   if (ms) out.push({ text: dur(ms) });
   if (cost) out.push({ text: usd(cost) });
   if (pending) out.push({ text: t('⏳ идёт') });
+  else if (cond && isRestart(cond)) out.push({ text: t('↺ перезапущена'), cls: 'warn' });
   else if (cond && cond.type !== 'none') out.push(cond.done ? { text: t('✔ условие выполнено'), cls: 'ok' } : { text: t('↻ условие не выполнено'), cls: 'warn' });
   return out;
 }
@@ -155,6 +221,12 @@ export type StepItem =
   | { kind: 'cond'; c: ConditionReport }
   | { kind: 'condPending'; c: PendingCond };
 
+/** Сколько итераций у блока в «Обзоре» и есть ли у них заголовки: у блока без цикла — только когда итерацию повторили (fix.restart). */
+function blockIterHeads(r: RunView, b: RunBlockView): { iters: number; heads: boolean } {
+  const iters = Math.max(b.iterations || 0, ...r.phases.filter((p) => p.block === b.name).map((p) => p.iteration), 0);
+  return { iters, heads: b.looped || iters > 1 };
+}
+
 /** Список «Этапы по итерациям»: блоки, итерации, карточки шагов и свёртки (keys — все ключи, unfold — свёрнуто больше половины). */
 export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; keys: string[]; unfold: boolean } {
   const r = st.run;
@@ -169,8 +241,8 @@ export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; key
   blocks.forEach((b, bi) => {
     const inBlock = (x: { block?: string }) => x.block === b.name;
     const phases = r.phases.filter(inBlock);
-    const iters = Math.max(b.iterations || 0, ...phases.map((p) => p.iteration), 0);
-    if (b.looped) for (let it = 1; it <= iters; it++) foldKeys.set(`i:${bi}:${it}`, foldOpen(fold, `i:${bi}:${it}`, it === iters));
+    const { iters, heads } = blockIterHeads(r, b);
+    if (heads) for (let it = 1; it <= iters; it++) foldKeys.set(`i:${bi}:${it}`, foldOpen(fold, `i:${bi}:${it}`, it === iters));
     let blockOpen = true;
     if (multi) {
       if (iters > 0) {
@@ -187,7 +259,7 @@ export function runSteps(st: LiveState, fold: RunFold): { items: StepItem[]; key
     if (olderTo > 0) items.push({ kind: 'older', bi, to: olderTo });
     for (let it = 1; it <= iters; it++) {
       if (it <= olderTo && fold.over.get(`i:${bi}:${it}`) !== true) continue;
-      if (b.looped) {
+      if (heads) {
         const key = `i:${bi}:${it}`;
         const open = foldOpen(fold, key, it === iters);
         const pendingHere = pend.some((x) => x.block === b.name && x.iteration === it) || (st.condPending !== null && st.condPending.block === b.name && st.condPending.iteration === it);
@@ -335,6 +407,7 @@ export function blockIters(st: LiveState, bi: number, spec: SpecBlocks): BlockIt
     const item: IterItem = { it, st: 'future', mark: '', text: '', key: '' };
     if (asking) Object.assign(item, { st: 'wait', mark: t('ждёт ответа'), chain: chain(it) });
     else if (running) Object.assign(item, { st: 'live', mark: condRun?.iteration === it ? t('проверка') : t('идёт'), chain: chain(it) });
+    else if (c && isRestart(c)) Object.assign(item, { st: 'stop', mark: t('↺ перезапущена'), text: excerpt(c.feedback, 120) });
     else if (c) {
       const ok = c.done || c.type === 'none';
       item.st = ok ? 'ok' : 'fail';
@@ -375,9 +448,11 @@ export function ribbonRows(st: LiveState, fold: RunFold, spec: SpecBlocks): Ribb
   const sole = blocks.length === 1;
   const rows: RibbonRow[] = [];
   blocks.forEach((b, bi) => {
-    const head = sole ? undefined : { title: b.title || b.name || '', status: b.status, note: b.skipped ? t('пропущен') : b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход') };
+    const how = blockSkipNote(b) || (b.looped ? t('↺ до {n}', { n: b.maxIterations ?? '?' }) : t('один проход'));
+    // не выбранный развилкой блок не «ожидает»: статуса у него нет, только подпись
+    const head = sole ? undefined : { title: b.title || b.name || '', status: b.bypassed ? '' : b.status, note: [how, blockNextNote(b, blocks)].filter(Boolean).join(' · ') };
     const bs = blockIters(st, bi, spec);
-    if (!b.looped || b.skipped) {
+    if (!b.looped || b.skipped || b.bypassed) {
       if (!sole) rows.push({ bi, head, chain: bs.iters > 0 && !b.skipped ? bs.chain(1) : undefined });
       return;
     }
@@ -497,7 +572,7 @@ export function nodeFromKey(key: string): InspectSel | null {
 }
 
 type SpecPhase = { name: string; title?: string; tools?: string[]; model?: string; handoff?: string };
-type SpecBlock = { phases: SpecPhase[]; loop?: { until?: { type?: string; run?: string } } };
+type SpecBlock = { phases: SpecPhase[]; flow?: string; loop?: { until?: { type?: string; run?: string } } };
 
 export type InspectPhase = {
   kind: 'phase';
@@ -512,6 +587,8 @@ export type InspectPhase = {
   last?: { iteration: number; text: string; errors?: string };
   hist: PhaseReport[];
   files: { file: string; title: string; session?: string }[];
+  /** Блок-вызов: вызываемый flow и его дочерние запуски по итерациям, последний — внизу; у идущего статуса ещё нет. */
+  call?: { flow: string; runs: { iteration: number; runId: string; status?: RunStatus }[] };
 };
 export type InspectCond = {
   kind: 'cond';
@@ -560,6 +637,9 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
       f?.transcript ? { file: f.transcript, title: t('Транскрипт · {name}', { name: String(sel.name) }), session: rep && !run ? rep.sessionId || '' : '' } : null,
       !run && f?.output ? { file: f.output, title: t('Вывод · {name}', { name: String(sel.name) }) } : null,
     ].filter((x): x is NonNullable<typeof x> => Boolean(x));
+    const flow = specBlock?.flow ?? rep?.call?.flow ?? run?.call?.flow;
+    const calls: NonNullable<InspectPhase['call']>['runs'] = done.flatMap((p) => (p.call ? [{ iteration: p.iteration, runId: p.call.runId, status: p.call.status }] : []));
+    if (run?.call) calls.push({ iteration: run.iteration, runId: run.call.runId });
     return {
       where,
       kind: 'phase',
@@ -570,10 +650,11 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
       input,
       running: Boolean(run),
       last: rep && !run
-        ? { iteration: rep.iteration, text: `${t('{n} ходов', { n: rep.turns })} · ${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
+        ? { iteration: rep.iteration, text: `${rep.call ? '' : `${t('{n} ходов', { n: rep.turns })} · `}${dur(rep.durationMs)} · ${usd(rep.costUsd)}${rep.ok ? '' : ` · ${rep.subtype}`}`, errors: rep.errors?.length ? rep.errors.join('\n') : undefined }
         : undefined,
       hist: done.length > 1 ? done.slice(-6) : [],
       files,
+      ...(flow ? { call: { flow, runs: calls.slice(-6) } } : {}),
     };
   }
   if (sel.kind === 'cond') {
@@ -624,22 +705,6 @@ export function gotoTarget(
   }
   const open: string[] = [];
   if (blocks.length > 1) open.push(`b:${bi}`);
-  if (target && b.looped) open.push(`i:${bi}:${target.it}`);
+  if (target && blockIterHeads(r, b).heads) open.push(`i:${bi}:${target.it}`);
   return { open, target: target?.key ?? null, bi };
-}
-
-// ---------- чат
-
-/** Лёгкая разметка ответа чата: блоки кода, `код`, **жирный**; остальное — как есть. Возвращает HTML с экранированием. */
-export function chatText(text: string): string {
-  const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]!);
-  return esc(text).split(/```[^\n]*\n?/).map((part, i) => (i % 2
-    ? `<pre>${part.replace(/\n$/, '')}</pre>`
-    : part.replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'))).join('');
-}
-
-/** Строка над чатом: сообщений, потрачено, «агент отвечает…». */
-export function chatMeta(messages: { role: string }[], totalCostUsd: number | undefined, busy: boolean): string {
-  const n = messages.filter((m) => m.role !== 'note').length;
-  return [n ? t('сообщений {n}', { n }) : '', totalCostUsd ? t('потрачено {cost}', { cost: usd(totalCostUsd) }) : '', busy ? t('агент отвечает…') : ''].filter(Boolean).join(' · ');
 }

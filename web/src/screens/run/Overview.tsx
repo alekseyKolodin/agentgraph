@@ -2,7 +2,7 @@
 // итог завершённого запуска, сводка идущего, лента итераций, хвост живого лога, карточки этапов по итерациям, задача.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { ConditionReport, PhaseReport, RunReport } from '@server/api-types';
+import type { ConditionReport, PhaseReport, RunNote, RunReport } from '@server/api-types';
 import { fetchRunFile, setMaxIterations, errorText } from '../../api';
 import { Badge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -18,12 +18,13 @@ import { linkifyText } from '../../lib/md';
 import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
-  ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows, runBlocks,
-  runFinished, runSteps, stepKey, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
+  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
+  runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
 import { art } from './artStore';
 import { ArtFinalLine, ArtIterMark, ArtStepLine } from './ArtifactsPanel';
+import { NoteBox, StepNotes } from './FixPanel';
 import { RunTail } from './RunLog';
 import { bump, runState, setRunTab } from './store';
 import styles from './Run.module.css';
@@ -35,6 +36,8 @@ type Props = { st: LiveState; spec: SpecBlocks; graphNow: string; implicit: read
 export function Overview({ st, spec, graphNow, implicit }: Props) {
   const r = st.run;
   const { items, keys, unfold } = runSteps(st, runState.fold);
+  // поле указания — на первой идущей карточке (этап или проверка условия): указание получит следующий шаг
+  const noteAt = r.live && runPause(r) !== 'paused' ? items.find((it) => it.kind === 'running') ?? items.find((it) => it.kind === 'condPending') : undefined;
   const foldAll = (open: boolean) => {
     for (const k of keys) runState.fold.over.set(k, open);
     bump();
@@ -63,7 +66,7 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
         )}
       </div>
       <div className={styles.phases}>
-        {items.map((it, i) => <Step key={stepId(it, i)} item={it} st={st} implicit={implicit} />)}
+        {items.map((it, i) => <Step key={stepId(it, i)} item={it} st={st} implicit={implicit} noteBox={it === noteAt} />)}
       </div>
       <div className={styles.runSecHead}><span className={styles.runLabel}>{t('Задача')}</span></div>
       {r.input && <p className={styles.runInput} dangerouslySetInnerHTML={{ __html: linkifyText(r.input) }} />}
@@ -144,22 +147,24 @@ function parts(list: Part[]): ReactNode[] {
 
 // ---------- карточки шагов
 
-function Step({ item, st, implicit }: { item: StepItem; st: LiveState; implicit: readonly string[] }) {
+function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; implicit: readonly string[]; noteBox: boolean }) {
   const r = st.run;
   switch (item.kind) {
     case 'block': {
       const b = item.block;
-      const how = b.skipped ? t('пропущен (уже пройден)') : b.looped ? null : t('один проход');
+      const how = b.bypassed ? t('не выбран развилкой') : b.skipped ? t('пропущен (уже пройден)') : b.looped ? null : t('один проход');
+      const next = blockNextNote(b, runBlocks(r));
       return (
         <div className={styles.blockHead}>
           {item.foldKey ? <FoldButton foldKey={item.foldKey} open={item.open}>{item.label}</FoldButton> : <span>{item.label}</span>}
-          <Badge status={b.status} />
+          {!b.bypassed && <Badge status={b.status} />}
           <span className="muted">
             {how !== null
               ? `${how}${item.cost ? ` · ${usd(item.cost)}` : ''}`
               : limitEditable(r, b)
                 ? <>{`${t('итераций {n}', { n: b.iterations || 0 })}/`}<LimitCtl block={b} />{item.cost ? ` · ${usd(item.cost)}` : ''}</>
                 : `${t('итераций {i}/{n}', { i: b.iterations || 0, n: b.maxIterations })}${item.cost ? ` · ${usd(item.cost)}` : ''}`}
+            {next && ` · ${next}`}
           </span>
         </div>
       );
@@ -188,13 +193,17 @@ function Step({ item, st, implicit }: { item: StepItem; st: LiveState; implicit:
         </div>
       );
     case 'phase':
-      return <PhaseCard p={item.p} runId={r.id} implicit={implicit} />;
+      return <PhaseCard p={item.p} runId={r.id} implicit={implicit} notes={stepNotes(r, item.p.block, item.p.iteration, item.p.phase)} />;
     case 'running':
-      return <RunningCard x={item.x} doing={item.doing} runId={r.id} implicit={implicit} />;
+      return (
+        <RunningCard x={item.x} doing={item.doing} runId={r.id} implicit={implicit} notes={stepNotes(r, item.x.block, item.x.iteration, item.x.phase)}>
+          {noteBox && <NoteBox r={r} placeholder={t('Указание следующему шагу: что поправить или учесть — этот этап уже идёт')} />}
+        </RunningCard>
+      );
     case 'answered':
       return <AnsweredCard q={item.q} />;
     case 'cond':
-      return <CondCard c={item.c} runId={r.id} />;
+      return <CondCard c={item.c} runId={r.id} notes={stepNotes(r, item.c.block, item.c.iteration, COND_STEP)} />;
     case 'condPending': {
       const c = item.c;
       return (
@@ -205,6 +214,8 @@ function Step({ item, st, implicit }: { item: StepItem; st: LiveState; implicit:
             <span className={styles.stats}>{c.detail}</span>
             {c.file && <button className="btn small" onClick={() => void openRunFile(r.id, c.file!, t('Промпт судьи · итерация {it}', { it: c.iteration }))}>{t('промпт судьи')}</button>}
           </div>
+          <StepNotes notes={stepNotes(r, c.block, c.iteration, COND_STEP)} />
+          {noteBox && <NoteBox r={r} placeholder={t('Указание следующему шагу: что поправить или учесть — проверка уже идёт')} />}
         </div>
       );
     }
@@ -224,7 +235,7 @@ function CtxChip({ x, live }: { x: Parameters<typeof ctxChipInfo>[0]; live: bool
   return info ? <span className={cx(styles.pctx, info.level && styles[info.level])} title={info.title}>{info.text}</span> : null;
 }
 
-function PhaseCard({ p, runId, implicit }: { p: PhaseReport; runId: string; implicit: readonly string[] }) {
+function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: string; implicit: readonly string[]; notes: RunNote[] }) {
   const files = p.files || {};
   return (
     <div className={cx(styles.card, p.group && styles.grouped)} data-step={stepKey(p.block, p.iteration, p.phase)}>
@@ -232,12 +243,13 @@ function PhaseCard({ p, runId, implicit }: { p: PhaseReport; runId: string; impl
         <span className={styles.status}>{p.ok ? <span className="ok">✓</span> : <span className="warn">!</span>}</span>
         <span className={styles.title}>{p.title || p.phase}</span>
         <GroupTag group={p.group} />
-        <span className={styles.tools}>{`[${toolsLabel(p.tools, implicit)}]`}</span>
+        <span className={styles.tools}>{p.call ? <CallLink call={p.call} /> : `[${toolsLabel(p.tools, implicit)}]`}</span>
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
-        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${t('{n} ходов', { n: p.turns })} · ${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
+        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
+      <StepNotes notes={notes} />
       {art.on && <ArtStepLine rep={p} phase={p.phase} />}
       {Object.keys(files).length > 0 && (
         <div className={styles.actions}>
@@ -250,7 +262,12 @@ function PhaseCard({ p, runId, implicit }: { p: PhaseReport; runId: string; impl
   );
 }
 
-function RunningCard({ x, doing, runId, implicit }: { x: PendingPhase; doing: string; runId: string; implicit: readonly string[] }) {
+/** Шаг блока-вызова: ссылка на его дочерний запуск вместо инструментов. */
+const CallLink = ({ call }: { call: { runId: string; flow: string } }) => (
+  <Link to={`/run/${call.runId}`} title={t('Открыть вызванный запуск {id}', { id: call.runId })}>{t('↪ запуск flow {flow}', { flow: call.flow })}</Link>
+);
+
+function RunningCard({ x, doing, runId, implicit, notes, children }: { x: PendingPhase; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
   // промпт записан до старта этапа, транскрипт пишется по ходу; вывода до phase_end ещё нет. У старых запусков files нет.
   const pf = x.files;
   return (
@@ -259,17 +276,19 @@ function RunningCard({ x, doing, runId, implicit }: { x: PendingPhase; doing: st
         <span className={styles.status}>⏳</span>
         <span className={styles.title}>{x.title}</span>
         <GroupTag group={x.group} />
-        <span className={styles.tools}>{`[${toolsLabel(x.tools, implicit)}]`}</span>
+        <span className={styles.tools}>{x.call ? <CallLink call={x.call} /> : `[${toolsLabel(x.tools, implicit)}]`}</span>
         <ModelChip x={x} />
         <CtxChip x={x} live />
         <span className={styles.stats}>{doing}</span>
       </div>
+      <StepNotes notes={notes} />
       {pf && (
         <div className={styles.actions}>
           <button className="btn small" onClick={() => void openRunFile(runId, pf.prompt, t('Промпт · {name}', { name: x.phase }))}>{t('промпт')}</button>
           <button className="btn small" onClick={() => void openRunFile(runId, pf.transcript, t('Транскрипт · {name} (на момент открытия)', { name: x.phase }))}>{t('транскрипт')}</button>
         </div>
       )}
+      {children}
     </div>
   );
 }
@@ -277,20 +296,23 @@ function RunningCard({ x, doing, runId, implicit }: { x: PendingPhase; doing: st
 /** Замечания судьи — markdown; у команды — хвост её вывода моноширинно. */
 export const Feedback = ({ c }: { c: ConditionReport }) => (feedbackIsMarkdown(c) ? <SafeMarkdown text={runnerText(c.feedback, c.type)} /> : <pre><PathText text={runnerText(c.feedback, c.type)} /></pre>);
 
-function CondCard({ c, runId }: { c: ConditionReport; runId: string }) {
+function CondCard({ c, runId, notes }: { c: ConditionReport; runId: string; notes: RunNote[] }) {
   const none = c.type === 'none';
+  // итерацию оборвал повтор (FixPanel): проверки не было, в замечаниях — то, что получит следующая
+  const restart = isRestart(c);
   const label = { command: t('команда'), judge: t('судья'), marker: t('маркер'), none: t('без условия') }[c.type] || c.type;
   const foldKey = `f:${c.block ?? ''}:${c.iteration}`;
   return (
     <div className={cx(styles.card, styles.cond)} data-step={stepKey(c.block, c.iteration, '#cond')}>
       <div className={styles.head}>
-        <span className={styles.status}>{none ? <span className="muted">•</span> : c.done ? <span className="ok">✔</span> : <span className="warn">↻</span>}</span>
-        <span className={styles.title}>{none ? t('Итерация завершена') : c.done ? t('Условие выполнено') : t('Условие не выполнено')}</span>
-        <span className={styles.tools}>{`[${label}]`}</span>
+        <span className={styles.status}>{restart ? <span className="warn">↺</span> : none ? <span className="muted">•</span> : c.done ? <span className="ok">✔</span> : <span className="warn">↻</span>}</span>
+        <span className={styles.title}>{restart ? t('Итерация перезапущена') : none ? t('Итерация завершена') : c.done ? t('Условие выполнено') : t('Условие не выполнено')}</span>
+        {!restart && <span className={styles.tools}>{`[${label}]`}</span>}
         <span className={styles.stats}>{`${runnerText(c.detail, c.type)}${c.costUsd ? ` · ${usd(c.costUsd)}` : ''}`}</span>
         {c.logFile && <button className="btn small" onClick={() => void openRunFile(runId, c.logFile!, t('Условие · итерация {it}', { it: c.iteration }))}>{t('лог')}</button>}
       </div>
       {c.summary && <div className={styles.condSum}>{c.summary}</div>}
+      <StepNotes notes={notes} />
       {art.on && <ArtStepLine rep={c} phase={null} />}
       {c.feedback && (
         // <details> пересоздаётся вместе с карточкой: раскрыт ли он, помним на запуск
@@ -364,7 +386,7 @@ function RunFinal({ r }: { r: RunReport }) {
         {r.digest?.text && <div className={styles.sumDigest}>{r.digest.text}</div>}
         {multi && (
           <div className={styles.finalBlocks}>
-            {blocks.map((b, i) => <span key={i}>{`${b.title || b.name} `}<Badge status={b.status} /></span>)}
+            {blocks.map((b, i) => <span key={i}>{`${b.title || b.name} `}{b.bypassed ? <span className="muted">{t('не выбран')}</span> : <Badge status={b.status} />}</span>)}
           </div>
         )}
         {r.error && <div className="error">{r.error}</div>}
@@ -472,7 +494,7 @@ function Ribbons({ st, spec }: { st: LiveState; spec: SpecBlocks }) {
             <div className={styles.rbHead}>
               <span className={styles.rbBn}>{t('Блок {n}', { n: row.bi + 1 })}</span>
               <span className={styles.rbTitle}>{row.head.title}</span>
-              <Badge status={row.head.status} />
+              {row.head.status && <Badge status={row.head.status} />}
               <span className="muted small">{row.head.note}</span>
             </div>
           )}

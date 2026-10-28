@@ -36,17 +36,18 @@ export const ctxFlowOptions = (flows: FlowListItem[]): { value: string; label: s
   flows.filter((f) => f.valid !== false).map((f) => ({ value: f.name, label: f.folder ? `${f.folder}/${f.name}` : f.name }));
 
 type SpecPhase = { name: string; title?: string };
-type SpecLike = { blocks?: { name: string; title?: string; phases: SpecPhase[] }[]; phases?: SpecPhase[] };
+type SpecLike = { blocks?: { name: string; title?: string; phases?: SpecPhase[] }[]; phases?: SpecPhase[] };
 export type PhaseOption = { value: string; label: string };
 /** Этапы flow: при нескольких блоках — группами по блокам (label — группа), при одном — плоским списком (label пустой). */
 export type PhaseGroup = { label: string; options: PhaseOption[] };
 
 export function ctxPhaseGroups(spec: SpecLike | undefined): PhaseGroup[] {
   if (!spec) return [];
-  const blocks = spec.blocks || [{ name: 'main', phases: spec.phases || [] }];
+  // у блока-вызова своих этапов нет (их сессии — в вызываемом flow), в выборе его не показываем
+  const blocks = (spec.blocks || [{ name: 'main', phases: spec.phases || [] }]).filter((b) => b.phases?.length);
   const opt = (p: SpecPhase): PhaseOption => ({ value: p.name, label: p.title || p.name });
   return blocks.length > 1
-    ? blocks.map((b) => ({ label: b.title || b.name, options: b.phases.map(opt) }))
+    ? blocks.map((b) => ({ label: b.title || b.name, options: (b.phases ?? []).map(opt) }))
     : [{ label: '', options: (blocks[0]?.phases ?? []).map(opt) }];
 }
 

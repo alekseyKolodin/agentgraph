@@ -75,7 +75,7 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
   const visible = o.showHidden ? all : all.filter((r) => !r.hidden || r.id === o.activeId);
   const words = searchWords(o.query);
   const searching = words.length > 0;
-  const runs = visible.filter((r) => r.id === o.activeId || ((!o.statuses.size || o.statuses.has(r.status)) && (!searching || runMatches(r, words))));
+  const runs = nestRuns(visible.filter((r) => r.id === o.activeId || ((!o.statuses.size || o.statuses.has(r.status)) && (!searching || runMatches(r, words)))));
   const chips = statusChips(visible, searching ? visible.filter((r) => runMatches(r, words)) : visible, o.statuses);
   const empty = runs.length ? '' : !visible.length ? (hiddenCount ? t('все запуски скрыты') : t('запусков ещё не было')) : searching ? t('Ничего не нашлось') : t('нет запусков с таким статусом');
   if (!grouped) return { chips, runs: runs.slice(0, RUNS_FLAT_LIMIT), groups: [], searching, hiddenCount, empty };
@@ -106,8 +106,43 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
   return { chips, runs, groups, searching, hiddenCount, empty };
 }
 
+/**
+ * Дочерние запуски блоков-вызовов — сразу под родителем, в порядке вызова (от старых); вложенные — под своим дочерним.
+ * Дочерний без родителя в списке (скрыт фильтром или за лимитом) остаётся на своём месте.
+ */
+export function nestRuns(runs: RunSummary[]): RunSummary[] {
+  const ids = new Set(runs.map((r) => r.id));
+  const kids = new Map<string, RunSummary[]>();
+  for (const r of runs) {
+    if (!r.parent || !ids.has(r.parent.runId)) continue;
+    if (!kids.has(r.parent.runId)) kids.set(r.parent.runId, []);
+    kids.get(r.parent.runId)!.push(r);
+  }
+  if (!kids.size) return runs;
+  const out: RunSummary[] = [];
+  const put = (r: RunSummary) => {
+    out.push(r);
+    for (const k of [...(kids.get(r.id) ?? [])].reverse()) put(k);
+  };
+  for (const r of runs) if (!r.parent || !ids.has(r.parent.runId)) put(r);
+  return out;
+}
+
+/** Глубина строки под родителями из того же списка: 0 — запуск верхнего уровня. */
+export function runDepths(runs: RunSummary[]): Map<string, number> {
+  const byId = new Map(runs.map((r) => [r.id, r]));
+  const depth = new Map<string, number>();
+  for (const r of runs) {
+    let d = 0;
+    for (let p = r.parent && byId.get(r.parent.runId); p && d < 10; p = p.parent && byId.get(p.parent.runId)) d++;
+    depth.set(r.id, d);
+  }
+  return depth;
+}
+
 /** Подсказка строки: имя запуска и flow; без имени — flow. */
-export const runRowTitle = (r: RunSummary): string => (r.title ? `${r.title}\nflow ${r.flow}` : r.flow);
+export const runRowTitle = (r: RunSummary): string =>
+  `${r.title ? `${r.title}\nflow ${r.flow}` : r.flow}${r.parent ? `\n${t('вызван блоком {block} запуска {id}', { block: r.parent.block, id: r.parent.runId })}` : ''}`;
 
 /** Подстрока: flow (если есть имя, первым — чтобы многоточие его не съело), проект (в плоском списке), дата, итерации, цена. */
 export const runRowSub = (r: RunSummary, withProject: boolean): { flow: string; rest: string } => ({

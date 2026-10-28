@@ -21,6 +21,8 @@ export type PendingPhase = {
   effort?: string;
   at: number;
   ctx?: { peak: number; requests: number; window?: number };
+  /** Блок-вызов: идущий дочерний запуск (событие call). */
+  call?: { runId: string; flow: string };
 };
 export type PendingCond = { block: string; iteration: number; kind: UntilType; detail: string; file?: string };
 
@@ -44,6 +46,8 @@ export type EventEffect = {
   close?: boolean;
   /** Запуск закончился: спросить сервер, можно ли его продолжить. */
   ended?: boolean;
+  /** Flow запуска поправили на паузе: перечитать снимок для графа (отчёты блоков принесло само событие). */
+  flow?: boolean;
 };
 
 export const pendingKey = (x: { block?: string; iteration: number; phase: string }): string => `${x.block}:${x.iteration}:${x.phase}`;
@@ -95,6 +99,18 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       const cur = st.pending.get(pendingKey(e));
       if (!cur) return { render: false };
       cur.ctx = { peak: e.contextPeak, requests: e.requests, ...(e.contextWindow ? { window: e.contextWindow } : {}) };
+      break;
+    }
+    case 'call': {
+      // дочерний запуск блока-вызова стартовал: ссылка на него — у идущего этапа, а в списке запусков он появится сам
+      const cur = st.pending.get(pendingKey(e));
+      if (cur) cur.call = { runId: e.runId, flow: e.flow };
+      return { render: true, runsSoon: true };
+    }
+    case 'next': {
+      const b = r.blocks?.find((x) => x.name === e.block);
+      if (b) b.next = e.next;
+      r.maxIterations = e.total;
       break;
     }
     case 'log':
@@ -170,6 +186,28 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       if (b) b.maxIterations = e.max;
       r.maxIterations = e.total;
       break;
+    }
+    case 'note': {
+      // добавлено или применено ещё к шагу: в applied события — только новые записи, дописываем их без дублей
+      const list = (r.notes ||= []);
+      const cur = list.find((n) => n.id === e.note.id);
+      if (!cur) {
+        list.push({ ...e.note, applied: [...(e.note.applied ?? [])] });
+        break;
+      }
+      const key = (a: { block: string; iteration: number; phase: string }) => `${a.block}\u0000${a.iteration}\u0000${a.phase}`;
+      const seen = new Set((cur.applied ?? []).map(key));
+      const fresh = (e.note.applied ?? []).filter((a) => !seen.has(key(a)));
+      if (fresh.length) cur.applied = [...(cur.applied ?? []), ...fresh];
+      break;
+    }
+    case 'flow': {
+      const list = (r.flowEdits ||= []);
+      if (!list.some((x) => x.version === e.edit.version)) list.push(e.edit);
+      // будущие блоки правка могла заменить: отчёты — из события, а не запросом (его ответ при переигрывании опоздал бы)
+      r.blocks = e.blocks.map((b) => ({ ...b }));
+      r.maxIterations = e.maxIterations;
+      return { render: true, flow: true };
     }
     case 'end':
       st.run = withQuestions({ ...e.report, live: false });
