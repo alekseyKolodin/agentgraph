@@ -4,7 +4,7 @@
 // «сохранить и в flow») — flowsSync: сверка с файлом и наложение правки поверх него (patchFlowYaml); файл — через deps.
 import { createHash } from 'node:crypto';
 import { isMap, isScalar, isSeq, parseDocument, type Document } from 'yaml';
-import { compactSpec, flowBlocks, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
+import { compactSpec, flowBlocks, isCallBlock, MAIN_BLOCK, type Block, type FlowSpec } from './schema.js';
 
 /** Где стоит запуск: block — индекс идущего блока (все до него завершены), iterations — сколько итераций он начал. */
 export type FixPoint = {
@@ -44,7 +44,8 @@ export function canon(v: unknown): string {
 /**
  * Что мешает идущему запуску перейти на next с prev. Можно менять всё, что ещё впереди: этапы и условие идущего блока,
  * будущие блоки, defaults. Нельзя — имя, задачу (для неё есть указание), объявления артефактов (хранилище уже создано),
- * раскладку логов (один блок или несколько), пройденные блоки и место идущего блока.
+ * раскладку логов (один блок или несколько), пройденные блоки (и пропущенные развилкой), место идущего блока и его вид:
+ * этапы или вызов flow. Его flow, input и next, как и next будущих блоков, править можно.
  */
 export function flowEditProblems(prev: FlowSpec, next: FlowSpec, at: FixPoint): string[] {
   const out: string[] = [];
@@ -66,7 +67,10 @@ export function flowEditProblems(prev: FlowSpec, next: FlowSpec, at: FixPoint): 
   const cur = pb[at.block];
   const now = nb[at.block];
   if (cur && now?.name !== cur.name) out.push(`блок ${cur.name} идёт сейчас: он должен остаться ${at.block + 1}-м`);
-  else if (cur && now) {
+  else if (cur && now && isCallBlock(cur) !== isCallBlock(now)) {
+    // итерации идущего блока считаются по его этапам: вызов вместо этапов (и наоборот) — только с нового запуска
+    out.push(`блок ${cur.name} идёт сейчас: ${isCallBlock(cur) ? 'вызов flow заменить этапами' : 'этапы заменить вызовом flow'} на ходу нельзя`);
+  } else if (cur && now) {
     const was = at.limit(cur);
     const will = at.limit(now);
     if (will !== was && will < at.iterations) out.push(`блок ${cur.name} уже на итерации ${at.iterations}: лимит ${will} меньше`);
@@ -108,8 +112,10 @@ export function flowChanges(prev: FlowSpec, next: FlowSpec): string[] {
   for (const b of pb) if (!nbm.has(b.name)) out.push(`− блок ${b.name}`);
   for (const b of nb) if (!pbm.has(b.name)) out.push(`+ блок ${b.name}`);
 
-  // имена этапов уникальны во всём flow: этап, перенесённый в другой блок, — тот же этап
-  const phases = (list: Block[]) => new Map(list.flatMap((b) => b.phases.map((p) => [p.name, p] as const)));
+  // имена этапов уникальны во всём flow: этап, перенесённый в другой блок, — тот же этап. Этап блока-вызова — его же
+  // поля flow и input (flowBlocks), они уже в строке блока
+  const own = (b: Block) => (isCallBlock(b) ? [] : b.phases);
+  const phases = (list: Block[]) => new Map(list.flatMap((b) => own(b).map((p) => [p.name, p] as const)));
   const pp = phases(pb);
   const np = phases(nb);
   for (const b of nb) {
@@ -117,7 +123,7 @@ export function flowChanges(prev: FlowSpec, next: FlowSpec): string[] {
     if (!was) continue;
     const fields = diff(was, b, new Set(['phases']));
     if (fields.length) out.push(`блок ${b.name}: ${fields.join(', ')}`);
-    const order = (blk: Block, other: Block) => blk.phases.filter((p) => other.phases.some((q) => q.name === p.name)).map((p) => p.name);
+    const order = (blk: Block, other: Block) => own(blk).filter((p) => own(other).some((q) => q.name === p.name)).map((p) => p.name);
     if (canon(order(was, b)) !== canon(order(b, was))) out.push(`блок ${b.name}: порядок этапов`);
   }
   for (const [name] of pp) if (!np.has(name)) out.push(`− этап ${name}`);

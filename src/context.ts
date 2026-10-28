@@ -9,7 +9,7 @@ import { CLAUDEAI_TOOL_PREFIX, NO_CLAUDEAI_CONNECTORS_ENV, sessionOptions } from
 import { connectorName, connectorToolName, isConnector, waitForConnectors } from './connectors.js';
 import { loadFlow, resolveFlowFile } from './flows.js';
 import { buildRequest, dirsTail, handoffTail, resolveAddDirs, resolvePlugins } from './runner.js';
-import { flowBlocks, flowPhases, type Phase } from './schema.js';
+import { flowBlocks, flowPhases, isCallBlock, type Phase } from './schema.js';
 import { ARTIFACTS_DIR, artifactAccess, hasArtifacts } from './artifacts.js';
 import { RUNS_DIR } from './paths.js';
 import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, type Tag, type TagKind } from './tags.js';
@@ -73,7 +73,9 @@ export function contextOptions(req: ContextRequest): ContextOptions {
     throw new ContextError(404, (err as Error).message);
   }
   const spec = loadFlow(file);
-  // имена этапов уникальны во всём flow: ищем по всем блокам
+  // имена этапов уникальны во всём flow: ищем по всем блокам; у блока-вызова своей сессии нет — она в вызываемом flow
+  const call = req.phase ? flowBlocks(spec).find((b) => isCallBlock(b) && b.name === req.phase) : undefined;
+  if (call) throw new ContextError(404, `${req.phase} во flow ${spec.name} — вызов flow ${call.flow}: смотри контекст его этапов`);
   const phase = req.phase ? flowPhases(spec).find((p) => p.name === req.phase) : undefined;
   if (req.phase && !phase) throw new ContextError(404, `В flow ${spec.name} нет этапа ${req.phase}`);
   if (!phase) {

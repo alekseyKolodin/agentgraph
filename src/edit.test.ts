@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { editFlow } from './edit.js';
+import { EDITOR_SYSTEM, editFlow } from './edit.js';
 import type { FlowAiStage } from './api-types.js';
 import type { runSession, SessionEvent, SessionRequest, SessionResult } from './agent.js';
 
@@ -98,4 +98,9 @@ test('выбранная модель уходит в каждую сессию 
   const session = fakeEditor([BROKEN, EDITED]);
   await editFlow('demo', 'добавь Grep', { yaml: BASE }, { model: 'claude-sonnet-5-5', deps: { session } });
   assert.deepEqual(session.calls.map((c) => c.model), ['claude-sonnet-5-5', 'claude-sonnet-5-5']);
+});
+
+test('редактор знает блоки-вызовы и next: не трогает их без запроса и не добавляет вызову этапы', () => {
+  assert.match(EDITOR_SYSTEM, /Call block: instead of phases a block may have "flow"/);
+  assert.match(EDITOR_SYSTEM, /Keep call blocks \("flow", "input"\) and every "next" exactly as they are unless the request is about them; never add phases to a call block/);
 });

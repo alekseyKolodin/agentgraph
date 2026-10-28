@@ -3,7 +3,7 @@
 // разбирает тело и отвечает, решения — здесь.
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertFlowName, flowExists, flowFileName, flowFolder, flowToYaml, loadFlow, parseFlow, saveFlowYaml, validateSpec } from './flows.js';
+import { assertFlowName, checkCalls, flowExists, flowFileName, flowFolder, flowToYaml, loadFlow, parseFlow, saveFlowYaml, validateSpec } from './flows.js';
 import { compactSpec, flowBlocks, type Block, type FlowSpec } from './schema.js';
 import type { ApiReply } from './artifact-api.js';
 import type { RunReport } from './runner.js';
@@ -23,6 +23,8 @@ export function draftSpec(body: { spec?: unknown; yaml?: unknown }): FlowSpec {
   }
   // имя уходит в путь папки запуска: проверяем и здесь, а не только регэкспом схемы
   assertFlowName(spec.name);
+  // черновик вызывает только сохранённые flow: их и проверяем
+  checkCalls(spec);
   return spec;
 }
 
@@ -40,7 +42,10 @@ export function specFromRunBody(
   if (given[0] === 'flow') {
     if (typeof body.flow !== 'string') throw new Error('flow — имя flow');
     assertFlowName(body.flow);
-    return { spec: load(body.flow), adhoc: false };
+    const spec = load(body.flow);
+    // вызываемые flow могли удалить или поменять после сохранения: ошибка — до папки запуска, а не первым шагом
+    checkCalls(spec, load);
+    return { spec, adhoc: false };
   }
   return { spec: draftSpec(body), adhoc: true };
 }

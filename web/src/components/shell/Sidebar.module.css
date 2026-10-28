@@ -105,6 +105,8 @@
 .list li.more { color: var(--live); font-size: var(--fs-meta); padding: 4px 8px; }
 .list li { position: relative; }
 .list li.hidden-run { opacity: .6; }
+/* дочерний запуск блока-вызова: под родителем, с отступом и линией слева */
+.list li.child-run { margin-left: calc(var(--depth, 1) * 12px); border-left: 1px solid var(--line-strong); border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .list li .li-acts { position: absolute; top: 6px; right: 6px; display: none; gap: 2px; background: var(--hover); border-radius: var(--r-sm); }
 .list li:hover .li-acts { display: flex; }
 .li-acts :global(.icon-btn) { border: 0; background: transparent; color: var(--ink-2); padding: 3px; border-radius: var(--r-xs); cursor: pointer; display: flex; }

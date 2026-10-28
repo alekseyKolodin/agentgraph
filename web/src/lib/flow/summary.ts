@@ -21,13 +21,23 @@ export function conditionText(s: string): string {
   return t(base) + tail;
 }
 
-/** «3 этапа · до 5 итераций, пока судья не скажет «готово»» или «2 блока · 4 этапа». */
+/** «3 этапа · до 5 итераций, пока судья не скажет «готово»», «2 блока · 4 этапа» или «3 блока · 2 вызова flow · 1 этап». */
 export function schemeSummary(summary: FlowSummary): string {
-  const blocks = summary.blocks || [{ looped: true, maxIterations: summary.maxIterations ?? 1, condition: summary.condition ?? '', phases: summary.phases ?? [] }];
+  const blocks: { looped: boolean; maxIterations: number; condition: string; phases: unknown[]; flow?: string }[] =
+    summary.blocks || [{ looped: true, maxIterations: summary.maxIterations ?? 1, condition: summary.condition ?? '', phases: summary.phases ?? [] }];
   const loopText = (b: { looped: boolean; maxIterations: number; condition: string }) => (b.looped ? t('до {n}, {condition}', { n: iterTo(b.maxIterations), condition: conditionText(b.condition).replace(/`/g, '') }) : t('один проход'));
   const phaseCount = blocks.reduce((n, b) => n + b.phases.length, 0);
   const phasesWord = plural(phaseCount, 'этап', 'этапа', 'этапов');
-  return blocks.length === 1
-    ? `${phaseCount} ${phasesWord} · ${loopText(blocks[0]!)}`
-    : `${blocks.length} ${plural(blocks.length, 'блок', 'блока', 'блоков')} · ${phaseCount} ${phasesWord}`;
+  const calls = blocks.filter((b) => b.flow !== undefined).length;
+  const callsText = calls ? `${calls} ${plural(calls, 'вызов', 'вызова', 'вызовов')} flow` : '';
+  if (blocks.length === 1) return calls ? `${callsText} ${blocks[0]!.flow} · ${loopText(blocks[0]!)}` : `${phaseCount} ${phasesWord} · ${loopText(blocks[0]!)}`;
+  return [`${blocks.length} ${plural(blocks.length, 'блок', 'блока', 'блоков')}`, callsText, phaseCount || !calls ? `${phaseCount} ${phasesWord}` : ''].filter(Boolean).join(' · ');
 }
+
+/** Подпись узла вызова на графе: состав вызываемого flow по списку flow; нет в списке — так и сказать. */
+export const callSubOf = (flows: FlowSummary[] | undefined) => (name: string): string | undefined => {
+  if (!flows) return undefined;
+  const f = flows.find((x) => x.name === name);
+  if (!f) return t('нет в flows/');
+  return f.valid === false ? t('невалиден') : schemeSummary(f);
+};

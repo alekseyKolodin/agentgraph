@@ -10,7 +10,7 @@ import { AdhocBadge, Badge, TagBadge } from '../Badge';
 import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
 import { t } from '../../lib/i18n';
-import { deleteRunText, projKey, runListView, runManageable, runRowSub, runRowTitle } from '../../lib/runs';
+import { deleteRunText, projKey, runDepths, runListView, runManageable, runRowSub, runRowTitle } from '../../lib/runs';
 import { LS } from '../../lib/storage';
 import { isOpen, reveal, setOpen, useFold } from './fold';
 import { ICON } from './FlowList';
@@ -132,10 +132,16 @@ export function RunList() {
   };
 
   // имя запуска — заголовком, flow — первым в подстроке (чтобы многоточие его не съело); без имени заголовок — flow
-  const item = (r: RunSummary, withProject: boolean) => {
+  const item = (r: RunSummary, withProject: boolean, depth = 0) => {
     const sub = runRowSub(r, withProject);
     return (
-      <li key={r.id} className={cx(activeId === r.id && styles.active, r.hidden && styles.hiddenRun)} title={runRowTitle(r)} onClick={() => void navigate(`/run/${r.id}`)}>
+      <li
+        key={r.id}
+        className={cx(activeId === r.id && styles.active, r.hidden && styles.hiddenRun, depth > 0 && styles.childRun)}
+        style={depth > 0 ? { ['--depth' as string]: depth } : undefined}
+        title={runRowTitle(r)}
+        onClick={() => void navigate(`/run/${r.id}`)}
+      >
         <span className={styles.name}>
           {r.title || r.flow}
           {r.adhoc && <AdhocBadge />}
@@ -173,6 +179,9 @@ export function RunList() {
       </li>
     );
   };
+
+  // дочерние запуски блоков-вызовов — с отступом под родителем (порядок — nestRuns в lib/runs.ts)
+  const depths = runDepths(view.runs);
 
   const setStatus = (st: string) => {
     if (!st) side.statuses.clear();
@@ -222,7 +231,7 @@ export function RunList() {
           </div>
         )}
         {loaded && view.empty && <p className={`${styles.sideEmpty} muted`}>{view.empty}</p>}
-        {!view.empty && !s.grouped && <ul className={styles.list}>{view.runs.map((r) => item(r, true))}</ul>}
+        {!view.empty && !s.grouped && <ul className={styles.list}>{view.runs.map((r) => item(r, true, depths.get(r.id)))}</ul>}
         {!view.empty && s.grouped && view.groups.map((g) => {
           // при поиске группы раскрыты, не трогая запомненную свёртку
           const open = view.searching || isOpen(g.key);
@@ -238,7 +247,7 @@ export function RunList() {
                 <span className={styles.grpCount}>{g.count}</span>
               </button>
               <ul className={styles.list}>
-                {g.runs.map((r) => item(r, false))}
+                {g.runs.map((r) => item(r, false, depths.get(r.id)))}
                 {g.more > 0 && (
                   <li
                     className={styles.more}

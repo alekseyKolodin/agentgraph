@@ -141,6 +141,14 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
       </div>
     );
   }
+  if (n.kind === 'end') {
+    return (
+      <div className={cx(styles.fgNode, styles.fgEnd)} title={t('Конец запуска: сюда ведут правила next с goto: end')}>
+        {handles}
+        <div className={styles.fgTitle}>{n.title}</div>
+      </div>
+    );
+  }
   if (n.kind === 'artifact') {
     return (
       <div
@@ -157,16 +165,21 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
       </div>
     );
   }
-  const tools = g.toolsOf ? g.toolsOf(n) : '';
-  const base = `${n.num}. ${n.title}${tools ? `\n${t('Инструменты: {tools}', { tools })}` : ''}`;
+  // узел вызова: этапы — в вызываемом flow, поэтому без инструментов и «+»; выделяется вместе со своим блоком
+  const call = n.kind === 'call';
+  const tools = !call && g.toolsOf ? g.toolsOf(n) : '';
+  const base = call
+    ? `${n.num}. ${t('Вызов flow {flow}', { flow: n.flow! })}${n.title !== n.flow ? ` · ${n.title}` : ''}`
+    : `${n.num}. ${n.title}${tools ? `\n${t('Инструменты: {tools}', { tools })}` : ''}`;
+  const selected = (g.selectedName && g.selectedName === n.name) || g.selectedKey === n.key || (call && g.selectedBlock === n.b);
   return (
     <div
-      className={cx(styles.fgNode, styles.fgPhase, g.changed?.has(n.name!) && styles.aiChanged, ((g.selectedName && g.selectedName === n.name) || g.selectedKey === n.key) && styles.isSelected, status, 'nopan')}
-      title={n.kind === 'phase' ? phaseNodeTitle(base, s) : base}
+      className={cx(styles.fgNode, styles.fgPhase, call && styles.fgCall, g.changed?.has(n.name!) && styles.aiChanged, selected && styles.isSelected, status, 'nopan')}
+      title={phaseNodeTitle(base, s)}
       {...common}
     >
       {handles}
-      <div className={styles.fgTitle}><span className={styles.fgNum}>{n.num}</span>{n.title}</div>
+      <div className={styles.fgTitle}><span className={styles.fgNum}>{n.num}</span>{call && <span className={styles.fgCallMark} aria-hidden="true">↪</span>}{n.title}</div>
       <div className={cx(styles.fgSub, 'mono')}>{n.sub}</div>
       {n.inputs && (
         <div className={styles.fgIn}>
@@ -174,10 +187,10 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
         </div>
       )}
       <div className={styles.fgFoot}>
-        <span className={styles.fgTools}>{n.tools} {plural(n.tools ?? 0, 'инструмент', 'инструмента', 'инструментов')}</span>
+        <span className={styles.fgTools}>{call ? t('вызов flow') : `${n.tools} ${plural(n.tools ?? 0, 'инструмент', 'инструмента', 'инструментов')}`}</span>
         <span className={styles.fgBadge}>{s ? nodeBadge('phase', s) : ''}</span>
       </div>
-      {g.mode === 'edit' && <PlusButton title={t('Добавить этап после этого')} hit={hitOf(n)} />}
+      {g.mode === 'edit' && !call && <PlusButton title={t('Добавить этап после этого')} hit={hitOf(n)} />}
     </div>
   );
 });

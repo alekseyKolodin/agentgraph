@@ -9,6 +9,7 @@ import {
   assertFlowName,
   blankFlowYaml,
   deleteFlow,
+  flowCallers,
   flowExists,
   flowFolder,
   flowToYaml,
@@ -26,7 +27,7 @@ import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema
 import { type AskAnswers } from './agent.js';
 import { editBase } from './edit.js';
 import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
-import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunReport } from './runner.js';
+import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunOptions, type RunReport } from './runner.js';
 import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
 import { pickRunTitle } from './run-title.js';
@@ -41,7 +42,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
+import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -121,6 +122,8 @@ type LiveRun = {
   notes: RunNote[];
   /** Правка запуска на паузе (runner.ts RunFix): flow и повтор итерации. Раннер отдаёт её до первой контрольной точки. */
   fix?: RunFix;
+  /** Идущий дочерний запуск блока-вызова: пауза, продолжение и остановка этого запуска доходят и до него. */
+  child?: string;
   /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
   flows?: FlowsSync;
 };
@@ -362,6 +365,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       }
     }
     if (method === 'DELETE') {
+      // вызываемый другими flow не удаляем: они упали бы только на запуске
+      const callers = flowCallers(name);
+      if (callers.length) return sendJson(res, 409, { error: `Flow ${name} вызывают ${callers.join(', ')}: сначала убери вызовы из них`, callers });
       deleteFlow(name);
       return sendJson(res, 200, { ok: true });
     }
@@ -852,7 +858,6 @@ function startRun(
   srv: ServerOptions,
 ): string {
   const runDir = makeRunDir(RUNS_DIR, spec.name);
-  const id = path.basename(runDir);
   // до live.set: упавшая запись вложений не оставит висящий запуск
   let attachments: string[];
   try {
@@ -862,12 +867,33 @@ function startRun(
     throw err;
   }
   const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
+  // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
+  const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
+  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv).id;
+}
+
+/**
+ * Живой запуск с готовыми опциями раннера (папка уже есть): своё состояние, поток, вопросы, пауза и правка. Так же
+ * запускаются и дочерние запуски блоков-вызовов (runChild): раннер родителя даёт им папку, задачу, бюджет и abort,
+ * а здесь они получают своё управление — их страница, чат и кнопки управляют только ими. done — итог раннера;
+ * упавший раннер — отчёт failed, как и в run.json.
+ */
+function launchRun(
+  spec: FlowSpec,
+  opts: RunOptions & { runDir: string },
+  srv: ServerOptions,
+  parent?: LiveRun,
+  deps: { runFlow: typeof runFlow } = { runFlow },
+): { id: string; done: Promise<RunReport> } {
+  const { runDir } = opts;
+  const id = path.basename(runDir);
   const lr: LiveRun = {
     id,
     events: [],
     logs: [],
     clients: new Set(),
-    abort: new AbortController(),
+    // у дочернего — контроллер от раннера родителя: остановка родителя останавливает и его
+    abort: opts.abort ?? new AbortController(),
     report: null,
     pending: new Map(),
     pause: null,
@@ -953,7 +979,8 @@ function startRun(
         costUsd: e.type === 'end' ? e.report.totalCostUsd : e.type === 'title' || e.type === 'digest' ? e.totalCostUsd : undefined,
         title: e.type === 'title' ? e.title : undefined,
       });
-      if (e.type === 'question' || e.type === 'end') notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
+      // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя
+      if (e.type === 'question' || (e.type === 'end' && !parent)) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
     if (e.type === 'end') {
@@ -970,21 +997,29 @@ function startRun(
   };
   const onFix = (fix: RunFix) => {
     lr.fix = fix;
-    if (!o.adhoc) lr.flows = flowsSync(spec.name, flowsFile(spec.name), spec);
+    // у дочернего запуска flow — тоже из flows/ (вызываются только сохранённые): правку его страницы можно сохранить туда же
+    if (!opts.adhoc) lr.flows = flowsSync(spec.name, flowsFile(spec.name), spec);
   };
-  // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
-  const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
   // итоги итераций и сводка «где мы сейчас» — для UI; у CLI их нет: смотреть их там некому
   const digest = (input: Parameters<typeof writeDigest>[0], signal: AbortSignal) => writeDigest(input, { signal });
-  runFlow(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, ...(nameRun ? { nameRun } : {}) }).catch((err) => {
+  // дочерний запуск блока-вызова — такой же живой запуск; пока он идёт, пауза и остановка этого доходят до него
+  const runChild = (childSpec: FlowSpec, co: RunOptions): Promise<RunReport> => {
+    const c = launchRun(childSpec, co as RunOptions & { runDir: string }, srv, lr, deps);
+    lr.child = c.id;
+    if (lr.pause) pauseRun(c.id);
+    return c.done.finally(() => {
+      if (lr.child === c.id) delete lr.child;
+    });
+  };
+  const done = deps.runFlow(spec, { ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
     const report: RunReport = lr.report ?? {
       id,
       flow: spec.name,
       input: spec.input ?? '',
-      cwd: o.cwd,
+      cwd: opts.cwd,
       status: 'failed',
       iterations: 0,
-      maxIterations: flowBlocks(spec).reduce((n, b) => n + blockMaxIterations(b, o), 0),
+      maxIterations: flowBlocks(spec).reduce((n, b) => n + blockMaxIterations(b, opts), 0),
       totalCostUsd: 0,
       blocks: [],
       phases: [],
@@ -992,20 +1027,22 @@ function startRun(
       questions: [],
       runDir,
       startedAt: new Date().toISOString(),
-      ...(o.adhoc ? { adhoc: true as const } : {}),
-      ...(o.addDirs?.length ? { addDirs: o.addDirs } : {}),
-      ...(attachments.length ? { attachments } : {}),
-      ...(o.tags?.length ? { tags: o.tags, saveTag: o.saveTag !== false } : {}),
-      ...(o.knowledge?.length ? { knowledge: o.knowledge } : {}),
-      ...(o.title ? { title: o.title } : {}),
+      ...(opts.adhoc ? { adhoc: true as const } : {}),
+      ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
+      ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+      ...(opts.tags?.length ? { tags: opts.tags, saveTag: opts.saveTag !== false } : {}),
+      ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
+      ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.parent ? { parent: opts.parent } : {}),
     };
     report.status = 'failed';
     report.error = errMsg(err);
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(report, null, 2));
     broadcast({ type: 'end', report });
+    return report;
   });
-  return id;
+  return { id, done };
 }
 
 /** Меняет состояние паузы, отпускает раннер при продолжении, пишет в отчёт и рассылает событие. */
@@ -1044,19 +1081,44 @@ function abortRun(id: string): void {
     pnd.reject(new Error('запуск остановлен'));
     lr.pending.delete(qid);
   }
+  // abort дочернего связан с нашим в раннере, а его паузу и вопросы отпускаем здесь
+  const child = childOf(lr);
+  if (child) abortRun(child.id);
 }
 
 function pauseRun(id: string): LiveRun['pause'] {
   const lr = liveRun(id);
   if (lr.abort.signal.aborted) throw new HttpError(409, 'Запуск останавливается');
   if (!lr.pause) setPause(lr, 'requested');
+  // этот запуск стоит в блоке-вызове до конца дочернего: встаёт на паузу дочерний, этот — после него
+  const child = childOf(lr);
+  if (child && !child.abort.signal.aborted) pauseRun(child.id);
   return lr.pause;
 }
 
 function resumeRun(id: string): void {
   const lr = liveRun(id);
   if (lr.pause) setPause(lr, null);
+  const child = childOf(lr);
+  if (child) resumeRun(child.id);
 }
+
+/** Идущий дочерний запуск блока-вызова. */
+function childOf(lr: LiveRun): LiveRun | undefined {
+  return lr.child ? live.get(lr.child) : undefined;
+}
+
+/** Живые запуски без HTTP и настоящих сессий — для тестов связки flow (server.compose.test.ts). */
+export const liveControl = {
+  launch: launchRun,
+  pause: pauseRun,
+  resume: resumeRun,
+  abort: abortRun,
+  state: (id: string) => {
+    const lr = live.get(id);
+    return lr && { pause: lr.pause, child: lr.child, pending: lr.pending.size };
+  },
+};
 
 function changeMaxIterations(id: string, block: string, value: number): BlockReport {
   const lr = liveRun(id);
@@ -1290,6 +1352,8 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   if (!prev) throw new HttpError(404, 'Запуск не найден');
   if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: продолжить можно только завершённый');
   if (!prev.cwd) throw new HttpError(400, 'В отчёте запуска нет директории проекта');
+  // вызванный блоком-вызовом запуск продолжается вместе с родителем: отдельно он оторвался бы от связки
+  if (prev.parent) throw new HttpError(400, childContinueReason(prev.parent));
   const spec = specOf(prev);
   spec.input = prev.input;
   let cont: Continuation;
@@ -1301,6 +1365,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
         const f = path.resolve(dir, rel);
         return f.startsWith(dir + path.sep) && fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : undefined;
       },
+      // упавший блок-вызов продолжает свой дочерний запуск по его flow, артефакты берёт из его папки в runs/
+      spec: specOf,
+      dir: (runId) => path.join(RUNS_DIR, runId),
     });
   } catch (err) {
     throw new HttpError(400, errMsg(err));
@@ -1666,6 +1733,7 @@ function liveRuns(): HomeRun[] {
       ...(r.digest ? { digest: r.digest } : {}),
       // «Ответить на странице запуска» на главной: пауза по просьбе агента и артефакт решений
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
+      ...(r.parent ? { parent: r.parent } : {}),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -1735,9 +1803,33 @@ function listRuns(): RunSummary[] {
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
       ...(r.tags?.length ? { tags: r.tags } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
+      ...(r.parent ? { parent: r.parent } : {}),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+}
+
+const childContinueReason = (p: RunParent) =>
+  `Запуск вызван блоком ${p.block} запуска ${p.runId}: продолжай его — вызов продолжится с того же места`;
+
+/**
+ * Артефакты дочернего запуска для правила «можно ли править» (artifacts.ts): сам он не продолжается, но его артефакты
+ * переходят в продолжение родителя (Continuation.calls), если родитель остановился на его блоке и он там последний вызов.
+ */
+function childArtifactsContinuability(report: RunReport, p: RunParent): { continuable: boolean; continueReason?: string } {
+  const parent = readReport(p.runId);
+  if (!parent) return { continuable: false, continueReason: `Нет запуска ${p.runId}, который вызвал этот` };
+  const c = continuability(parent, live.has(parent.id));
+  if (!c.continuable) return { continuable: false, continueReason: `Запуск ${p.runId}, который вызвал этот, продолжить нельзя: ${c.continueReason ?? ''}`.trim() };
+  try {
+    const spec = specOf(parent);
+    const at = canContinue(parent, spec);
+    const last = [...parent.phases].reverse().find((x) => x.block === p.block && x.call)?.call?.runId;
+    if (at.ok && flowBlocks(spec)[at.skip.length]?.name === p.block && last === report.id) return { continuable: true };
+  } catch {
+    // flow родителя не загружается: как и у него самого, продолжения не будет
+  }
+  return { continuable: false, continueReason: `Продолжение запуска ${p.runId} не возьмёт артефакты этого вызова` };
 }
 
 /** Папка завершённого запуска для скрытия и удаления. Идущий (здесь или процессом CLI) не отдаём; без run.json — не запуск. */
@@ -1788,6 +1880,7 @@ function reply(res: http.ServerResponse, r: ApiReply): void {
 function continuability(report: RunReport, isLive: boolean): { continuable: boolean; continueReason?: string } {
   if (isLive) return { continuable: false, continueReason: 'Запуск ещё идёт' };
   if (!report.cwd) return { continuable: false, continueReason: 'В отчёте запуска нет директории проекта' };
+  if (report.parent) return { continuable: false, continueReason: childContinueReason(report.parent) };
   try {
     const c = canContinue(report, specOf(report));
     return c.ok ? { continuable: true } : { continuable: false, continueReason: c.reason };
@@ -1835,7 +1928,7 @@ function artifactRun(id: string): ArtifactRun | undefined {
     status: report.status,
     live: false,
     cliAlive: report.status === 'running',
-    ...continuability(report, false),
+    ...(report.parent ? childArtifactsContinuability(report, report.parent) : continuability(report, false)),
     pendingQuestion: [],
     pause: null,
     view,

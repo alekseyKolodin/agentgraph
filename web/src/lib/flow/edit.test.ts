@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSpec } from '@server/schema';
 import {
-  addPhaseAfter, advLabel, collectSpec, duplicatePhase, insertVar, movePhase, newBlock, newPhase, phaseInputs, renamePhase, setBlockMode, specChanges,
-  SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
+  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, removeBlock, renameBlock,
+  renamePhase, setBlockMode, specChanges, SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
 import { conditionText, schemeSummary } from './summary';
 import { setLangForTest } from '../i18n';
@@ -245,4 +245,135 @@ test('collectSpec: плагины из конструктора — без пу�
   assert.deepEqual(out.blocks[0]!.plugins, ['~/qa']);
   assert.deepEqual((out.blocks[0]!.phases as Record<string, unknown>[])[0]!.plugins, ['/p']);
   assert.equal(advLabel(ph('x', { plugins: ['/p'], add_dirs: ['/d'] })), 'Дополнительно · директорий: 1 · плагинов: 1');
+});
+
+test('блок-вызов в конструкторе: в рабочей копии phases пустой, при сохранении — flow, input и next без этапов', () => {
+  const s = toEditable({
+    name: 'f',
+    blocks: [
+      { name: 'triage', flow: 'triage', next: [{ if: { type: 'marker', marker: '<BUG>' }, goto: 'fix' }, { goto: 'build' }] },
+      { name: 'fix', flow: 'fix-bug', input: '{{input}}\n{{phases.triage}}', next: 'end' },
+      { name: 'build', phases: [ph('a')] },
+    ],
+  } as FlowSpec);
+  assert.deepEqual(s.blocks.map((b) => b.phases.length), [0, 0, 1]);
+  const out = collectSpec(s) as { blocks: Record<string, unknown>[] };
+  assert.deepEqual(out.blocks[0], { name: 'triage', flow: 'triage', next: [{ if: { type: 'marker', marker: '<BUG>' }, goto: 'fix' }, { goto: 'build' }] });
+  assert.deepEqual(out.blocks[1], { name: 'fix', flow: 'fix-bug', input: '{{input}}\n{{phases.triage}}', next: 'end' });
+  assert.equal('phases' in out.blocks[0]!, false);
+  assert.deepEqual(Object.keys(out.blocks[2]!), ['name', 'phases']);
+  // пустая задача — задача по умолчанию; не выбранный flow — ошибка сохранения
+  s.blocks[1]!.input = '  ';
+  assert.equal('input' in (collectSpec(s) as { blocks: Record<string, unknown>[] }).blocks[1]!, false);
+  s.blocks[1]!.flow = '';
+  assert.throws(() => collectSpec(s), /Блок 2: не выбран вызываемый flow/);
+});
+
+test('next при сохранении: одно безусловное правило — строкой, пустой список — без поля; условие без лишних полей', () => {
+  const s = spec([{ name: 'a', phases: [ph('x')], next: [{ goto: 'end' }] }, { name: 'b', phases: [ph('y')], next: [] }]);
+  let out = collectSpec(s) as { blocks: Record<string, unknown>[] };
+  assert.equal(out.blocks[0]!.next, 'end');
+  assert.equal('next' in out.blocks[1]!, false);
+  s.blocks[0]!.next = [{ if: { type: 'command', run: 'npm test', prompt: 'лишнее' }, goto: 'b' }];
+  out = collectSpec(s) as { blocks: Record<string, unknown>[] };
+  assert.deepEqual(out.blocks[0]!.next, [{ if: { type: 'command', run: 'npm test' }, goto: 'b' }]);
+});
+
+test('имя блока-вызова — имя его итога: не совпадает с этапом, переименование тянет ссылки и переходы', () => {
+  const s = spec([
+    { name: 'spec', flow: 'write-spec', phases: [] },
+    { name: 'impl', phases: [ph('code', { prompt: 'Спека: {{phases.spec}}' })], loop: { max_iterations: 2, until: { type: 'judge', prompt: '{{ phases.spec }}' } } },
+    { name: 'last', flow: 'review', phases: [], input: 'по {{phases.spec}}' },
+  ]);
+  s.blocks[0]!.next = [{ if: { type: 'judge', prompt: 'есть ли {{phases.spec}}' }, goto: 'last' }];
+  assert.equal(renameBlock(s, 'spec', 'code'), 'Этап code уже есть');
+  assert.equal(renameBlock(s, 'spec', 'impl'), 'Блок impl уже есть');
+  assert.equal(renameBlock(s, 'spec', 'plan'), null);
+  assert.equal(s.blocks[0]!.name, 'plan');
+  assert.equal(s.blocks[1]!.phases[0]!.prompt, 'Спека: {{phases.plan}}');
+  assert.equal(s.blocks[1]!.loop!.until.prompt, '{{phases.plan}}');
+  assert.equal(s.blocks[2]!.input, 'по {{phases.plan}}');
+  assert.equal(nextRules(s.blocks[0]!)[0]!.if!.prompt, 'есть ли {{phases.plan}}');
+  // переход next идёт за переименованным блоком
+  assert.equal(renameBlock(s, 'last', 'review'), null);
+  assert.equal(nextRules(s.blocks[0]!)[0]!.goto, 'review');
+  // этап с именем блока-вызова — ошибка сохранения
+  s.blocks[1]!.phases[0]!.name = 'plan';
+  assert.throws(() => collectSpec(s), /идентификатор plan повторяется|уже занят этапом/);
+});
+
+test('блок-вызов: что получает узел вызова, переменные задачи, итог в переменных следующих этапов, этап в него не переносится', () => {
+  const s = spec([
+    { name: 'a', phases: [ph('x')] },
+    { name: 'call', flow: 'child', phases: [] },
+    { name: 'b', phases: [ph('y', { prompt: '{{prev}} {{phases.call}}' })] },
+  ]);
+  // задача по умолчанию: {{input}}, итог прошлого шага, замечания
+  assert.deepEqual(phaseInputs(s, 1, 0), ['задача', '← x', 'замечания условия']);
+  s.blocks[1]!.input = 'только {{phases.x}}';
+  assert.deepEqual(phaseInputs(s, 1, 0), ['← x']);
+  assert.ok(!callVariables(s, 1).some((v) => v.key === 'outputs'));
+  assert.ok(callVariables(s, 1).some((v) => v.key === 'phases.x'));
+  const vars = variableList(s, 2, 0);
+  assert.equal(vars.find((v) => v.key === 'prev')!.label, 'Итог блока «call»');
+  assert.equal(vars.find((v) => v.key === 'phases.call')!.label, 'Итог вызова child (блок 2)');
+  assert.deepEqual(phaseInputs(s, 2, 0), ['← call', '← call']);
+  assert.match(movePhase(s, 0, 0, false)!, /Соседний блок вызывает flow/);
+  assert.match(movePhase(s, 2, 0, true)!, /Соседний блок вызывает flow/);
+  // новый блок-вызов: без этапов, имя не занято этапами
+  const added = newBlock(s, '');
+  assert.deepEqual([added.flow, added.phases.length], ['', 0]);
+  assert.deepEqual(nextTargets(s, 1).map((x) => x.value), ['b', added.name, 'end']);
+});
+
+test('сводка flow с вызовами: блоки, вызовы и этапы', () => {
+  const blocks = [
+    { name: 'a', looped: false, maxIterations: 1, condition: 'один проход', onFail: 'stop' as const, phases: [], flow: 'x' },
+    { name: 'b', looped: false, maxIterations: 1, condition: 'один проход', onFail: 'stop' as const, phases: [], flow: 'y' },
+    { name: 'c', looped: false, maxIterations: 1, condition: 'один проход', onFail: 'stop' as const, phases: [{ name: 'p', tools: [] }] },
+  ];
+  assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks }), '3 блока · 2 вызова flow · 1 этап');
+  assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: blocks.slice(0, 2) }), '2 блока · 2 вызова flow');
+  assert.equal(schemeSummary({ name: 'f', file: '', folder: '', valid: true, blocks: blocks.slice(0, 1) }), '1 вызов flow x · один проход');
+});
+
+test('развилка в переменных: {{prev}} — вывод того блока, что выполнился перед этим; пропускаемый блок — «может быть пусто»', () => {
+  const s = spec([
+    { name: 'triage', phases: [ph('decide')], next: [{ if: { type: 'marker', marker: '<IDEA>' }, goto: 'review' }, { goto: 'slogan' }] },
+    { name: 'review', flow: 'example-parallel', phases: [], next: 'end' },
+    { name: 'slogan', flow: 'example-blocks', phases: [], loop: { max_iterations: 2, until: { type: 'none' } } },
+    { name: 'after', phases: [ph('x', { prompt: '{{prev}} {{phases.review}} {{phases.decide}}' })] },
+  ]);
+  assert.deepEqual(predecessors(s, 2), [0]);
+  assert.deepEqual(predecessors(s, 1), [0]);
+  assert.ok(mayBypass(s, 1, 2));
+  assert.ok(!mayBypass(s, 0, 2));
+  const prev = callVariables(s, 2).find((v) => v.key === 'prev')!;
+  assert.equal(prev.label, 'Вывод предыдущего блока');
+  assert.match(prev.hint, /«triage»; на итерации 2\+ — итог прошлого вызова/);
+  assert.match(callVariables(s, 2).find((v) => v.key === 'phases.review')!.hint, /пусто, если развилка пропустила блок 2/);
+  // в after попадают только из slogan: review ведёт в конец
+  assert.deepEqual(phaseInputs(s, 3, 0), ['← slogan', '← decide', '← review']);
+  assert.equal(variableList(s, 3, 0).find((v) => v.key === 'prev')!.label, 'Итог блока «slogan»');
+  assert.match(variableList(s, 3, 0).find((v) => v.key === 'phases.review')!.hint, /пусто, если развилка пропустила блок 2/);
+  assert.doesNotMatch(variableList(s, 3, 0).find((v) => v.key === 'phases.decide')!.hint, /пусто/);
+});
+
+test('развилка в конструкторе: этап не получает имя блока-вызова, блок — имя end; удаление блока убирает ведущие в него правила', () => {
+  const s = spec([
+    { name: 'a', phases: [ph('p', { prompt: '{{phases.rev}} {{phases.p}}' })], next: [{ if: { type: 'marker', marker: '<X>' }, goto: 'c' }, { goto: 'rev' }] },
+    { name: 'rev', flow: 'review', phases: [] },
+    { name: 'c', phases: [ph('q')], next: [{ if: { type: 'marker', marker: '<Y>' }, goto: 'end' }] },
+  ]);
+  assert.equal(renamePhase(s, 'p', 'rev'), 'Так называется блок-вызов: rev — его итог');
+  assert.equal(s.blocks[0]!.phases[0]!.prompt, '{{phases.rev}} {{phases.p}}');
+  assert.match(renameBlock(s, 'c', 'end')!, /end в правилах next — конец запуска/);
+  removeBlock(s, 2);
+  assert.deepEqual(s.blocks[0]!.next, [{ goto: 'rev' }]);
+  removeBlock(s, 1);
+  assert.equal(s.blocks[0]!.next, undefined);
+  // унаследованный блок end целью перехода не предлагается
+  const legacy = spec([{ name: 'a', phases: [ph('p')] }, { name: 'end', phases: [ph('q')] }]);
+  assert.deepEqual(nextTargets(legacy, 0).map((x) => x.value), ['end']);
+  assert.equal(nextTargets(legacy, 0).length, 1);
 });

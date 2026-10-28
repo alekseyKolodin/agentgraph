@@ -369,13 +369,14 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/cli.ts` | entry point: the `gen`, `edit`, `run`, `show`, `tags`, `eval`, `ui` commands |
 | `src/eval.ts` | end-to-end flow eval from the CLI (`agentgraph eval`): `tasks.yaml` → setup / runFlow / check for each run, pass by `done` and the check exit code, aggregates per (flow, task), flipped tasks with `--compare`, a table in the console, `results.json` in `runs/evals/<date>-<flow>[-vs-<flow2>]/`; the runs are ordinary ones in `runs/`, named "eval <flow> · <task> #<n>" |
 | `src/run-analysis.ts` | "Analyze flow" for a finished run: facts from `run.json` (context window share per phase, feedback stagnation, turns, denials, what the prompt uses), a prompt with "boundary between phases only by context" heuristics, a session without tools (sonnet) with structured output, `runs/<id>/analysis.json`; the `GET|POST /api/runs/:id/analysis` route in `server.ts` |
-| `src/schema.ts` | the `flow.yaml` schema (zod): phases, blocks, conditions, the tool list |
-| `src/flows.ts` | reading, saving and finding flows in `flows/`, folders |
+| `src/schema.ts` | the `flow.yaml` schema (zod): phases, blocks, call blocks (`flow:`), branching (`next`), conditions, the tool list |
+| `src/compose.ts` | connecting flows: the call graph check (callee exists, no cycles, depth), the called flow's task, picking the next block by `next`, the call result for the parent; the runner and server call it at their entry points |
+| `src/flows.ts` | reading, saving and finding flows in `flows/`, folders; calls are checked on save, a called flow can't be deleted |
 | `src/adhoc.ts` | one-off run: a draft from the request body (`spec`/`yaml`), the run's flow snapshot, which flow to continue from (the snapshot or `flows/`), "Save as flow" |
 | `src/generate.ts` | the generator: task → flow (a Claude session without tools) |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
 | `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
-| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`) |
+| `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`); call blocks as child runs (`runChild`) and branching by `next` |
 | `src/run-fix.ts` | "fix and continue": what an edit of a running run's flow may not change and what it changed (pure functions; the runner applies the edit at a checkpoint) |
 | `src/artifacts.ts` | run artifacts without the file system: phase permissions (`reads`, `writes`, substitutions), validation, the map of a large artifact, the "Run artifacts" prompt section, the guard decision, whether an artifact may be edited |
 | `src/artifact-store.ts` | run artifact store: files and versions, quarantine and reconciliation with disk before a step, locking during a writing step, authorship, user edits and replies to a pause |
@@ -393,7 +394,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/attachments.ts` | task attachments: type and size checks, writing to `runs/<id>/attachments/`, copying on continuation |
 | `src/agent.ts` | one Claude Code session through the Agent SDK, `AskUserQuestion` questions |
 | `src/template.ts` | substituting `{{variables}}` into prompts |
-| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs |
+| `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs (a call block's child run is a live run of its own; pause, resume and stop reach it from the parent) |
 | `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, artifacts, flow) and the `ui` widget tools (table, links, action buttons, reply chips); dangerous actions run only on a confirmed click (`chatAction`); history with steps and widgets in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
 | `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, stopping runs and the server (`stopServer`) on quit |

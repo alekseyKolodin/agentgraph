@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 import { ZodError } from 'zod';
-import { compactSpec, flowBlocks, flowPhases, FlowSchema, type Block, type FlowSpec, type Phase } from './schema.js';
+import { compactSpec, flowBlocks, flowPhases, FlowSchema, isCallBlock, type Block, type FlowSpec, type Phase } from './schema.js';
 import { validateReferences } from './generate.js';
+import { callProblems, describeNext, nextProblems } from './compose.js';
 import { FLOWS_DIR } from './paths.js';
 import type { FlowSummary, PhaseSummary } from './api-types.js';
 
@@ -101,6 +102,8 @@ export function validateSpec(raw: unknown): FlowSpec {
   try {
     const spec = FlowSchema.parse(raw);
     validateReferences(spec);
+    const next = nextProblems(spec);
+    if (next.length) throw new Error(next.join('\n'));
     return spec;
   } catch (err) {
     if (err instanceof ZodError) {
@@ -118,10 +121,42 @@ export function validateSpec(raw: unknown): FlowSpec {
 export function saveFlowSpec(name: string, raw: unknown): { spec: FlowSpec; yaml: string; file: string } {
   assertFlowName(name);
   const spec = compactSpec(validateSpec({ ...(raw as object), name }));
+  checkCalls(spec);
   const yaml = flowToYaml(spec);
   const file = targetFile(name);
   fs.writeFileSync(file, yaml);
   return { spec, yaml, file };
+}
+
+/**
+ * Вызовы flow (блоки с flow:) годятся для запуска: вызываемые flow есть в flows/ и валидны, нет круга, глубина в пределах.
+ * Файлы читает, поэтому не входит в validateSpec: её зовут и для одного файла без flows/ рядом.
+ */
+export function checkCalls(spec: FlowSpec, load: (name: string) => FlowSpec = loadCalledFlow): void {
+  const problems = callProblems(spec, load);
+  if (problems.length) throw new Error(problems.join('\n'));
+}
+
+/** Вызываемый flow — только по имени из flows/, не путь к файлу. */
+export function loadCalledFlow(name: string): FlowSpec {
+  assertFlowName(name);
+  const file = findFlowFile(name);
+  if (!file) throw new Error(`нет такого flow в flows/`);
+  return parseFlow(fs.readFileSync(file.file, 'utf8'));
+}
+
+/** Flow, которые вызывают name (блоки с flow: name), — чтобы не удалить вызываемый молча. Невалидные пропускаются. */
+export function flowCallers(name: string): string[] {
+  const out: string[] = [];
+  for (const f of flowFiles()) {
+    if (f.name === name) continue;
+    try {
+      if (flowBlocks(parseFlow(fs.readFileSync(f.file, 'utf8'))).some((b) => b.flow === name)) out.push(f.name);
+    } catch {
+      // невалидный flow никого не запустит
+    }
+  }
+  return out;
 }
 
 export function flowToYaml(spec: FlowSpec): string {
@@ -167,7 +202,9 @@ export function summarize(name: string, file: string, spec: FlowSpec): FlowSumma
       maxIterations: b.loop?.max_iterations ?? 1,
       condition: describeCondition(b),
       onFail: b.on_fail ?? 'stop',
-      phases: b.phases.map(phaseSummary),
+      phases: isCallBlock(b) ? [] : b.phases.map(phaseSummary),
+      ...(isCallBlock(b) ? { flow: b.flow } : {}),
+      ...(b.next !== undefined ? { next: describeNext(b) } : {}),
     })),
   };
 }
@@ -219,6 +256,7 @@ export function readFlowYaml(name: string): string {
 export function saveFlowYaml(name: string, yamlText: string, folder = ''): { spec: FlowSpec; file: string } {
   assertFlowName(name);
   const spec = parseFlow(yamlText);
+  checkCalls({ ...spec, name });
   const file = targetFile(name, folder);
   fs.writeFileSync(file, yamlText.endsWith('\n') ? yamlText : yamlText + '\n');
   return { spec, file };
@@ -227,6 +265,8 @@ export function saveFlowYaml(name: string, yamlText: string, folder = ''): { spe
 export function deleteFlow(name: string): void {
   assertFlowName(name);
   const file = resolveFlowFile(name);
+  const callers = flowCallers(name);
+  if (callers.length) throw new Error(`Flow ${name} вызывают ${callers.join(', ')}: сначала убери вызовы из них`);
   fs.rmSync(file);
   removeFolderIfEmpty(folderOf(file));
 }

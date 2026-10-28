@@ -30,9 +30,9 @@ const withBlocks = (f: (blocks: FlowSpec['blocks'] & object) => void): FlowSpec 
 
 test('совместимость: правка идущего и будущих блоков, defaults — без проблем', () => {
   const next = withBlocks((b) => {
-    b[1].phases[1].prompt = 'ревью строже';
-    b[1].phases.push(phase('lint') as never);
-    b[2].phases[0].model = 'haiku';
+    b[1].phases![1].prompt = 'ревью строже';
+    b[1].phases!.push(phase('lint') as never);
+    b[2].phases![0].model = 'haiku';
     b.push({ name: 'docs', phases: [phase('readme')] } as never);
   });
   next.defaults = { model: 'sonnet' };
@@ -48,7 +48,7 @@ test('совместимость: другое имя, задача, артеф�
 });
 
 test('совместимость: пройденный блок менять, убирать и переставлять нельзя', () => {
-  const changed = withBlocks((b) => { b[0].phases[0].prompt = 'иначе'; });
+  const changed = withBlocks((b) => { b[0].phases![0].prompt = 'иначе'; });
   assert.deepEqual(flowEditProblems(flow(), changed, at), ['блок plan уже пройден: менять его нельзя']);
   const removed = withBlocks((b) => { b.shift(); });
   assert.ok(flowEditProblems(flow(), removed, at).includes('блок plan уже пройден: убрать или переставить его нельзя'));
@@ -104,12 +104,29 @@ test('изменения: поля этапа, добавленные и убр�
   ]);
 });
 
+test('изменения: у блока-вызова — строка блока с flow, input и next, без этапа-двойника', () => {
+  const call = (over: Record<string, unknown> = {}) =>
+    ({ name: 'f', blocks: [{ name: 'plan', phases: [phase('analyze')] }, { name: 'review', flow: 'checker', input: '{{prev}}', ...over }] }) as unknown as FlowSpec;
+  assert.deepEqual(flowChanges(call(), call({ flow: 'other', input: 'проверь {{prev}}', next: [{ goto: 'end' }] })), ['блок review: flow, input, next']);
+  // блок этапов стал вызовом: его этапы ушли
+  const was = { name: 'f', blocks: [{ name: 'plan', phases: [phase('analyze')] }, { name: 'review', phases: [phase('check')] }] } as unknown as FlowSpec;
+  assert.deepEqual(flowChanges(was, call()), ['блок review: flow, input', '− этап check']);
+});
+
+test('совместимость: пройденный блок-вызов менять нельзя, идущий и будущие — можно', () => {
+  const spec = (input: string, later = '{{prev}}') =>
+    ({ name: 'f', blocks: [{ name: 'a', flow: 'x', input }, { name: 'b', flow: 'y', input: later }, { name: 'c', phases: [phase('z')] }] }) as unknown as FlowSpec;
+  const point: FixPoint = { block: 1, iterations: 1, limit: (b) => blockMaxIterations(b, {}) };
+  assert.deepEqual(flowEditProblems(spec('{{input}}'), spec('другое'), point), ['блок a уже пройден: менять его нельзя']);
+  assert.deepEqual(flowEditProblems(spec('{{input}}'), spec('{{input}}', 'иначе {{prev}}'), point), []);
+});
+
 test('keepBlockName: короткая форма правки получает имя единственного блока запуска', () => {
   const run = { name: 'f', blocks: [{ name: 'impl', loop: { max_iterations: 3, until: { type: 'none' } }, phases: [phase('a')] }] } as unknown as FlowSpec;
   const short = { name: 'f', loop: { max_iterations: 3, until: { type: 'none' } }, phases: [phase('a', { prompt: 'новый' })] } as unknown as FlowSpec;
   const kept = keepBlockName(run, short);
   assert.equal(kept.blocks?.[0].name, 'impl');
-  assert.equal(kept.blocks?.[0].phases[0].prompt, 'новый');
+  assert.equal(kept.blocks?.[0].phases![0].prompt, 'новый');
   assert.equal('phases' in kept || 'loop' in kept, false);
   assert.deepEqual(flowChanges(run, kept), ['этап a: prompt']);
   // блок main или полная форма — как есть
@@ -263,4 +280,43 @@ test('flowsSync: после «взять из flows/» сверка — с фа�
   const failed = sync.save(runEdit);
   assert.ok('error' in failed);
   assert.match(failed.error, /flows\/f\.yaml не записан: EACCES/);
+});
+
+test('совместимость: идущий блок не меняет вид — этапы на вызов flow и обратно нельзя, flow, input и next вызова — можно', () => {
+  const spec = (second: Record<string, unknown>) =>
+    ({ name: 'f', blocks: [{ name: 'a', phases: [phase('x')], next: 'b' }, { name: 'b', ...second }, { name: 'c', phases: [phase('z')] }] }) as unknown as FlowSpec;
+  const point: FixPoint = { block: 1, iterations: 1, limit: (b) => blockMaxIterations(b, {}) };
+  const call = spec({ flow: 'checker', input: '{{prev}}' });
+  assert.deepEqual(flowEditProblems(spec({ phases: [phase('y')] }), call, point), ['блок b идёт сейчас: этапы заменить вызовом flow на ходу нельзя']);
+  assert.deepEqual(flowEditProblems(call, spec({ phases: [phase('y')] }), point), ['блок b идёт сейчас: вызов flow заменить этапами на ходу нельзя']);
+  assert.deepEqual(flowEditProblems(call, spec({ flow: 'other', input: 'иначе', next: [{ if: { type: 'marker', marker: '<X>' }, goto: 'end' }] }), point), []);
+  // next пройденного блока — уже решённая развилка
+  const moved = structuredClone(call);
+  moved.blocks![0].next = 'c';
+  assert.deepEqual(flowEditProblems(call, moved, point), ['блок a уже пройден: менять его нельзя']);
+});
+
+test('patchFlowYaml: правка блока-вызова и развилки ложится поверх файла, комментарии остаются', () => {
+  const file = [
+    'name: f',
+    'blocks:',
+    '  - name: triage # решает, куда дальше',
+    '    phases:',
+    '      - name: t',
+    '        tools: []',
+    '        prompt: p',
+    '    next:',
+    '      - if: { type: marker, marker: "<BUG>" } # баг',
+    '        goto: fix',
+    '      - goto: end',
+    '  - name: fix',
+    '    flow: fix-bug # вызов',
+    '    input: "{{input}}"',
+    '',
+  ].join('\n');
+  const edit = file.replace('flow: fix-bug # вызов', 'flow: fix-bug-v2').replace('input: "{{input}}"', 'input: "{{prev}}"').replace('goto: end', 'goto: fix');
+  const out = patchFlowYaml(file, edit);
+  assert.deepEqual(parseYaml(out), parseYaml(edit));
+  assert.match(out, /# решает, куда дальше/);
+  assert.match(out, /# баг/);
 });

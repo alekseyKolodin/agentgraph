@@ -99,9 +99,9 @@
 .pcard-head .pnum { width: 26px; height: 26px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--line-strong); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-weight: 500; font-size: var(--fs-meta); flex: none; }
 .pcard-head input.p-title { font-weight: 600; font-size: var(--fs-h3); flex: 2; }
 .p-adv input.p-name, .bpanel input.b-name { font-family: var(--font-mono); font-size: var(--fs-meta); }
-.pcard-head .icon, .bblock-head .icon { border: 1px solid var(--line); background: transparent; color: var(--ink-2); border-radius: var(--r-sm); width: 28px; height: 28px; cursor: pointer; font-size: var(--fs-small); }
-.pcard-head .icon:hover, .bblock-head .icon:hover { background: var(--hover); color: var(--ink); }
-.pcard-head .icon.danger:hover, .bblock-head .icon.danger:hover { color: var(--st-fail); }
+.pcard-head .icon, .bblock-head .icon, .next-rule .icon { border: 1px solid var(--line); background: transparent; color: var(--ink-2); border-radius: var(--r-sm); width: 28px; height: 28px; cursor: pointer; font-size: var(--fs-small); }
+.pcard-head .icon:hover, .bblock-head .icon:hover, .next-rule .icon:hover { background: var(--hover); color: var(--ink); }
+.pcard-head .icon.danger:hover, .bblock-head .icon.danger:hover, .next-rule .icon.danger:hover { color: var(--st-fail); }
 .pcard-head .icon:disabled, .bblock-head .icon:disabled { opacity: .35; cursor: default; }
 /* этап параллельной группы: метка ∥ группа */
 .pgroup { font-size: var(--fs-cap); font-weight: 600; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 40%, transparent); border-radius: var(--r-pill); padding: 0 7px; white-space: nowrap; flex: none; }
@@ -142,3 +142,17 @@
 .p-art code, .art-decl code { font-size: var(--fs-meta); }
 .art-decl ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-small); }
 .art-decl-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* конструктор: блок-вызов — выбор flow и его задача; развилка next — правила строками «условие → блок» */
+.call-box { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.call-box :global(.row) { align-items: end; }
+.call-box select { min-width: 0; }
+.builder textarea.call-input { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.45; min-height: 96px; }
+.block-pane textarea.call-input { min-height: 22vh; line-height: 1.6; }
+.next-box { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.next-rule { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.next-rule select, .next-rule input { width: auto; min-width: 0; flex: 1 1 120px; }
+.next-rule input { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.next-goto { display: flex; gap: 6px; align-items: center; flex: 1 1 200px; min-width: 0; }
+.next-goto .icon { flex: 0 0 auto; }
+.next-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+textarea.next-judge { flex-basis: 100%; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.45; }
