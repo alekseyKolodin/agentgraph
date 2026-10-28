@@ -125,6 +125,8 @@ type LiveRun = {
   fix?: RunFix;
   /** Идущий дочерний запуск блока-вызова: пауза, продолжение и остановка этого запуска доходят и до него. */
   child?: string;
+  /** Пауза этого запуска пришла от родителя (pauseRun родителя): только её снимает и «Возобновить» родителя. */
+  pausedByParent?: boolean;
   /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
   flows?: FlowsSync;
 };
@@ -927,6 +929,8 @@ function launchRun(
     },
     requestPause: () => {
       if (!lr.pause) setPause(lr, 'requested');
+      // этап сам попросил паузу (pause_marker): она — его, и «Возобновить» родителя её не снимет — ждёт ответа здесь
+      delete lr.pausedByParent;
       const reason = lr.report?.pauseReason;
       if (reason) notifyPause(srv, id, runLabel(spec.name, lr.report?.title), reason);
     },
@@ -989,6 +993,7 @@ function launchRun(
         status: e.type === 'end' ? e.report.status : undefined,
         costUsd: e.type === 'end' ? e.report.totalCostUsd : e.type === 'title' || e.type === 'digest' ? e.totalCostUsd : undefined,
         title: e.type === 'title' ? e.title : undefined,
+        parent: e.type === 'end' ? e.report.parent : undefined,
       });
       // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя
       if (e.type === 'question' || (e.type === 'end' && !parent)) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
@@ -1103,15 +1108,20 @@ function pauseRun(id: string): LiveRun['pause'] {
   if (!lr.pause) setPause(lr, 'requested');
   // этот запуск стоит в блоке-вызове до конца дочернего: встаёт на паузу дочерний, этот — после него
   const child = childOf(lr);
-  if (child && !child.abort.signal.aborted) pauseRun(child.id);
+  if (child && !child.abort.signal.aborted && !child.pause) {
+    pauseRun(child.id);
+    child.pausedByParent = true;
+  }
   return lr.pause;
 }
 
 function resumeRun(id: string): void {
   const lr = liveRun(id);
   if (lr.pause) setPause(lr, null);
+  delete lr.pausedByParent;
+  // дочерний отпускаем, только если на паузу его поставил этот запуск: свою паузу (вопрос этапа) он ждёт сам
   const child = childOf(lr);
-  if (child) resumeRun(child.id);
+  if (child?.pausedByParent) resumeRun(child.id);
 }
 
 /** Идущий дочерний запуск блока-вызова. */
@@ -1239,7 +1249,8 @@ function applyRunFlow(id: string, yaml: string, o: { saveToFlows?: boolean; via?
   let next: FlowSpec;
   try {
     if (typeof yaml !== 'string') throw new Error('yaml — строка');
-    next = draftSpec({ yaml });
+    // вызовы проверяет раннер, и только у блоков впереди (fix.checkFlow): пройденный вызов мог с тех пор измениться
+    next = draftSpec({ yaml }, { calls: false });
   } catch (err) {
     throw new RunFixHttp(400, errMsg(err), 'incompatible', [errMsg(err)]);
   }

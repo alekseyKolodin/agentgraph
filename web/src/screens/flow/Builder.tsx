@@ -106,6 +106,7 @@ export function Builder({ hidden }: { hidden: boolean }) {
                 selectedName={st.graphSel}
                 selectedBlock={selBlock}
                 changed={st.ai?.diff.phases}
+                changedBlocks={st.ai?.diff.blocks}
                 chip={knowledgeChip}
                 toolsOf={toolsOf}
                 onNode={pick}

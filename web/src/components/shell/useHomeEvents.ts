@@ -62,8 +62,9 @@ export function useHomeEvents(): void {
   };
 
   // Конец запуска объявляем только уведомлением, когда вкладка не на виду; остановку руками — нет, её только что нажали.
+  // Конец дочернего запуска блока-вызова — нет: о связке скажет конец родителя (как и сервер в системных уведомлениях).
   const announceEnd = (e: HomeEvent) => {
-    if (e.status === 'aborted' || !tabAway() || !browserNotifies()) return;
+    if (e.status === 'aborted' || e.parent || !tabAway() || !browserNotifies()) return;
     const n = new Notification(t('{flow}: запуск завершён', { flow: e.flow }), { body: `${statusLabel(e.status ?? '')} · ${usd(e.costUsd)}`, tag: e.runId });
     n.onclick = () => {
       window.focus();

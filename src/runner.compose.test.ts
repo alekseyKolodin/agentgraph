@@ -572,3 +572,89 @@ test('правка flow на паузе после развилки: событ�
   assert.equal(ev.blocks[1].bypassed, true);
   assert.equal(ev.maxIterations, 2);
 });
+
+// --- продолжение продолжения
+
+test('продолжение: решение развилки переживает два продолжения подряд — судья не перепроверяет её', async () => {
+  const spec = branchy([{ if: { type: 'judge', prompt: 'p' }, goto: 'review' }]);
+  const fail = (n: string) => (n === 'r' ? result('упал', { ok: false, subtype: 'error_during_execution', errors: ['упал'] }) : `out-${n}`);
+  const reports: Record<string, RunReport> = {};
+  const st: RunStore = { report: (id) => reports[id], output: () => 'x' };
+
+  // id запусков — по секунде старта: в тесте они совпали бы, даём свои
+  const r1 = await run(spec, { judge: () => true, output: fail });
+  const p1 = (reports.p1 = { ...r1.saved, id: 'p1' });
+  assert.equal(p1.blocks![0].next?.to, 'review');
+  const r2 = await run(spec, { judge: () => assert.fail('судья второй раз'), output: fail, opts: { continueFrom: continuationFrom(p1, spec, st) } });
+  const p2 = (reports.p2 = { ...r2.saved, id: 'p2' });
+  assert.equal(p2.continuedFrom, 'p1');
+  // пропущенный блок несёт прошлое решение
+  assert.equal(p2.blocks![0].next?.to, 'review');
+  assert.equal(p2.blocks![1].bypassed, true);
+
+  const c3 = continuationFrom(p2, spec, st);
+  assert.equal(c3.branchFrom, undefined);
+  assert.equal(c3.decided?.triage.to, 'review');
+  const r3 = await run(spec, { judge: () => assert.fail('судья третий раз'), opts: { continueFrom: c3 } });
+  assert.equal(r3.report.status, 'done');
+  assert.deepEqual(ran(r3.calls), ['r']);
+
+  // отчёт старого формата (у пропущенного блока решения нет) — решение по цепочке continuedFrom
+  const old = structuredClone(p2);
+  delete old.blocks![0].next;
+  assert.equal(continuationFrom(old, spec, st).decided?.triage.to, 'review');
+});
+
+test('блок-вызов: связь с дочерним в run.json и транскрипт вызова — уже при старте дочернего', async () => {
+  let seen: { call?: unknown; transcript?: string } = {};
+  const spec = flow([{ name: 'review', flow: 'child', input: '{{input}}' }]);
+  await run(spec, {
+    flows: { child: child() },
+    opts: {
+      runChild: async (s, co) => {
+        const dir = path.join(co.runsDir!, co.parent!.runId);
+        const saved = JSON.parse(fs.readFileSync(path.join(dir, 'run.json'), 'utf8')) as RunReport;
+        seen = { call: saved.blocks?.[0].call, transcript: fs.readFileSync(path.join(dir, 'iter-01', '01-review.transcript.md'), 'utf8') };
+        return runFlow(s, co);
+      },
+    },
+  });
+  const call = seen.call as { runId: string; iteration: number } | undefined;
+  assert.equal(call?.iteration, 1);
+  assert.match(String(call?.runId), /-child$/);
+  assert.match(seen.transcript!, /^↪ вызов flow child: запуск /);
+});
+
+test('продолжение: дочерний находится по связи при старте вызова и по цепочке continuedFrom, если продолжение до вызова не дошло', () => {
+  const kid = rep({ id: 'kid-1', flow: 'child', runDir: '/runs/kid-1', status: 'interrupted' as RunReport['status'], blocks: [{ name: 'main', status: 'failed' }] as RunReport['blocks'] });
+  const spec = flow([{ name: 'plan', phases: [phase('a')] }, { name: 'review', flow: 'child', input: '{{prev}}' }]);
+  const blocks = [{ name: 'plan', status: 'done' }, { name: 'review', status: 'failed' }];
+  const planRan = [{ block: 'plan', iteration: 1, phase: 'a', files: { output: 'o/a' } }];
+  // родитель оборвался, пока ждал дочерний: этапа-вызова в отчёте нет, связь — в блоке
+  const p1 = rep({ id: 'p1', status: 'interrupted' as RunReport['status'], blocks: [blocks[0], { ...blocks[1], call: { runId: 'kid-1', iteration: 1 } }] as RunReport['blocks'], phases: planRan as RunReport['phases'] });
+  const st = store({ p1, 'kid-1': kid });
+  assert.deepEqual(continuationFrom(p1, spec, st).calls?.review.from, { runId: 'kid-1', runDir: '/runs/kid-1' });
+  // продолжение p2 упало до вызова: дочерний — из p1
+  const p2 = rep({ id: 'p2', continuedFrom: 'p1', blocks: [{ name: 'plan', status: 'done', skipped: true }, blocks[1]] as RunReport['blocks'], phases: [] });
+  assert.deepEqual(continuationFrom(p2, spec, store({ p1, p2, 'kid-1': kid })).calls?.review.from, { runId: 'kid-1', runDir: '/runs/kid-1' });
+});
+
+test('продолжение: указания шага-вызова уходят и продолжаемому дочернему — хвостом его задачи, в prompt.md — она же', async () => {
+  const kid = { name: 'child', blocks: [{ name: 'one', phases: [phase('c1')] }, { name: 'two', phases: [phase('c2', 'in=[{{input}}]')] }] } as unknown as FlowSpec;
+  const kidCont = { runId: 'kid-1', skipBlocks: ['one'], phases: { c1: 'x' }, prev: 'x', history: [] };
+  let given = false;
+  const r = await run(flow([{ name: 'review', flow: 'child', input: '{{input}}' }]), {
+    flows: { child: kid },
+    opts: {
+      continueFrom: { runId: 'prev', skipBlocks: [], phases: {}, prev: '', history: [], calls: { review: { from: { runId: 'kid-1', runDir: '/nowhere' }, cont: kidCont, spec: { ...kid, input: 'старая задача' } } } },
+      control: {
+        checkpoint: async () => {},
+        takeNotes: () => (given ? [] : ((given = true), [{ id: 'n1', text: 'проверь null', scope: 'next' as const, at: 'now', via: 'ui' as const }])),
+      },
+    },
+  });
+  assert.equal(r.report.status, 'done');
+  assert.match(r.calls[0].prompt, /in=\[старая задача\n\nУказание пользователя .*\nпроверь null\]/s);
+  const p = r.saved.phases[0];
+  assert.match(r.read(p.files!.prompt!), /^старая задача\n\nУказание пользователя/);
+});

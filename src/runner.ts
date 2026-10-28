@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
 import type {
-  BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
+  BlockNext, BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
   RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, TagSummaryReport,
 } from './api-types.js';
 import { flowBlocks, isCallBlock, NEXT_END, phaseSteps, type Block, type FlowSpec, type NextRule, type Phase, type PhaseStep, type Until } from './schema.js';
@@ -137,6 +137,8 @@ export type Continuation = {
   history: string[];
   /** Блоки, через которые развилка перешла в прошлом запуске: не выполняются и в этом. */
   bypassBlocks?: string[];
+  /** Решения развилок пропускаемых блоков из прошлых запусков: в отчёт этого, чтобы следующее продолжение их не перерешало. */
+  decided?: Record<string, BlockNext>;
   /**
    * Последний пропускаемый блок с next, чья развилка в прошлом запуске так и не решилась (остановили во время её
    * проверки): раннер решает её по выводам этого блока, прежде чем идти дальше.
@@ -405,6 +407,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       onFail: b.on_fail ?? 'stop',
       ...(skipped ? { skipped: true } : {}),
       ...(bypassed ? { bypassed: true } : {}),
+      ...(cont?.decided?.[b.name] ? { next: cont.decided[b.name] } : {}),
     };
   });
   const report: RunReport = {
@@ -748,10 +751,11 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     const files: PhaseFiles = { prompt: `${baseRel}.prompt.md`, transcript: `${baseRel}.transcript.md`, output: `${baseRel}.output.md` };
     const task = withNotes(callInput(block, art ? { ...snap, artifacts: art.snapshot } : snap), notes);
     fs.writeFileSync(path.join(runDir, files.prompt), task);
+    // транскрипт вызова — его строки хода: пишется по ходу, чтобы файл был и у идущего шага
+    fs.writeFileSync(path.join(runDir, files.transcript), '');
     emit({ type: 'phase_start', block: block.name, iteration: iter, index: i, phase: phase.name, title, tools: [], files });
-    const lines: string[] = [];
     const log = (line: string) => {
-      lines.push(line);
+      fs.appendFileSync(path.join(runDir, files.transcript), line + '\n');
       emit({ type: 'log', block: block.name, iteration: iter, phase: phase.name, line });
     };
     const startedAt = Date.now();
@@ -768,11 +772,19 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       // а если тот можно продолжить — продолжает его
       const prior = iter === 1 ? cont?.calls?.[block.name] : undefined;
       const resume = prior?.cont && prior.spec ? { cont: prior.cont, spec: prior.spec } : undefined;
-      const callee: FlowSpec = resume ? resume.spec : { ...(opts.loadFlow ?? loadCalledFlow)(block.flow), input: task };
+      // продолжаемый дочерний идёт со своей прежней задачей; указания, взятые для этого шага, — её хвостом
+      const callee: FlowSpec = resume
+        ? { ...resume.spec, input: withNotes(resume.spec.input ?? '', notes) }
+        : { ...(opts.loadFlow ?? loadCalledFlow)(block.flow), input: task };
+      if (resume) fs.writeFileSync(path.join(runDir, files.prompt), callee.input ?? '');
       childDir = makeRunDir(opts.runsDir, callee.name);
       // вложения задачи — и дочернему: те же имена, копия в его папке
       const attachments = opts.attachments ?? [];
       if (attachments.length) fs.cpSync(path.join(runDir, ATTACHMENTS_DIR), path.join(childDir, ATTACHMENTS_DIR), { recursive: true });
+      // связь с дочерним — сразу: прервётся этот запуск, пока ждёт его, — продолжение найдёт дочерний по ней
+      const br = blockReports.find((b) => b.name === block.name);
+      if (br) br.call = { runId: path.basename(childDir), iteration: iter };
+      save();
       const before = iter > 1 ? lastCall.get(block.name) : prior?.from;
       const budget = opts.maxBudgetUsd !== undefined ? Math.max(0, opts.maxBudgetUsd - report.totalCostUsd) : undefined;
       const parent: RunParent = { runId: report.id, flow: spec.name, block: block.name, iteration: iter };
@@ -820,7 +832,6 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       calling = undefined;
       opts.abort?.signal.removeEventListener('abort', stop);
     }
-    fs.writeFileSync(path.join(runDir, files.transcript), lines.join('\n') + '\n');
     const output = res.text;
     fs.writeFileSync(path.join(runDir, files.output), output);
     const phaseReport: PhaseReport = {
@@ -1717,7 +1728,10 @@ const CONTINUE_DEPTH_MAX = 50;
  * Смотрит только на статусы, файлы не читает. skip — сплошное начало блоков, завершённых в prev (done), по имени.
  * prev — отчёт глазами сервера: у оборвавшегося запуска статус interrupted, а не running.
  */
-export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'> & { phases?: RunReport['phases'] }, spec: FlowSpec): { ok: true; skip: Block[] } | { ok: false; reason: string } {
+export function canContinue(
+  prev: Pick<RunReport, 'status' | 'blocks'> & { phases?: RunReport['phases']; continuedFrom?: string },
+  spec: FlowSpec,
+): { ok: true; skip: Block[] } | { ok: false; reason: string } {
   if (prev.status === 'running') return { ok: false, reason: 'Запуск ещё идёт: продолжить можно только завершённый' };
   if (prev.status === 'done') return { ok: false, reason: 'Запуск завершён полностью: продолжать нечего' };
   const blocks = flowBlocks(spec);
@@ -1732,7 +1746,10 @@ export function canContinue(prev: Pick<RunReport, 'status' | 'blocks'> & { phase
   // первый блок, упёршийся в лимит итераций, продолжаем: он идёт заново с новым лимитом, а код и артефакты остаются;
   // первый блок-вызов, уже вызывавший flow, — тоже: его первая итерация продолжает дочерний запуск (Continuation.calls)
   const first = prev.blocks?.find((x) => x.name === blocks[0].name)?.status;
-  const called = isCallBlock(blocks[0]) && Boolean(prev.phases?.some((p) => p.block === blocks[0].name && p.call));
+  // (или prev сам продолжение: тогда вызов был в запуске, который он продолжал, — callContinuation найдёт его там)
+  const called = isCallBlock(blocks[0]) && Boolean(
+    prev.blocks?.find((x) => x.name === blocks[0].name)?.call || prev.phases?.some((p) => p.block === blocks[0].name && p.call) || prev.continuedFrom,
+  );
   if (!skip.length && first !== 'max_iterations' && !called) {
     return { ok: false, reason: `Первый блок «${blocks[0].title ?? blocks[0].name}» не завершён: продолжать нечего, запусти заново` };
   }
@@ -1797,13 +1814,27 @@ export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStor
   const tail = lastStep ? stepPrev(lastStep.phases.map(({ phase }) => ({ phase: phase.name, output: phases[phase.name] }))) : '';
   const bypass = skip.filter(bypassed).map((b) => b.name);
   const calls = callContinuation(prev, blocks[skip.length], store, depth);
+  // решения развилок пропускаемых блоков: у пропущенного и в prev блока — по цепочке continuedFrom, где он выполнялся
+  const decisionIn = (r: RunReport, block: string, d: number): BlockNext | undefined => {
+    const br = r.blocks?.find((x) => x.name === block);
+    if (br?.next) return br.next;
+    if (!br?.skipped || !r.continuedFrom || d >= CONTINUE_DEPTH_MAX) return undefined;
+    const from = store.report(r.continuedFrom);
+    return from ? decisionIn(from, block, d + 1) : undefined;
+  };
+  const decided: Record<string, BlockNext> = {};
+  for (const b of skip) {
+    const n = b.next !== undefined && !bypassed(b) ? decisionIn(prev, b.name, 0) : undefined;
+    if (n) decided[b.name] = n;
+  }
   // развилку после последнего пропускаемого блока не решили (остановили на её проверке) — её решит этот запуск
   const last = skip.at(-1);
-  const undecided = last && last === lastRan && last.next !== undefined && !prev.blocks?.find((x) => x.name === last.name)?.next;
+  const undecided = last && last === lastRan && last.next !== undefined && !decided[last.name];
   return {
     runId: prev.id, skipBlocks: skip.map((b) => b.name), phases, prev: tail, history,
     ...(bypass.length ? { bypassBlocks: bypass } : {}),
     ...(calls ? { calls } : {}),
+    ...(Object.keys(decided).length ? { decided } : {}),
     ...(undecided ? { branchFrom: last.name } : {}),
   };
 }
@@ -1816,8 +1847,16 @@ export function continuationFrom(prev: RunReport, spec: FlowSpec, store: RunStor
  */
 function callContinuation(prev: RunReport, block: Block | undefined, store: RunStore, depth: number): Continuation['calls'] {
   if (!block || !isCallBlock(block)) return undefined;
-  const last = [...prev.phases].reverse().find((p) => p.block === block.name && p.call);
-  const child = last?.call ? store.report(last.call.runId) : undefined;
+  // последний дочерний блока: связь пишется при старте вызова (BlockReport.call), у старых отчётов — только в этапе.
+  // Не вызывал вовсе (продолжение упало до вызова) — ищем в запуске, который оно продолжало
+  const lastChild = (r: RunReport, d: number): string | undefined => {
+    const id = r.blocks?.find((x) => x.name === block.name)?.call?.runId ?? [...r.phases].reverse().find((p) => p.block === block.name && p.call)?.call?.runId;
+    if (id || !r.continuedFrom || d >= CONTINUE_DEPTH_MAX) return id;
+    const from = store.report(r.continuedFrom);
+    return from ? lastChild(from, d + 1) : undefined;
+  };
+  const id = lastChild(prev, 0);
+  const child = id ? store.report(id) : undefined;
   if (!child || child.flow !== block.flow) return undefined;
   const from = { runId: child.id, runDir: store.dir?.(child.id) ?? child.runDir };
   if (!store.spec || depth >= CONTINUE_DEPTH_MAX) return { [block.name]: { from } };

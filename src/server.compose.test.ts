@@ -28,7 +28,7 @@ async function until(cond: () => boolean, what: string): Promise<void> {
  * Родитель с блоком-вызовом как живой запуск сервера, с поддельной сессией: этап c дочернего ждёт, пока тест его не
  * отпустит (release) — в это время дочерний идёт, а родитель стоит в блоке-вызове.
  */
-function launch(spec: FlowSpec = parentSpec, flows: Record<string, FlowSpec> = { child: childSpec }) {
+function launch(spec: FlowSpec = parentSpec, flows: Record<string, FlowSpec> = { child: childSpec }, output: (name: string, n: number) => string = (n) => `out-${n}`) {
   const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-live-'));
   const started: string[] = [];
   let release!: () => void;
@@ -37,7 +37,7 @@ function launch(spec: FlowSpec = parentSpec, flows: Record<string, FlowSpec> = {
     const name = nameOf(req);
     started.push(name);
     if (name === 'c') await gate;
-    return result(`out-${name}`);
+    return result(output(name, started.filter((x) => x === name).length));
   };
   const deps = {
     // итоги итераций зовут модель: в тесте их нет
@@ -143,6 +143,30 @@ test('пауза и остановка родителя доходят до вн
     assert.equal(childReport(r.runsDir, grandkid).status, 'aborted');
     assert.equal(childReport(r.runsDir, grandkid).parent.runId, kid);
     assert.equal(liveControl.state(grandkid), undefined);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('«Возобновить» родителя не снимает паузу, которую дочерний поставил сам по вопросу этапа', async () => {
+  const asker = {
+    name: 'asker',
+    loop: { max_iterations: 2, until: { type: 'marker', marker: '<DONE>' }, pause_marker: '<NEEDS_USER>' },
+    phases: [phase('q')],
+  } as unknown as FlowSpec;
+  const top = { name: 'top', input: 'задача', blocks: [{ name: 'ask', flow: 'asker', input: '{{input}}' }] } as unknown as FlowSpec;
+  const r = launch(top, { asker }, (name, n) => (n === 1 ? 'какой цвет?\n<NEEDS_USER>' : 'готово\n<DONE>'));
+  try {
+    await until(() => Boolean(r.child() && liveControl.state(r.child()!)?.pause === 'paused'), 'пауза дочернего по вопросу');
+    const kid = r.child()!;
+    liveControl.pause(r.id);
+    liveControl.resume(r.id);
+    // вопрос этапа ждёт ответа на странице дочернего
+    assert.equal(liveControl.state(kid)?.pause, 'paused');
+    assert.equal(childReport(r.runsDir, kid).pauseReason?.phase, 'q');
+    liveControl.resume(kid);
+    assert.equal((await r.done).status, 'done');
+    assert.deepEqual(r.started, ['q', 'q']);
   } finally {
     r.cleanup();
   }

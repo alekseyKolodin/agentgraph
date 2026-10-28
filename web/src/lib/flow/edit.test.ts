@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSpec } from '@server/schema';
 import {
-  addPhaseAfter, advLabel, callVariables, collectSpec, duplicatePhase, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, removeBlock, renameBlock,
+  addPhaseAfter, advLabel, callVariables, collectSpec, DEFAULT_CALL_INPUT, duplicatePhase, insertCallVar, insertVar, mayBypass, movePhase, newBlock, newPhase, nextRules, nextTargets, phaseInputs, predecessors, removeBlock, renameBlock,
   renamePhase, setBlockMode, specChanges, SpecError, toEditable, untilFor, variableList, type EditPhase, type EditSpec,
 } from './edit';
 import { conditionText, schemeSummary } from './summary';
@@ -376,4 +376,14 @@ test('развилка в конструкторе: этап не получае
   const legacy = spec([{ name: 'a', phases: [ph('p')] }, { name: 'end', phases: [ph('q')] }]);
   assert.deepEqual(nextTargets(legacy, 0).map((x) => x.value), ['end']);
   assert.equal(nextTargets(legacy, 0).length, 1);
+});
+
+test('insertCallVar: в пустую задачу вызова переменная дописывается к задаче по умолчанию, а не заменяет её', () => {
+  const r = insertCallVar(undefined, 'phases.plan', 0, 0);
+  assert.ok(r.text.startsWith(DEFAULT_CALL_INPUT));
+  assert.ok(r.text.endsWith('{{phases.plan}}'));
+  // уже есть в задаче по умолчанию — выделяется на месте, текст тот же
+  assert.equal(insertCallVar(undefined, 'prev', 0, 0).text, DEFAULT_CALL_INPUT);
+  // своя задача — как insertVar
+  assert.deepEqual(insertCallVar('Проверь:', 'prev', 8, 8), insertVar('Проверь:', 'prev', 8, 8));
 });
