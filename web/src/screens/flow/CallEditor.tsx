@@ -3,7 +3,7 @@
 import { useRef } from 'react';
 import { Link } from 'react-router';
 import { useFlows } from '../../api';
-import { callVariables, DEFAULT_CALL_INPUT, insertVar, NEXT_JUDGE, nextRules, nextTargets, untilFor, usesVar, type EditBlock, type EditNextRule } from '../../lib/flow/edit';
+import { callVariables, DEFAULT_CALL_INPUT, insertCallVar, NEXT_JUDGE, nextRules, nextTargets, untilFor, usesVar, type EditBlock, type EditNextRule } from '../../lib/flow/edit';
 import { schemeSummary } from '../../lib/flow/summary';
 import { t } from '../../lib/i18n';
 import { afterRender } from './actions';
@@ -27,7 +27,8 @@ export function CallFields({ bi }: { bi: number }) {
 
   const insert = (key: string) => {
     const ta = input.current!;
-    const r = insertVar(ta.value, key, ta.selectionStart ?? ta.value.length, ta.selectionEnd ?? ta.selectionStart ?? ta.value.length);
+    // пустое поле — это задача по умолчанию (подсказка в поле): переменная дописывается к ней, а не заменяет её
+    const r = insertCallVar(b.input, key, ta.selectionStart ?? ta.value.length, ta.selectionEnd ?? ta.selectionStart ?? ta.value.length);
     if (r.text !== b.input) {
       b.input = r.text;
       markDirty();

@@ -255,6 +255,15 @@ export function callInputs(spec: EditSpec, bi: number): string[] {
 }
 
 /**
+ * Переменная в задачу блока-вызова. Пустое поле (input нет) — это задача по умолчанию: переменная дописывается в её конец,
+ * а не заменяет её; иначе — как insertVar на место выделения.
+ */
+export function insertCallVar(input: string | undefined, key: string, start: number, end: number): { text: string; select: [number, number] } {
+  if (input !== undefined) return insertVar(input, key, start, end);
+  return insertVar(DEFAULT_CALL_INPUT, key, DEFAULT_CALL_INPUT.length, DEFAULT_CALL_INPUT.length);
+}
+
+/**
  * Вставка переменной в текст: уже есть — вернуть её место для выделения, нет — вставить {{key}} на место выделения
  * (с пробелом, если перед ним не пробел и не перенос). caret — куда поставить курсор.
  */

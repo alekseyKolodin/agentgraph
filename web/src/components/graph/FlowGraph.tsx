@@ -51,6 +51,8 @@ export type FlowGraphProps = {
   selectedKey?: string | null;
   /** Этапы, изменённые «Правкой с ИИ»: зелёная обводка. */
   changed?: Set<string>;
+  /** Блоки, изменённые ею же: у блока-вызова обводится его узел (этапов, чтобы попасть в changed, у него нет). */
+  changedBlocks?: Set<string>;
   /** Чип тега знаний в шапке рамки блока. */
   chip?: (slug: string) => ReactNode;
   /** Подпись и чипы узла «Задача». */
@@ -174,7 +176,7 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
   const selected = (g.selectedName && g.selectedName === n.name) || g.selectedKey === n.key || (call && g.selectedBlock === n.b);
   return (
     <div
-      className={cx(styles.fgNode, styles.fgPhase, call && styles.fgCall, g.changed?.has(n.name!) && styles.aiChanged, selected && styles.isSelected, status, 'nopan')}
+      className={cx(styles.fgNode, styles.fgPhase, call && styles.fgCall, (call ? g.changedBlocks?.has(n.block!) : g.changed?.has(n.name!)) && styles.aiChanged, selected && styles.isSelected, status, 'nopan')}
       title={phaseNodeTitle(base, s)}
       {...common}
     >
@@ -400,10 +402,10 @@ function Canvas(props: FlowGraphProps) {
 
   const run = props.run;
   const ctx = useMemo<Ctx>(() => ({
-    mode, selectedName: props.selectedName, selectedBlock: props.selectedBlock, selectedKey: props.selectedKey, changed: props.changed, chip: props.chip,
+    mode, selectedName: props.selectedName, selectedBlock: props.selectedBlock, selectedKey: props.selectedKey, changed: props.changed, changedBlocks: props.changedBlocks, chip: props.chip,
     startSub: props.startSub, startChips: props.startChips, toolsOf: props.toolsOf, run, artInfo: props.artInfo, artLocked: props.artLocked, onNode: props.onNode, onAdd: props.onAdd,
     markers, current: new Set(run?.currentKeys ?? []), hl, setHl,
-  }), [mode, props.selectedName, props.selectedBlock, props.selectedKey, props.changed, props.chip, props.startSub, props.startChips, props.toolsOf, run, props.artInfo, props.artLocked, props.onNode, props.onAdd, markers, hl]);
+  }), [mode, props.selectedName, props.selectedBlock, props.selectedKey, props.changed, props.changedBlocks, props.chip, props.startSub, props.startChips, props.toolsOf, run, props.artInfo, props.artLocked, props.onNode, props.onAdd, markers, hl]);
 
   const marker = (id: string, cls: string) => (
     <marker id={`${id}-${markers}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

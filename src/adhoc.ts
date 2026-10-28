@@ -11,8 +11,11 @@ import type { RunReport } from './runner.js';
 /** Id запуска — имя папки в runs/: без точек и слэшей. */
 export const RUN_ID_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Черновик из конструктора (spec — объект) или из скилла (yaml — строка): валидный spec в короткой форме. */
-export function draftSpec(body: { spec?: unknown; yaml?: unknown }): FlowSpec {
+/**
+ * Черновик из конструктора (spec — объект) или из скилла (yaml — строка): валидный spec в короткой форме.
+ * calls: false — вызовы не проверять (правка идущего запуска: раннер проверяет их только у блоков впереди).
+ */
+export function draftSpec(body: { spec?: unknown; yaml?: unknown }, o: { calls?: boolean } = {}): FlowSpec {
   let spec: FlowSpec;
   if (body.yaml !== undefined) {
     if (typeof body.yaml !== 'string') throw new Error('yaml — строка');
@@ -24,7 +27,7 @@ export function draftSpec(body: { spec?: unknown; yaml?: unknown }): FlowSpec {
   // имя уходит в путь папки запуска: проверяем и здесь, а не только регэкспом схемы
   assertFlowName(spec.name);
   // черновик вызывает только сохранённые flow: их и проверяем
-  checkCalls(spec);
+  if (o.calls !== false) checkCalls(spec);
   return spec;
 }
 
