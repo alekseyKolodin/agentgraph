@@ -248,7 +248,8 @@ const withLocal = (list: string | undefined) => [...new Set([...(list ?? '').spl
 
 /**
  * Окружение claude: всё пользовательское (вход, провайдер, Bedrock, токены) остаётся, вычищаются только маркеры
- * хоста и сессии. Хуки и MCP идут на 127.0.0.1 мимо прокси (NO_PROXY), терминал — 256 цветов и truecolor.
+ * хоста и сессии. Хуки и MCP идут на 127.0.0.1 мимо прокси (NO_PROXY), терминал — 256 цветов и truecolor, без
+ * локали — C.UTF-8.
  */
 export function sessionEnv(env: NodeJS.ProcessEnv, hasAddDirs: boolean): Record<string, string> {
   const out: Record<string, string> = {};
@@ -259,6 +260,9 @@ export function sessionEnv(env: NodeJS.ProcessEnv, hasAddDirs: boolean): Record<
   if (env.no_proxy !== undefined) out.no_proxy = withLocal(env.no_proxy);
   out.TERM = 'xterm-256color';
   out.COLORTERM = 'truecolor';
+  // локаль ставит терминал (Terminal.app, iTerm2), а у приложения из Finder её нет: claude копирует выделение ещё и
+  // через pbcopy, и тот без UTF-8 превращает «привет» в «–њ—А–Є–≤–µ—В». Заданную пользователем локаль не трогаем
+  if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) out.LANG = 'C.UTF-8';
   // CLAUDE.md папок тегов — как у этапов запуска (agent.ts)
   if (hasAddDirs) out.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD = '1';
   return out;

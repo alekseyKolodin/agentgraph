@@ -173,6 +173,10 @@ test('sessionEnv: вычищает только маркеры хоста и с�
   assert.equal(env.TERM, 'xterm-256color');
   assert.equal(env.COLORTERM, 'truecolor');
   assert.equal(sessionEnv({}, false).NO_PROXY, '127.0.0.1,localhost');
+  // приложение из Finder без локали: pbcopy внутри claude испортил бы кириллицу; заданную локаль не трогаем
+  assert.equal(env.LANG, 'C.UTF-8');
+  assert.equal(sessionEnv({ LANG: 'ru_RU.UTF-8' }, false).LANG, 'ru_RU.UTF-8');
+  assert.deepEqual([sessionEnv({ LC_ALL: 'en_US.UTF-8' }, false).LANG, sessionEnv({ LC_CTYPE: 'UTF-8' }, false).LANG], [undefined, undefined]);
   assert.equal(sessionEnv({}, false).CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, undefined);
 });
 
