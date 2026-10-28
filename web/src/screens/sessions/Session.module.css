@@ -43,7 +43,7 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 20px; border-bottom: 1px solid var(--line); min-height: 28px; }
 .tags-label { font-size: var(--fs-meta); color: var(--ink-2); margin-right: 2px; }
 .none { font-size: var(--fs-meta); color: var(--ink-3); }
-.chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); color: var(--ink); font-size: var(--fs-meta); }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); color: var(--ink); font-size: var(--fs-meta); white-space: nowrap; }
 .chip:has(.chip-x) { padding-right: 2px; }
 .chip.task { background: color-mix(in srgb, var(--live) 16%, transparent); border-color: var(--live); font-weight: 600; }
 .chip.knowledge svg { color: var(--ink-2); }

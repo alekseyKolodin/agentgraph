@@ -9,9 +9,10 @@ export function Badge({ status }: { status: string }) {
 }
 
 export function TagBadge({ slug, kind = 'task' }: { slug: string; kind?: TagKind }) {
+  // слаг — и в подсказке: в узком месте пилюля обрезается многоточием
   return kind === 'knowledge'
-    ? <span className="badge tag knowledge" title={t('Тег области знаний: заметки, пути и вложения для промптов этапов')}>#{slug}</span>
-    : <span className="badge tag" title={t('Тег задачи: саммари фичи между запусками')}>#{slug}</span>;
+    ? <span className="badge tag knowledge" title={`#${slug}\n${t('Тег области знаний: заметки, пути и вложения для промптов этапов')}`}>#{slug}</span>
+    : <span className="badge tag" title={`#${slug}\n${t('Тег задачи: саммари фичи между запусками')}`}>#{slug}</span>;
 }
 
 export function AdhocBadge() {

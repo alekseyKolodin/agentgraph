@@ -29,7 +29,7 @@
 .name a { color: var(--ink); font-weight: 500; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name a:hover { text-decoration: underline; }
 .tag-list { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.tag-list :global(.badge) { margin-left: 0; }
+.tag-list :global(.badge) { margin-left: 0; max-width: 220px; }
 .dir { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
 .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .when { color: var(--ink-2); white-space: nowrap; font-size: var(--fs-meta); }
