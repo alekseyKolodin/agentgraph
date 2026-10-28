@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canSummarize, chipHint, fileUris, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, summaryNote } from './sessions';
+import { canSummarize, chipHint, fileUris, osc52Text, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, summaryNote } from './sessions';
 
 test('статус сессии: подписи и тон точки; выход без SessionStart — отдельный исход', () => {
   assert.deepEqual([sessionStatusLabel({ status: 'working' }), sessionTone({ status: 'working' })], ['Работает', 'live']);
@@ -59,4 +59,15 @@ test('состояние саммари: пишется, приложение з
   assert.deepEqual(summaryNote({ chips: task, summary: { at, tags: ['checkout', 'billing'], costUsd: 0.01 } }, now), { text: 'Саммари записано в checkout и billing · 14:52', tone: 'ok', title: '$0.010' });
   const err = summaryNote({ chips: task, summary: { at, tags: ['a'], errors: { b: 'таймаут' }, costUsd: 0 } }, now);
   assert.deepEqual([err?.text, err?.tone, err?.title], ['Саммари записано в a, ошибка в b', 'err', 'b: таймаут']);
+});
+
+test('OSC 52: текст из base64 в UTF-8, любой буфер; запрос буфера, пустое и не base64 — null', () => {
+  const b64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+  assert.equal(osc52Text('c;ZWxsbyBjb3B5IHRlc3Q='), 'ello copy test');
+  assert.equal(osc52Text(`;${b64('корзина ✓\nвторая строка')}`), 'корзина ✓\nвторая строка');
+  assert.equal(osc52Text(`p;${b64('x')}`), 'x');
+  assert.equal(osc52Text('c;?'), null);
+  assert.equal(osc52Text('c;'), null);
+  assert.equal(osc52Text('нет-разделителя'), null);
+  assert.equal(osc52Text('c;не base64!'), null);
 });

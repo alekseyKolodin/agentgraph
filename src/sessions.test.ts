@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionTags, resumeTarget,
-  safeRealpath, sessionArgs, sessionContext, sessionEnv, sessionFlags, sessionName, sessionReadTargets, sessionTagDirs, tagDelta, type HookDeps, type HookState,
-  type SessionLaunch,
+  childPermissionMode, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionTags, resumeTarget,
+  safeRealpath, sessionArgs, sessionContext, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, sessionTagDirs, tagDelta, SESSION_PROMPT_MAX,
+  type HookDeps, type HookState, type SessionLaunch,
 } from './sessions.js';
 import { createTag, readTag, tagDir, tagsDir, updateTag, writeTagSummary } from './tags.js';
 
@@ -52,10 +52,12 @@ test('sessionArgs: новый разговор — --session-id, названи�
   // HTTP-хуки на SessionStart Claude Code пропускает: только командой, -f и || true
   assert.equal(start.type, 'command');
   assert.match(start.command, /^curl -sSf --max-time 5 .*'X-Agentgraph-Session: tok123'.*'http:\/\/127\.0\.0\.1:4755\/api\/sessions\/11111111-2222-4333-8444-555555555555\/hook' \|\| true$/);
-  for (const e of ['UserPromptSubmit', 'PostToolBatch', 'Stop', 'StopFailure', 'Notification', 'SessionEnd', 'PermissionRequest']) {
+  for (const e of ['UserPromptSubmit', 'PostToolBatch', 'Stop', 'StopFailure', 'Notification', 'SessionEnd', 'PermissionRequest', 'PreToolUse']) {
     const h = settings.hooks[e][0].hooks[0];
     assert.deepEqual([h.type, h.url, h.headers], ['http', 'http://127.0.0.1:4755/api/sessions/11111111-2222-4333-8444-555555555555/hook', { 'X-Agentgraph-Session': 'tok123' }]);
   }
+  // PreToolUse — только на session_new: остальные инструменты хук не задерживает
+  assert.equal(settings.hooks.PreToolUse[0].matcher, 'mcp__agentgraph__session_new');
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
@@ -72,6 +74,31 @@ test('sessionArgs: «Продолжить» — --resume, модель и реж
   assert.ok(!args.some((a) => a.startsWith('--session-id')));
   assert.equal(flagValue(args, '--model'), 'haiku');
   assert.equal(flagValue(args, '--permission-mode'), 'plan');
+});
+
+test('sessionArgs: первое сообщение — последним, после `--`: --add-dir не заберёт его себе, дефис в начале — не флаг', () => {
+  const args = sessionArgs(launch({ prompt: '--help почини корзину', model: 'haiku' }));
+  assert.deepEqual(args.slice(-2), ['--', '--help почини корзину']);
+  assert.equal(args.filter((a) => a === '--').length, 1);
+  assert.ok(!sessionArgs(launch()).includes('--'));
+});
+
+test('sessionPrompt: пусто — без сообщения, не строка и слишком длинное — ошибка', () => {
+  assert.equal(sessionPrompt(undefined), undefined);
+  assert.equal(sessionPrompt('   '), undefined);
+  assert.equal(sessionPrompt(' почини \n'), 'почини');
+  assert.throws(() => sessionPrompt(42), /строка/);
+  // предел — в байтах: Linux режет один аргумент на 128 КиБ, кириллица — два байта на знак
+  assert.equal(sessionPrompt('x'.repeat(SESSION_PROMPT_MAX)), 'x'.repeat(SESSION_PROMPT_MAX));
+  assert.throws(() => sessionPrompt('ж'.repeat(SESSION_PROMPT_MAX / 2 + 1)), /больше 100000 байт/);
+});
+
+test('childPermissionMode: текущий режим из хуков, иначе режим запуска, иначе manual; default и опасные — manual', () => {
+  assert.equal(childPermissionMode('plan', 'auto'), 'plan');
+  assert.equal(childPermissionMode('auto', 'manual'), 'auto');
+  assert.equal(childPermissionMode(undefined, 'acceptEdits'), 'acceptEdits');
+  assert.equal(childPermissionMode(undefined, undefined), 'manual');
+  for (const m of ['default', 'bypassPermissions', 'dontAsk', 'что-то новое']) assert.equal(childPermissionMode(m, 'auto'), 'manual');
 });
 
 test('sessionFlags: пусто — без флагов; модель с дефисом или пробелом и режимы bypassPermissions/dontAsk — ошибка', () => {
@@ -283,6 +310,16 @@ test(
     assert.equal(parseHookInput({ hook_event_name: 'PostToolBatch', agent_id: 'sub-1' })?.agent_id, 'sub-1');
   }),
 );
+
+test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new', () => {
+  assert.equal(handleHook(state(), { hook_event_name: 'UserPromptSubmit', prompt: 'x', permission_mode: 'plan' }, deps()).patch.permissionMode, 'plan');
+  assert.equal(handleHook(state({ permissionMode: 'plan' }), { hook_event_name: 'Stop', permission_mode: 'plan' }, deps()).patch.permissionMode, undefined);
+  assert.equal(handleHook(state(), { hook_event_name: 'PostToolBatch', agent_id: 'a1', permission_mode: 'auto' }, deps()).patch.permissionMode, undefined);
+  assert.deepEqual(parseHookInput({ hook_event_name: 'Stop', permission_mode: 'auto' }), { hook_event_name: 'Stop', permission_mode: 'auto' });
+  const ask = handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__session_new', permission_mode: 'auto' }, deps()).reply;
+  assert.equal((ask.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask');
+  assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash' }, deps()).reply, {});
+});
 
 test('хуки: id разговора не UUID в историю разговоров не попадает (он ушёл бы в --resume)', () => {
   const r = handleHook(state({ claudeSessionIds: ['11111111-2222-4333-8444-555555555555'] }), { hook_event_name: 'Stop', session_id: '--dangerously-skip-permissions', transcript_path: '/t/x.jsonl' }, deps());

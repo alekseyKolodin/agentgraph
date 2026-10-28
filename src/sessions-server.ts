@@ -7,6 +7,7 @@
 import { STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -23,9 +24,9 @@ import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import {
   findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionTags, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
-  sessionFlags, sessionName, sessionReadTargets, sessionTagDirs, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type HookState,
+  childPermissionMode, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, sessionTagDirs, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type HookState,
 } from './sessions.js';
-import { mcpReply } from './sessions-mcp.js';
+import { mcpReply, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
@@ -67,6 +68,8 @@ type Live = {
   status: SessionStatus;
   injected: string[] | null;
   started: boolean;
+  /** Режим разрешений claude сейчас (из хуков; Shift+Tab его меняет) — его получит сессия из session_new. */
+  mode?: string;
   /** Диалог доверия сейчас на экране; был ли он хоть раз. */
   trustNow: boolean;
   sawTrust: boolean;
@@ -263,10 +266,12 @@ export class SessionManager {
     if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Директория не найдена: ${cwd}`);
     let tags: string[];
     let flags: ReturnType<typeof sessionFlags>;
+    let prompt: string | undefined;
     try {
       tags = runTagSlugs(body.tags);
       for (const t of tags) readTag(t);
       flags = sessionFlags(body);
+      prompt = sessionPrompt(body.prompt);
       if (body.saveTag !== undefined && typeof body.saveTag !== 'boolean') throw new Error('saveTag — true или false');
     } catch (err) {
       throw new SessionError(400, errMsg(err));
@@ -292,7 +297,7 @@ export class SessionManager {
     const s = newLive(rec, 'starting');
     this.sessions.set(id, s);
     try {
-      this.spawn(s, kit, bin, port, { claudeSessionId: id, resume: false }, sizeOf(body));
+      this.spawn(s, kit, bin, port, { claudeSessionId: id, resume: false, ...(prompt ? { prompt } : {}) }, sizeOf(body));
     } catch (err) {
       this.sessions.delete(id);
       throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
@@ -301,7 +306,7 @@ export class SessionManager {
   }
 
   /** Новый процесс claude для сессии: новый токен, папки и запреты по текущим тегам. */
-  private spawn(s: Live, kit: PtyKit, bin: string, port: number, conv: { claudeSessionId: string; resume: boolean }, size: { cols: number; rows: number }): void {
+  private spawn(s: Live, kit: PtyKit, bin: string, port: number, conv: { claudeSessionId: string; resume: boolean; prompt?: string }, size: { cols: number; rows: number }): void {
     const r = s.rec;
     const filesDir = this.filesDir(r.id);
     fs.mkdirSync(filesDir, { recursive: true });
@@ -313,7 +318,7 @@ export class SessionManager {
     // CLAUDE.md ищется только в папках тегов: папка перетащенных файлов — не повод
     const proc = kit.spawn(bin, args, { name: 'xterm-256color', ...size, cwd: r.cwd, env: sessionEnv(this.deps.env(), dirs.addDirs.length > 1) });
     const pty = new PtySession(proc, kit.mirror(size.cols, size.rows), size);
-    Object.assign(s, { pty, status: 'starting', injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
+    Object.assign(s, { pty, status: 'starting', injected: null, started: false, mode: undefined, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
     delete r.endedAt;
     delete r.exitCode;
     delete r.outcome;
@@ -599,6 +604,7 @@ export class SessionManager {
       transcriptPath: s.rec.transcriptPath,
       started: s.started,
       turns: s.rec.turns,
+      permissionMode: s.mode,
     };
     const r = handleHook(state, input, {
       readTags: (slugs) => readSessionTags(slugs, readTag),
@@ -610,6 +616,7 @@ export class SessionManager {
     if (p.transcriptPath) s.rec.transcriptPath = p.transcriptPath;
     if (p.turns !== undefined) s.rec.turns = p.turns;
     if (p.started) s.started = true;
+    if (p.permissionMode) s.mode = p.permissionMode;
     if (p.status && s.pty?.alive) s.status = p.status;
     s.lastHookAt = Date.now();
     s.rec.lastActivityAt = new Date().toISOString();
@@ -626,11 +633,48 @@ export class SessionManager {
     return r.reply;
   }
 
-  mcp(s: Live, body: unknown): { status: number; body?: unknown } {
-    return mcpReply(body, () => {
-      const t = readSessionTags(s.rec.tags, readTag);
-      return { task: t.task.map((x) => x.slug), knowledge: t.knowledge.map((x) => x.slug) };
+  /** MCP дочернего claude: теги сессии на момент вызова и session_new — новая сессия рядом с этой. */
+  mcp(s: Live, body: unknown, port: number): Promise<McpReply> {
+    return mcpReply(body, {
+      tags: () => {
+        const t = readSessionTags(s.rec.tags, readTag);
+        return { task: t.task.map((x) => x.slug), knowledge: t.knowledge.map((x) => x.slug) };
+      },
+      open: (args) => this.openFrom(s, args, port),
     });
+  }
+
+  /**
+   * session_new из терминала сессии s. Чего модель не задала — как у s: папка, теги, модель, запись саммари в теги.
+   * Режим разрешений модель не выбирает: текущий режим s, а не известен — режим запуска или manual (childPermissionMode).
+   * Теги — любые существующие: опечатка модели не заводит пустой тег. Первое сообщение — с пометкой, что его написала
+   * модель: claude не примет его за slash-команду или `!`, а модель новой сессии видит, чей это текст. Открытые экраны
+   * s получают ссылку на новую сессию.
+   */
+  private async openFrom(s: Live, args: SessionNewArgs, port: number): Promise<SessionView> {
+    const r = s.rec;
+    const prompt = args.prompt && `Задача из сессии agentgraph «${r.name}»: этот текст написал Claude по просьбе пользователя.\n\n${args.prompt}`;
+    // слаг проверяется до чтения с диска: «../x» не должен стать путём
+    const missing = args.tags ? runTagSlugs(args.tags).filter((t) => !readTag(t)) : [];
+    if (missing.length) throw new SessionError(400, `Тегов ${missing.join(', ')} в agentgraph нет: новой сессии можно дать только существующие`);
+    const cwd = args.cwd?.trim() ? path.resolve(r.cwd, args.cwd.trim().replace(/^~(?=$|\/)/, os.homedir())) : r.cwd;
+    const v = await this.create(
+      {
+        cwd,
+        tags: args.tags ?? r.tags.filter((t) => readTag(t)),
+        name: args.name,
+        model: args.model ?? r.model,
+        permissionMode: childPermissionMode(s.mode, r.permissionMode),
+        saveTag: r.saveTag,
+        prompt,
+        ...(s.pty ? { cols: s.pty.cols, rows: s.pty.rows } : {}),
+      },
+      port,
+      r.cwd,
+    );
+    const msg = JSON.stringify({ t: 'opened', session: v } satisfies SessionWsServer);
+    for (const ws of s.sockets.keys()) if (ws.readyState === ws.OPEN) ws.send(msg);
+    return v;
   }
 
   // --- WebSocket экрана
@@ -936,7 +980,7 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
       const s = mgr.authed(m[1], req.headers);
       // без потока сервер→клиент (GET) и без завершения сессии (DELETE): сервер без состояния
       if (method !== 'POST') return done(405, { error: 'Только POST' });
-      const r = mgr.mcp(s, await ctx.readJson());
+      const r = await mgr.mcp(s, await ctx.readJson(), req.socket.localPort ?? 0);
       return done(r.status, r.body);
     }
     if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'GET') return done(200, mgr.view(mgr.get(m[1])) satisfies SessionView);

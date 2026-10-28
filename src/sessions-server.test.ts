@@ -192,7 +192,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   // MCP того же сервера: только POST и только с токеном
   const list = await call<{ result: { tools: unknown[] } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': token });
-  assert.equal(list.body.result.tools.length, 2);
+  assert.equal(list.body.result.tools.length, 3);
   assert.equal((await call('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 404);
   assert.equal((await call('GET', `/api/sessions/${s.id}/mcp`, undefined, { 'X-Agentgraph-Session': token })).status, 405);
 
@@ -200,6 +200,53 @@ test('хуки: чужой токен и без токена — 404; SessionSta
   assert.deepEqual(p.killed, ['SIGHUP']);
   v = await view(s.id);
   assert.deepEqual([v.status, v.live, v.exitCode, v.outcome], ['ended', false, 129, undefined]);
+});
+
+test('session_new: новая сессия из терминала — папка, теги и модель как у этой, режим — всегда этой; экран этой получает ссылку', async () => {
+  createTag('cart', 'Корзина');
+  fs.mkdirSync(path.join(root, 'api'), { recursive: true });
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['cart'], model: 'sonnet', permissionMode: 'plan', cols: 110, rows: 33 });
+  const token = tokenOf(spawned.at(-1)!);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/sessions/${s.id}/ws`, { origin: `http://127.0.0.1:${port}` });
+  const got: SessionWsServer[] = [];
+  ws.on('message', (m) => got.push(JSON.parse(String(m)) as SessionWsServer));
+  await new Promise((r) => ws.once('open', r));
+  const tool = async (args: Record<string, unknown>) =>
+    (await call<{ result: { content: Array<{ text: string }>; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'session_new', arguments: args } }, { 'X-Agentgraph-Session': token })).body.result;
+
+  const r = await tool({ prompt: 'Почини корзину', cwd: '../api', permissionMode: 'auto' });
+  // режим разрешений модель не задаёт: лишний параметр — ошибка, новой сессии нет
+  assert.deepEqual([r.isError, /Лишние параметры: permissionMode/.test(r.content[0].text)], [true, true]);
+  const ok = await tool({ prompt: 'Почини корзину', cwd: '../api' });
+  assert.equal(ok.isError, undefined, ok.content[0].text);
+  const p = spawned.at(-1)!;
+  assert.equal(p.opts.cwd, path.join(root, 'api'));
+  assert.deepEqual([p.opts.cols, p.opts.rows], [110, 33]);
+  // текст модели — с пометкой: не slash-команда и не `!`, а модель новой сессии видит, чей он
+  assert.deepEqual(p.args.slice(-2), ['--', `Задача из сессии agentgraph «${s.name}»: этот текст написал Claude по просьбе пользователя.\n\nПочини корзину`]);
+  assert.equal(p.args[p.args.indexOf('--model') + 1], 'sonnet');
+  // хуков ещё не было — режим запуска
+  assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'plan');
+  await until(() => got.some((m) => m.t === 'opened'));
+  const opened = got.find((m) => m.t === 'opened') as Extract<SessionWsServer, { t: 'opened' }>;
+  assert.deepEqual([opened.session.cwd, opened.session.tags, opened.session.live], [path.join(root, 'api'), ['cart'], true]);
+  assert.match(ok.content[0].text, new RegExp(`^Сессия «${opened.session.name}» открыта`));
+
+  // теги — только существующие: опечатка не заводит пустой тег; [] — без тегов
+  const typo = await tool({ tags: ['cart', 'no-such-tag'] });
+  assert.deepEqual([typo.isError, typo.content[0].text], [true, 'Тегов no-such-tag в agentgraph нет: новой сессии можно дать только существующие']);
+  assert.equal((await call('GET', '/api/tags/no-such-tag')).status, 404);
+  assert.equal((await tool({ tags: ['../x'] })).isError, true);
+  // режим переключили Shift+Tab (хук принёс default) — новая сессия получает текущий: manual
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'x', session_id: s.id, permission_mode: 'default' });
+  assert.equal((await tool({ tags: [], model: 'haiku' })).isError, undefined);
+  const last = spawned.at(-1)!.args;
+  assert.deepEqual([last.includes('--'), last[last.indexOf('--model') + 1], last[last.indexOf('--permission-mode') + 1]], [false, 'haiku', 'manual']);
+  // PreToolUse на session_new — «спросить» даже в auto
+  const pre = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__session_new', permission_mode: 'auto' });
+  assert.equal((pre.body.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask');
+  ws.close();
+  for (const v of (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live)) await call('POST', `/api/sessions/${v.id}/end`);
 });
 
 test('выход без SessionStart с диалогом доверия на экране — «папка не доверена», а не просто «код 0»', async () => {

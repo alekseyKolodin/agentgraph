@@ -17,7 +17,7 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canSummarize, chipHint, pendingNote, sessionStatusLabel, sessionTone, summaryNote } from '../../lib/sessions';
-import { SessionTerminal } from './SessionTerminal';
+import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { ICON, tildePath } from './icons';
 import styles from './Session.module.css';
 
@@ -79,7 +79,15 @@ function useActions(s: SessionView, setS: (v: SessionView) => void) {
 
 function Session({ s }: { s: SessionView }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  const toast = useToast();
   const setS = (v: SessionView) => putSession(qc, v);
+  // Claude открыл сессию инструментом session_new: она уже в списке, переход — по клику на всплывашку
+  const opened = (v: SessionView) => {
+    qc.setQueryData(sessionKeys.one(v.id), v);
+    void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
+    toast(t('Claude открыл сессию «{name}» — нажми, чтобы перейти', { name: v.name }), () => void navigate(`/sessions/${encodeURIComponent(v.id)}`));
+  };
   const home = useConfig().data?.home;
   const act = useActions(s, setS);
   const [screenOnly, setScreenOnly] = useState(false);
@@ -125,12 +133,13 @@ function Session({ s }: { s: SessionView }) {
           id={s.id}
           live={s.live}
           onState={setS}
+          onOpened={opened}
           overlay={!s.live && !screenOnly && <Ended s={s} act={act} onHide={() => setScreenOnly(true)} />}
         />
       </section>
       <footer className={styles.foot}>
         {s.live
-          ? [t('Ctrl-C дважды — выйти из Claude'), t('Shift+Enter — новая строка'), t('перезагрузка страницы сессию не прерывает'), ...(s.claudeVersion ? [`claude ${s.claudeVersion}`] : [])].join(' · ')
+          ? [t('Ctrl-C дважды — выйти из Claude'), t('Shift+Enter — новая строка'), t('{key}+мышь — выделение терминала', { key: SELECT_KEY }), t('перезагрузка страницы сессию не прерывает'), ...(s.claudeVersion ? [`claude ${s.claudeVersion}`] : [])].join(' · ')
           : s.transcriptPath
             ? <>{t('Транскрипт:')} <span className="mono">{tildePath(s.transcriptPath, home)}</span></>
             : t('Транскрипта нет: не было ни одного сообщения')}

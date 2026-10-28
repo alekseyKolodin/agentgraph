@@ -18,6 +18,9 @@ import {
 export const SESSION_MCP_SERVER = 'agentgraph';
 /** Инструмент полного текста тега задачи, когда теги задачи не влезли в бюджет хука и пришли строкой. */
 export const TAG_READ_TOOL = 'tag_read';
+/** Инструмент «открыть новую сессию»: не в SESSION_ALLOWED_TOOLS, и хук PreToolUse велит claude спросить даже в auto. */
+export const SESSION_NEW_TOOL = 'session_new';
+const SESSION_NEW_FULL = `mcp__${SESSION_MCP_SERVER}__${SESSION_NEW_TOOL}`;
 /** Разрешены без подтверждения: только чтение тегов сессии. */
 export const SESSION_ALLOWED_TOOLS = [KNOWLEDGE_READ_TOOL, TAG_READ_TOOL].map((t) => `mcp__${SESSION_MCP_SERVER}__${t}`);
 /** Заголовок с токеном сессии у хуков и MCP: без него (или с чужим) — 404. */
@@ -31,6 +34,8 @@ export const PERMISSION_MODES: readonly SessionPermissionMode[] = ['acceptEdits'
 export const SESSION_NAME_MAX = 80;
 /** Модель — алиас или id: без пробелов и без дефиса в начале, чтобы не стать флагом claude. */
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._[\]-]{0,63}$/;
+/** Первое сообщение новой сессии уходит в argv одним аргументом: Linux режет его на 128 КиБ (MAX_ARG_STRLEN), держим запас. */
+export const SESSION_PROMPT_MAX = 100_000;
 /** Диалог доверия к папке на экране claude: до его принятия ни хуки, ни MCP не запускаются. */
 export const TRUST_PROMPT_RE = /Is this a project you created or one you trust|Do you trust the files in this folder/;
 
@@ -94,6 +99,25 @@ export function sessionFlags(body: { model?: unknown; permissionMode?: unknown }
   return { ...(model ? { model } : {}), ...(mode ? { permissionMode: mode as SessionPermissionMode } : {}) };
 }
 
+/**
+ * Режим новой сессии из session_new: текущий режим этой (из хуков — его меняют Shift+Tab), иначе режим запуска, иначе
+ * manual. Передаётся всегда: без флага claude взял бы defaultMode из настроек папки, которую выбрала модель.
+ * default — это manual; bypassPermissions, dontAsk и незнакомые — тоже manual.
+ */
+export function childPermissionMode(current: string | undefined, launch: SessionPermissionMode | undefined): SessionPermissionMode {
+  const mode = current ?? launch;
+  return PERMISSION_MODES.includes(mode as SessionPermissionMode) ? (mode as SessionPermissionMode) : 'manual';
+}
+
+/** Первое сообщение новой сессии: пусто — claude ждёт пользователя. */
+export function sessionPrompt(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string') throw new Error('prompt — строка');
+  const text = raw.trim();
+  if (Buffer.byteLength(text) > SESSION_PROMPT_MAX) throw new Error(`Первое сообщение больше ${SESSION_PROMPT_MAX} байт`);
+  return text || undefined;
+}
+
 // --- запуск claude
 
 export type SessionTags = { task: Tag[]; knowledge: Tag[] };
@@ -153,6 +177,8 @@ export type SessionLaunch = {
   denyDirs: string[];
   model?: string;
   permissionMode?: SessionPermissionMode;
+  /** Первое сообщение нового разговора: claude отправит его сам, как `claude "задача"`. */
+  prompt?: string;
 };
 
 const base = (l: Pick<SessionLaunch, 'port' | 'id'>) => `http://127.0.0.1:${l.port}/api/sessions/${l.id}`;
@@ -171,6 +197,7 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: curl, timeout: 10 }] }],
       ...Object.fromEntries(HTTP_HOOKS.map((e) => [e, http])),
+      PreToolUse: [{ matcher: SESSION_NEW_FULL, hooks: http[0].hooks }],
     },
     // //путь — абсолютный путь в правилах разрешений; Edit закрывает все инструменты записи файлов, правило Write(путь)
     // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит
@@ -185,7 +212,7 @@ export function sessionMcpConfig(l: SessionLaunch): Record<string, unknown> {
 
 /**
  * argv для claude: запуск без shell, массивом, поэтому JSON не экранируется. Название — через `=`: начнись оно с дефиса,
- * claude принял бы его за флаг. Модель и режим разрешений — только если выбраны.
+ * claude принял бы его за флаг. Модель и режим разрешений — только если выбраны, первое сообщение — последним.
  */
 export function sessionArgs(l: SessionLaunch): string[] {
   // id — через `=`: значение не может стать флагом, даже если бы пришло из хука кривым
@@ -195,6 +222,8 @@ export function sessionArgs(l: SessionLaunch): string[] {
   for (const d of l.addDirs) args.push('--add-dir', d);
   if (l.model) args.push('--model', l.model);
   if (l.permissionMode) args.push('--permission-mode', l.permissionMode);
+  // после `--`: --add-dir и --allowedTools берут несколько значений и иначе забрали бы сообщение себе
+  if (l.prompt) args.push('--', l.prompt);
   return args;
 }
 
@@ -319,6 +348,8 @@ export type HookInput = {
   notification_type?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  /** Режим разрешений в момент хука: default, plan, acceptEdits, auto… */
+  permission_mode?: string;
 };
 
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
@@ -330,7 +361,7 @@ export function parseHookInput(raw: unknown): HookInput | undefined {
   if (!event) return undefined;
   const input = r.tool_input && typeof r.tool_input === 'object' && !Array.isArray(r.tool_input) ? (r.tool_input as Record<string, unknown>) : undefined;
   const out: HookInput = { hook_event_name: event };
-  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name'] as const) {
+  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode'] as const) {
     const v = str(r[k]);
     if (v !== undefined) out[k] = v;
   }
@@ -349,6 +380,8 @@ export type HookState = {
   /** SessionStart приходил у этого процесса claude. */
   started: boolean;
   turns: number;
+  /** Текущий режим разрешений по последнему хуку основного разговора. */
+  permissionMode?: string;
 };
 
 export type HookResult = {
@@ -388,6 +421,7 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
   const sid = input.session_id && CLAUDE_ID_RE.test(input.session_id) ? input.session_id : undefined;
   if (sid && s.claudeSessionIds.at(-1) !== sid) patch.claudeSessionIds = [...s.claudeSessionIds.filter((x) => x !== sid), sid];
   if (sid && input.transcript_path) patch.transcriptPath = input.transcript_path;
+  if (input.permission_mode && !input.agent_id && input.permission_mode !== s.permissionMode) patch.permissionMode = input.permission_mode;
   const event = input.hook_event_name;
   const tags = () => deps.readTags(s.tags);
 
@@ -416,6 +450,13 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       return { reply: {}, patch: WAIT_NOTIFICATIONS.includes(input.notification_type ?? '') ? { ...patch, status: 'waiting' } : patch };
     case 'PermissionRequest':
       return { reply: permissionReply(input, deps.readTargets(tags()), deps.realpath), patch };
+    case 'PreToolUse':
+      // session_new запускает claude с текстом модели: спрашиваем человека в любом режиме, auto тоже
+      if (input.tool_name !== SESSION_NEW_FULL) return { reply: {}, patch };
+      return {
+        reply: { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'agentgraph: новая сессия запустит claude с заданием от модели' } },
+        patch,
+      };
     default:
       return { reply: {}, patch };
   }
