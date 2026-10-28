@@ -475,7 +475,7 @@ claude --session-id <uuid> --name=<name>
   [--model M] [--permission-mode P] [-- '<first message>']
 ```
 
-No `--append-system-prompt` (it freezes on the first request), `--strict-mcp-config` or `--bare`: the user's own hooks and MCP servers stay. The environment is the server's minus host and session markers (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_AGENT_SDK_*`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_PREVIEW_*` and a few more) — the user's login, provider and Bedrock/Vertex settings stay — plus `NO_PROXY=127.0.0.1,localhost`, `TERM=xterm-256color`, `COLORTERM=truecolor`.
+No `--append-system-prompt` (it freezes on the first request), `--strict-mcp-config` or `--bare`: the user's own hooks and MCP servers stay. The environment is the server's minus host and session markers (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_AGENT_SDK_*`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_PREVIEW_*` and a few more) — the user's login, provider and Bedrock/Vertex settings stay — plus `NO_PROXY=127.0.0.1,localhost`, `TERM=xterm-256color`, `COLORTERM=truecolor`, and `LANG=C.UTF-8` when no locale is set (an app started from Finder has none, and claude's own `pbcopy` would garble non-ASCII text).
 
 **How the tags get in.** Only through standard Claude Code mechanisms:
 - `SessionStart` (start, `/clear`, `/resume`, compact) — a command hook (`curl -sSf … || true`; Claude Code skips HTTP hooks on SessionStart) answers with the full tag context in `additionalContext`: a task tag block (title, notes, paths, attachments, the summary as `source-data`) without the run markers, and a line per knowledge tag (inline ones in full).
