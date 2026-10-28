@@ -1248,7 +1248,8 @@ async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: 
     else if (report.status !== 'done') r = { tag, ok: false, costUsd: 0, skipped: `запуск не завершён (${report.status})` };
     // «Остановить» во время саммари прерывает оставшиеся сессии, запуск остаётся done
     else if (opts.abort?.signal.aborted) r = { tag, ok: false, costUsd: 0, skipped: 'остановлено' };
-    else r = await queueTagSummary(tag, () => updateTagSummary(report, final, tag, opts, emit));
+    // «Стоп» мог прийти, пока саммари ждало в очереди тега (её держала сессия терминала): тогда ни промпта, ни сессии
+    else r = await queueTagSummary(tag, async () => (opts.abort?.signal.aborted ? { tag, ok: false, costUsd: 0, skipped: 'остановлено' } : updateTagSummary(report, final, tag, opts, emit)));
     out.push(r);
   }
   return out;
