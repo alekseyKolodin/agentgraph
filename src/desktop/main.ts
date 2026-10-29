@@ -152,6 +152,12 @@ function openWindow(): void {
       detail: 'Если уйти, они пропадут.',
     });
     if (choice === 0) e.preventDefault();
+    else if (pendingRestart) {
+      // «Остаться» отменило выход: перезапуска после обновления не будет, UI скажет перезапустить вручную
+      pendingRestart(false);
+      pendingRestart = null;
+      quitConfirmed = false;
+    }
   });
   win.on('closed', () => (win = null));
   void win.loadURL(`${origin}/`);
@@ -192,6 +198,8 @@ let stopping: Promise<void> | null = null;
 let liveSessions: () => string[] = () => [];
 let quitConfirmed = false;
 let quitAsking = false;
+/** Перезапуск после автообновления ждёт выхода: relaunch — в will-quit, false — выход отменили в окне. */
+let pendingRestart: ((ok: boolean) => void) | null = null;
 
 /** «Идут 2 сессии Claude: «a» и «b».» */
 function sessionsLine(names: string[]): string {
@@ -241,7 +249,16 @@ async function main(): Promise<void> {
   const { ROOT } = await import('../paths.js');
   home = ROOT;
   const port = await pickPort();
-  await server.startServer({ port, host: HOST, defaultCwd: os.homedir() });
+  // после автообновления (src/update.ts) — обычный выход и новый экземпляр приложения; про живые сессии UI уже
+  // предупредил, Cmd+Q-вопрос не нужен. Окно с несохранёнными правками ещё может выход отменить (will-prevent-unload)
+  const restart = () =>
+    new Promise<boolean>((resolve) => {
+      pendingRestart = resolve;
+      quitConfirmed = true;
+      app.quit();
+    });
+  // упакованное приложение не git checkout: проверка обновлений сама скажет, что обновляться не с чего
+  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, restart });
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();
@@ -290,7 +307,10 @@ app.on('will-quit', (e) => {
   e.preventDefault();
   stopping = stopServer()
     .catch((err) => console.error('agentgraph desktop: остановка сервера —', err))
-    .finally(() => app.exit(0));
+    .finally(() => {
+      if (pendingRestart) app.relaunch();
+      app.exit(0);
+    });
 });
 
 main().catch((err) => {

@@ -14,7 +14,8 @@ import { editBase, editFlow } from './edit.js';
 import { runFlow, type QuestionRecord, type RunOptions } from './runner.js';
 import type { AskAnswers } from './agent.js';
 import { consoleReporter } from './reporters.js';
-import { startServer } from './server.js';
+import { startServer, stopServer } from './server.js';
+import { execveRestart } from './update.js';
 import { RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import { c, fmtUsd } from './ui.js';
 import { createTag, listTags, readTag, runTagSlugs, splitRunTags, tagsRunDirs, withTagsInput } from './tags.js';
@@ -231,7 +232,8 @@ async function main(): Promise<number> {
       return result.aborted ? 2 : 0;
     }
     case 'ui': {
-      const url = await startServer({ port: values.port ? Number(values.port) : 4747, host: '127.0.0.1', defaultCwd: cwd, notify: !values['no-notify'] });
+      // автообновление: после него процесс перезапускается на месте с теми же аргументами (src/update.ts)
+      const url = await startServer({ port: values.port ? Number(values.port) : 4747, host: '127.0.0.1', defaultCwd: cwd, notify: !values['no-notify'], update: true, restart: execveRestart(stopServer) });
       console.log(`${c.green('●')} agentgraph ui: ${c.bold(url)}  ${c.dim(`(директория проекта по умолчанию: ${cwd})`)}`);
       // npm run ui собирает UI сам (scripts/ensure-web.mts); agentgraph ui и tsx src/cli.ts ui — нет
       if (!fs.existsSync(path.join(WEB_DIST_DIR, 'index.html'))) console.warn(c.yellow('UI не собран, на / его нет: npm run build:web (или запускай через npm run ui)'));
