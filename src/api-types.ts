@@ -16,6 +16,41 @@ export type ConfigResponse = {
   features: string[];
 };
 
+/** Шаг обновления: fetch — git fetch, merge — fast-forward, install — npm install, build — tsc в dist/, web — сборка UI, restart — перезапуск. */
+export type UpdateStep = 'fetch' | 'merge' | 'install' | 'build' | 'web' | 'restart';
+
+/**
+ * GET /api/update: новая версия agentgraph в его git checkout (src/update.ts).
+ * - unknown — ещё не проверяли; off — обновляться нечем (reason: не git checkout, нет upstream, HEAD отсоединён, выключено);
+ * - current — последняя версия; available — новые коммиты на upstream (blocked — почему нельзя обновить автоматически);
+ * - updating — идёт шаг step; restarting — обновлено, процесс перезапускается; updated — обновлено, перезапуск вручную
+ *   (canRestart: false); failed — обновление не удалось (error), checkout откачен к прежнему коммиту.
+ */
+export type UpdateStatus = {
+  state: 'unknown' | 'off' | 'current' | 'available' | 'updating' | 'restarting' | 'updated' | 'failed';
+  /** Версия из package.json запущенного кода. */
+  version: string;
+  reason?: string;
+  /** Версия из package.json на upstream. */
+  latest?: string;
+  /** Ветка, за которой следим: origin/main. */
+  upstream?: string;
+  /** Сколько коммитов upstream впереди. */
+  behind?: number;
+  /** Новые коммиты, сначала свежие, не больше 30. */
+  commits?: { sha: string; subject: string }[];
+  blocked?: string;
+  step?: UpdateStep;
+  error?: string;
+  /** Ошибка последней проверки (нет сети, нет доступа к remote): состояние остаётся прежним. */
+  checkError?: string;
+  checkedAt?: string;
+  /** Процесс умеет перезапуститься сам. */
+  canRestart: boolean;
+  /** Что обновление остановит: идущие запуски и живые сессии терминала. */
+  busy: { runs: number; sessions: string[] };
+};
+
 export type LimitWindow = {
   /** Сколько окна израсходовано, 0–100. */
   percent: number | null;

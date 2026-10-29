@@ -76,6 +76,16 @@ The interface is a React app from `web/`. `npm run ui` builds it into `dist/web`
 
 To stop the server: `Ctrl+C`. Runs in progress at that moment are cut off and show up in the list as "interrupted". Such a run can be continued from where it stopped.
 
+### Updates
+
+When agentgraph runs from a git checkout (`npm run ui`, `agentgraph ui`, `npm run desktop:dev`), the server runs `git fetch` 10 seconds after start and then once an hour, and compares the branch with its upstream (no upstream — `origin/<branch>`). If there are new commits, an **Update** badge appears next to the name in the sidebar; it opens the list of new commits and **Update and restart**:
+
+1. `git merge --ff-only` to the upstream — only a fast-forward: with uncommitted changes to tracked files or with local commits of your own, the dialog says why it can't update and suggests `git pull` by hand;
+2. `npm install` if `package.json` or `package-lock.json` changed (a `package-lock.json` rewritten by your npm version is put back to the committed one); `npm run build` if `src/` changed and there is a `dist/` build (the desktop app and `bin/agentgraph` run from it); `npm run build:web` if `web/` changed;
+3. runs in progress are stopped as with "Stop" (they can be continued), terminal sessions end (the conversation is kept), and the process restarts: `npm run ui` / `agentgraph ui` replace themselves in place (`process.execve`, Node 22.15+; the same terminal, `Ctrl+C` works as before), the desktop app quits and relaunches (if a window has unsaved changes and you choose "Stay", it keeps running and asks you to restart by hand). The page reloads by itself when the new server answers; other open tabs stay on the old interface until you reload them.
+
+If a step fails, the checkout is reset to the previous commit, the steps that had started (dependencies, builds) are repeated for it, and the dialog shows the error. Without `process.execve` the update is applied and the dialog asks you to restart by hand. The packaged app (`.dmg`) and an archive from `npm run share` aren't git checkouts and don't check for updates. The background `git fetch` never asks for anything in the terminal: ssh runs with `BatchMode=yes` unless you set `GIT_SSH_COMMAND` yourself. To turn checking off: `AGENTGRAPH_NO_UPDATE_CHECK=1`. API: `GET /api/update`, `POST /api/update/check` (fetch now), `POST /api/update`; the server checks only when started with `update: true` (`agentgraph ui`, the desktop app).
+
 ### Desktop app (macOS)
 
 The same server and the same UI in a separate window, without a terminal or a browser tab. It is an Electron wrapper: the main process (`src/desktop/main.ts`) calls `startServer()` from `src/server.ts` on a free `127.0.0.1` port and opens a window at `http://localhost:<port>/` — over http, not from `file://`, otherwise `server-guard.ts` would reject the requests. Electron rather than Tauri: the Agent SDK runs only in Node, and Electron carries Node inside.
@@ -418,7 +428,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/server.ts` | the UI HTTP server: REST API and event stream (SSE), managing running runs (a call block's child run is a live run of its own; pause, resume and stop reach it from the parent) |
 | `src/chat.ts` | run chat: a Claude session with run tools (status, log, pause, limit, reply, artifacts, flow) and the `ui` widget tools (table, links, action buttons, reply chips); dangerous actions run only on a confirmed click (`chatAction`); history with steps and widgets in `chat.json` |
 | `src/notify.ts` | system notifications (macOS, Linux) |
-| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, confirming Cmd+Q while terminal sessions are live, stopping runs, sessions and the server (`stopServer`) on quit |
+| `src/desktop/main.ts` | the desktop app's main process (Electron): data folder, port, login-shell environment, path to the Claude Code CLI outside asar, window at `http://localhost:<port>/`, confirming Cmd+Q while terminal sessions are live, stopping runs, sessions and the server (`stopServer`) on quit, relaunching after an auto-update |
 | `electron-builder.yml` | desktop app packaging: what goes into asar, what is unpacked (the Claude Code CLI and `node-pty`), dmg and zip targets |
 | `scripts/pty-helper.mts` | before `electron-builder`: makes `node-pty`'s `spawn-helper` executable (1.1.0 ships it without the bit) |
 | `src/feed.ts` | the Home events feed from `run.json`: questions, pauses, run endings |
@@ -428,6 +438,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/settings.ts` | settings and the Jira token in `~/.agentgraph` |
 | `src/jira.ts` | Jira Cloud REST v3 client, ADF → markdown |
 | `src/git.ts` | git and `glab` through `execFile`: remote, branches, MRs, worktree |
+| `src/update.ts` | auto-update of the agentgraph checkout: `git fetch` against the upstream, why it's blocked (local changes, own commits), fast-forward, `npm install` and rebuilds by the changed files, rollback on failure, restart (`process.execve` for the CLI, `restart` from `ServerOptions`); the `/api/update` routes in `server.ts` (on with `ServerOptions.update`), the badge and dialog in `web/src/components/shell/UpdateBadge.tsx`; tests `update.test.ts` (real temporary git repositories, fake npm) |
 | `src/projects.ts` | the project list: auto-discovery from runs and manual editing; recent directories for the run form |
 | `src/reveal.ts` | "Show in Finder" for file paths in the UI and in agent output (`POST /api/reveal`, macOS): a relative path is resolved from the run's cwd, extra dirs, run folder and its artifacts; files and folders are only selected (`open -R`), never opened or executed |
 | `src/intake.ts` | task text from an issue, MR or branch |

@@ -18,6 +18,19 @@
 .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .lang-switch { font: inherit; font-family: var(--font-mono); font-size: var(--fs-cap); font-weight: 600; color: var(--ink-3); background: none; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 1px 6px; cursor: pointer; }
 .lang-switch:hover { color: var(--ink); background: var(--hover); }
+/* автообновление (UpdateBadge.tsx): плашка у названия и её диалог */
+.brand-tools { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.update-badge { font: inherit; font-size: var(--fs-cap); font-weight: 600; color: var(--live); background: color-mix(in srgb, var(--live) 14%, transparent); border: 1px solid color-mix(in srgb, var(--live) 45%, transparent); border-radius: var(--r-pill); padding: 1px 8px; cursor: pointer; white-space: nowrap; }
+.update-badge:hover { background: color-mix(in srgb, var(--live) 24%, transparent); }
+.update-badge:focus-visible { outline: none; box-shadow: var(--focus); }
+.update-badge.update-busy { color: var(--ink-2); background: transparent; border-color: var(--line-strong); }
+.update-badge.update-fail { color: var(--st-fail); background: color-mix(in srgb, var(--st-fail) 12%, transparent); border-color: color-mix(in srgb, var(--st-fail) 45%, transparent); }
+.update-dialog { width: min(620px, 92vw); }
+.update-dialog p { margin: 0 0 10px; }
+.update-commits { list-style: none; margin: 0 0 12px; padding: 8px 10px; max-height: 40vh; overflow-y: auto; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); font-size: var(--fs-small); }
+.update-commits li { padding: 2px 0; overflow-wrap: anywhere; }
+.update-commits code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); margin-right: 6px; }
+.update-step { color: var(--ink-2); }
 .brand-count { font-size: var(--fs-cap); font-weight: 600; padding: 0 6px; border-radius: var(--r-pill); background: var(--st-wait); color: var(--on-solid); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 /* разделы — компактная строка, а не пункты одного веса с flow и запусками */
 .side-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; }

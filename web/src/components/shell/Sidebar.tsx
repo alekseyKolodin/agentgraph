@@ -11,6 +11,7 @@ import { sessionSub } from '../../lib/sessions';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
+import { UpdateBadge } from './UpdateBadge';
 import styles from './Sidebar.module.css';
 
 const caret = (
@@ -155,7 +156,10 @@ export function Sidebar() {
     <aside className={styles.sidebar}>
       <div className={styles.brandRow}>
         <Link to="/" className={styles.brand} title={t('Главная: вопросы агентов и идущие запуски')}>agentgraph</Link>
-        <LangSwitch />
+        <span className={styles.brandTools}>
+          <UpdateBadge />
+          <LangSwitch />
+        </span>
       </div>
       {/* разделы — компактной строкой: главное в сайдбаре — запуски и flow */}
       <ul className={styles.sideNav}>

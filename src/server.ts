@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { FLOWS_DIR, RUNS_DIR, WEB_DIST_DIR } from './paths.js';
+import { APP_DIR, FLOWS_DIR, RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import {
   assertFlowName,
   blankFlowYaml,
@@ -42,7 +42,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -74,7 +74,8 @@ import {
 } from './tags.js';
 import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { sessionsAvailable, sessionsRoute, sessionsUpgrade, stopSessions } from './sessions-server.js';
+import { liveSessionNames, sessionsAvailable, sessionsRoute, sessionsUpgrade, stopSessions } from './sessions-server.js';
+import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
   port: number;
@@ -82,6 +83,13 @@ export type ServerOptions = {
   defaultCwd: string;
   /** Системные уведомления о вопросах и конце запуска, когда UI их сам не покажет. По умолчанию включены. */
   notify?: boolean;
+  /**
+   * Автообновление checkout agentgraph (src/update.ts): проверка по таймеру и /api/update. Включают CLI `ui` и десктоп;
+   * по умолчанию выключено — тесты и встраивания сервера в сеть не ходят.
+   */
+  update?: boolean;
+  /** Перезапуск процесса после автообновления, сервер останавливает сам; нет — UI просит перезапустить вручную. */
+  restart?: Restart;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -162,6 +170,8 @@ const contextHttp = (err: unknown) => (err instanceof ContextError ? new HttpErr
 
 /** Поднятые startServer серверы: их закрывает stopServer. */
 const servers = new Set<http.Server>();
+/** Автообновление checkout agentgraph: одно на процесс, создаёт первый startServer с update. */
+let updater: Updater | null = null;
 
 export function startServer(opts: ServerOptions): Promise<string> {
   const server = http.createServer((req, res) => {
@@ -171,6 +181,14 @@ export function startServer(opts: ServerOptions): Promise<string> {
     });
   });
   servers.add(server);
+  if (opts.update) {
+    updater ??= new Updater({
+      dir: APP_DIR,
+      restart: opts.restart,
+      disabled: process.env.AGENTGRAPH_NO_UPDATE_CHECK ? 'проверка обновлений выключена (AGENTGRAPH_NO_UPDATE_CHECK)' : undefined,
+    });
+    updater.start();
+  }
   // WebSocket экрана сессии терминала: upgrade обходит handle(), проверки Host и Origin — в sessions-server.ts
   server.on('upgrade', sessionsUpgrade);
   return new Promise((resolve, reject) => {
@@ -187,6 +205,7 @@ export function startServer(opts: ServerOptions): Promise<string> {
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
+  updater?.stop();
   for (const id of live.keys()) abortRun(id);
   for (const turn of chats.values()) turn.abort.abort();
   for (const abort of generations) abort.abort();
@@ -227,8 +246,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
+  }
+
+  // --- автообновление: GET — состояние, POST /check — fetch сейчас, а не по таймеру (POST: с чужой страницы не дёрнуть),
+  // POST — обновление с перезапуском. busy — что перезапуск остановит: идущие запуски (live держит их до конца) и сессии терминала
+  if (updater && ((method === 'GET' && p === '/api/update') || (method === 'POST' && (p === '/api/update' || p === '/api/update/check')))) {
+    if (p === '/api/update/check') await updater.check();
+    else if (method === 'POST') {
+      const problem = updater.apply();
+      if (problem) throw new HttpError(409, problem);
+    }
+    return sendJson(res, 200, { ...updater.status(), busy: { runs: live.size, sessions: liveSessionNames() } } satisfies UpdateStatus);
   }
 
   // --- системный диалог выбора папки: { path: null } — пользователь отменил

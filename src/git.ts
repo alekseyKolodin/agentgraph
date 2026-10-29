@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { WorktreeResult } from './api-types.js';
 
-export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; timeoutMs?: number }) => Promise<string>;
+/** env — добавка к окружению процесса. */
+export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv }) => Promise<string>;
 
 /** Ответ glab со 100 MR вместе с описаниями больше дефолтного 1 МБ. */
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -19,7 +20,7 @@ export const exec: Exec = (cmd, args, opts = {}) =>
         timeout: opts.timeoutMs ?? 30_000,
         maxBuffer: MAX_BUFFER,
         // fetch на приватном remote не должен виснуть на вопросе пароля
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GLAB_NO_PROMPT: '1', GH_PROMPT_DISABLED: '1', NO_COLOR: '1' },
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GLAB_NO_PROMPT: '1', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', ...opts.env },
       },
       (err, stdout, stderr) => {
         if (err) {
