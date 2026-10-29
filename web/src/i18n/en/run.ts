@@ -122,6 +122,8 @@ export const run: Record<string, string> = {
   'Открыть артефакты': 'Open artifacts',
   'Разделы запуска': 'Run sections',
   'Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.': 'The last 3000 lines of all sessions. The full phase log is under the phase\'s "transcript" button.',
+  'Исходные строки лога — удобно копировать': 'Raw log lines, easy to copy',
+  'Показать все вызовы серии': 'Show every call in this run of steps',
   'Жду конца шага: поле ответа появится, когда запуск встанет на паузу.': 'Waiting for the step to end: the reply field will appear once the run is paused.',
   'Ответ — допишется в артефакт «{title}»': 'Reply — will be appended to the artifact "{title}"',
   'Решение для агента: допишется в артефакт решений, затем запуск пойдёт дальше': 'A decision for the agent: it will be appended to the decisions artifact, then the run will go on',

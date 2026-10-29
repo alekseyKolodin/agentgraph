@@ -330,6 +330,9 @@ export function ctxChipInfo(
 /** Замечания судьи — markdown; у команды это хвост её вывода — моноширинно, как condition.command.log. */
 export const feedbackIsMarkdown = (c: Pick<ConditionReport, 'type' | 'feedback'>): boolean => c.type !== 'command' && markdownFits(c.feedback);
 
+/** Транскрипт этапа: в окне — разбором строк сессии (components/transcript), а не markdown и не моноширинно. */
+export const fileIsTranscript = (file: string): boolean => file.endsWith('.transcript.md');
+
 /** Окно файла: промпт и вывод этапа, промпт судьи — markdown; транскрипт, лог команды, JSON-вывод и огромный файл — моноширинно. */
 export function fileIsMarkdown(file: string, text: string): boolean {
   if (/\.transcript\.md$|\.log$/.test(file)) return false;

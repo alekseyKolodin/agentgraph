@@ -23,7 +23,7 @@ export function PathLink({ path, className, children }: { path: string; classNam
 }
 
 /** Больше — без ссылок: тысячи узлов на огромный транскрипт не нужны, как и разметка md.ts выше её порога. */
-const PATH_TEXT_MAX = 300_000;
+export const PATH_TEXT_MAX = 300_000;
 
 /** Моноширинный текст с путями-ссылками: внутрь <pre>. */
 export function PathText({ text }: { text: string }) {
@@ -33,21 +33,20 @@ export function PathText({ text }: { text: string }) {
   );
 }
 
+/** Ссылка на путь узлом DOM — для текста, который пишется мимо React. text — подпись, если она не сам путь (с ~). */
+export function pathAnchor(path: string, text = path): HTMLAnchorElement {
+  const a = document.createElement('a');
+  a.className = 'path-link';
+  a.dataset.path = path;
+  a.setAttribute('role', 'link');
+  a.tabIndex = 0;
+  a.textContent = text;
+  return a;
+}
+
 /** Текст с путями в узел: для живого лога, который пишется мимо React. */
 export function appendPaths(el: Node, text: string): void {
-  for (const piece of splitPaths(text)) {
-    if (typeof piece === 'string') {
-      el.appendChild(document.createTextNode(piece));
-      continue;
-    }
-    const a = document.createElement('a');
-    a.className = 'path-link';
-    a.dataset.path = piece.path;
-    a.setAttribute('role', 'link');
-    a.tabIndex = 0;
-    a.textContent = piece.path;
-    el.appendChild(a);
-  }
+  for (const piece of splitPaths(text)) el.appendChild(typeof piece === 'string' ? document.createTextNode(piece) : pathAnchor(piece.path));
 }
 
 export function PathLinks() {

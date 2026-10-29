@@ -64,3 +64,6 @@ export function splitPaths(text: string): Piece[] {
 /** HTML ссылки на путь для md.ts. path и html уже экранированы; клик ловит обработчик оболочки по data-path. */
 export const pathLinkHtml = (path: string, html: string): string =>
   `<a class="path-link" data-path="${path}" role="link" tabindex="0">${html}</a>`;
+
+/** Путь от домашней папки: «/Users/me/proj/shop» → «~/proj/shop». */
+export const tildePath = (p: string, home: string | undefined): string => (home && (p === home || p.startsWith(home + '/')) ? `~${p.slice(home.length)}` : p);

@@ -1,0 +1,58 @@
+/* Транскрипт «как в Claude Code» (render.ts): строка — колонка значка 16px и тело. Текст агента — markdown цветом --ink,
+   вызов — моноширинная строка с точкой --st-ok, результат — тише и под именем вызова, длинная серия — свёрнутый итог.
+   Класс tx — у корня окна транскрипта и у кусков живого лога (у лога pre-wrap для режима «как текст»). */
+.tx { white-space: normal; font-family: var(--font-sans); font-size: var(--fs-small); line-height: 1.5; }
+
+.row { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: baseline; }
+/* line-height 1: мелкая точка не раздувает строку, выравнивание — по базовой линии */
+.glyph { font-family: var(--font-mono); line-height: 1; color: var(--ink-3); user-select: none; }
+.body { min-width: 0; }
+
+.text { margin: 10px 0; color: var(--ink); font-size: var(--fs-body); }
+.text > .glyph { font-size: 9px; color: var(--ink); }
+.plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.tool, .result, .fold-head { font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.65; }
+.tool > .body, .result > .body, .fold-head > .body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool > .glyph { font-size: 9px; color: var(--st-ok); }
+.name { color: var(--ink); font-weight: 600; }
+.paren { color: var(--ink-3); }
+.arg { color: var(--ink-2); }
+/* результат — под именем вызова, а не под точкой */
+.result { padding-left: 14px; color: var(--ink-3); }
+.result > .glyph { color: var(--ink-off); }
+.result.err, .result.err > .glyph { color: var(--st-fail); }
+
+.steps { margin: 2px 0; }
+.fold { margin: 2px 0; }
+.fold-head { cursor: pointer; list-style: none; color: var(--ink-2); border-radius: var(--r-xs); width: fit-content; max-width: 100%; }
+.fold-head::-webkit-details-marker { display: none; }
+.fold-head:hover { color: var(--ink); }
+.fold-head:focus-visible { outline: none; box-shadow: var(--focus); }
+.fold-head > .glyph { display: inline-block; width: 10px; transition: transform .12s; color: var(--ink-3); }
+.fold[open] > .fold-head > .glyph { transform: rotate(90deg); }
+.fold-n { font-weight: 600; }
+.fold-tools { color: var(--ink-3); }
+.fold-err { color: var(--st-fail); }
+
+/* вопрос агента и ответ человека — то, что ждало человека, полосой цвета ожидания (в живом логе — без обёртки .qa) */
+.qa { margin: 10px 0; }
+.ask, .answer { padding-left: 8px; border-left: 2px solid var(--st-wait); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask { padding-top: 4px; color: var(--ink); font-weight: 500; }
+.ask > .glyph { color: var(--st-wait); }
+.answer { padding-bottom: 4px; color: var(--ink-2); }
+
+/* живой лог: смена этапа — тихий разделитель с именем */
+.phase { display: flex; align-items: center; gap: 8px; margin: 12px 0 2px; font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); }
+.phase::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.tx > :first-child { margin-top: 0; }
+
+/* хвост лога: каждая строка — одна строка экрана */
+/* высота ровно 1.5em: подпись этапа другим шрифтом не раздувает строку, окно хвоста — на 6 строк (Run.module.css .run-tail) */
+.compact { margin: 0; font-size: var(--fs-meta); line-height: 1.5; height: 1.5em; }
+.compact > .body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact.text { color: var(--ink-2); }
+.compact.text > .glyph { color: var(--ink-3); }
+.tail-phase { color: var(--ink-3); font-family: var(--font-mono); font-weight: 400; }
+
+@media (prefers-reduced-motion: reduce) { .fold-head > .glyph { transition: none; } }
