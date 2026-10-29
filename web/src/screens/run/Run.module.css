@@ -243,13 +243,16 @@
 
 /* хвост живого лога на «Обзоре» */
 .run-tail-box { display: flex; flex-direction: column; gap: 6px; }
-.run-tail { margin: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; font-size: var(--fs-meta); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; min-height: 3.2em; max-height: 9.6em; overflow: hidden; }
+/* строки — components/transcript (tailLine), по одной строке экрана в 1.5em: окно — ровно на LOG_TAIL_LINES строк */
+.run-tail { margin: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; font-size: var(--fs-meta); color: var(--ink-2); min-height: 3.2em; max-height: calc(6 * 1.5em + 18px); overflow: hidden; }
 .run-tail:empty::before { content: 'пока тихо'; color: var(--ink-off); }
 
 /* лог во вкладке занимает экран, а не 50vh */
 .log-pane .log-body { max-height: none; height: calc(100vh - 300px); min-height: 320px; margin-top: 0; }
 .log-pane .log-body.tall { height: calc(100vh - 300px); }
-.log-pane .log > p { margin: 0 0 8px; }
+.log-pane .log-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
+.log-pane .log-head > p { margin: 0; min-width: 0; }
+.log-pane .log-head > button { flex: none; white-space: nowrap; }
 
 /* вкладка «Граф»: холст и инспектор выбранного узла (есть, только когда узел выбран) */
 .run-graph-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }

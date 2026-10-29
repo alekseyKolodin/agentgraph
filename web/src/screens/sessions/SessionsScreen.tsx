@@ -14,10 +14,10 @@ import { TagInput } from '../../components/TagInput';
 import { baseName, feedTime } from '../../lib/format';
 import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
+import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canSummarize, sessionStatusLabel, sessionTone } from '../../lib/sessions';
 import { LS } from '../../lib/storage';
-import { tildePath } from './icons';
 import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');

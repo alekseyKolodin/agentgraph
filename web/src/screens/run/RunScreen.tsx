@@ -39,7 +39,7 @@ import { FixPanel } from './FixPanel';
 import { answerKey, setPauseAnswer, usePauseAnswer } from './pauseAnswer';
 import { RunChat } from './RunChat';
 import { RunGraph } from './RunGraph';
-import { LogBody } from './RunLog';
+import { LogBody, LogRawToggle } from './RunLog';
 import { SaveFlowDialog } from './SaveFlowDialog';
 import { bump, closeRun, loadContinuable, markAnswered, openRun, RUN_TABS, runEvent, runState, resetLog, setRunTab, shownTab, useRunStore, type RunTab } from './store';
 import styles from './Run.module.css';
@@ -426,8 +426,11 @@ function RunPage({ id }: { id: string }) {
         )}
       </section>
       <section id="run-pane-log" className={cx(styles.runPane, styles.logPane)} role="tabpanel" hidden={tab !== 'log'}>
-        <div className={styles.log}>
-          <p className="muted small">{t('Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.')}</p>
+        <div>
+          <div className={styles.logHead}>
+            <p className="muted small">{t('Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.')}</p>
+            <LogRawToggle />
+          </div>
           <LogBody shown={tab === 'log'} />
         </div>
       </section>

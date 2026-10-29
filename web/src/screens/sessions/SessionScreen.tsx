@@ -15,10 +15,11 @@ import { TagField } from '../../components/TagInput';
 import { useToast } from '../../components/Toast';
 import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canSummarize, chipHint, pendingNote, sessionStatusLabel, sessionTone, summaryNote } from '../../lib/sessions';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
-import { ICON, tildePath } from './icons';
+import { ICON } from './icons';
 import styles from './Session.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
