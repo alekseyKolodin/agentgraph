@@ -7,7 +7,7 @@ Task → `flow.yaml` → a chain of Claude Code sessions, looped until a conditi
 The idea:
 
 1. You drop in a task description.
-2. The **generator** (a Claude session without tools) turns it into a flow spec: phases (`phases`), phase prompts, the tools of each phase, a stop condition.
+2. The **generator** (a Claude session that reads the project but changes nothing: its instructions, build and test commands, the files the task names) turns it into a flow spec: phases (`phases`), phase prompts, the tools of each phase, a stop condition.
 3. The **runner** executes the spec: each phase = a fresh Claude Code session with its own prompt, into which the previous phase's output is substituted. After all phases have run, the condition is checked; if it is not met, the next iteration starts, and the condition's feedback goes into the prompts.
 4. A flow can consist of several **blocks** in a row: a loop until a condition, then steps in a single pass, then another loop with its own condition (see "Several blocks in a row"). A block can also call another flow as a child run, and `next` can jump ahead or end the run (see "Calling another flow and branching").
 5. Besides output text, phases can maintain shared **run artifacts**: named files (plan, checklist, decisions) that survive iterations and blocks, are protected by phase permissions and can be edited by the user in the UI between steps (see "Run artifacts").

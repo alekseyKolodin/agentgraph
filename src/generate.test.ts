@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { generateFlow } from './generate.js';
+import { DESIGN_RULES, generateFlow } from './generate.js';
 import type { runSession, SessionEvent, SessionRequest, SessionResult } from './agent.js';
 
 const GENERATED = {
@@ -41,10 +41,16 @@ test('генерация отдаёт ход сессии: модель, пов�
     assert.deepEqual(models, ['claude-haiku-test']);
     assert.equal(events[0]?.kind, 'retry');
     assert.deepEqual(lines, ['думаю над flow']);
-    assert.equal(session.calls[0]?.tools?.length, 0, 'генератор работает без инструментов');
+    assert.deepEqual(session.calls[0]?.tools, ['Read', 'Grep', 'Glob'], 'генератор смотрит проект только на чтение');
+    assert.deepEqual(session.calls[0]?.implicitTools, [], 'без сабагентов и скиллов');
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test('пример команды в правиле про список работ доходит до модели с обратными слэшами', () => {
+  // в шаблонной строке «\[» молча теряет слэш, и grep искал бы не то
+  assert.ok(DESIGN_RULES.includes("grep -q '^- \\[ \\]' docs/plan.md"));
 });
 
 test('генерация возвращает модель сессии и длительность', async () => {

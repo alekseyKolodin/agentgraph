@@ -186,6 +186,10 @@ test('H2: тексты генератора и «Правки с ИИ» опис
     ['группа: один писатель артефакта', /at most one member writes a given artifact/],
     ['правило 6: max_turns 1-3 только без tools и без артефактов', /Set max_turns \(1-3\) only for phases with no tools and no writes or reads of artifacts/],
     ['артефакты — второй канал между этапами', /Run artifacts are named text files of the run/],
+    ['список работ: одна позиция за итерацию', /The working phase takes exactly ONE item/],
+    ['ревью списка — только позиция этой итерации', /does not re-audit items confirmed in earlier iterations/],
+    ['каждая проверка один раз, команды — командой', /Every check runs once[^\n]*\n[^\n]*Never leave to an LLM phase or a judge what an exit code decides/],
+    ['шаги из задачи — требования, а не блоки', /they are requirements, not the block structure/],
   ];
   for (const [name, text] of [['генератор', GENERATOR_SYSTEM], ['Правка с ИИ', EDITOR_SYSTEM]] as const) {
     for (const [what, re] of anchors) assert.match(text, re, `${name}: нет «${what}»`);
@@ -193,8 +197,8 @@ test('H2: тексты генератора и «Правки с ИИ» опис
     assert.doesNotMatch(text, /only through template variables/, `${name}: «только текст между этапами» больше неправда`);
   }
   // у генератора своё правило после DESIGN_RULES: номера не повторяются
-  assert.equal(GENERATOR_SYSTEM.match(/^9\. /gm)?.length, 1);
-  assert.match(GENERATOR_SYSTEM, /^10\. "input" must contain/m);
+  for (const n of [9, 10, 11]) assert.equal(GENERATOR_SYSTEM.match(new RegExp(`^${n}\\. `, 'gm'))?.length, 1, `правило ${n} одно`);
+  assert.match(GENERATOR_SYSTEM, /^12\. "input" must contain/m);
 });
 
 // ---------- права этапа

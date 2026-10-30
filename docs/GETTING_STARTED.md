@@ -400,7 +400,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/compose.ts` | connecting flows: the call graph check (callee exists, no cycles, depth), the called flow's task, picking the next block by `next`, the call result for the parent; the runner and server call it at their entry points |
 | `src/flows.ts` | reading, saving and finding flows in `flows/`, folders; calls are checked on save, a called flow can't be deleted |
 | `src/adhoc.ts` | one-off run: a draft from the request body (`spec`/`yaml`), the run's flow snapshot, which flow to continue from (the snapshot or `flows/`), "Save as flow" |
-| `src/generate.ts` | the generator: task → flow (a Claude session without tools) |
+| `src/generate.ts` | the generator: task → flow (a Claude session with read-only tools: real check commands and paths come from the project); design rules shared with "Edit with AI" |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
 | `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
 | `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`); call blocks as child runs (`runChild`) and branching by `next` |
