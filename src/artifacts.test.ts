@@ -188,7 +188,8 @@ test('H2: тексты генератора и «Правки с ИИ» опис
     ['артефакты — второй канал между этапами', /Run artifacts are named text files of the run/],
     ['список работ: одна позиция за итерацию', /The working phase takes exactly ONE item/],
     ['ревью списка — только позиция этой итерации', /does not re-audit items confirmed in earlier iterations/],
-    ['каждая проверка один раз, команды — командой', /Every check runs once[^\n]*\n[^\n]*Never leave to an LLM phase or a judge what an exit code decides/],
+    ['у проверки один владелец, команды — командой', /Every check has one owner[^\n]*\n[^\n]*Never ask an LLM phase or a judge to infer what an exit code decides/],
+    ['команда условия — голый shell без переменных', /no template variables, so it cannot see artifacts/],
     ['шаги из задачи — требования, а не блоки', /they are requirements, not the block structure/],
   ];
   for (const [name, text] of [['генератор', GENERATOR_SYSTEM], ['Правка с ИИ', EDITOR_SYSTEM]] as const) {
