@@ -59,7 +59,7 @@ test('progress с моделью после повтора тоже убирае
 
 test('«нет вестей»: генерация молчит до 4 минут без предупреждения, правка — до 2', () => {
   const gen = startProgress('generate', T0);
-  assert.equal(isSilent(gen, T0 + 3 * 60_000), false, 'генерация без инструментов думает молча — это норма');
+  assert.equal(isSilent(gen, T0 + 3 * 60_000), false, 'генерация после чтения проекта думает молча — это норма');
   assert.equal(isSilent(gen, T0 + SILENCE_MS.generate), true);
   const edit = startProgress('edit', T0);
   assert.equal(isSilent(edit, T0 + 90_000), false);
