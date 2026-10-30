@@ -327,7 +327,7 @@ function RunPage({ id }: { id: string }) {
               {r.adhoc ? <>{`flow ${r.flow} `}<span className="muted">{t('(разовый)')}</span></> : <>flow <Link to={`/flow/${r.flow}`} title={t('Открыть flow')}>{r.flow}</Link></>}
             </p>
           )}
-          <p title={t('Стоимость: оценка по прайсу API; с подписки не списывается')}>{runMeta(r, st.tagPending)}</p>
+          <p title={`${t('Стоимость: оценка по прайсу API; с подписки не списывается')}\n${t('«идёт» — токены идущих этапов, включая сабагентов: их стоимость станет известна, когда этапы закончатся')}`}>{runMeta(r, st.tagPending, st.pending.values())}</p>
           <p className={cx('muted small', styles.runSub)}>{sub.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}</p>
           {extras.length > 0 && <p className={cx('muted small', styles.runExtras)}>{extras.flatMap((x, i) => (i ? [<span key={`e${i}`}>·</span>, x] : [x]))}</p>}
           {edits && <p className="muted small" title={edits.title}>{edits.text}</p>}

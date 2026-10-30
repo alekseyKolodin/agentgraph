@@ -76,7 +76,7 @@ async function dataHome(): Promise<string | undefined> {
 /** Диалог выбора папки данных; отмена — undefined. Выбор запоминается. */
 async function chooseHome(): Promise<string | undefined> {
   const r = await dialog.showOpenDialog({
-    title: 'Папка agentgraph',
+    title: 'Папка AgentGraph',
     message: 'Папка с flows/ и runs/ — например, checkout agentgraph. Отмена — пустая папка внутри приложения.',
     // без проверки existsSync: заглянуть в ~/Documents самому — запрос доступа macOS, панели выбора он не нужен
     defaultPath: app.getPath('documents'),
@@ -126,7 +126,7 @@ function openWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'agentgraph',
+    title: 'AgentGraph',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   const isOwn = (url: string) => url === origin || url.startsWith(`${origin}/`);
@@ -217,7 +217,7 @@ async function confirmQuit(names: string[]): Promise<boolean> {
     buttons: ['Завершить сессии и закрыть', 'Отмена'],
     defaultId: 0,
     cancelId: 1,
-    message: 'Закрыть agentgraph?',
+    message: 'Закрыть AgentGraph?',
     detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСаммари тегов задач при таком выходе не пишется — его можно обновить позже.`,
   };
   const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
@@ -240,6 +240,9 @@ async function main(): Promise<void> {
   if (app.isPackaged) {
     importShellEnv();
     unpackedClaude();
+  } else {
+    // desktop:dev запускает голый Electron.app: без этого в Dock его иконка, у упакованного — build/icon.icns
+    app.dock?.setIcon(path.join(app.getAppPath(), 'build', 'icon.png'));
   }
   const dir = await dataHome();
   if (dir) process.env.AGENTGRAPH_HOME = dir;
@@ -314,6 +317,6 @@ app.on('will-quit', (e) => {
 });
 
 main().catch((err) => {
-  dialog.showErrorBox('agentgraph не запустился', err instanceof Error ? (err.stack ?? err.message) : String(err));
+  dialog.showErrorBox('AgentGraph не запустился', err instanceof Error ? (err.stack ?? err.message) : String(err));
   app.exit(1);
 });

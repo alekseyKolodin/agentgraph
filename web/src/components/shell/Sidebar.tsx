@@ -155,7 +155,7 @@ export function Sidebar() {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.brandRow}>
-        <Link to="/" className={styles.brand} title={t('Главная: вопросы агентов и идущие запуски')}>agentgraph</Link>
+        <Link to="/" className={styles.brand} title={t('Главная: вопросы агентов и идущие запуски')}>AgentGraph</Link>
         <span className={styles.brandTools}>
           <UpdateBadge />
           <LangSwitch />
