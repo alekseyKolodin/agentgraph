@@ -29,9 +29,9 @@ test('входящие: вопросы всех запусков, сначала
   const runs = [run({ id: 'a', questions: [question('q2', iso(5))] }), run({ id: 'b', questions: [question('q1', iso(1)), question('q3', iso(9))] })];
   assert.deepEqual(inbox(runs).map((x) => `${x.run.id}:${x.q.id}`), ['b:q1', 'a:q2', 'b:q3']);
   assert.equal(inboxCount(runs), 3);
-  assert.equal(docTitle(3), '(3) agentgraph');
-  assert.equal(docTitle(0), 'agentgraph');
-  assert.equal(docTitle(1, 'Кнопка'), '(1) Кнопка · agentgraph');
+  assert.equal(docTitle(3), '(3) AgentGraph');
+  assert.equal(docTitle(0), 'AgentGraph');
+  assert.equal(docTitle(1, 'Кнопка'), '(1) Кнопка · AgentGraph');
   assert.equal(homeMeta(runs, 3), 'идут 2 · вопросов 3 · ≈$0.80');
   assert.equal(homeMeta([], 0), '');
   assert.deepEqual(withoutQuestion(runs, 'b', 'q1')[1]!.questions.map((q) => q.id), ['q3']);
