@@ -451,7 +451,9 @@ test('промпт: условия — только те, что есть в с�
   for (const type of UntilSchema.options.map((o) => o.shape.type.value)) assert.ok(ANALYSIS_SYSTEM.includes(`${type} (`), `условие ${type} не описано`);
   assert.match(ANALYSIS_SYSTEM, /Условие остановки у блока одно — loop\.until одного вида/);
   assert.match(ANALYSIS_SYSTEM, /Составных условий \(«команда и маркер», «судья и тесты»\) нет/);
-  assert.match(ANALYSIS_SYSTEM, /`! grep -q '\^- \\\[ \\\]' plan\.md && make test`/);
+  // пример как у генератора: без test -f нет файла — «готово», grep -n печатает оставшееся в {{feedback}}
+  assert.match(ANALYSIS_SYSTEM, /`test -f plan\.md && ! grep -n '\^- \\\[ \\\]' plan\.md && make test`/);
+  assert.match(ANALYSIS_SYSTEM, /У каждой проверки один владелец/);
 });
 
 test('промпт: проверяющий с writes в артефакт и без Edit/Write — «код не правит», а не «пишущий»', () => {
