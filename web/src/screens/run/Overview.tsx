@@ -252,7 +252,7 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
         <SpentChip x={p} live={false} />
-        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
+        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${p.tokens?.estimated && !p.costUsd ? '$?' : usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
       <StepNotes notes={notes} />

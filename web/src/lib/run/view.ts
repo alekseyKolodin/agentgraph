@@ -350,14 +350,16 @@ export function spentChipInfo(
   if (!(spent > 0)) return null;
   const n = tokensShort;
   const subs = live ? x.ctx?.subagents ?? 0 : 0;
+  const est = !live && !!x.tokens?.estimated;
   const lines = [live ? t('Потрачено этапом к этому моменту: ≈{n} токенов (вход, кэш и выход)', { n: n(spent) }) : t('Потрачено этапом: {n} токенов (вход, кэш и выход)', { n: n(spent) })];
   if (subs > 0) lines.push(t('из них сабагенты ({k}): {n}', { k: subs, n: n(x.ctx!.subSpent) }));
   else if (!live) lines.push(t('включая сабагентов'));
+  if (est) lines.push(t('Оценка по ходу этапа: его остановили до итога, точного расхода и стоимости нет'));
   const over = live && maxDone > 0 && spent > maxDone;
   if (over) lines.push(t('Уже больше самого дорогого готового этапа запуска ({n}): проверьте, нужен ли он, или поставьте запуск на паузу', { n: n(maxDone) }));
   lines.push(t('Большая часть обычно — чтение кэша: оно дешевле остального, но тоже идёт в лимит'));
   if (live) lines.push(t('Оценка по ходу этапа: служебные запросы сюда не попадают, точный итог и стоимость будут, когда он закончится'));
-  return { text: `Σ ${n(spent)}${subs > 0 ? ` · ${t('{k} саб.', { k: subs })}` : ''}`, level: over ? 'warn' : '', title: lines.join('\n') };
+  return { text: `Σ ${est || live ? '≈' : ''}${n(spent)}${subs > 0 ? ` · ${t('{k} саб.', { k: subs })}` : ''}`, level: over ? 'warn' : '', title: lines.join('\n') };
 }
 
 /** Замечания судьи — markdown; у команды это хвост её вывода — моноширинно, как condition.command.log. */

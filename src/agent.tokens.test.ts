@@ -182,6 +182,29 @@ test('onContext: снимок на каждый новый запрос, вкл�
   assert.equal(res.tokens?.contextWindow, 1000000);
 });
 
+test('сессию остановили до результата: итог токенов — оценка по ходу, со сабагентами; с результатом оценки нет', async () => {
+  const stopped = (async function* () {
+    yield init('opus');
+    yield assistant('m1', 2, 0, 35000);
+    yield assistant('s1', 1, 900000, 0, 'toolu_1');
+    throw new Error('остановлено');
+  })();
+  const res = await runSession(base, () => {}, { query: (() => stopped) as unknown as Fake });
+  assert.equal(res.costUsd, 0);
+  assert.deepEqual(
+    [res.tokens?.input, res.tokens?.output, res.tokens?.cacheRead, res.tokens?.cacheCreation, res.tokens?.estimated, res.tokens?.contextPeak],
+    [3, 2, 900000, 35000, true, 35002],
+  );
+  // только сабагент успел ответить — оценка всё равно есть
+  const onlySub = await runSession(base, () => {}, { query: stream([init('opus'), assistant('s1', 1, 10, 0, 'toolu_1')]) });
+  assert.equal(onlySub.tokens?.cacheRead, 10);
+  // результат пришёл — итог из него, без пометки
+  const full = await collect([init('opus'), assistant('m1', 1, 0, 1000), resultOf({ opus: entry(1000000) })]);
+  assert.equal(full.res.tokens && 'estimated' in full.res.tokens, false);
+  // запросов не было — токенов нет
+  assert.equal((await runSession(base, () => {}, { query: stream([init('opus')]) })).tokens, undefined);
+});
+
 test('onContext: окно из кэша есть с первого запроса второй сессии той же модели', async () => {
   const msgs = [init('opus'), assistant('m1', 1, 0, 1000), resultOf({ opus: entry(1000000) })];
   const first = await collect(msgs);

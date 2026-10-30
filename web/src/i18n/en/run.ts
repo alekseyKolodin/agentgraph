@@ -37,6 +37,7 @@ export const run: Record<string, string> = {
   'Потрачено этапом: {n} токенов (вход, кэш и выход)': 'Spent by the phase: {n} tokens (input, cache and output)',
   'из них сабагенты ({k}): {n}': 'subagents ({k}): {n} of it',
   'включая сабагентов': 'including subagents',
+  'Оценка по ходу этапа: его остановили до итога, точного расхода и стоимости нет': 'Estimate made while the phase ran: it was stopped before the final totals, so exact spend and cost are unknown',
   'Уже больше самого дорогого готового этапа запуска ({n}): проверьте, нужен ли он, или поставьте запуск на паузу': 'Already more than the costliest finished phase of this run ({n}): check whether it is needed, or pause the run',
   '«идёт» — токены идущих этапов, включая сабагентов: их стоимость станет известна, когда этапы закончатся': '“in progress” — tokens of running phases, including subagents: their cost is known when the phases finish',
   'Большая часть обычно — чтение кэша: оно дешевле остального, но тоже идёт в лимит': 'Most of it is usually cache reads: cheaper than the rest, but they still count toward the limit',

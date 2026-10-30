@@ -88,8 +88,8 @@ export type TokenTally = {
   seen: Set<string>;
   model?: string;
   liveWindow?: number;
-  /** Расход по ходу: id сообщения модели -> его токены (sub — запрос сабагента); subagents — их parent_tool_use_id. */
-  spent: Map<string, { n: number; sub: boolean }>;
+  /** Расход по ходу: id сообщения модели -> его токены (n — сумма; sub — запрос сабагента); subagents — их parent_tool_use_id. */
+  spent: Map<string, { n: number; sub: boolean; input: number; output: number; cacheRead: number; cacheCreation: number }>;
   subagents: Set<string>;
 };
 
@@ -147,11 +147,12 @@ export function tallySpent(t: TokenTally, msg: SDKMessage): boolean {
   const m = msg.message as { id?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } };
   if (!m.id || !m.usage) return false;
   const u = m.usage;
-  const n = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+  const x = { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheCreation: u.cache_creation_input_tokens ?? 0 };
+  const n = x.input + x.output + x.cacheRead + x.cacheCreation;
   const prev = t.spent.get(m.id);
   if (prev && prev.n >= n) return false;
   const parent = msg.parent_tool_use_id;
-  t.spent.set(m.id, { n, sub: !!parent });
+  t.spent.set(m.id, { n, sub: !!parent, ...x });
   if (parent) t.subagents.add(parent);
   return true;
 }
@@ -199,6 +200,23 @@ export function tallyTokens(t: TokenTally, msg: SDKMessage): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Итога нет (сессию остановили или она упала до result): input/output/кэш — по живому счётчику, со сабагентами,
+ * с пометкой estimated. Без этого расход остановленного этапа пропадал из отчёта. true — оценку записали.
+ */
+export function estimateTotals(t: TokenTally): boolean {
+  if (t.tokens.input !== undefined || !t.spent.size) return false;
+  const sum = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  for (const x of t.spent.values()) {
+    sum.input += x.input;
+    sum.output += x.output;
+    sum.cacheRead += x.cacheRead;
+    sum.cacheCreation += x.cacheCreation;
+  }
+  Object.assign(t.tokens, sum, { estimated: true });
+  return true;
 }
 
 /** Фактическая модель сессии из сообщения system/init; undefined — другое сообщение или модели в нём нет. */
@@ -347,6 +365,7 @@ export async function runSession(req: SessionRequest, log: LogFn, deps: SessionD
   }
   done = true;
   result.durationMs = Date.now() - started;
+  counted = estimateTotals(tally) || counted;
   if (counted) result.tokens = tally.tokens;
   return result;
 }

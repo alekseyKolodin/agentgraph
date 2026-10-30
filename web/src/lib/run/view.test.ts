@@ -49,7 +49,7 @@ test('шапка: токены идущих этапов — до их стои�
 
 test('чип расхода: идущий — со сабагентами и подсветкой дороже готовых, готовый — по tokens', () => {
   const live = spentChipInfo({ ctx: { spent: 38000000, subSpent: 36000000, subagents: 5 } }, true, 26800000);
-  assert.equal(live?.text, 'Σ 38M · 5 саб.');
+  assert.equal(live?.text, 'Σ ≈38M · 5 саб.');
   assert.equal(live?.level, 'warn');
   assert.match(live!.title, /сабагенты \(5\): 36M/);
   assert.equal(spentChipInfo({ ctx: { spent: 1000000 } }, true, 26800000)?.level, '');
@@ -59,6 +59,10 @@ test('чип расхода: идущий — со сабагентами и п�
   assert.equal(done?.text, 'Σ 26.8M');
   assert.equal(spentChipInfo({ tokens: { contextStart: 1, contextPeak: 1, requests: 1 } }, false), null);
   assert.equal(spentChipInfo({}, true), null);
+  // этап остановили до итога: оценка по ходу помечена
+  const est = spentChipInfo({ tokens: { contextStart: 1, contextPeak: 1, requests: 1, input: 0, output: 0, cacheRead: 38000000, cacheCreation: 0, estimated: true } }, false);
+  assert.equal(est?.text, 'Σ ≈38M');
+  assert.match(est!.title, /остановили до итога/);
 });
 
 test('лимит правится у живого цикла до конца блока; «Продолжить» — по серверу, без поля — старое правило', () => {

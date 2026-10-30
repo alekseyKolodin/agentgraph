@@ -509,6 +509,11 @@ export type SessionTokens = {
   cacheRead?: number;
   cacheCreation?: number;
   contextWindow?: number;
+  /**
+   * input/output/кэш — оценка по ходу сессии (со сабагентами), а не итог SDK: сессию остановили или она упала
+   * до результата. Стоимости у такой сессии нет (costUsd 0): прайса в agentgraph нет.
+   */
+  estimated?: true;
 };
 
 export type ArtifactAuthor =
