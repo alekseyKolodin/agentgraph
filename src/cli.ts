@@ -286,8 +286,12 @@ async function withTags(spec: FlowSpec, slugs: string[], saveTag: boolean, autoT
 
 /** save: false — разовый запуск: flow не пишется на диск (и flowFileName не создаёт папку). */
 async function generate(task: string, cwd: string, out: string | undefined, model: string | undefined, abort: AbortController, save = true) {
-  process.stdout.write(`${c.cyan('✎')} Генерирую flow для задачи … `);
-  const { spec, result } = await generateFlow(task, { cwd, model, abort });
+  console.log(`${c.cyan('✎')} Генерирую flow для задачи …`);
+  // генератор сначала читает проект: без этих строк CLI минуту-другую молчит
+  const log = (line: string) => {
+    if (line.startsWith('▸ ')) console.log(c.dim(`  ${line.length > 120 ? line.slice(0, 119) + '…' : line}`));
+  };
+  const { spec, result } = await generateFlow(task, { cwd, model, abort, log });
   console.log(c.dim(`оценка ${fmtUsd(result.costUsd)}`));
   if (!save) {
     console.log(`${c.green('✓')} Разовый запуск: flow не сохраняется, его копия ляжет в папку запуска (flow.yaml)`);

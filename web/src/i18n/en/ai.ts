@@ -13,8 +13,8 @@ export const ai: Record<string, string> = {
   'модель…': 'model…',
   'Сколько идёт': 'Elapsed',
   'Остановить сессию: траты прекратятся, flow не изменится': 'Stop the session: spending stops, the flow stays as it was',
-  'Генератор работает без инструментов: думает молча и присылает flow целиком в конце.':
-    'The generator works without tools: it thinks silently and sends the whole flow at the end.',
+  'Генератор сначала читает проект, потом думает молча и присылает flow целиком в конце.':
+    'The generator first reads the project, then thinks silently and sends the whole flow at the end.',
   'Здесь появятся шаги ИИ: чтение и правки файла flow.': 'The AI\'s steps will appear here: reading and editing the flow file.',
   'Нет вестей {time}. Модель может долго думать молча; если это дольше обычного — прерви и попробуй снова.':
     'No news for {time}. The model may think silently for a long time; if this takes longer than usual, abort and try again.',

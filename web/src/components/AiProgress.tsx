@@ -35,7 +35,7 @@ export function AiProgress({ progress: p, onAbort, className }: { progress: Prog
       ) : (
         <p className={styles.quiet}>
           {p.kind === 'generate'
-            ? t('Генератор работает без инструментов: думает молча и присылает flow целиком в конце.')
+            ? t('Генератор сначала читает проект, потом думает молча и присылает flow целиком в конце.')
             : t('Здесь появятся шаги ИИ: чтение и правки файла flow.')}
         </p>
       )}
