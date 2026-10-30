@@ -42,6 +42,9 @@ test('модель и контекст идущего этапа; опоздав
   assert.equal(applyRunEvent(st, { type: 'phase_model', block: 'main', iteration: 1, phase: 'a', model: 'haiku' }).render, false);
   applyRunEvent(st, { type: 'phase_context', block: 'main', iteration: 1, phase: 'a', contextPeak: 90000, requests: 2, contextWindow: 200000 });
   assert.deepEqual([...st.pending.values()][0]?.ctx, { peak: 90000, requests: 2, window: 200000 });
+  // расход по ходу этапа, включая сабагентов
+  applyRunEvent(st, { type: 'phase_context', block: 'main', iteration: 1, phase: 'a', contextPeak: 90000, requests: 3, spent: 5000000, subSpent: 4000000, subagents: 5 });
+  assert.deepEqual([...st.pending.values()][0]?.ctx, { peak: 90000, requests: 3, spent: 5000000, subSpent: 4000000, subagents: 5 });
   assert.equal(applyRunEvent(st, { type: 'phase_context', block: 'main', iteration: 1, phase: 'b', contextPeak: 1, requests: 1 }).render, false);
 });
 

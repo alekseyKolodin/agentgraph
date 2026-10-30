@@ -853,10 +853,11 @@ export type RunEvent =
   /** Фактическая модель этапа из system/init: приходит после phase_start, один раз, и только если init был. */
   | { type: 'phase_model'; block: string; iteration: number; phase: string; model: string }
   /**
-   * Занятость контекста идущего этапа: после каждого запроса главного цикла к модели. Пик, число запросов и окно
-   * модели (нет, пока неизвестно). Сервер хранит только последний снимок этапа и ни в ленту событий, ни на главную не шлёт.
+   * Занятость контекста идущего этапа: после каждого запроса к модели. Пик, число запросов главного цикла и окно
+   * модели (нет, пока неизвестно). spent — все токены этапа по ходу, включая сабагентов; subSpent и subagents —
+   * их доля и число (нет — сабагентов не было). Оценка: точный итог — tokens в phase_end. Сервер хранит только последний снимок этапа и ни в ленту событий, ни на главную не шлёт.
    */
-  | { type: 'phase_context'; block: string; iteration: number; phase: string; contextPeak: number; requests: number; contextWindow?: number }
+  | { type: 'phase_context'; block: string; iteration: number; phase: string; contextPeak: number; requests: number; contextWindow?: number; spent?: number; subSpent?: number; subagents?: number }
   | { type: 'log'; block: string; iteration: number; phase: string; line: string }
   | { type: 'phase_end'; report: PhaseReport }
   /** file — промпт судьи (от runDir), уже записан к моменту события. */

@@ -4,7 +4,7 @@ import type { BlockReport, ConditionReport, PhaseReport, RunDetail, RunReport } 
 import { liveState, type LiveState, type PendingPhase } from './events';
 import {
   blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
-  blockNextNote, blockSkipNote, inspectView, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
+  blockNextNote, blockSkipNote, inspectView, spentChipInfo, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
   summaryView, tagFinalLines, waitingNotes, type RunFold,
 } from './view';
 
@@ -39,6 +39,26 @@ test('шапка: статус ждёт ответа / на паузе / идё�
   const multi = st({ blocks: [block('a', { status: 'done' }), block('b', { index: 1, status: 'running' }), block('c', { index: 2, status: 'pending' })], iterations: 4 });
   assert.equal(runMeta(multi.run, { tag: 'front', file: '' }), 'блок 2/3 · итераций: 4 · ≈$0.00 · обновляю саммари тега front…');
   assert.equal(runBlocks({ ...report(), blocks: undefined as unknown as BlockReport[] })[0]!.name, undefined);
+});
+
+test('шапка: токены идущих этапов — до их стоимости', () => {
+  const running = [{ ctx: { peak: 1, requests: 1, spent: 30000000 } }, { ctx: { peak: 1, requests: 1, spent: 8000000 } }, {}] as PendingPhase[];
+  assert.equal(runMeta(st({ totalCostUsd: 10.6 }).run, null, running), 'итерация 1/3 · ≈$10.60 · идёт ≈38M токенов');
+  assert.equal(runMeta(st().run, null, [{ ctx: { peak: 1, requests: 1 } }] as PendingPhase[]), 'итерация 1/3 · ≈$0.00');
+});
+
+test('чип расхода: идущий — со сабагентами и подсветкой дороже готовых, готовый — по tokens', () => {
+  const live = spentChipInfo({ ctx: { spent: 38000000, subSpent: 36000000, subagents: 5 } }, true, 26800000);
+  assert.equal(live?.text, 'Σ 38M · 5 саб.');
+  assert.equal(live?.level, 'warn');
+  assert.match(live!.title, /сабагенты \(5\): 36M/);
+  assert.equal(spentChipInfo({ ctx: { spent: 1000000 } }, true, 26800000)?.level, '');
+  // без готовых этапов сравнивать не с чем
+  assert.equal(spentChipInfo({ ctx: { spent: 1000000 } }, true)?.level, '');
+  const done = spentChipInfo({ tokens: { contextStart: 1, contextPeak: 1, requests: 1, input: 100, output: 900, cacheRead: 26000000, cacheCreation: 799000 } }, false);
+  assert.equal(done?.text, 'Σ 26.8M');
+  assert.equal(spentChipInfo({ tokens: { contextStart: 1, contextPeak: 1, requests: 1 } }, false), null);
+  assert.equal(spentChipInfo({}, true), null);
 });
 
 test('лимит правится у живого цикла до конца блока; «Продолжить» — по серверу, без поля — старое правило', () => {

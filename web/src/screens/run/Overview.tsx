@@ -18,7 +18,7 @@ import { linkifyText } from '../../lib/md';
 import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
-  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
+  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, phaseSpent, spentChipInfo, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
   runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
@@ -196,7 +196,7 @@ function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; 
       return <PhaseCard p={item.p} runId={r.id} implicit={implicit} notes={stepNotes(r, item.p.block, item.p.iteration, item.p.phase)} />;
     case 'running':
       return (
-        <RunningCard x={item.x} doing={item.doing} runId={r.id} implicit={implicit} notes={stepNotes(r, item.x.block, item.x.iteration, item.x.phase)}>
+        <RunningCard x={item.x} maxDone={Math.max(0, ...r.phases.map((p) => phaseSpent(p.tokens)))} doing={item.doing} runId={r.id} implicit={implicit} notes={stepNotes(r, item.x.block, item.x.iteration, item.x.phase)}>
           {noteBox && <NoteBox r={r} placeholder={t('Указание следующему шагу: что поправить или учесть — этот этап уже идёт')} />}
         </RunningCard>
       );
@@ -235,6 +235,11 @@ function CtxChip({ x, live }: { x: Parameters<typeof ctxChipInfo>[0]; live: bool
   return info ? <span className={cx(styles.pctx, info.level && styles[info.level])} title={info.title}>{info.text}</span> : null;
 }
 
+function SpentChip({ x, live, maxDone }: { x: Parameters<typeof spentChipInfo>[0]; live: boolean; maxDone?: number }) {
+  const info = spentChipInfo(x, live, maxDone);
+  return info ? <span className={cx(styles.pctx, info.level && styles[info.level])} title={info.title}>{info.text}</span> : null;
+}
+
 function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: string; implicit: readonly string[]; notes: RunNote[] }) {
   const files = p.files || {};
   return (
@@ -246,6 +251,7 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
         <span className={styles.tools}>{p.call ? <CallLink call={p.call} /> : `[${toolsLabel(p.tools, implicit)}]`}</span>
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
+        <SpentChip x={p} live={false} />
         <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
@@ -267,7 +273,7 @@ const CallLink = ({ call }: { call: { runId: string; flow: string } }) => (
   <Link to={`/run/${call.runId}`} title={t('Открыть вызванный запуск {id}', { id: call.runId })}>{t('↪ запуск flow {flow}', { flow: call.flow })}</Link>
 );
 
-function RunningCard({ x, doing, runId, implicit, notes, children }: { x: PendingPhase; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
+function RunningCard({ x, maxDone, doing, runId, implicit, notes, children }: { x: PendingPhase; maxDone: number; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
   // промпт записан до старта этапа, транскрипт пишется по ходу; вывода до phase_end ещё нет. У старых запусков files нет.
   const pf = x.files;
   return (
@@ -279,6 +285,7 @@ function RunningCard({ x, doing, runId, implicit, notes, children }: { x: Pendin
         <span className={styles.tools}>{x.call ? <CallLink call={x.call} /> : `[${toolsLabel(x.tools, implicit)}]`}</span>
         <ModelChip x={x} />
         <CtxChip x={x} live />
+        <SpentChip x={x} live maxDone={maxDone} />
         <span className={styles.stats}>{doing}</span>
       </div>
       <StepNotes notes={notes} />

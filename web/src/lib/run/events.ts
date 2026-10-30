@@ -20,7 +20,8 @@ export type PendingPhase = {
   model?: string;
   effort?: string;
   at: number;
-  ctx?: { peak: number; requests: number; window?: number };
+  /** spent — токены этапа по ходу, включая сабагентов (subSpent из них у subagents сабагентов). */
+  ctx?: { peak: number; requests: number; window?: number; spent?: number; subSpent?: number; subagents?: number };
   /** Блок-вызов: идущий дочерний запуск (событие call). */
   call?: { runId: string; flow: string };
 };
@@ -98,7 +99,13 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       // этапа нет в pending — снимок опоздал к phase_end
       const cur = st.pending.get(pendingKey(e));
       if (!cur) return { render: false };
-      cur.ctx = { peak: e.contextPeak, requests: e.requests, ...(e.contextWindow ? { window: e.contextWindow } : {}) };
+      cur.ctx = {
+        peak: e.contextPeak,
+        requests: e.requests,
+        ...(e.contextWindow ? { window: e.contextWindow } : {}),
+        ...(e.spent ? { spent: e.spent } : {}),
+        ...(e.subSpent ? { subSpent: e.subSpent, subagents: e.subagents ?? 0 } : {}),
+      };
       break;
     }
     case 'call': {

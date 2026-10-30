@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { contextSnapshot, newTally, resetWindowCache, runSession, tallyTokens, type ContextSnapshot, type SessionDeps, type SessionResult } from './agent.js';
+import { contextSnapshot, newTally, resetWindowCache, runSession, tallySpent, tallyTokens, type ContextSnapshot, type SessionDeps, type SessionResult } from './agent.js';
 import { runFlow } from './runner.js';
 import type { FlowSpec } from './schema.js';
 
@@ -35,6 +35,22 @@ test('токены: контекст первого и самого большо
   );
   // обрыв без результата: контекст есть, итогов нет — нулевые суммы занизили бы итог по запуску
   assert.equal('input' in t.tokens || 'output' in t.tokens, false);
+});
+
+test('расход по ходу: все запросы с сабагентами, повтор стрима с растущим выходом — по максимуму', () => {
+  const t = newTally();
+  const out = (id: string, output: number, parent: string | null = null) =>
+    ({ type: 'assistant', parent_tool_use_id: parent, message: { id, usage: { input_tokens: 10, output_tokens: output } } }) as unknown as SDKMessage;
+  assert.equal(tallySpent(t, out('m1', 1)), true);
+  assert.equal(tallySpent(t, out('m1', 1)), false);
+  assert.equal(tallySpent(t, out('m1', 50)), true);
+  assert.equal(tallySpent(t, out('m1', 20)), false);
+  tallySpent(t, out('s1', 5, 'toolu_1'));
+  tallySpent(t, out('s2', 5, 'toolu_1'));
+  tallySpent(t, out('s3', 5, 'toolu_2'));
+  assert.deepEqual(contextSnapshot(t), { contextPeak: 0, requests: 0, spent: 105, subSpent: 45, subagents: 2 });
+  // не сообщение модели — не расход
+  assert.equal(tallySpent(t, { type: 'user' } as unknown as SDKMessage), false);
 });
 
 test('токены: итог по всем моделям сессии из modelUsage, без него — из usage главного цикла', () => {
@@ -147,7 +163,7 @@ const collect = async (msgs: SDKMessage[], getContextUsage?: () => Promise<unkno
   return { snaps, res };
 };
 
-test('onContext: снимок на каждый новый запрос главного цикла, не на повтор стрима и не на сабагента', async () => {
+test('onContext: снимок на каждый новый запрос, включая сабагента, но не на повтор стрима; контекст — только главного цикла', async () => {
   const { snaps, res } = await collect([
     init('opus'),
     assistant('m1', 2, 0, 35000),
@@ -158,9 +174,10 @@ test('onContext: снимок на каждый новый запрос глав
     resultOf({ opus: entry(1000000) }),
   ]);
   assert.deepEqual(snaps, [
-    { contextPeak: 35002, requests: 1 },
-    { contextPeak: 39001, requests: 2 },
-    { contextPeak: 39001, requests: 3 },
+    { contextPeak: 35002, requests: 1, spent: 35003 },
+    { contextPeak: 35002, requests: 1, spent: 935005, subSpent: 900002, subagents: 1 },
+    { contextPeak: 39001, requests: 2, spent: 974007, subSpent: 900002, subagents: 1 },
+    { contextPeak: 39001, requests: 3, spent: 1004109, subSpent: 900002, subagents: 1 },
   ]);
   assert.equal(res.tokens?.contextWindow, 1000000);
 });

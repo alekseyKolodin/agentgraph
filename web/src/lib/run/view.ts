@@ -69,15 +69,21 @@ export function headerStatus(r: RunView): string {
   return runWaiting(r) ? 'waiting' : pause === 'paused' ? 'paused' : r.live ? 'running' : r.status;
 }
 
-/** «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; идущее саммари тега. */
-export function runMeta(r: RunView, tagPending: LiveState['tagPending']): string {
+/**
+ * «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; токены идущих этапов
+ * (их стоимость придёт только с концом этапа, а лимит подписки тратится уже сейчас); идущее саммари тега.
+ */
+export function runMeta(r: RunView, tagPending: LiveState['tagPending'], running: Iterable<PendingPhase> = []): string {
   const blocks = runBlocks(r);
   let progress = t('итерация {i}/{n}', { i: r.iterations, n: r.maxIterations ?? '?' });
   if (blocks.length > 1) {
     const cur = Math.max(0, blocks.findLastIndex((b) => b.status !== 'pending'));
     progress = t('блок {k}/{n} · итераций: {i}', { k: cur + 1, n: blocks.length, i: r.iterations });
   }
-  return `${progress} · ≈${usd(r.totalCostUsd)}${tagPending ? ` · ${t('обновляю саммари тега {tag}…', { tag: tagPending.tag })}` : ''}`;
+  let spent = 0;
+  for (const x of running) spent += x.ctx?.spent ?? 0;
+  const live = spent > 0 ? ` · ${t('идёт ≈{n} токенов', { n: tokensShort(spent) })}` : '';
+  return `${progress} · ≈${usd(r.totalCostUsd)}${live}${tagPending ? ` · ${t('обновляю саммари тега {tag}…', { tag: tagPending.tag })}` : ''}`;
 }
 
 /** Лимит итераций можно менять у живого запуска, пока блок с циклом не завершился. */
@@ -325,6 +331,33 @@ export function ctxChipInfo(
     }
   } else if (x.ctx!.requests > 0) parts.push(t('запросов к модели: {n}', { n: x.ctx!.requests }));
   return { text: `ctx ${ctxLabel(peak!, window)}`, level: ctxLevel(peak!, window), title: parts.join('\n') };
+}
+
+/** Все токены этапа (вход, кэш, выход, включая сабагентов) по итогу сессии; нет данных — 0. */
+export const phaseSpent = (tk?: SessionTokens): number => (tk?.input ?? 0) + (tk?.output ?? 0) + (tk?.cacheRead ?? 0) + (tk?.cacheCreation ?? 0);
+
+/**
+ * Чип расхода этапа «Σ 38M · 5 саб.»: идущий — по снимку ctx из потока, готовый — по tokens отчёта. Идущий этап,
+ * который уже потратил больше самого дорогого готового этапа запуска (maxDone), подсвечивается: такой этап стоит
+ * остановить или проверить, пока он не съел лимит. Нет данных — null.
+ */
+export function spentChipInfo(
+  x: { tokens?: SessionTokens; ctx?: { spent?: number; subSpent?: number; subagents?: number } },
+  live: boolean,
+  maxDone = 0,
+): { text: string; level: '' | 'warn'; title: string } | null {
+  const spent = live ? x.ctx?.spent ?? 0 : phaseSpent(x.tokens);
+  if (!(spent > 0)) return null;
+  const n = tokensShort;
+  const subs = live ? x.ctx?.subagents ?? 0 : 0;
+  const lines = [live ? t('Потрачено этапом к этому моменту: ≈{n} токенов (вход, кэш и выход)', { n: n(spent) }) : t('Потрачено этапом: {n} токенов (вход, кэш и выход)', { n: n(spent) })];
+  if (subs > 0) lines.push(t('из них сабагенты ({k}): {n}', { k: subs, n: n(x.ctx!.subSpent) }));
+  else if (!live) lines.push(t('включая сабагентов'));
+  const over = live && maxDone > 0 && spent > maxDone;
+  if (over) lines.push(t('Уже больше самого дорогого готового этапа запуска ({n}): проверьте, нужен ли он, или поставьте запуск на паузу', { n: n(maxDone) }));
+  lines.push(t('Большая часть обычно — чтение кэша: оно дешевле остального, но тоже идёт в лимит'));
+  if (live) lines.push(t('Оценка по ходу этапа: служебные запросы сюда не попадают, точный итог и стоимость будут, когда он закончится'));
+  return { text: `Σ ${n(spent)}${subs > 0 ? ` · ${t('{k} саб.', { k: subs })}` : ''}`, level: over ? 'warn' : '', title: lines.join('\n') };
 }
 
 /** Замечания судьи — markdown; у команды это хвост её вывода — моноширинно, как condition.command.log. */

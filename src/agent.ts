@@ -48,7 +48,7 @@ export type SessionRequest = {
   guard?: (tool: string, input: Record<string, unknown>, ctx: { cwd: string }) => string | undefined;
   /** Вызывается один раз, когда SDK прислал system/init с фактической моделью сессии. */
   onModel?: (model: string) => void;
-  /** Вызывается после каждого нового запроса главного цикла к модели: занятость контекста по ходу сессии. */
+  /** Вызывается после каждого нового запроса к модели (и сабагентов) и роста его расхода: контекст и расход по ходу сессии. */
   onContext?: (c: ContextSnapshot) => void;
   /** Ход сессии событиями (SessionEvent) — рядом с LogFn, а не вместо: строки лога остаются как были. */
   onEvent?: (e: SessionEvent) => void;
@@ -72,17 +72,29 @@ export type SessionResult = {
 };
 
 
-/** Занятость контекста по ходу сессии: пик из SessionTokens и окно, если оно уже известно. */
-export type ContextSnapshot = { contextPeak: number; requests: number; contextWindow?: number };
+/**
+ * Занятость контекста по ходу сессии: пик из SessionTokens и окно, если оно уже известно. spent — все токены
+ * всех запросов сессии (вход, кэш, выход), включая сабагентов: subSpent из них у subagents сабагентов.
+ * Оценка по ходу: точный итог придёт с результатом. Нулевые поля не пишутся.
+ */
+export type ContextSnapshot = { contextPeak: number; requests: number; contextWindow?: number; spent?: number; subSpent?: number; subagents?: number };
 
 /**
  * Счётчик токенов по потоку сообщений SDK; seen — id сообщений модели, чей запрос уже учтён;
  * model — модель главного цикла из system/init; liveWindow — окно из getContextUsage, пока результата нет.
  */
-export type TokenTally = { tokens: SessionTokens; seen: Set<string>; model?: string; liveWindow?: number };
+export type TokenTally = {
+  tokens: SessionTokens;
+  seen: Set<string>;
+  model?: string;
+  liveWindow?: number;
+  /** Расход по ходу: id сообщения модели -> его токены (sub — запрос сабагента); subagents — их parent_tool_use_id. */
+  spent: Map<string, { n: number; sub: boolean }>;
+  subagents: Set<string>;
+};
 
 export function newTally(): TokenTally {
-  return { tokens: { contextStart: 0, contextPeak: 0, requests: 0 }, seen: new Set() };
+  return { tokens: { contextStart: 0, contextPeak: 0, requests: 0 }, seen: new Set(), spent: new Map(), subagents: new Set() };
 }
 
 /**
@@ -110,7 +122,38 @@ export function mainContextWindow(usage: Record<string, ModelUsage>, model?: str
 /** Снимок контекста: окно из результата, а пока его нет — из кэша по модели, затем из getContextUsage. */
 export function contextSnapshot(t: TokenTally): ContextSnapshot {
   const contextWindow = t.tokens.contextWindow ?? (t.model ? windowCache.get(t.model) : undefined) ?? t.liveWindow;
-  return { contextPeak: t.tokens.contextPeak, requests: t.tokens.requests, ...(contextWindow ? { contextWindow } : {}) };
+  let spent = 0;
+  let subSpent = 0;
+  for (const x of t.spent.values()) {
+    spent += x.n;
+    if (x.sub) subSpent += x.n;
+  }
+  return {
+    contextPeak: t.tokens.contextPeak,
+    requests: t.tokens.requests,
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(spent ? { spent } : {}),
+    ...(subSpent ? { subSpent, subagents: t.subagents.size } : {}),
+  };
+}
+
+/**
+ * Учесть расход запроса по ходу сессии, включая сабагентов: их запросы стоят лимита так же, как главного цикла,
+ * а в tokens попадают только с результатом. Стрим одного запроса — несколько сообщений с общим id и растущим выходом:
+ * берём наибольшее. true — расход вырос.
+ */
+export function tallySpent(t: TokenTally, msg: SDKMessage): boolean {
+  if (msg.type !== 'assistant') return false;
+  const m = msg.message as { id?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } };
+  if (!m.id || !m.usage) return false;
+  const u = m.usage;
+  const n = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+  const prev = t.spent.get(m.id);
+  if (prev && prev.n >= n) return false;
+  const parent = msg.parent_tool_use_id;
+  t.spent.set(m.id, { n, sub: !!parent });
+  if (parent) t.subagents.add(parent);
+  return true;
 }
 
 /** Учесть сообщение SDK в счётчике. true — счётчик что-то узнал (иначе tokens в отчёт не пишем). */
@@ -295,8 +338,9 @@ export async function runSession(req: SessionRequest, log: LogFn, deps: SessionD
         }
       }
       const requests = tally.tokens.requests;
+      const grew = tallySpent(tally, msg);
       counted = tallyTokens(tally, msg) || counted;
-      if (tally.tokens.requests !== requests) emitContext();
+      if (tally.tokens.requests !== requests || grew) emitContext();
     }
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : String(err));
