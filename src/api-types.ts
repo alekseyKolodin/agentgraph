@@ -1097,7 +1097,15 @@ export type AnalysisIteration = {
   /** Начало замечаний, не больше 300 знаков. */
   feedback: string;
   stale: boolean;
+  /** Команда условия упала без вывода (grep -q по списку): замечания одинаковы при любом прогрессе, застоем не считаются. */
+  silent?: boolean;
   costUsd: number;
+  /** Итог итерации от модели (ConditionReport.summary), начало: по нему видно, движется ли цикл по списку работ. */
+  summary?: string;
+  /** Итерация кончилась паузой по loop.pause_marker: этап ждал ответа пользователя; answered — запуск пошёл дальше. */
+  pause?: { phase: string; answered: boolean };
+  /** Папка итерации относительно runDir (там выводы этапов и condition.json). */
+  dir?: string;
 };
 
 export type AnalysisBlock = {
@@ -1118,7 +1126,11 @@ export type AnalysisBlock = {
   next?: string;
   /** Застой: сколько итераций подряд (включая первую из серии) провалились с теми же замечаниями, максимум по блоку. */
   stuck: number;
+  /** loop.pause_marker блока из flow. */
+  pauseMarker?: string;
   log: AnalysisIteration[];
+  /** Итерация, которая до условия не дошла (упал этап, запуск оборвали), и её папка относительно runDir. */
+  unfinished?: { iteration: number; dir?: string };
 };
 
 /** Что этап берёт из шаблона промпта: по регэкспам по тексту flow. */
@@ -1137,6 +1149,9 @@ export type AnalysisPhaseRun = {
   /** Доля окна модели в процентах, если окно известно. */
   contextPct?: number;
 };
+
+/** Запуск этапа, завершившийся ошибкой: текст ошибки SDK (лимит аккаунта, API, лимит ходов), начало. */
+export type AnalysisPhaseError = { iteration: number; subtype: string; text: string };
 
 /** Этап flow: сводка по всем запускам (итерациям) и последний запуск. */
 export type AnalysisPhase = {
@@ -1173,6 +1188,8 @@ export type AnalysisPhase = {
   reads: string[];
   writes: string[];
   last?: AnalysisPhaseRun;
+  /** Запуски с ошибкой и её текст, последние; нет — ошибок не было. */
+  errors?: AnalysisPhaseError[];
   /** Этап блока-вызова: имя вызываемого flow. Его запуск — дочерний запуск, стоимость — вместе с ним, ходов и контекста нет. */
   call?: string;
 };
@@ -1187,6 +1204,8 @@ export type AnalysisFacts = {
   blockCount: number;
   /** Объявленные артефакты flow (ключи). */
   artifacts: string[];
+  /** Почему запуск остановился (RunReport.error), начало; нет — без ошибки. */
+  error?: string;
   blocks: AnalysisBlock[];
   phases: AnalysisPhase[];
 };

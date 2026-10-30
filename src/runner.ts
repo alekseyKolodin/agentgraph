@@ -198,6 +198,8 @@ export type { RunFixVia, RunFlowEdit, RunNote } from './api-types.js';
 
 const HISTORY_ENTRY_MAX = 6000;
 const FEEDBACK_MAX = 6000;
+/** Граница в замечаниях непройденной команды: до неё — команда и код выхода, после — хвост вывода (анализ flow ищет пустой). */
+export const COMMAND_OUTPUT_HEAD = 'Вывод (хвост):\n';
 /** Как в LoopSchema.max_iterations. */
 const MAX_ITERATIONS_LIMIT = 50;
 /** Шаг проверки условия в applied указаний (судья), как ключ карточки условия в UI. */
@@ -1568,7 +1570,7 @@ async function evaluateUntil(
       fs.writeFileSync(path.join(runDir, logFile), out);
       const done = r.code === 0;
       const code = r.code ?? r.signal ?? '?';
-      const feedback = done ? '' : `Команда \`${until.run}\` завершилась с кодом ${code}. Вывод (хвост):\n${truncateTail(out, FEEDBACK_MAX)}`;
+      const feedback = done ? '' : `Команда \`${until.run}\` завершилась с кодом ${code}. ${COMMAND_OUTPUT_HEAD}${truncateTail(out, FEEDBACK_MAX)}`;
       return { ...base, done, feedback, detail: `exit ${code}`, logFile };
     }
 

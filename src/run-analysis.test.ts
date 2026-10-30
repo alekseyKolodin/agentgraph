@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { analysisFacts, analysisPrompt, analyzeRun, parseAnalysis, promptUses, readAnalysis } from './run-analysis.js';
+import { ANALYSIS_SYSTEM, analysisFacts, analysisPrompt, analysisRequest, analyzeRun, parseAnalysis, promptUses, readAnalysis, runFilesGuard } from './run-analysis.js';
 import type { ConditionReport, PhaseReport, RunReport } from './api-types.js';
-import type { FlowSpec } from './schema.js';
+import { UntilSchema, type FlowSpec } from './schema.js';
+import { COMMAND_OUTPUT_HEAD } from './runner.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 
 const spec: FlowSpec = {
@@ -193,7 +194,7 @@ const withDir = async (fn: (dir: string) => Promise<void>) => {
   }
 };
 
-test('анализ: валидный ответ — вердикт, рекомендации и факты записаны в analysis.json; запрос без инструментов, sonnet, без сохранения', () =>
+test('анализ: валидный ответ — вердикт, рекомендации и факты записаны в analysis.json; запрос с чтением папки запуска, sonnet, без сохранения', () =>
   withDir(async (dir) => {
     const f = fake({
       summary: 'Этапы analyze и implement стоит объединить.',
@@ -218,15 +219,19 @@ test('анализ: валидный ответ — вердикт, рекоме
     assert.ok(Date.parse(a.at) > 0);
 
     const req = f.reqs[0];
-    assert.deepEqual(req.tools, []);
+    assert.deepEqual(req.tools, ['Read', 'Grep', 'Glob']);
     assert.deepEqual(req.implicitTools, []);
+    assert.equal(typeof req.guard, 'function');
+    // чтение вне cwd — через доп. директорию, как у судьи
+    assert.deepEqual(req.additionalDirectories, [path.resolve(dir)]);
     assert.equal(req.model, 'sonnet');
-    assert.equal(req.maxTurns, 3);
+    assert.equal(req.maxTurns, 12);
     assert.equal(req.persist, false);
     assert.equal(req.cwd, os.tmpdir());
     assert.ok(req.outputSchema);
     assert.match(req.system!, /испорченный телефон/);
     assert.match(req.prompt, /name: feature/);
+    assert.ok(req.prompt.includes(`Папка запуска: ${path.resolve(dir)}.`));
 
     assert.deepEqual(readAnalysis(dir), a);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'analysis.json'), 'utf8')), a);
@@ -307,3 +312,192 @@ test('блок-вызов в анализе: факты вызова без хо
   // у flow без вызовов и развилки этого правила в промпте нет
   assert.doesNotMatch(analysisPrompt(analysisFacts(report(), spec), 'name: feature'), /Блок-вызов/);
 });
+
+const LIMIT = "Claude Code returned an error result: You've hit your session limit · resets 6:50pm (Asia/Tbilisi)";
+
+test('факты: текст ошибки упавшего этапа и ошибка запуска — в фактах и промпте, итерация без условия помечена', () => {
+  const r = report({
+    status: 'failed',
+    error: `Этап implement завершился с ошибкой: ${LIMIT}`,
+    blocks: [
+      { index: 0, name: 'build', title: 'Реализация', status: 'failed', iterations: 2, maxIterations: 5, condition: 'judge', looped: true, onFail: 'stop' },
+      { index: 1, name: 'review', title: '', status: 'pending', iterations: 0, maxIterations: 1, condition: 'none', looped: false, onFail: 'stop' },
+    ],
+    phases: [
+      phase('analyze', 1),
+      phase('implement', 1, { ok: false, subtype: 'error_max_turns', errors: [] }),
+      phase('analyze', 2, { files: { prompt: 'iter-02/01-analyze.prompt.md', transcript: 'iter-02/01-analyze.transcript.md', output: 'iter-02/01-analyze.output.md' } }),
+      // ошибочный результат SDK приходит с subtype success
+      phase('implement', 2, { ok: false, subtype: 'success', turns: 4, errors: [LIMIT] }),
+    ],
+    conditions: [cond(1)],
+  });
+  const f = analysisFacts(r, spec);
+  assert.equal(f.error, `Этап implement завершился с ошибкой: ${LIMIT}`);
+  const impl = f.phases.find((p) => p.name === 'implement')!;
+  // без текста ошибки — хотя бы subtype
+  assert.deepEqual(impl.errors, [{ iteration: 1, subtype: 'error_max_turns', text: 'error_max_turns' }, { iteration: 2, subtype: 'success', text: LIMIT }]);
+  assert.equal(f.phases.find((p) => p.name === 'analyze')!.errors, undefined);
+  assert.deepEqual(f.blocks[0].unfinished, { iteration: 2, dir: 'iter-02' });
+  assert.equal(f.blocks[1].unfinished, undefined);
+  // ни текста, ни говорящего subtype
+  const mute = analysisFacts(report({ phases: [phase('analyze', 1, { ok: false, subtype: 'success', errors: [] })] }), spec);
+  assert.equal(mute.phases[0].errors?.[0].text, 'текста ошибки нет');
+
+  const p = analysisPrompt(f, 'name: feature');
+  assert.match(p, /^Запуск остановился с ошибкой: <source-data> Этап implement завершился с ошибкой: Claude Code returned an error result: You've hit your session limit/m);
+  assert.match(p, /ошибка на итерации 2: <source-data> Claude Code returned an error result: You've hit your session limit/);
+  assert.match(p, /последний запуск: итерация 2, ошибка, 4 ходов/);
+  assert.match(p, /итерация 2 \(iter-02\): до условия не дошла — запуск остановился на ней/);
+  // у прошлых запусков ошибки не было — строки нет
+  assert.doesNotMatch(analysisPrompt(analysisFacts(report({ phases: [phase('analyze', 1)] }), spec), 'name: feature'), /остановился с ошибкой|ошибка на итерации|до условия не дошла/);
+  // и правило: лимит аккаунта, прерывание, сбой API — не повод перекраивать flow, а лимит ходов — повод
+  assert.match(ANALYSIS_SYSTEM, /Внешний сбой — не устройство flow\. Лимит аккаунта или сессии \(session limit, usage limit, rate limit\), прерывание пользователем \(статус aborted\), перезапуск сервера \(статус interrupted\), ошибка API/);
+  assert.match(ANALYSIS_SYSTEM, /error_max_turns — не внешний сбой/);
+});
+
+test('факты: итерация с паузой по pause_marker — «пауза: этап ждал ответа пользователя», а не «не выполнено»', () => {
+  const paused: FlowSpec = {
+    ...spec,
+    blocks: [{ ...spec.blocks![0], loop: { max_iterations: 5, until: { type: 'marker', marker: '<DONE>' }, pause_marker: '<NEEDS_USER>' } }, spec.blocks![1]],
+  };
+  const noMarker = { type: 'marker' as const, feedback: '', detail: 'маркер <DONE> последней строкой вывода implement: нет' };
+  const r = report({
+    blocks: [{ index: 0, name: 'build', title: 'Реализация', status: 'done', iterations: 3, maxIterations: 5, condition: 'marker', looped: true, onFail: 'stop' }],
+    conditions: [cond(1, noMarker), cond(2, noMarker), cond(3, { type: 'marker', done: true, feedback: '' })],
+    pauses: [
+      { block: 'build', iteration: 1, phase: 'analyze', text: 'Какой клиент API взять?', output: 'iter-01/01-analyze.output.md', resumedAt: '2026-10-24T10:05:00Z' },
+      // пауза другого блока с тем же номером итерации к build не относится
+      { block: 'review', iteration: 2, phase: 'check', text: '?', output: 'x' },
+    ],
+  });
+  const f = analysisFacts(r, paused);
+  const b = f.blocks[0];
+  assert.equal(b.pauseMarker, '<NEEDS_USER>');
+  assert.deepEqual(b.log.map((x) => x.pause), [{ phase: 'analyze', answered: true }, undefined, undefined]);
+
+  const p = analysisPrompt(f, 'name: feature');
+  assert.match(p, /- build «Реализация»: цикл marker, итераций 3 из 5, пауза по маркеру <NEEDS_USER>, статус done/);
+  assert.match(p, /итерация 1: пауза: этап analyze ждал ответа пользователя, ответ получен \(\$0\.05\) — <source-data> маркер <DONE>/);
+  assert.doesNotMatch(p, /итерация 1: не выполнено/);
+  assert.match(p, /итерация 2: не выполнено/);
+  // ответа не дождались (запуск прервали на паузе)
+  const waiting = analysisFacts(report({ conditions: [cond(1, noMarker)], pauses: [{ block: 'build', iteration: 1, phase: 'implement', text: '?', output: 'o' }] }), paused);
+  assert.deepEqual(waiting.blocks[0].log[0].pause, { phase: 'implement', answered: false });
+  assert.match(analysisPrompt(waiting, ''), /итерация 1: пауза: этап implement ждал ответа пользователя, ответа нет/);
+  assert.match(ANALYSIS_SYSTEM, /Блоку, у которого pause_marker уже есть, его не советуй/);
+  // у цикла без условия вердикт «проход», но пауза видна и там
+  const fixed = analysisFacts(
+    report({ blocks: [{ index: 0, name: 'build', title: 'Реализация', status: 'done', iterations: 1, maxIterations: 2, condition: 'none', looped: true, onFail: 'stop' }], conditions: [cond(1, { type: 'none', feedback: '' })], pauses: [{ block: 'build', iteration: 1, phase: 'implement', text: '?', output: 'o', resumedAt: '2026-10-24T10:05:00Z' }] }),
+    paused,
+  );
+  assert.match(analysisPrompt(fixed, ''), /итерация 1: проход, пауза: этап implement ждал ответа пользователя, ответ получен/);
+});
+
+test('факты: цикл по списку работ — итог каждой итерации и её папка в промпте, шаг цикла по правилам — прогресс', () => {
+  const files = (i: number, n: string) => ({ files: { prompt: `01-build/iter-0${i}/${n}.prompt.md`, transcript: `01-build/iter-0${i}/${n}.transcript.md`, output: `01-build/iter-0${i}/${n}.output.md` } });
+  const item = { type: 'marker' as const, feedback: '', detail: 'маркер <ALL_DONE> последней строкой вывода implement: нет' };
+  const r = report({
+    phases: [1, 2, 3].flatMap((i) => [phase('analyze', i, files(i, '01-analyze')), phase('implement', i, files(i, '02-implement'))]),
+    conditions: [
+      cond(1, { ...item, summary: 'Веха 1 готова и проверена. Дальше веха 2.' }),
+      cond(2, { ...item, summary: 'Веха 2 готова и проверена. Дальше веха 3.' }),
+      cond(3, { type: 'marker', done: true, feedback: '', summary: 'x'.repeat(800) }),
+    ],
+  });
+  const f = analysisFacts(r, spec);
+  const b = f.blocks[0];
+  assert.deepEqual(b.log.map((x) => x.dir), ['01-build/iter-01', '01-build/iter-02', '01-build/iter-03']);
+  assert.equal(b.log[2].summary!.length, 501);
+  assert.equal(b.stuck, 0);
+  // у этапа без пути вывода (старый отчёт) папки нет
+  assert.equal(analysisFacts(report(), spec).blocks[0].log[0].dir, undefined);
+
+  const p = analysisPrompt(f, 'name: feature');
+  assert.match(p, /итерация 1 \(01-build\/iter-01\): не выполнено \(\$0\.05\) — <source-data> маркер <ALL_DONE>.*<\/source-data> — итог: <source-data> Веха 1 готова и проверена\. Дальше веха 2\. <\/source-data>/);
+  assert.match(p, /итерация 2 \(01-build\/iter-02\): не выполнено .* — итог: <source-data> Веха 2 готова/);
+  assert.match(ANALYSIS_SYSTEM, /Итерация, не выполнившая условие, здесь — прогресс, если по итогам итераций позиции сменяются/);
+  assert.match(ANALYSIS_SYSTEM, /проверяющий смотрит позицию этой итерации/);
+});
+
+test('факты: цикл по списку с командой без вывода (grep -q) — не застой; скопированный итог помечен, а не повторён', () => {
+  const run = "! grep -q '^- \\[ \\]' docs/plan.md && make test";
+  const silent = { type: 'command' as const, detail: 'exit 1', feedback: `Команда \`${run}\` завершилась с кодом 1. ${COMMAND_OUTPUT_HEAD}` };
+  const r = report({
+    conditions: [
+      cond(1, { ...silent, summary: 'Веха 1 готова. Дальше веха 2.' }),
+      // digest при тех же замечаниях модель не зовёт и копирует прошлый итог
+      cond(2, { ...silent, summary: 'Веха 1 готова. Дальше веха 2.' }),
+      cond(3, { type: 'command', done: true, feedback: '', detail: 'exit 0', summary: 'Все вехи закрыты.' }),
+    ],
+  });
+  const b = analysisFacts(r, spec).blocks[0];
+  assert.deepEqual(b.log.map((x) => [x.silent, x.stale]), [[true, false], [true, false], [undefined, false]]);
+  assert.equal(b.stuck, 0);
+  const p = analysisPrompt(analysisFacts(r, spec), '');
+  assert.match(p, /итерация 1: не выполнено \(\$0\.05\) — <source-data> exit 1 <\/source-data> — команда упала без вывода: по замечаниям прогресс не виден — итог: <source-data> Веха 1 готова/);
+  assert.match(p, /итерация 2: не выполнено \(\$0\.05\) — <source-data> exit 1 <\/source-data> — команда упала без вывода: по замечаниям прогресс не виден — итог тот же, что у прошлой итерации \(скопирован\)/);
+  assert.doesNotMatch(p, /Застой/);
+  assert.match(ANALYSIS_SYSTEM, /Команда без вывода \(grep -q, пока в списке есть открытые пункты\) даёт одинаковые замечания при любом прогрессе — это не застой/);
+
+  // та же команда с одинаковым выводом — застой, как раньше
+  const loud = { ...silent, feedback: `${silent.feedback}FAIL TestParse` };
+  const stuck = analysisFacts(report({ conditions: [cond(1, loud), cond(2, loud), cond(3, { type: 'command', done: true, feedback: '' })] }), spec).blocks[0];
+  assert.deepEqual(stuck.log.map((x) => x.stale), [false, true, false]);
+  assert.equal(stuck.stuck, 2);
+});
+
+test('промпт: условия — только те, что есть в схеме, по одному на блок; составных нет', () => {
+  for (const type of UntilSchema.options.map((o) => o.shape.type.value)) assert.ok(ANALYSIS_SYSTEM.includes(`${type} (`), `условие ${type} не описано`);
+  assert.match(ANALYSIS_SYSTEM, /Условие остановки у блока одно — loop\.until одного вида/);
+  assert.match(ANALYSIS_SYSTEM, /Составных условий \(«команда и маркер», «судья и тесты»\) нет/);
+  // пример как у генератора: без test -f нет файла — «готово», grep -n печатает оставшееся в {{feedback}}
+  assert.match(ANALYSIS_SYSTEM, /`test -f plan\.md && ! grep -n '\^- \\\[ \\\]' plan\.md && make test`/);
+  assert.match(ANALYSIS_SYSTEM, /У каждой проверки один владелец/);
+});
+
+test('промпт: проверяющий с writes в артефакт и без Edit/Write — «код не правит», а не «пишущий»', () => {
+  const reviewed: FlowSpec = {
+    ...spec,
+    blocks: [spec.blocks![0], { name: 'review', phases: [{ name: 'check', tools: ['Read', 'Bash'], writes: ['plan'], prompt: 'Проверь' }] }],
+  };
+  const p = analysisPrompt(analysisFacts(report(), reviewed), '');
+  assert.match(p, /### check «check» \(блок review\)\nинструменты: Read, Bash \(код не правит, пишет артефакты plan\)/);
+  assert.match(p, /### implement «Код» \(блок build\)\nинструменты: Read, Edit, Bash \(пишущий\)/);
+});
+
+test('запрос: без папки запуска — без инструментов и guard, 3 хода, о файлах в промпте ни слова', () => {
+  const req = analysisRequest(analysisFacts(report(), spec), 'name: feature');
+  assert.deepEqual(req.tools, []);
+  assert.equal(req.guard, undefined);
+  assert.equal(req.additionalDirectories, undefined);
+  assert.equal(req.maxTurns, 3);
+  assert.doesNotMatch(req.prompt, /Папка запуска/);
+});
+
+test('guard анализа: Read, Grep и Glob — только внутри папки запуска, симлинк наружу и путь без папки — отказ', () =>
+  withDir(async (dir) => {
+    fs.mkdirSync(path.join(dir, 'iter-01'));
+    fs.symlinkSync(os.homedir(), path.join(dir, 'home'));
+    const g = runFilesGuard(dir);
+    const ctx = { cwd: os.tmpdir() };
+    assert.equal(g('Read', { file_path: path.join(dir, 'run.json') }, ctx), undefined);
+    assert.equal(g('Read', { file_path: path.join(dir, 'iter-01', 'нет-такого.md') }, ctx), undefined);
+    assert.equal(g('Grep', { pattern: 'limit', path: path.join(dir, 'iter-01') }, ctx), undefined);
+    assert.equal(g('Glob', { pattern: '**/*.output.md', path: dir }, ctx), undefined);
+    // инструменты вне чтения (структурный ответ) guard не касаются: других сессии не выдано
+    assert.equal(g('StructuredOutput', { summary: 'x' }, ctx), undefined);
+
+    const denied = [
+      g('Read', { file_path: '/etc/hosts' }, ctx),
+      g('Read', { file_path: path.join(dir, '..', 'other', 'run.json') }, ctx),
+      g('Read', { file_path: path.join(dir, 'home', '.zshrc') }, ctx),
+      // относительный путь — от cwd сессии, а не от папки запуска
+      g('Read', { file_path: 'run.json' }, ctx),
+      g('Grep', { pattern: 'x' }, ctx),
+      g('Glob', { pattern: '../**/*.md', path: dir }, ctx),
+      g('Glob', { pattern: '/Users/**', path: dir }, ctx),
+      g('Glob', { pattern: '~/**', path: dir }, ctx),
+    ];
+    for (const why of denied) assert.match(why ?? '', /Читать можно только папку запуска/);
+  }));
