@@ -1,6 +1,6 @@
 ---
 name: agentgraph-core
-description: Правила правок ядра agentgraph в src/ — runner.ts (блоки, итерации, условия, пауза, продолжение), schema.ts, artifacts*.ts, agent.ts (сессии Agent SDK), tags.ts, server.ts и его API, тесты рядом. Загружать перед любой правкой файлов в src/ (кроме чистого UI в web/): стек, границы безопасности, порядок проверки.
+description: Правила правок ядра agentgraph в src/ — runner.ts (блоки, итерации, условия, пауза, продолжение), schema.ts, artifacts*.ts, agent.ts (сессии Agent SDK), spaces.ts и tags.ts (пространства и теги знаний), sessions*.ts, server.ts и его API, тесты рядом. Загружать перед любой правкой файлов в src/ (кроме чистого UI в web/): стек, границы безопасности, порядок проверки.
 ---
 
 # Ядро agentgraph: правила правок в `src/`

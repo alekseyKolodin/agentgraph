@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Хелпер скилла /agentgraph: запуск флоу через API UI-сервера agentgraph и ретрансляция вопросов агента в чат.
-// Команды: ensure | flows | draft | start | continue | wait | answer | status | pause | resume | abort | note | flow-reload | artifacts | artifact | artifact-write.
+// Команды: ensure | flows | spaces | draft | start | continue | wait | answer | status | pause | resume | abort | note | flow-reload | artifacts | artifact | artifact-write.
 // Вывод — JSON или короткий текст для Claude.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -20,7 +20,9 @@ const fail = (msg, code = 1) => { console.error(`ошибка: ${msg}`); process
 const expandHome = (p) => path.resolve(String(p).replace(/^~(?=$|\/)/, os.homedir()));
 
 // опции, которые можно повторять: значения собираются в массив
-const REPEATABLE = new Set(['add-dir', 'attach']);
+const REPEATABLE = new Set(['add-dir', 'attach', 'knowledge']);
+// флаги без значения: следующий аргумент — не их значение, а позиционный (имя flow)
+const FLAGS = new Set(['no-save-state', 'auto-space']);
 
 function parseArgs(argv) {
   const pos = [];
@@ -30,7 +32,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const k = a.slice(2);
       const next = argv[i + 1];
-      const v = next === undefined || next.startsWith('--') ? true : (i++, next);
+      const v = FLAGS.has(k) || next === undefined || next.startsWith('--') ? true : (i++, next);
       if (REPEATABLE.has(k)) (opt[k] ??= []).push(v);
       else opt[k] = v;
     } else pos.push(a);
@@ -76,6 +78,13 @@ async function ensure() {
 }
 
 const usesAsk = (f) => (f.phases || []).some((p) => p.tools.includes('AskUserQuestion'));
+
+// Пространства (фича или проект: карта, документы, состояние «где мы сейчас») — для start --space
+async function spaces() {
+  await need('spaces');
+  const { spaces: list } = await api('GET', '/api/spaces');
+  return list.map((s) => ({ slug: s.slug, title: s.title || undefined, preview: s.preview || undefined, docs: s.docs, hasMap: s.hasMap, hasState: s.hasState, updatedAt: s.updatedAt }));
+}
 
 async function flows() {
   const list = await api('GET', '/api/flows');
@@ -164,6 +173,16 @@ async function start(pos, opt) {
     if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) fail(`нет файла ${file}`);
     return { name: path.basename(file), data: fs.readFileSync(file).toString('base64') };
   });
+  // пространство: карта (CLAUDE.md) — памятью этапов, документы — по запросу, состояние — в промпты; после done
+  // agentgraph перепишет его состояние (--no-save-state — не трогать). Нет такого — сервер заведёт пустое
+  const space = opt.space;
+  if (space === true) fail('--space: укажи слаг пространства');
+  if (opt['auto-space'] && space) fail('--auto-space заводит новое пространство: с --space <slug> он ни к чему');
+  if (opt['no-save-state'] && !space) fail('--no-save-state — только вместе с --space');
+  // теги знаний: строка с описанием — в промпты этапов, полный текст — инструментом knowledge_read
+  const knowledge = (opt.knowledge || []).map((k) => (k === true ? fail('--knowledge: укажи слаг тега знаний') : k));
+  if (space) await need('spaces');
+  if (opt['auto-space']) await need('auto-space');
   // сервер, поднятый до обновления agentgraph, эти поля молча отбросит: проверяем, что он их знает
   if (addDirs.length || attachments.length) {
     const features = (await api('GET', '/api/config')).features || [];
@@ -178,11 +197,15 @@ async function start(pos, opt) {
     cwd,
     addDirs: addDirs.length ? addDirs : undefined,
     attachments: attachments.length ? attachments : undefined,
+    ...(space ? { space, saveState: !opt['no-save-state'] } : {}),
+    ...(opt['auto-space'] ? { autoSpace: true } : {}),
+    ...(knowledge.length ? { tags: knowledge } : {}),
     maxIterations: opt['max-iterations'],
     maxBudgetUsd: opt['max-budget'],
     model: opt.model,
   });
-  return { id: r.id, ui: `${BASE}/run/${r.id}`, ...(specFile ? { adhoc: true } : {}) };
+  // autoSpace — какое пространство завёл ИИ (или почему не вышло: тогда запуск идёт без пространства)
+  return { id: r.id, ui: `${BASE}/run/${r.id}`, ...(specFile ? { adhoc: true } : {}), ...(r.autoSpace ? { autoSpace: r.autoSpace } : {}) };
 }
 
 // «Сохранить как flow» у разового запуска: без --name — свободное имя от имени запуска
@@ -251,6 +274,9 @@ function summary(run) {
     error: run.error,
     runDir: run.runDir,
     ui: `${BASE}/run/${run.id}`,
+    // пространство запуска (у старых запусков — тег задачи, теперь пространство с тем же слагом) и запись его состояния
+    space: run.space ?? run.tags?.[0],
+    stateUpdate: run.stateUpdate ? { ok: run.stateUpdate.ok, error: run.stateUpdate.error, skipped: run.stateUpdate.skipped } : undefined,
     blocks: multi
       ? run.blocks.map((b) => ({ block: b.title || b.name, status: b.status, iterations: `${b.iterations}/${b.maxIterations}` }))
       : undefined,
@@ -501,6 +527,7 @@ try {
   switch (cmd) {
     case 'ensure': out(await ensure()); break;
     case 'flows': await ensure(); out(await flows()); break;
+    case 'spaces': await ensure(); out(await spaces()); break;
     case 'draft': await ensure(); out(await draft(pos, opt)); break;
     case 'start': await ensure(); out(await start(pos, opt)); break;
     case 'save-flow': out(await saveFlow(pos, opt)); break;
@@ -516,7 +543,7 @@ try {
     case 'artifacts': out(await artifacts(pos)); break;
     case 'artifact': { const r = await artifact(pos, opt); if (r) out(r); break; }
     case 'artifact-write': out(await artifactWrite(pos, opt)); break;
-    default: fail('команды: ensure | flows | draft --task-file F [--cwd DIR] [--out F.yaml] [--model M] | start (<flow> | --spec-file F.yaml) --cwd DIR [--input TEXT | --input-file F] [--add-dir DIR]... [--attach FILE]... [--max-iterations N] [--max-budget USD] [--model M] | continue <id> [--max-budget USD] [--model M] | wait <id> [--timeout SEC] | answer <id> <qid> --json J | status <id> | pause <id> | resume <id> [--answer-file F] | abort <id> | note <id> (--text T | --file F) [--all] | flow-reload <id> | save-flow <id> [--name N] [--folder D] | artifacts <id> | artifact <id> <key> [--version N] [--out F] | artifact-write <id> <key> --file F [--base HASH] [--resume]');
+    default: fail('команды: ensure | flows | spaces | draft --task-file F [--cwd DIR] [--out F.yaml] [--model M] | start (<flow> | --spec-file F.yaml) --cwd DIR [--input TEXT | --input-file F] [--space SLUG [--no-save-state] | --auto-space] [--knowledge SLUG]... [--add-dir DIR]... [--attach FILE]... [--max-iterations N] [--max-budget USD] [--model M] | continue <id> [--max-budget USD] [--model M] | wait <id> [--timeout SEC] | answer <id> <qid> --json J | status <id> | pause <id> | resume <id> [--answer-file F] | abort <id> | note <id> (--text T | --file F) [--all] | flow-reload <id> | save-flow <id> [--name N] [--folder D] | artifacts <id> | artifact <id> <key> [--version N] [--out F] | artifact-write <id> <key> --file F [--base HASH] [--resume]');
   }
 } catch (err) {
   fail(err instanceof Error ? err.message : String(err));

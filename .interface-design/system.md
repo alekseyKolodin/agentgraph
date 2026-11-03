@@ -107,7 +107,7 @@ One style for the builder, the "Run" tab and the run page.
 
 ## Sidebar
 
-Top to bottom: the brand with the question counter; sections (Home · Tags · Context) as a compact `.side-nav` row (the selected one has a `--select` background); **"Now"** — active runs; **Flow** — the library with search, folders and drag-and-drop; **Runs** — the whole history with search, a status filter, grouping by project, hiding and deleting.
+Top to bottom: the brand with the question counter; sections (Home · Spaces · Knowledge · Context · Sessions) as a compact `.side-nav` row (the selected one has a `--select` background); **"Now"** — active runs; **Flow** — the library with search, folders and drag-and-drop; **Runs** — the whole history with search, a status filter, grouping by project, hiding and deleting.
 - `"Now" row` (`.lrun`) — an 8px dot (`--live` running, `--st-wait` waiting for you: question, pause, stuck), the name 500, below it an `--fs-meta` caption (`waiting for reply · phase "X"`, `paused`, `phase "X"`), on the right the iteration `2/5` mono `--ink-3`. Waiting runs come first and are amber. The section header has "waiting N · running M" mono (`--st-wait` if any are waiting). An empty section is hidden. Data comes from `/api/home`; without it, statuses from `/api/runs`.
 
 ## Builder
@@ -119,14 +119,18 @@ Top to bottom: the brand with the question counter; sections (Home · Tags · Co
 
 ## Run form (flow → "Run")
 
-At the top, "Task" and "Project directory" with recent paths; the source (MR, issue) is under the task. Everything else is in the "Advanced" disclosure (tags, attachments, additional directories, worktree, limits, model); its summary shows what's set to a non-default value (`#tag · 2 files · up to $2`). Files dropped on the form expand it. "Run" is in the sticky bar. Below the form is a single "Scheme" disclosure with the flow's composition in its summary ("3 blocks · 5 phases" or "2 phases · up to 3 iterations, …") and the graph, open by default.
+At the top, "Task" and "Project directory" with recent paths; the source (MR, issue) is under the task. Everything else is in the "Advanced" disclosure (space, knowledge tags, attachments, additional directories, worktree, limits, model); its summary shows what's set to a non-default value (`◇ press-alert · #qa · 2 files · up to $2`). The space field has a one-line note under it (what the space gives, or an error in `--st-err`) and a collapsible preview of the phase section. Files dropped on the form expand it. "Run" is in the sticky bar. Below the form is a single "Scheme" disclosure with the flow's composition in its summary ("3 blocks · 5 phases" or "2 phases · up to 3 iterations, …") and the graph, open by default.
 
-## Tags
+## Spaces
 
-The tag list is the main element, on the left (`minmax(260px, 340px)`): the "All tags N" heading and a `+ New tag` button, which expands a compact form above the list (slug and title in a row, kind, "Create tag"; Esc or "Cancel" close it; with no tags it's open right away). On the right is the editor of the selected tag; with nothing selected, a single hint line, not an empty panel. A large field editor appears as a third column, only when a field has focus and the container is wider than 1200px.
+The same two columns as Knowledge: the list on the left (`minmax(260px, 320px)`) — the "All spaces N" heading, a `+ New space` button that expands a compact form above the list (slug and title in a row, the gist, paths, "Create space"; with no spaces it's open right away), search, rows with the title, the beginning of the state and a mono meta line. On the right is the editor of the selected space: a header (title `--fs-h3`/500, the slug mono `--ink-3`, the folder path; on the right "New session", "Session in the folder" ghost, "Delete" ghost danger, "Save" — the only primary, disabled without changes), then tabs "Map · State · Documents · Context · Settings" (the selected one is kept when you come back to the page). From 1180px of container width the space's sessions and runs go into a 300px column on the right (live first, a dot as in "Now"); narrower — below the editor. The space badge everywhere (run list, run page, sessions) is `.badge.space` with a `◇` mark; a link where there's somewhere to go.
+
+## Knowledge
+
+The tag list is the main element, on the left (`minmax(260px, 340px)`): the "All tags N" heading and a `+ New tag` button, which expands a compact form above the list (slug and title in a row, "Create tag"; Esc or "Cancel" close it; with no tags it's open right away). On the right is the editor of the selected tag; with nothing selected, a single hint line, not an empty panel. A large field editor appears as a third column, only when a field has focus and the container is wider than 1200px.
 
 ## Pages
 
 - **Run** — tabs "Overview · Graph · Log · Artifacts", the selected tab is remembered. Overview: the "where we are now" summary, the iteration feed, the current phase with its log tail. Graph: the "Pult" style, a node inspector on the right (only when selected), "follow current" mode.
-- **Sidebar, builder, run form, tags** — see the sections above.
+- **Sidebar, builder, run form, spaces, knowledge** — see the sections above.
 - **Home** — "Waiting for you" (questions with context), then "Running" as rows with a summary, then "MRs · need attention", then "Tasks and code". On the right, the events feed. In `/api/home` the server returns `conds` for each run: verdicts of the running block's checks, up to 50, text up to 300 characters, `summary` — the model's iteration summary, if any; and `digest` — the run summary.

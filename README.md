@@ -20,7 +20,7 @@ Runs locally on your Claude Code subscription or API key: in the browser, as a m
 |---|---|
 | re-run tests after the agent says "fixed" and paste the log back | The check is a shell command. Its output becomes the next iteration's feedback, with no copy-paste |
 | review every agent diff yourself first | A separate **read-only** reviewer that never saw the implementer's reasoning, plus a judge with your rubric |
-| re-explain the feature in every new session | A **task tag** keeps a summary of the feature across runs: where the code is, decisions, what's left |
+| re-explain the feature in every new session | A **space** per feature or project: its own `CLAUDE.md` map, docs and a "where we are now" state that every session and run in it starts from |
 | juggle three terminals with three agents | One **Home** page: every run, every agent question, the PRs that need you; each run in its own git worktree |
 | find out the agent burned $15 going in circles | Budget, turn and iteration limits per run and per phase, and a "stuck" warning when iterations fail the same way |
 | can't reproduce the one great session you had | The process is a YAML file in git, and `/session-to-flow` turns a past session into one |
@@ -211,8 +211,8 @@ When an agent needs a decision only you can make, it asks with `AskUserQuestion`
 ### More things people use it for
 
 - **Codebase-wide migrations.** Put the finish line into the check: `! grep -rn "from 'moment'" src && npx tsc --noEmit && npm test`. While old imports remain, `grep` prints them, and that list is the next iteration's feedback. `max_budget_usd` stops a migration that goes sideways.
-- **One feature over many runs.** Implementation, then QA bugs, then review comments, then a rebase: give the runs the same **task tag** (`--tag loyalty-card`). After every successful run a cheap model rewrites the tag's summary (where the code is, key decisions, what's left), and the next run starts from it.
-- **Interactive sessions with the same context.** The **Sessions** tab runs the regular Claude Code TUI in a terminal inside agentgraph (desktop app or browser) with your tags: task tag summaries and knowledge tags arrive through hooks, a tag added mid-session reaches the model on its next step, the task tags' summaries are rewritten when claude exits, **Continue** reopens the conversation with `--resume`, and claude can open another session next to it when you ask. See [Sessions](docs/REFERENCE.md#sessions-claude-code-in-a-terminal-with-tags).
+- **One feature over many runs.** Implementation, then QA bugs, then review comments, then a rebase: run them in the same **space** (`--space loyalty-card`). Its `CLAUDE.md` map reaches every phase as memory, like a repository's `CLAUDE.md`, its docs are read on demand, and after every successful run a cheap model rewrites its state (where the code is, key decisions, what's left), so the next run starts from it.
+- **Interactive sessions with the same context.** The **Sessions** tab runs the regular Claude Code TUI in a terminal inside agentgraph (desktop app or browser) in the space you pick: its map loads as memory, its state, docs and knowledge tags arrive through hooks, a space or tag changed mid-session reaches the model on its next step, the state is rewritten when claude exits, **Continue** reopens the conversation with `--resume`, and claude can write to the space's docs or open another session next to it when you ask. See [Sessions](docs/REFERENCE.md#sessions-claude-code-in-a-terminal-with-a-space).
 - **Your team's process, in git.** Flows are YAML files that get reviewed like code. `/session-to-flow` turns a good Claude Code session into a flow, keeping the commands that worked and the pitfalls you hit. **Knowledge tags** give phases your team's rules: the prompt gets a one-line description of each, and the agent reads the full text only when the task touches that area.
 - **Measure, don't guess.** **Analyze flow** on a finished run says which phases to merge or split, based on peak context, repeating feedback and unused permissions. `agentgraph eval` runs a task set through two variants of a flow and shows which tasks flipped.
 
@@ -244,8 +244,8 @@ Open http://127.0.0.1:4747, pick **example → example-blocks** and click **Run*
 # describe the task: agentgraph writes a flow and runs it
 npm run agentgraph -- "Fix the failing tests, don't change the tests themselves" --cwd ~/code/my-repo --max-budget 3
 
-# run a saved flow with a feature tag
-npm run agentgraph -- run add-feature --cwd ~/code/my-repo --tag loyalty-card
+# run a saved flow in a feature's space
+npm run agentgraph -- run add-feature --cwd ~/code/my-repo --space loyalty-card
 
 # compare two variants of a flow on a task set, each task twice
 npm run agentgraph -- eval fix-tests --compare fix-tests-solo --tasks evals/tasks.yaml --runs 2 --cwd ~/code/my-repo
@@ -263,7 +263,7 @@ To get the same interface as a macOS app, run `npm run desktop:dev`. Integration
 - **Parallel groups**: phases of a block with a shared `group` run at the same time.
 - **Calls and branching**: a block can also call another flow (`flow: <name>`), which runs as a child run with its own page and passes its result on, and `next` rules (`marker`, `command` or `judge`) jump forward to a later block or end the run. See [Calling another flow and branching](docs/REFERENCE.md#calling-another-flow-and-branching).
 - **Artifacts**: run files with explicit read and write permissions per phase. You can edit them between steps.
-- **Tags**: context from outside the flow. **Task tags** carry a feature across runs, and **knowledge tags** give phases your team's rules on demand. See [Tags](docs/REFERENCE.md#tags-tasks-and-knowledge-areas).
+- **Spaces and knowledge tags**: context from outside the flow. A **space** carries a feature or project across sessions and runs (a map, docs, a state), and **knowledge tags** give phases your team's rules on demand. See [Spaces](docs/REFERENCE.md#spaces-a-feature-or-project) and [Knowledge tags](docs/REFERENCE.md#knowledge-tags).
 
 You can write a flow by hand, build it in the visual builder, generate it from a description, or edit it in words ("add a read-only review phase with a judge"). Every field of `flow.yaml` is in the [reference](docs/REFERENCE.md#flowyaml-format).
 
@@ -301,7 +301,7 @@ scripts/        UI build, zip archive, releases, SDK hook check
 .claude/        /agentgraph and /session-to-flow skills, development rules (agentgraph-core, -web, -tests, flow-author skills), code-reviewer subagent
 ```
 
-The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`, terminal sessions to `sessions/<id>/`; tags are stored in `~/.agentgraph/tags/`.
+The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`, terminal sessions to `sessions/<id>/`; spaces are stored in `~/.agentgraph/spaces/`, knowledge tags in `~/.agentgraph/tags/`.
 
 | Command | What it does |
 |---|---|
@@ -323,7 +323,7 @@ CI runs on GitHub Actions: typecheck, tests and the UI build on every pull reque
 ## Documentation
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — installation, first run, day-to-day work, integrations, how the code is organized.
-- [docs/REFERENCE.md](docs/REFERENCE.md) — every `flow.yaml` field, interface screens, artifacts, tags, cost, limitations.
+- [docs/REFERENCE.md](docs/REFERENCE.md) — every `flow.yaml` field, interface screens, artifacts, spaces, knowledge tags, cost, limitations.
 - [flows/example/](flows/example/) — ready-made example flows.
 
 ## License
