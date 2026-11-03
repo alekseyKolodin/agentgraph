@@ -29,7 +29,8 @@ import {
   spaceContextReply,
   spaceDir,
   spaceDocReply,
-  spaceGuard,
+  dataDirsGuard,
+  phaseProtectedRoots,
   spaceReadDirs,
   spaceReply,
   spacesDir,
@@ -41,19 +42,23 @@ import {
   writeSpaceState,
   type SpaceUpdate,
 } from './spaces.js';
-import { createTag, readTag, tagDir } from './tags.js';
+import { createTag, readTag, tagDir, tagsDir } from './tags.js';
 
 function withConfigDir(fn: (root: string) => Promise<void> | void) {
   return async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-spaces-')));
     const prev = process.env.AGENTGRAPH_CONFIG_DIR;
-    process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, 'cfg');
+    // папка настроек — рядом, а не внутри root: root служит папкой пространства, а предок папки настроек в пути
+    // пространства не годится (tooBroadPath)
+    const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-cfg-')));
+    process.env.AGENTGRAPH_CONFIG_DIR = cfg;
     try {
       await fn(root);
     } finally {
       if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
       else process.env.AGENTGRAPH_CONFIG_DIR = prev;
       fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cfg, { recursive: true, force: true });
     }
   };
 }
@@ -278,7 +283,7 @@ test(
     assert.match(sess, /^Пространство agentgraph «Пуш-тревога» \(press-alert\) — фича или проект/);
     assert.ok(sess.includes(`Папка пространства: ${s0.dir}`));
     assert.match(sess, /CLAUDE\.md — карта пространства .*уже в контексте как память/);
-    assert.ok(sess.includes(`- ${path.join(s.dir, 'docs', 'd0.md')} — Документ 0 (`));
+    assert.ok(sess.includes(`- ${path.join(s.dir, 'docs', 'd0.md')} — «Документ 0» (`));
     assert.ok(sess.includes(`Папки пространства (только чтение): ${root}`));
     assert.ok(!sess.includes('нет'), 'несуществующая папка не перечисляется');
     assert.match(sess, /инструментом space_write \(спросит пользователя\)/);
@@ -321,26 +326,40 @@ test(
 );
 
 test(
-  'пространства: guard этапов — Edit/Write/MultiEdit/NotebookEdit в папку пространств отклоняются (и относительным путём, и через ссылку), остальное разрешено',
+  'пространства: guard этапа — запись в пространства, теги знаний, папку запусков (без артефактов) и папки чтения пространства вне проекта отклоняется (и относительным путём, и через ссылку); проект — можно',
   withConfigDir((root) => {
     createSpace('p');
-    const guard = spaceGuard();
+    const runs = path.join(root, 'runs');
+    const proj = path.join(root, 'proj');
+    const ext = path.join(root, 'ext');
+    for (const d of [runs, proj, path.join(proj, 'sub'), ext]) fs.mkdirSync(d, { recursive: true });
+    const reasons: string[] = [];
+    const roots = phaseProtectedRoots({ runsDir: runs, artifacts: false, spaceDirs: [spaceDir('p'), ext, path.join(proj, 'sub')], cwd: proj });
+    const guard = dataDirsGuard(roots, (_tool, reason) => reasons.push(reason));
     const map = path.join(spaceDir('p'), 'CLAUDE.md');
     for (const tool of ['Edit', 'Write', 'MultiEdit']) assert.match(guard(tool, { file_path: map }) ?? '', /только для чтения/, tool);
     assert.match(guard('NotebookEdit', { notebook_path: path.join(spaceDir('p'), 'docs', 'n.ipynb') }) ?? '', /только для чтения/);
-    // соседняя папка в том же разделе другого пространства — тоже
+    // другое пространство, папка тегов знаний, артефакты прошлых запусков (их CLAUDE.md — память пространства), папка
+    // чтения пространства вне проекта
     assert.ok(guard('Write', { file_path: path.join(spacesDir(), 'other', 'CLAUDE.md') }));
+    assert.ok(guard('Write', { file_path: path.join(tagsDir(), 'k', 'attachments', 'CLAUDE.md') }));
+    assert.ok(guard('Write', { file_path: path.join(runs, 'r1', 'artifacts', 'CLAUDE.md') }));
+    assert.ok(guard('Edit', { file_path: path.join(ext, 'notes.md') }));
     // относительный путь от cwd проекта и ссылка из проекта в пространство
-    const proj = path.join(root, 'proj');
-    fs.mkdirSync(proj);
     fs.symlinkSync(spaceDir('p'), path.join(proj, 'link'));
     assert.ok(guard('Edit', { file_path: 'link/CLAUDE.md' }, { cwd: proj }));
-    assert.ok(guard('Write', { file_path: '../cfg/spaces/p/STATE.md' }, { cwd: proj }));
-    // чтение и запись в проект — можно; Bash guard не ловит
-    assert.equal(guard('Read', { file_path: map }), undefined);
+    assert.ok(guard('Write', { file_path: path.relative(proj, path.join(spaceDir('p'), 'STATE.md')) }, { cwd: proj }));
+    // проект и папка пространства внутри проекта — можно; чтение и Bash guard не ловит
     assert.equal(guard('Write', { file_path: path.join(proj, 'a.ts') }), undefined);
+    assert.equal(guard('Write', { file_path: path.join(proj, 'sub', 'b.ts') }), undefined);
+    assert.equal(guard('Read', { file_path: map }), undefined);
     assert.equal(guard('Bash', { command: `echo > ${map}` }), undefined);
     assert.equal(guard('Write', {}), undefined);
+    assert.deepEqual([...new Set(reasons)].sort(), ['knowledge-readonly', 'runs-dir', 'space-readonly']);
+    // у flow с артефактами папку запусков сторожит guard артефактов (он пускает этап в свои артефакты): здесь её нет
+    const withArt = dataDirsGuard(phaseProtectedRoots({ runsDir: runs, artifacts: true, cwd: proj }));
+    assert.equal(withArt('Write', { file_path: path.join(runs, 'r2', 'artifacts', 'plan.md') }), undefined);
+    assert.ok(withArt('Write', { file_path: map }));
   }),
 );
 
@@ -433,15 +452,20 @@ test(
 );
 
 test(
-  'пространства: ответы API — создание 201/200, деталь с extra, 404 на нет, контекст — тексты сессии и этапа, папки, карта, предупреждения',
+  'пространства: ответы API — создание 201, занятый слаг 409, деталь с extra, 404 на нет, контекст — тексты сессии и этапа, папки, карта, предупреждения',
   withConfigDir((root) => {
-    assert.equal(createSpaceReply({ slug: 'p', title: 'П', gist: 'суть', dirs: [root] }).status, 201);
-    assert.equal(createSpaceReply({ slug: 'p' }).status, 200);
+    const proj = path.join(root, 'proj');
+    fs.mkdirSync(proj);
+    assert.equal(createSpaceReply({ slug: 'p', title: 'П', gist: 'суть', dirs: [proj] }).status, 201);
+    // занятый слаг — 409: суть и папки не пропадут молча; кривое тело — 400, а не 500
+    assert.equal(createSpaceReply({ slug: 'p', gist: 'другая' }).status, 409);
+    assert.equal(createSpaceReply(null).status, 400);
     assert.equal(createSpaceReply({ slug: 'q', title: 5 }).status, 400);
     assert.equal(spaceReply('nope').status, 404);
-    const detail = spaceReply('p', () => ({ runs: [{ id: 'r1' }] })).body as { slug: string; runs: unknown[] };
+    const r1 = { id: 'r1', flow: 'f', status: 'done', startedAt: '', input: '' };
+    const detail = spaceReply('p', () => ({ runs: [r1], sessions: [] })).body as { slug: string; runs: unknown[] };
     assert.equal(detail.slug, 'p');
-    assert.deepEqual(detail.runs, [{ id: 'r1' }]);
+    assert.deepEqual(detail.runs, [r1]);
     updateSpace('p', { map: 'x'.repeat(7000), dirs: [root, path.join(root, 'нет')] });
     const ctx = spaceContextReply('p', path.join(root, 'runs')).body as { session: string; phase: string; readDirs: string[]; map: { chars: number; exists: boolean }; warnings: string[] };
     assert.match(ctx.session, /space_write/);

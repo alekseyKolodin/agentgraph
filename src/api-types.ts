@@ -342,6 +342,8 @@ export type SpaceMeta = {
   updatedAt: string;
   /** Абсолютные пути (папки или файлы), которые пространство открывает сессиям и этапам на чтение. */
   dirs?: string[];
+  /** Рабочая папка (проект): её подставляют формы сессии и запуска при выборе пространства. Нет — папка последней работы. */
+  cwd?: string;
   /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
   history: SpaceUpdate[];
   /** Пространство перенесено из тега задачи. */
@@ -361,11 +363,13 @@ export type SpaceListItem = {
   docs: number;
   hasMap: boolean;
   hasState: boolean;
+  /** Рабочая папка, заданная у пространства. */
+  cwd?: string;
   migratedFrom?: { tag: string; at: string };
 };
 
-/** Запуск на странице пространства. */
-export type SpaceRun = { id: string; flow: string; title?: string; status: string; startedAt: string; finishedAt?: string; input: string; legacy?: true };
+/** Запуск на странице пространства; legacy — старый запуск с тегом задачи (до переноса тега в пространство). */
+export type SpaceRun = { id: string; flow: string; title?: string; status: string; startedAt: string; finishedAt?: string; input: string; cwd?: string; legacy?: true };
 /** Сессия терминала на странице пространства. */
 export type SpaceSession = { id: string; name: string; status: SessionStatus; live: boolean; cwd: string; lastActivityAt: string; turns: number; legacy?: true };
 
@@ -621,8 +625,11 @@ export type ArtifactMeta = {
   versions: ArtifactVersion[];
 };
 
-/** space-readonly — запись этапа в папку пространств (guard пространства, spaces.ts). */
-export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation' | 'space-readonly';
+/**
+ * space-readonly — запись этапа в папку пространств или в папку чтения пространства вне проекта, knowledge-readonly — в папку
+ * тегов знаний, runs-dir — в папку запусков (guard папок данных, spaces.ts; у flow с артефактами — и guard артефактов).
+ */
+export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation' | 'space-readonly' | 'knowledge-readonly';
 export type Denial = { tool: string; reason: DenialReason; count: number };
 
 /** report.artifacts: артефакты запуска, откуда взяты при продолжении, предупреждения уровня запуска. */

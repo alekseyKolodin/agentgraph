@@ -31,7 +31,7 @@ import {
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
 import { knowledgeBlock, knowledgeDirs, resolveKnowledge, type KnowledgeTag } from './tags.js';
-import { queueSpaceState, readSpace, spaceContext, spaceGuard, writeSpaceState } from './spaces.js';
+import { dataDirsGuard, phaseProtectedRoots, queueSpaceState, readSpace, spaceContext, writeSpaceState } from './spaces.js';
 import { dropRunPaths, parseSpaceState, SPACE_STATE_PROMPT_FILE, spaceStateRequest } from './space-state.js';
 import type { AutoSpaceReport } from './auto-space.js';
 import type { RunTitleReport } from './run-title.js';
@@ -687,11 +687,13 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         }
       : undefined;
     const startedAt = Date.now();
-    // у flow с артефактами каждый этап под guard: свои артефакты, папка запусков; у запуска с пространством — ещё и
-    // папка пространств только для чтения. Отказы считаются в отчёт этапа
+    // каждый этап под guard папок данных agentgraph: пространства, теги знаний, у flow без артефактов — папка запусков,
+    // папки чтения пространства вне проекта (их CLAUDE.md грузится памятью следующих сессий и этапов); у flow с
+    // артефактами — ещё guard артефактов: свои артефакты и папка запусков. Отказы считаются в отчёт этапа
     const denials: Denial[] = [];
     const artGuard = store && art ? store.guard(phase.tools, art.access, (tool, reason) => countDenial(denials, tool, reason)) : undefined;
-    const guard = phaseGuard(artGuard, opts.space ? spaceGuard() : undefined, (tool) => countDenial(denials, tool, 'space-readonly'));
+    const roots = phaseProtectedRoots({ runsDir: opts.runsDir, artifacts: Boolean(artGuard), spaceDirs: opts.spaceDirs, cwd: runOpts.cwd });
+    const guard = phaseGuard(artGuard, dataDirsGuard(roots, (tool, reason) => countDenial(denials, tool, reason)));
     let res: SessionResult;
     let thrown: { err: unknown } | undefined;
     try {
@@ -1278,21 +1280,36 @@ async function updateSpaceState(report: RunReport, final: FinalPhase[], slug: st
 async function writeRunState(report: RunReport, final: FinalPhase[], slug: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<SpaceStateReport> {
   let out: SpaceStateReport;
   try {
-    const space = readSpace(slug);
+    let space = readSpace(slug);
     if (!space) throw new Error(`пространства ${slug} нет: его удалили`);
-    const req = spaceStateRequest({ ...report, final }, space, space.state, { model: opts.stateModel ?? 'haiku', abort: opts.abort });
-    fs.writeFileSync(path.join(report.runDir, SPACE_STATE_PROMPT_FILE), req.prompt);
-    emit({ type: 'space_state_start', space: slug, file: SPACE_STATE_PROMPT_FILE });
     let res: SessionResult | undefined;
+    let cost = 0;
     try {
-      res = await (opts.session ?? runSession)(req, () => {});
-      report.totalCostUsd += res.costUsd;
-      // ссылки на выводы этапов и прочие файлы папки запуска следующим недоступны — вычищаем
-      const text = dropRunPaths(parseSpaceState(res), path.dirname(report.runDir));
-      writeSpaceState(slug, text, { id: report.id, at: new Date().toISOString(), kind: 'run', flow: report.flow, ...(report.title ? { title: report.title } : {}), status: report.status });
-      out = { space: slug, ok: true, costUsd: res.costUsd };
+      // состояние правят и руками на странице пространства, мимо очереди: если его переписали, пока шла сессия, —
+      // пересчитываем один раз от нового, чтобы правка не пропала молча
+      for (let attempt = 0; ; attempt++) {
+        const req = spaceStateRequest({ ...report, final }, space, space.state, { model: opts.stateModel ?? 'haiku', abort: opts.abort });
+        if (attempt === 0) {
+          fs.writeFileSync(path.join(report.runDir, SPACE_STATE_PROMPT_FILE), req.prompt);
+          emit({ type: 'space_state_start', space: slug, file: SPACE_STATE_PROMPT_FILE });
+        }
+        res = await (opts.session ?? runSession)(req, () => {});
+        report.totalCostUsd += res.costUsd;
+        cost += res.costUsd;
+        // ссылки на выводы этапов и прочие файлы папки запуска следующим недоступны — вычищаем
+        const text = dropRunPaths(parseSpaceState(res), path.dirname(report.runDir));
+        const now = readSpace(slug);
+        if (!now) throw new Error(`пространства ${slug} нет: его удалили`);
+        if (attempt === 0 && now.state !== space.state && !opts.abort?.signal.aborted) {
+          space = now;
+          continue;
+        }
+        writeSpaceState(slug, text, { id: report.id, at: new Date().toISOString(), kind: 'run', flow: report.flow, ...(report.title ? { title: report.title } : {}), status: report.status });
+        break;
+      }
+      out = { space: slug, ok: true, costUsd: cost };
     } catch (err) {
-      out = { space: slug, ok: false, costUsd: res?.costUsd ?? 0, error: err instanceof Error ? err.message : String(err) };
+      out = { space: slug, ok: false, costUsd: cost, error: err instanceof Error ? err.message : String(err) };
     }
     if (res?.tokens) out.tokens = res.tokens;
   } catch (err) {
@@ -1316,22 +1333,13 @@ export function spaceSection(opts: Pick<RunOptions, 'space' | 'spaceDirs'>): str
   }
 }
 
-/** Guard этапа из guard артефактов и guard пространства: первый отказ решает; без обоих — без guard (как раньше). */
+/** Guard этапа: сначала артефакты (свои артефакты, папка запусков), затем папки данных agentgraph; первый отказ решает. */
 export function phaseGuard(
   art: SessionRequest['guard'] | undefined,
-  space: SessionRequest['guard'] | undefined,
-  onSpaceDeny: (tool: string) => void,
+  data: SessionRequest['guard'] | undefined,
 ): { guard?: NonNullable<SessionRequest['guard']> } {
-  if (!art && !space) return {};
-  return {
-    guard: (tool, input, ctx) => {
-      const why = art?.(tool, input, ctx);
-      if (why) return why;
-      const denied = space?.(tool, input, ctx);
-      if (denied) onSpaceDeny(tool);
-      return denied;
-    },
-  };
+  if (!art && !data) return {};
+  return { guard: (tool, input, ctx) => art?.(tool, input, ctx) ?? data?.(tool, input, ctx) };
 }
 
 /**

@@ -12,21 +12,36 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
 import { isInside } from './artifacts.js';
-import { attachDir, existingTagPaths, knowledgeBlock, knowledgeDirs, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
-import { existingSpacePaths, META_FILE, spaceArtifactDirs, spaceContext, spaceReadDirs, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
+import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
+import { existingSpacePaths, META_FILE, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 
 /** Имя MCP-сервера в конфиге claude: не knowledge, чтобы не столкнуться с сервером пользователя. */
 export const SESSION_MCP_SERVER = 'agentgraph';
 /** Инструмент «открыть новую сессию»: не в SESSION_ALLOWED_TOOLS, и хук PreToolUse велит claude спросить даже в auto. */
 export const SESSION_NEW_TOOL = 'session_new';
-const SESSION_NEW_FULL = `mcp__${SESSION_MCP_SERVER}__${SESSION_NEW_TOOL}`;
+export const SESSION_NEW_FULL = `mcp__${SESSION_MCP_SERVER}__${SESSION_NEW_TOOL}`;
 /** Запись документа пространства: как session_new — не в SESSION_ALLOWED_TOOLS, PreToolUse велит спросить всегда. */
-const SPACE_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_WRITE_TOOL}`;
+export const SPACE_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_WRITE_TOOL}`;
 /** Инструменты, о каждом вызове которых claude спрашивает человека в любом режиме: хук PreToolUse отвечает ask. */
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
   [SPACE_WRITE_FULL]: 'agentgraph: документ пространства увидят все следующие сессии и запуски',
 };
+/** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
+export const HOOK_ON_FAILURE_SINCE = '2.1.295';
+
+/** Версия claude не ниже нужной («2.1.317 (Claude Code)» и подобные); неизвестная — нет. */
+export function versionAtLeast(version: string | undefined, min: string): boolean {
+  const v = version?.match(/(\d+)\.(\d+)\.(\d+)/);
+  const m = min.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!v || !m) return false;
+  for (let i = 1; i <= 3; i++) {
+    const d = Number(v[i]) - Number(m[i]);
+    if (d) return d > 0;
+  }
+  return true;
+}
+
 /** Разрешены без подтверждения: только чтение тегов знаний сессии. */
 export const SESSION_ALLOWED_TOOLS = [KNOWLEDGE_READ_TOOL].map((t) => `mcp__${SESSION_MCP_SERVER}__${t}`);
 /** Заголовок с токеном сессии у хуков и MCP: без него (или с чужим) — 404. */
@@ -129,9 +144,13 @@ export function sessionPrompt(raw: unknown): string | undefined {
 /** Что сессия получает от agentgraph: пространство (может не быть) и теги знаний — существующие на момент чтения. */
 export type SessionCtx = { space?: Space; knowledge: Tag[] };
 
-/** Папки чтения сессии: папка пространства, его пути и артефакты прошлых запусков; пути и вложения тегов знаний. */
+/**
+ * Папки чтения сессии (--add-dir): папка пространства, его пути-папки и артефакты прошлых запусков; пути-папки и вложения
+ * тегов знаний. Путь-файл не открывает свою папку целиком (у ~/notes.md это был бы весь ~): его чтение пропускает хук
+ * PermissionRequest по sessionReadTargets.
+ */
 export function sessionDirs(ctx: SessionCtx, runsDir: string): string[] {
-  return [...new Set([...(ctx.space ? spaceReadDirs(ctx.space, runsDir) : []), ...knowledgeDirs(ctx.knowledge)])];
+  return [...new Set(sessionReadTargets(ctx, runsDir).dirs)];
 }
 
 /**
@@ -170,13 +189,61 @@ const plainPath = (d: string) => !/[()[\]*?{}\n]/.test(d);
  * закрыт и тогда — denyFiles. Путь со спецсимволами правило не поймает — такой папки нет ни в --add-dir, ни в запретах.
  * filesDir — папка файлов, перетащенных в терминал.
  */
-export function launchDirs(readDirs: string[], cwd: string, filesDir: string, protectedDirs: string[] = []): { addDirs: string[]; denyDirs: string[]; denyFiles: string[] } {
+export function launchDirs(
+  readDirs: string[],
+  cwd: string,
+  filesDir: string,
+  protectedDirs: string[] = [],
+): { addDirs: string[]; denyDirs: string[]; denyFiles: string[]; askDirs: string[] } {
   const add = readDirs.filter((d) => !isInside(cwd, d) && !isInside(d, cwd) && plainPath(d));
   const spaces = spacesDir();
   const guard = [tagsDir(), spaces, ...protectedDirs].filter((d) => !isInside(cwd, d) && plainPath(d));
-  const deny = [...guard, ...add].filter((d, i, all) => all.indexOf(d) === i && !all.some((o) => o !== d && isInside(d, o) && guard.includes(o)));
-  const denyFiles = isInside(cwd, spaces) && plainPath(spaces) ? [path.join(spaces, '*', META_FILE), path.join(spaces, '.migrated.json')] : [];
-  return { addDirs: [...add, filesDir], denyDirs: deny, denyFiles };
+  let denyFiles: string[] = [];
+  let askDirs: string[] = [];
+  const inSpace: string[] = [];
+  if (isInside(cwd, spaces) && plainPath(spaces)) {
+    // сессия в папке пространства («Сессия в папке»): своё пространство она правит как проект, но каждая правка — с
+    // вопросом (permissions.ask держит его и в acceptEdits, и в auto), без .claude/ (настройки и скиллы грузятся во все
+    // сессии пространства) и без space.json (его пути станут --add-dir других сессий); остальные пространства закрыты
+    const cur = path.relative(spaces, cwd).split(path.sep)[0];
+    const own = cur ? path.join(spaces, cur) : undefined;
+    for (const name of readdirSafe(spaces)) {
+      const d = path.join(spaces, name);
+      if (d !== own && plainPath(d) && fs.lstatSync(d, { throwIfNoEntry: false })?.isDirectory()) inSpace.push(d);
+    }
+    if (own) {
+      inSpace.push(path.join(own, '.claude'));
+      askDirs = [own];
+    }
+    denyFiles = [path.join(spaces, '*', META_FILE), path.join(spaces, '.migrated.json')];
+  }
+  const all = [...guard, ...add, ...inSpace];
+  const deny = all.filter((d, i) => all.indexOf(d) === i && !all.some((o) => o !== d && isInside(d, o) && guard.includes(o)));
+  // ~/.agentgraph может быть ссылкой: правило с лексическим путём реальный путь не поймало бы — добавляем и его
+  return { addDirs: [...add, filesDir], denyDirs: withRealpaths(deny), denyFiles: withRealpaths(denyFiles), askDirs: withRealpaths(askDirs) };
+}
+
+function readdirSafe(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** Путь и его realpath (папки или шаблона с * — по realpath существующего начала), если они разные и годятся в правило. */
+function withRealpaths(list: string[]): string[] {
+  const out: string[] = [];
+  for (const d of list) {
+    out.push(d);
+    const head = d.split(path.sep).findIndex((part) => part.includes('*'));
+    const base = head < 0 ? d : d.split(path.sep).slice(0, head).join(path.sep);
+    const real = safeRealpath(base);
+    if (real === base) continue;
+    const alt = head < 0 ? real : path.join(real, ...d.split(path.sep).slice(head));
+    if (plainPath(alt.replace(/\*/g, '')) && !out.includes(alt)) out.push(alt);
+  }
+  return out;
 }
 
 export type SessionLaunch = {
@@ -193,6 +260,10 @@ export type SessionLaunch = {
   denyDirs: string[];
   /** Отдельные файлы (или шаблоны с *) под запретом Edit: space.json, когда сессия открыта в папке пространства. */
   denyFiles?: string[];
+  /** Папки, правка в которых всегда с вопросом (permissions.ask): своё пространство сессии, открытой в его папке. */
+  askDirs?: string[];
+  /** Версия claude, если известна: от неё зависит onFailure у HTTP-хука PreToolUse. */
+  claudeVersion?: string;
   model?: string;
   permissionMode?: SessionPermissionMode;
   /** Первое сообщение нового разговора: claude отправит его сам, как `claude "задача"`. */
@@ -211,15 +282,24 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
   const url = `${base(l)}/hook`;
   const curl = `curl -sSf --max-time 5 -X POST -H 'Content-Type: application/json' -H '${SESSION_TOKEN_HEADER}: ${l.token}' --data-binary @- '${url}' || true`;
   const http = [{ hooks: [{ type: 'http', url, headers: { [SESSION_TOKEN_HEADER]: l.token }, timeout: 5 }] }];
+  // PreToolUse отвечает ask с причиной; сбой этого хука (таймаут, прокси) claude считает неблокирующим и пустил бы вызов
+  // дальше — с onFailure: block (claude 2.1.295+; старый ключа не знает, и ему его не шлём) вызов блокируется
+  const askHook = { ...http[0].hooks[0], ...(versionAtLeast(l.claudeVersion, HOOK_ON_FAILURE_SINCE) ? { onFailure: 'block' } : {}) };
+  const dirRules = (d: string) => [`Edit(/${d})`, `Edit(/${d}/**)`];
   return {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: curl, timeout: 10 }] }],
       ...Object.fromEntries(HTTP_HOOKS.map((e) => [e, http])),
-      PreToolUse: Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: http[0].hooks })),
+      PreToolUse: Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })),
     },
     // //путь — абсолютный путь в правилах разрешений; Edit закрывает все инструменты записи файлов, правило Write(путь)
-    // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит
-    permissions: { deny: [...l.denyDirs.flatMap((d) => [`Edit(/${d})`, `Edit(/${d}/**)`]), ...(l.denyFiles ?? []).map((f) => `Edit(/${f})`)] },
+    // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит.
+    // ask — session_new и space_write спрашивают и без хука (явное правило ask держит вопрос и в auto), плюс своё
+    // пространство сессии, открытой в его папке
+    permissions: {
+      deny: [...l.denyDirs.flatMap(dirRules), ...(l.denyFiles ?? []).map((f) => `Edit(/${f})`)],
+      ask: [...Object.keys(ASK_TOOLS), ...(l.askDirs ?? []).flatMap(dirRules)],
+    },
   };
 }
 
@@ -422,6 +502,8 @@ export type HookDeps = {
   /** Что они разрешают читать (sessionReadTargets). */
   readTargets: (ctx: SessionCtx) => ReadTargets;
   realpath: (p: string) => string;
+  /** Подробности к вопросу PreToolUse: что сделает этот вызов (папка, пространство, режим новой сессии; какой документ). */
+  askDetail?: (tool: string, input: Record<string, unknown>) => string | undefined;
 };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
@@ -478,7 +560,13 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       // спрашиваем человека в любом режиме, auto тоже
       const why = ASK_TOOLS[input.tool_name ?? ''];
       if (!why) return { reply: {}, patch };
-      return { reply: { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: why } }, patch };
+      let detail: string | undefined;
+      try {
+        detail = deps.askDetail?.(input.tool_name!, input.tool_input ?? {});
+      } catch {
+        detail = undefined;
+      }
+      return { reply: { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: detail ? `${why}. ${detail}` : why } }, patch };
     }
     default:
       return { reply: {}, patch };
@@ -498,7 +586,8 @@ export function permissionReply(input: HookInput, targets: ReadTargets, realpath
   if (typeof raw !== 'string' || !path.isAbsolute(raw)) return {};
   if (input.tool_name === 'Glob') {
     const pattern = input.tool_input?.pattern;
-    if (typeof pattern !== 'string' || path.isAbsolute(pattern) || pattern.startsWith('~') || pattern.split(/[\\/]/).includes('..')) return {};
+    // фигурные скобки раскрываются ({..,x}/*, {/,}etc/*): шаблон с ними пропускается к человеку
+    if (typeof pattern !== 'string' || path.isAbsolute(pattern) || pattern.startsWith('~') || /[{}]/.test(pattern) || pattern.split(/[\\/]/).includes('..')) return {};
   }
   const target = realpath(path.resolve(raw));
   const ok = targets.dirs.some((d) => isInside(target, realpath(d))) || (input.tool_name === 'Read' && targets.files.some((f) => target === realpath(f)));

@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   childPermissionMode, contextDelta, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionCtx,
   resumeTarget, safeRealpath, sessionArgs, sessionContext, sessionDirs, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_PROMPT_MAX,
-  type HookDeps, type HookState, type SessionLaunch,
+  sessionSettings, versionAtLeast, type HookDeps, type HookState, type SessionLaunch,
 } from './sessions.js';
 import { createTag, readTag, tagDir, tagsDir, updateTag } from './tags.js';
 import { addSpaceDoc, createSpace, readSpace, spaceDir, spacesDir, writeSpaceState } from './spaces.js';
@@ -18,13 +18,17 @@ function withConfigDir(fn: (root: string) => void) {
   return () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-sessions-')));
     const prev = process.env.AGENTGRAPH_CONFIG_DIR;
-    process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, 'cfg');
+    // папка настроек — рядом, а не внутри root: root служит папкой пространства, а предок папки настроек в пути
+    // пространства не годится (tooBroadPath)
+    const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-cfg-')));
+    process.env.AGENTGRAPH_CONFIG_DIR = cfg;
     try {
       fn(root);
     } finally {
       if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
       else process.env.AGENTGRAPH_CONFIG_DIR = prev;
       fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cfg, { recursive: true, force: true });
     }
   };
 }
@@ -215,15 +219,62 @@ test(
 );
 
 test(
-  'launchDirs: сессия в папке пространства правит его карту и документы как проект, но space.json любого пространства закрыт',
+  'launchDirs: сессия в папке пространства правит его карту и документы — с вопросом на каждую правку; .claude/, space.json и другие пространства закрыты',
   withConfigDir(() => {
     const own = path.join(spacesDir(), 'feat');
+    const other = path.join(spacesDir(), 'other');
+    fs.mkdirSync(own, { recursive: true });
+    fs.mkdirSync(other, { recursive: true });
     const r = launchDirs([own], own, '/s/files');
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs, [tagsDir()]);
+    assert.deepEqual(r.denyDirs.sort(), [tagsDir(), other, path.join(own, '.claude')].sort());
     assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '*', 'space.json'), path.join(spacesDir(), '.migrated.json')]);
+    assert.deepEqual(r.askDirs, [own]);
+    const settings = sessionSettings(launch({ ...r })) as { permissions: { ask: string[] } };
+    assert.ok(settings.permissions.ask.includes(`Edit(/${own}/**)`));
+    // вне папки пространств вопроса на папку нет
+    assert.deepEqual(launchDirs([own], '/p', '/s/files').askDirs, []);
   }),
 );
+
+test('sessionSettings: session_new и space_write — в permissions.ask (вопрос и без хука); onFailure: block у хука — только claude 2.1.295+', () => {
+  const ask = ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write'];
+  const hooksOf = (v?: string) => (sessionSettings(launch(v ? { claudeVersion: v } : {})) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> }; permissions: { ask: string[] } });
+  for (const v of [undefined, '2.1.285', '2.1.317']) assert.deepEqual(hooksOf(v).permissions.ask, ask, String(v));
+  assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), ask.map((m) => [m, 'block']));
+  // старый claude ключа не знает — ему не шлём; неизвестная версия — тоже
+  assert.ok(hooksOf('2.1.285').hooks.PreToolUse.every((h) => !('onFailure' in h.hooks[0])));
+  assert.ok(hooksOf().hooks.PreToolUse.every((h) => !('onFailure' in h.hooks[0])));
+  assert.deepEqual([versionAtLeast('2.1.295', '2.1.295'), versionAtLeast('2.2.0 (Claude Code)', '2.1.295'), versionAtLeast('2.1.29', '2.1.295'), versionAtLeast(undefined, '1.0.0')], [true, true, false, false]);
+});
+
+test(
+  'launchDirs: ~/.agentgraph — ссылка: запрет записи и по лексическому пути, и по настоящему',
+  withConfigDir((root) => {
+    const real = path.join(root, 'real-cfg');
+    fs.mkdirSync(path.join(real, 'spaces'), { recursive: true });
+    fs.mkdirSync(path.join(real, 'tags'), { recursive: true });
+    const link = path.join(root, 'link-cfg');
+    fs.symlinkSync(real, link);
+    const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+    process.env.AGENTGRAPH_CONFIG_DIR = link;
+    try {
+      const r = launchDirs([], '/p', '/s/files');
+      for (const d of [path.join(link, 'spaces'), path.join(real, 'spaces'), path.join(link, 'tags'), path.join(real, 'tags')]) assert.ok(r.denyDirs.includes(d), d);
+    } finally {
+      process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    }
+  }),
+);
+
+test('permissionReply: Glob с фигурными скобками не пропускается без вопроса — {..,x} раскрылся бы наружу', () => {
+  const t = { dirs: ['/space'], files: [] };
+  const id = (p: string) => p;
+  const glob = (pattern: string) => permissionReply({ hook_event_name: 'PermissionRequest', tool_name: 'Glob', tool_input: { path: '/space', pattern } }, t, id);
+  assert.ok(glob('**/*.md').hookSpecificOutput);
+  assert.deepEqual(glob('{..,x}/*'), {});
+  assert.deepEqual(glob('{/,}etc/*'), {});
+});
 
 test('findClaude: сначала PATH, потом CLI из пакета SDK; нет ни того, ни другого — undefined', () => {
   const exec = (set: string[]) => (p: string) => set.includes(p);
@@ -472,7 +523,8 @@ test(
     assert.ok(ask({ file_path: path.join(spaceDir('feat'), 'CLAUDE.md') }).hookSpecificOutput);
     assert.ok(ask({ file_path: note }).hookSpecificOutput);
     assert.deepEqual(ask({ file_path: path.join(root, 'secret') }), {});
-    assert.deepEqual(sessionDirs(ctx, runsDir), [spaceDir('feat'), specs, root, path.join(runsDir, 'r1', 'artifacts')]);
+    // путь-файл не открывает свою папку целиком: --add-dir — только папки, файл читается через хук
+    assert.deepEqual(sessionDirs(ctx, runsDir), [spaceDir('feat'), specs, path.join(runsDir, 'r1', 'artifacts')]);
     assert.ok(fs.existsSync(tagDir('nothing')) === false);
   }),
 );

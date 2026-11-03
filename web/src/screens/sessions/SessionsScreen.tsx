@@ -108,7 +108,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
     if (tagList.some((x) => x.slug === slug)) return setTags((list) => [...list, slug]);
     fetchTag(slug).then(
       () => setTags((list) => (list.includes(slug) ? list : [...list, slug])),
-      (err: unknown) => setMsg({ text: err instanceof ApiError && err.status === 404 ? t('Тега знаний {slug} нет: заведи его на странице «Знания»', { slug }) : errorText(err), tone: 'err' }),
+      (err: unknown) => setMsg({ text: err instanceof ApiError && err.status === 404 && err.code !== 'moved_to_space' ? t('Тега знаний {slug} нет: заведи его на странице «Знания»', { slug }) : errorText(err), tone: 'err' }),
     );
   };
 

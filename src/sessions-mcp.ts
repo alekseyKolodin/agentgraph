@@ -97,7 +97,7 @@ const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
  * Аргументы session_new: лишний параметр или тип — ошибка модели, а не молча «как у этой сессии». Пустая строка —
  * как не заданная (модели шлют "" в необязательных полях), управляющие символы вычищаются.
  */
-function newArgs(args: Record<string, unknown>): SessionNewArgs {
+export function parseSessionNewArgs(args: Record<string, unknown>): SessionNewArgs {
   const extra = Object.keys(args).filter((k) => !NEW_KEYS.includes(k));
   if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только ${NEW_KEYS.join(', ')}; режим разрешений — всегда как у этой сессии`);
   const out: SessionNewArgs = {};
@@ -136,7 +136,7 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
   const args = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   try {
     if (name === SESSION_NEW_TOOL) {
-      const a = newArgs(args);
+      const a = parseSessionNewArgs(args);
       return { content: [{ type: 'text', text: openedText(await ctx.open(a), a.prompt !== undefined) }] };
     }
     if (name === SPACE_WRITE_TOOL) {

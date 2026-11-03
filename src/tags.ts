@@ -7,10 +7,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configDir } from './settings.js';
-import type { Tag, TagDetail, TagKind, TagListItem, TagMeta } from './api-types.js';
+import type { Tag, TagDetail, TagListItem, TagMeta } from './api-types.js';
 import { ATTACHMENTS_COUNT_MAX, ATTACHMENTS_DIR, ATTACHMENTS_TOTAL_MAX, dedupeNames, safeAttachmentName, validateAttachments } from './attachments.js';
 import { flowBlocks, type FlowSpec } from './schema.js';
 import type { ApiReply } from './artifact-api.js';
+import { readRegular, writeAtomic } from './safe-fs.js';
 
 /** Слаг тега: строчные латинские буквы, цифры и дефис; он же имя папки. Тот же регэксп — TAG_SLUG_RE в schema.ts. */
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -51,15 +52,11 @@ const notesFile = (slug: string) => path.join(tagDir(slug), 'notes.md');
 /** Папка вложений тега: этапы читают их отсюда (она среди доп. директорий), промпт и knowledge_read перечисляют их абсолютными путями. */
 export const attachDir = (slug: string) => path.join(tagDir(slug), ATTACHMENTS_DIR);
 
-function writeAtomic(file: string, text: string): void {
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
-}
-
+/** Текст тега (заметки, саммари старого тега задачи); FIFO или ссылка на папку вместо файла — пусто, а не зависший сервер. */
+const TEXT_READ_MAX = 1024 * 1024;
 function readText(file: string): string {
   try {
-    return fs.readFileSync(file, 'utf8');
+    return readRegular(file, { max: TEXT_READ_MAX }) ?? '';
   } catch {
     return '';
   }
@@ -73,9 +70,10 @@ function readMeta(slug: string): TagMeta | undefined {
   const file = metaFile(slug);
   let raw: Partial<TagMeta>;
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<TagMeta>;
+    const text = readRegular(file, { max: TEXT_READ_MAX });
+    if (text === undefined) return undefined;
+    raw = JSON.parse(text) as Partial<TagMeta>;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw new Error(`Не читается тег ${slug}: ${(err as Error).message}`);
   }
   const now = new Date(0).toISOString();
@@ -105,7 +103,7 @@ function writeMeta(meta: TagMeta): void {
 function attachmentNames(slug: string): string[] {
   const dir = attachDir(slug);
   if (!fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) return [];
-  return fs.readdirSync(dir).filter((f) => !f.startsWith('.') && fs.statSync(path.join(dir, f)).isFile()).sort();
+  return fs.readdirSync(dir).filter((f) => !f.startsWith('.') && fs.lstatSync(path.join(dir, f), { throwIfNoEntry: false })?.isFile()).sort();
 }
 
 export function readTag(slug: string): Tag | undefined {
@@ -247,15 +245,18 @@ export function addTagAttachment(slug: string, item: unknown): string {
   if (size + a.bytes.length > ATTACHMENTS_TOTAL_MAX) throw new Error(`Вложения тега вместе больше ${Math.round(ATTACHMENTS_TOTAL_MAX / 1024 / 1024)} МБ`);
   const name = dedupeNames([...existing, a.name]).pop()!;
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, name), a.bytes);
+  // через временный файл и rename: подложенная ссылка с этим именем заменится, запись по ней не уйдёт
+  writeAtomic(path.join(dir, name), a.bytes);
   return name;
 }
 
 export function deleteTagAttachment(slug: string, name: string): boolean {
+  // папка старого тега задачи не трогается: он перенесён в пространство
+  if (readMeta(slug)?.kind !== 'knowledge') throw new Error(`Тега знаний ${slug} нет`);
   const dir = attachDir(slug);
   const file = path.resolve(dir, name);
   if (path.dirname(file) !== path.resolve(dir) || name !== safeAttachmentName(name)) throw new Error(`Неверное имя вложения: ${name}`);
-  if (!fs.existsSync(file)) return false;
+  if (!fs.lstatSync(file, { throwIfNoEntry: false })) return false;
   fs.rmSync(file);
   return true;
 }
@@ -276,6 +277,12 @@ export const TAG_BLOCKS_RE = /<!-- tag:[a-z0-9-]+ -->[\s\S]*?<!-- \/tag -->\n*/g
  */
 export function stripTagBlocks(input: string): string {
   return input.replace(TAG_BLOCKS_RE, '').trim();
+}
+
+/** Ввод без блока одного тега задачи (слаг проверен регэкспом слага: в регэкспе он буквальный); прочие блоки остаются. */
+export function stripTagBlock(input: string, slug: string): string {
+  if (!TAG_SLUG_RE.test(slug)) return input;
+  return input.replace(new RegExp(`<!-- tag:${slug} -->[\\s\\S]*?<!-- \\/tag -->\\n*`, 'g'), '').trim();
 }
 
 /**
@@ -487,6 +494,7 @@ export function addTagAttachmentReply(slug: string, body: unknown): ApiReply {
 
 export function deleteTagAttachmentReply(slug: string, name: string): ApiReply {
   try {
+    if (readMeta(slug)?.kind === 'task') return movedToSpace(slug);
     return deleteTagAttachment(slug, name)
       ? { status: 200, body: { attachments: attachmentNames(slug) } }
       : { status: 404, body: { error: `Вложения ${name} нет` } };

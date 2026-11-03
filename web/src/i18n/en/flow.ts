@@ -251,8 +251,8 @@ export const flow: Record<string, string> = {
   'Если условие не выполнено за {n}': "If the condition isn't met within {n}",
   'остановить запуск': 'stop the run',
   'всё равно перейти к следующему блоку': 'go on to the next block anyway',
-  'Теги вида «знание» со страницы «Теги»: их заметки, пути и вложения получат все этапы блока. Несуществующий тег роняет запуск до старта':
-    'Knowledge tags from the «Tags» page: every phase of the block gets their notes, paths and attachments. A tag that does not exist fails the run before it starts',
+  'Теги знаний со страницы «Знания»: каждый этап блока получит строку с описанием тега, полный текст возьмёт инструментом knowledge_read (тег «всегда в промпт» — целиком); пути и вложения тега откроются этапам. Несуществующий тег роняет запуск до старта':
+    'Knowledge tags from the «Knowledge» page: every phase of the block gets a line with the tag description and reads the full text with the knowledge_read tool (an «always in the prompt» tag goes in full); the tag paths and attachments are opened to the phases. A tag that does not exist fails the run before it starts',
   'Убрать тег у блока': 'Remove the tag from the block',
   'Этапы блока {n}': 'Phases of block {n}',
   'Этапы': 'Phases',

@@ -19,16 +19,17 @@ import { runSession, type SessionRequest, type SessionResult } from './agent.js'
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs } from './tags.js';
-import { createSpace, queueSpaceState, readSpace, readSpaceMeta, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS } from './spaces.js';
+import { cleanLine, createSpace, existingSpacePaths, queueSpaceState, readSpace, readSpaceMeta, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS } from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
 import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
+import { configDir } from './settings.js';
 import {
   findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
-  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type Delivered, type HookState,
-  type SessionCtx,
+  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_WRITE_FULL, TRUST_PROMPT_RE,
+  type Delivered, type HookState, type SessionCtx,
 } from './sessions.js';
-import { mcpReply, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
+import { mcpReply, parseSessionNewArgs, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
@@ -153,6 +154,8 @@ export class SessionManager {
   private poller: ReturnType<typeof setInterval> | null = null;
   /** Сервер останавливается: новых сессий и подключений не принимаем — их claude никто бы не погасил. */
   private stopping = false;
+  /** Версии claude по пути, последние известные: claude обновляется сам, кэш обновляется после каждого запуска. */
+  private binVersions = new Map<string, string>();
   private loaded = false;
   /** Идущие сессии состояния: остановка сервера прерывает их и ждёт, пока запишется пометка. */
   private readonly summaries = new Map<Promise<void>, AbortController>();
@@ -327,6 +330,7 @@ export class SessionManager {
     }
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
+    await this.knownVersion(bin);
     // пространство — последним: ошибка выше не оставит пустое пространство на диске. Новый слаг — пустое пространство
     if (space && !readSpaceMeta(space)) createSpace(space);
     const id = randomUUID();
@@ -364,7 +368,8 @@ export class SessionManager {
     const artifacts = sessionReadTargets(ctx, this.deps.runsDir).dirs.filter((d) => isInside(d, this.deps.runsDir));
     const dirs = launchDirs(sessionDirs(ctx, this.deps.runsDir), r.cwd, filesDir, artifacts);
     s.token = randomBytes(32).toString('hex');
-    const args = sessionArgs({ id: r.id, token: s.token, port, ...conv, name: r.name, ...dirs, model: r.model, permissionMode: r.permissionMode });
+    const claudeVersion = this.binVersions.get(bin);
+    const args = sessionArgs({ id: r.id, token: s.token, port, ...conv, name: r.name, ...dirs, model: r.model, permissionMode: r.permissionMode, ...(claudeVersion ? { claudeVersion } : {}) });
     // CLAUDE.md ищется только в папках пространства и тегов: папка перетащенных файлов — не повод
     const proc = kit.spawn(bin, args, { name: 'xterm-256color', ...size, cwd: r.cwd, env: sessionEnv(this.deps.env(), dirs.addDirs.length > 1) });
     const pty = new PtySession(proc, kit.mirror(size.cols, size.rows), size);
@@ -390,6 +395,7 @@ export class SessionManager {
     // версию — на каждом запуске: claude обновляется сам, пока сервер живёт
     void this.deps.version(bin)
       .then((v) => {
+        if (v) this.binVersions.set(bin, v);
         if (v && s.rec.claudeVersion !== v) {
           s.rec.claudeVersion = v;
           this.save(s);
@@ -514,6 +520,7 @@ export class SessionManager {
     if (!fs.statSync(s.rec.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Папки сессии больше нет: ${s.rec.cwd}`);
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
+    await this.knownVersion(bin);
     const target = resumeTarget(s.rec);
     try {
       this.spawn(s, kit, bin, port, target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false }, size ?? s.screen ?? DEFAULT_SIZE);
@@ -682,6 +689,7 @@ export class SessionManager {
       readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
       readTargets: (ctx) => sessionReadTargets(ctx, this.deps.runsDir),
       realpath: safeRealpath,
+      askDetail: (tool, args) => this.askDetail(s, tool, args),
     });
     const p = r.patch;
     if (p.claudeSessionIds) s.rec.claudeSessionIds = p.claudeSessionIds;
@@ -731,7 +739,35 @@ export class SessionManager {
    */
   private async openFrom(s: Live, args: SessionNewArgs, port: number): Promise<SessionView> {
     const r = s.rec;
-    const prompt = args.prompt && `Задача из сессии agentgraph «${r.name}»: этот текст написал Claude по просьбе пользователя.\n\n${args.prompt}`;
+    const n = this.resolveNew(s, args);
+    const v = await this.create(
+      {
+        cwd: n.cwd,
+        ...(n.space ? { space: n.space } : {}),
+        tags: n.tags,
+        name: args.name,
+        model: args.model ?? r.model,
+        permissionMode: n.mode,
+        saveState: r.saveState,
+        prompt: n.prompt,
+        ...(s.pty ? { cols: s.pty.cols, rows: s.pty.rows } : {}),
+      },
+      port,
+      r.cwd,
+    );
+    const msg = JSON.stringify({ t: 'opened', session: v } satisfies SessionWsServer);
+    for (const ws of s.sockets.keys()) if (ws.readyState === ws.OPEN) ws.send(msg);
+    return v;
+  }
+
+  /**
+   * Что получит новая сессия из session_new — один разбор для вызова и для вопроса PreToolUse. Папка — не папка данных
+   * agentgraph (в папке пространства сессия правит его карту, в папке запусков — артефакты). Пространство и теги —
+   * только существующие. Режим: та же папка и то же пространство — режим этой сессии (childPermissionMode), другие —
+   * manual: в новом месте правки подтверждает человек.
+   */
+  private resolveNew(s: Live, args: SessionNewArgs): { cwd: string; space?: string; tags: string[]; mode: SessionPermissionMode; prompt?: string } {
+    const r = s.rec;
     let space: string | undefined;
     let tags: string[];
     try {
@@ -743,23 +779,55 @@ export class SessionManager {
       throw new SessionError(400, errMsg(err));
     }
     const cwd = args.cwd?.trim() ? path.resolve(r.cwd, args.cwd.trim().replace(/^~(?=$|\/)/, os.homedir())) : r.cwd;
-    const v = await this.create(
-      {
-        cwd,
-        ...(space ? { space } : {}),
-        tags,
-        name: args.name,
-        model: args.model ?? r.model,
-        permissionMode: childPermissionMode(s.mode, r.permissionMode),
-        saveState: r.saveState,
-        prompt,
-        ...(s.pty ? { cols: s.pty.cols, rows: s.pty.rows } : {}),
-      },
-      port,
-      r.cwd,
-    );
-    const msg = JSON.stringify({ t: 'opened', session: v } satisfies SessionWsServer);
-    for (const ws of s.sockets.keys()) if (ws.readyState === ws.OPEN) ws.send(msg);
+    const real = safeRealpath(cwd);
+    for (const d of [configDir(), this.deps.runsDir]) {
+      if (isInside(real, safeRealpath(d))) throw new SessionError(400, `Новую сессию модель не открывает в ${d}: там данные agentgraph (пространства, теги, запуски)`);
+    }
+    const same = real === safeRealpath(r.cwd) && space === this.ctx(r).space?.slug;
+    const mode = same ? childPermissionMode(s.mode, r.permissionMode) : 'manual';
+    const prompt = args.prompt && `Задача из сессии agentgraph «${r.name}»: этот текст написал Claude по просьбе пользователя.\n\n${args.prompt}`;
+    return { cwd, ...(space ? { space } : {}), tags, mode, ...(prompt ? { prompt } : {}) };
+  }
+
+  /**
+   * Подробности вопроса PreToolUse — что сделает вызов: у session_new папка, пространство с папками чтения, режим и начало
+   * первого сообщения; у space_write — какой файл и перезапишет ли он документ. Ошибка разбора — тоже подробность.
+   */
+  private askDetail(s: Live, tool: string, input: Record<string, unknown>): string | undefined {
+    const kb = (n: number) => (n < 1024 ? `${n} Б` : `${Math.max(1, Math.round(n / 1024))} КБ`);
+    if (tool === SESSION_NEW_FULL) {
+      try {
+        const args = parseSessionNewArgs(input);
+        const n = this.resolveNew(s, args);
+        const space = n.space ? readSpace(n.space) : undefined;
+        const dirs = space ? existingSpacePaths(space).listed : [];
+        return [
+          `Папка: ${n.cwd}`,
+          n.space ? `пространство ${n.space}${dirs.length ? ` (откроет на чтение: ${dirs.join(', ')})` : ''}` : 'без пространства',
+          `режим: ${n.mode}`,
+          args.prompt ? `первое сообщение: «${cleanLine(args.prompt, 160)}»` : 'без первого сообщения',
+        ].join('; ');
+      } catch (err) {
+        return `Вызов не пройдёт: ${errMsg(err)}`;
+      }
+    }
+    if (tool === SPACE_WRITE_FULL) {
+      const space = this.ctx(s.rec).space;
+      if (!space) return 'У сессии нет пространства: вызов вернёт ошибку';
+      const name = typeof input.name === 'string' ? cleanLine(input.name, 80) : '';
+      const size = typeof input.text === 'string' ? Buffer.byteLength(input.text) : 0;
+      const old = space.docs.find((d) => d.name === input.name);
+      return `${path.join(space.dir, 'docs', name)}: ${old ? `перезапишет документ (${kb(old.size)} → ${kb(size)})` : `новый документ, ${kb(size)}`}`;
+    }
+    return undefined;
+  }
+
+  /** Версия claude по пути: из кэша, иначе спросить (claude --version); неизвестная — undefined. */
+  private async knownVersion(bin: string): Promise<string | undefined> {
+    const hit = this.binVersions.get(bin);
+    if (hit) return hit;
+    const v = await this.deps.version(bin).catch(() => undefined);
+    if (v) this.binVersions.set(bin, v);
     return v;
   }
 

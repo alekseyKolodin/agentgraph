@@ -456,7 +456,7 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
             {ctxPromptRows(d.prompt).map((x, i) => (
               <li key={i} className={styles.ctxRow}>
                 <span className={styles.ctxName}>{x.name}</span>
-                {x.inline && <span className="chip" title={t('Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»')}>{t('целиком')}</span>}
+                {x.inline && <span className="chip" title={t('Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Знания»')}>{t('целиком')}</span>}
                 <span className={styles.ctxTok}>{`${x.chars} · ${x.share}`}</span>
               </li>
             ))}

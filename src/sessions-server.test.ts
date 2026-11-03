@@ -230,7 +230,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
   assert.deepEqual([v.status, v.live, v.exitCode, v.outcome], ['ended', false, 129, undefined]);
 });
 
-test('session_new: новая сессия из терминала — папка, пространство, теги и модель как у этой, режим — всегда этой; экран этой получает ссылку', async () => {
+test('session_new: новая сессия из терминала — папка, пространство, теги и модель как у этой; режим этой — только в том же месте, другая папка — manual; папки данных agentgraph — нельзя; экран этой получает ссылку', async () => {
   createTag('cart', 'Корзина');
   createSpace('sn-space');
   fs.mkdirSync(path.join(root, 'api'), { recursive: true });
@@ -254,8 +254,14 @@ test('session_new: новая сессия из терминала — папк�
   // текст модели — с пометкой: не slash-команда и не `!`, а модель новой сессии видит, чей он
   assert.deepEqual(p.args.slice(-2), ['--', `Задача из сессии agentgraph «${s.name}»: этот текст написал Claude по просьбе пользователя.\n\nПочини корзину`]);
   assert.equal(p.args[p.args.indexOf('--model') + 1], 'sonnet');
-  // хуков ещё не было — режим запуска
-  assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'plan');
+  // другая папка — без унаследованного режима: в новом месте правки подтверждает человек
+  assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'manual');
+  // та же папка и то же пространство — режим этой сессии (хуков ещё не было — режим запуска)
+  assert.equal((await tool({ prompt: 'Ещё одно' })).isError, undefined);
+  assert.equal(spawned.at(-1)!.args[spawned.at(-1)!.args.indexOf('--permission-mode') + 1], 'plan');
+  // папка данных agentgraph (пространства, запуски) — не рабочая папка новой сессии
+  const inData = await tool({ cwd: spaceDir('sn-space') });
+  assert.deepEqual([inData.isError, /данные agentgraph/.test(inData.content[0].text)], [true, true]);
   await until(() => got.some((m) => m.t === 'opened'));
   const opened = got.find((m) => m.t === 'opened') as Extract<SessionWsServer, { t: 'opened' }>;
   assert.deepEqual([opened.session.cwd, opened.session.space, opened.session.tags, opened.session.live], [path.join(root, 'api'), 'sn-space', ['cart'], true]);
@@ -276,9 +282,15 @@ test('session_new: новая сессия из терминала — папк�
   assert.equal((await tool({ tags: [], model: 'haiku' })).isError, undefined);
   const last = spawned.at(-1)!.args;
   assert.deepEqual([last.includes('--'), last[last.indexOf('--model') + 1], last[last.indexOf('--permission-mode') + 1]], [false, 'haiku', 'manual']);
-  // PreToolUse на session_new — «спросить» даже в auto
-  const pre = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__session_new', permission_mode: 'auto' });
-  assert.equal((pre.body.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask');
+  // PreToolUse на session_new — «спросить» даже в auto, с тем, что сделает вызов: папка, пространство, режим, начало задачи
+  const pre = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__session_new', permission_mode: 'auto', tool_input: { cwd: '../api', prompt: 'Почини корзину' } });
+  const out = pre.body.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  assert.equal(out.permissionDecision, 'ask');
+  assert.ok(out.permissionDecisionReason.includes(`Папка: ${path.join(root, 'api')}`), out.permissionDecisionReason);
+  assert.match(out.permissionDecisionReason, /пространство sn-space; режим: manual; первое сообщение: «Почини корзину»/);
+  // space_write — какой файл и что с ним станет
+  const pw = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__space_write', tool_input: { name: 'plan.md', text: 'x' } });
+  assert.match((pw.body.hookSpecificOutput as { permissionDecisionReason: string }).permissionDecisionReason, /docs\/plan\.md: новый документ, 1 Б/);
   ws.close();
   for (const v of (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live)) await call('POST', `/api/sessions/${v.id}/end`);
 });

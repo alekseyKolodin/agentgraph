@@ -148,8 +148,8 @@ test(
 );
 
 test(
-  'пространство: guard — этап с Write/Edit не пишет в папку пространств, отказ в отчёте этапа; без пространства и артефактов guard нет',
-  withEnv(async (o) => {
+  'пространство: guard — этап с Write/Edit не пишет в папку пространств, отказ в отчёте этапа; без пространства guard тоже есть: папки данных agentgraph',
+  withEnv(async (o, root) => {
     createSpace('p');
     const guards: NonNullable<SessionRequest['guard']>[] = [];
     const s1 = { name: 'g', input: 'з', blocks: [{ name: 'a', phases: [{ name: 'w', tools: ['Write', 'Edit'], prompt: 'пиши' }] }] } as unknown as FlowSpec;
@@ -167,24 +167,29 @@ test(
     });
     assert.equal(guards.length, 1);
     assert.deepEqual(r.phases[0].denials, [{ tool: 'Write', reason: 'space-readonly', count: 1 }]);
-    // без пространства — как раньше: guard нет
+    // без пространства guard тоже есть: этап не пишет ни в пространства, ни в артефакты прошлых запусков (их CLAUDE.md —
+    // память пространства), а проект правит как раньше
     const plain: SessionRequest[] = [];
-    await runFlow(s1, { ...o, runDir: path.join(o.runsDir, 'run-2'), session: async (req) => (plain.push(req), result('out')) });
-    assert.equal(plain[0].guard, undefined);
+    const proj = path.join(root, 'proj');
+    const runsDir = path.join(root, 'runs');
+    fs.mkdirSync(proj);
+    await runFlow(s1, { ...o, cwd: proj, runsDir, runDir: path.join(runsDir, 'run-2'), session: async (req) => (plain.push(req), result('out')) });
+    const g = plain[0].guard!;
+    assert.ok(g('Write', { file_path: path.join(spaceDir('p'), 'STATE.md') }, { cwd: proj }));
+    assert.ok(g('Write', { file_path: path.join(runsDir, 'old', 'artifacts', 'CLAUDE.md') }, { cwd: proj }));
+    assert.equal(g('Write', { file_path: path.join(proj, 'x.ts') }, { cwd: proj }), undefined);
   }),
 );
 
-test('пространство: phaseGuard — первый отказ решает, артефакты раньше пространства; без обоих guard нет', () => {
-  const denied: string[] = [];
-  assert.deepEqual(phaseGuard(undefined, undefined, () => {}), {});
+test('пространство: phaseGuard — первый отказ решает, артефакты раньше папок данных; без обоих guard нет', () => {
+  assert.deepEqual(phaseGuard(undefined, undefined), {});
   const art = (tool: string) => (tool === 'Read' ? 'артефакты' : undefined);
-  const space = (tool: string) => (tool === 'Write' ? 'пространство' : undefined);
-  const { guard } = phaseGuard(art, space, (t) => denied.push(t));
+  const data = (tool: string) => (tool === 'Write' || tool === 'Read' ? 'данные' : undefined);
+  const { guard } = phaseGuard(art, data);
   const ctx = { cwd: '/' };
   assert.equal(guard!('Read', {}, ctx), 'артефакты');
-  assert.equal(guard!('Write', {}, ctx), 'пространство');
+  assert.equal(guard!('Write', {}, ctx), 'данные');
   assert.equal(guard!('Bash', {}, ctx), undefined);
-  assert.deepEqual(denied, ['Write']);
 });
 
 test(

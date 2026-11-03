@@ -118,7 +118,7 @@ export const misc: Record<string, string> = {
     'What the runner puts into the phase’s first message, by source; without substitutions, artifacts and attachments, which are known only during the run',
   'Промпт этапа по источникам': 'Phase prompt by source',
   '{n} знаков': '{n} chars',
-  'Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»': 'The tag notes go into every iteration in full; change the mode on the “Tags” page',
+  'Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Знания»': 'The tag notes go into every iteration in full; change the mode on the “Knowledge” page',
   'целиком': 'in full',
   'Скиллы': 'Skills',
   'Сабагенты': 'Subagents',

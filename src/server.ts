@@ -42,7 +42,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -73,8 +73,10 @@ import {
   createSpaceReply,
   deleteSpaceDocReply,
   deleteSpaceReply,
+  inheritRun,
   readSpace,
   readSpaceMeta,
+  reportSpace,
   spaceContextReply,
   spaceDocReply,
   spaceReadDirs,
@@ -258,7 +260,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'spaces', 'recent-dirs-hide', 'auto-space', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -477,13 +479,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   // --- пространства (src/spaces.ts): фича или проект — карта, документы, состояние, их сессии и запуски. Слаг берём
   // регэкспом без декодирования: кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из spaces.ts
   if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply());
-  if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply((await readJson(req)) as Record<string, unknown>));
+  if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply(await readJson(req)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)$/))) {
     const slug = m[1];
     if (method === 'GET') {
       // сессии — из реестра сессий терминала (без node-pty их нет), запуски — из runs/
       const sessions = await spaceSessions(slug).catch(() => []);
-      return reply(res, spaceReply(slug, () => ({ runs: spaceRuns(slug), sessions })));
+      return reply(res, spaceReply(slug, (s) => ({ runs: spaceRuns(slug, s.migratedFrom?.at), sessions })));
     }
     if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
     if (method === 'DELETE') return reply(res, deleteSpaceReply(slug));
@@ -1433,8 +1435,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   // вызванный блоком-вызовом запуск продолжается вместе с родителем: отдельно он оторвался бы от связки
   if (prev.parent) throw new HttpError(400, childContinueReason(prev.parent));
   const spec = specOf(prev);
-  // старый запуск нёс в задаче блоки тегов задач с саммари на момент старта: теперь свежее состояние даёт раздел пространства
-  spec.input = prev.space || !prev.tags?.length ? prev.input : stripTagBlocks(prev.input);
+  // старый запуск нёс в задаче блок тега задачи с саммари на момент старта: свежее состояние даст раздел пространства
+  const { input, ...spaceOpts } = inheritRun(prev, RUNS_DIR);
+  spec.input = input;
   let cont: Continuation;
   try {
     cont = continuationFrom(prev, spec, {
@@ -1473,7 +1476,7 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     adhoc: prev.adhoc,
     // пространство и галочка наследуются (у старого запуска — его перенесённый тег задачи); папки пересчитываются по
     // нынешнему пространству: старые могли удалить
-    ...inheritedSpace(prev),
+    ...spaceOpts,
     // теги знаний тоже наследуются; их разделы раннер пересчитает по нынешнему состоянию тегов
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     // имя наследуется, модель заново не зовётся
@@ -1607,8 +1610,9 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   } catch (err) {
     throw new HttpError(400, errMsg(err));
   }
-  // старый запуск нёс в задаче блоки тегов задач с саммари на момент старта: теперь свежее состояние даёт раздел пространства
-  spec.input = prev.space || !prev.tags?.length ? prev.input : stripTagBlocks(prev.input);
+  // старый запуск нёс в задаче блок тега задачи с саммари на момент старта: свежее состояние даст раздел пространства
+  const { input: rerunInput, ...rerunSpace } = inheritRun(prev, RUNS_DIR);
+  spec.input = rerunInput;
   const id = startRun(spec, {
     cwd: prev.cwd,
     maxBudgetUsd: o.maxBudgetUsd,
@@ -1618,7 +1622,7 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
     adhoc: prev.adhoc,
-    ...inheritedSpace(prev),
+    ...rerunSpace,
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     ...(prev.title ? { title: prev.title } : {}),
   }, srv);
@@ -1882,7 +1886,7 @@ function listRuns(): RunSummary[] {
       worktree: r.worktree,
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
-      ...(runSpace(r) ? { space: runSpace(r) } : {}),
+      ...(reportSpace(r) ? { space: reportSpace(r) } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
       ...(r.parent ? { parent: r.parent } : {}),
     });
@@ -1924,37 +1928,23 @@ function finishedRun(id: string): { dir: string; file: string } | { code: number
 }
 
 /**
- * Пространство запуска: его space, у старого запуска (до пространств) — первый тег задачи, перенесённый в пространство
- * с тем же слагом. Чтобы не тянуть битый отчёт в 500, ошибки чтения — «без пространства».
+ * Запуски пространства для его страницы — по сводкам списка запусков, без второго чтения run.json: свежие сверху, без
+ * дочерних запусков блоков-вызовов (они идут под родителем). legacy — запуск до переноса тега задачи в пространство.
  */
-function runSpace(r: Pick<RunReport, 'space' | 'tags'>): string | undefined {
-  return r.space ?? r.tags?.[0];
-}
-
-/**
- * Продолжение и перезапуск наследуют пространство и галочку состояния; папки — по нынешнему пространству (его пути и
- * артефакты могли измениться). Удалённое пространство — продолжение без него.
- */
-function inheritedSpace(prev: RunReport): { space?: string; saveState?: boolean; spaceDirs?: string[] } {
-  const slug = runSpace(prev);
-  let space;
-  try {
-    space = slug ? readSpace(slug) : undefined;
-  } catch {
-    space = undefined;
-  }
-  if (!space) return {};
-  return { space: space.slug, saveState: (prev.space ? prev.saveState : prev.saveTag) !== false, spaceDirs: spaceReadDirs(space, RUNS_DIR) };
-}
-
-/** Запуски пространства для его страницы: свежие сверху; legacy — запуск до пространств с этим тегом задачи. */
-function spaceRuns(slug: string) {
+function spaceRuns(slug: string, migratedAt?: string): SpaceRun[] {
   return listRuns()
-    .filter((r) => r.space === slug)
-    .map((r) => {
-      const legacy = !readReport(r.id)?.space;
-      return { id: r.id, flow: r.flow, ...(r.title ? { title: r.title } : {}), status: r.status, startedAt: r.startedAt, ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}), input: r.input, ...(legacy ? { legacy: true as const } : {}) };
-    });
+    .filter((r) => r.space === slug && !r.parent)
+    .map((r) => ({
+      id: r.id,
+      flow: r.flow,
+      ...(r.title ? { title: r.title } : {}),
+      status: r.status,
+      startedAt: r.startedAt,
+      ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+      input: r.input,
+      ...(r.cwd ? { cwd: r.cwd } : {}),
+      ...(migratedAt && r.startedAt < migratedAt ? { legacy: true as const } : {}),
+    }) satisfies SpaceRun);
 }
 
 function readReport(id: string): RunReport | undefined {
