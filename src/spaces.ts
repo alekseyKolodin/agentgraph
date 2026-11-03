@@ -238,6 +238,7 @@ export function listSpaces(): SpaceListItem[] {
       preview: summaryPreview(s.state.trim() ? s.state : s.map),
       docs: s.docs.length,
       hasMap: Boolean(s.map.trim()),
+      hasState: Boolean(s.state.trim()),
       ...(s.migratedFrom ? { migratedFrom: s.migratedFrom } : {}),
     });
   }

@@ -135,6 +135,7 @@ export const space: Record<string, string> = {
     'A session in the space folder itself: Claude edits the map and documents like a regular project, you approve the edits',
   'Сессия в папке': 'Session in the folder',
   'Перечитать с диска': 'Reload from disk',
+  'Сохранить карту, состояние и настройки (⌘S)': 'Save the map, state and settings (⌘S)',
   'CLAUDE.md пространства — карта: суть, где что, куда за чем ходить, договорённости. Claude Code загружает её памятью в каждую сессию и этап пространства, как CLAUDE.md репозитория. Держи её короткой: подробности — в документы, их агент откроет сам':
     'The space\'s CLAUDE.md is its map: the gist, where things are, where to go for what, agreements. Claude Code loads it as memory into every session and phase of the space, like a repository\'s CLAUDE.md. Keep it short: details go into documents, the agent opens them itself',
   'Карта длинная: она уходит в каждый запрос модели — вынеси подробности в документы': 'The map is long: it goes into every model request — move the details into documents',

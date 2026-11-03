@@ -130,7 +130,9 @@ export function TagsScreen() {
       (err) => {
         if (my !== seq.current) return;
         closeEditor();
-        setEditorErr(err instanceof ApiError && err.status === 404 && err.code !== 'moved_to_space' ? t('Тега {slug} нет', { slug }) : errorText(err));
+        // старая ссылка на тег задачи: он стал пространством с тем же слагом — туда и ведём
+        if (err instanceof ApiError && err.code === 'moved_to_space') return void navigate(`/spaces/${slug}`, { replace: true });
+        setEditorErr(err instanceof ApiError && err.status === 404 ? t('Тега {slug} нет', { slug }) : errorText(err));
       },
     );
   }, [location.key]);

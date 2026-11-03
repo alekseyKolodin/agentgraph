@@ -6,7 +6,7 @@ import {
   spacePreview, spacesNoneText, spaceSnapshot, stateByText, updateLine,
 } from './spaces';
 
-const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false });
+const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false, hasState: false });
 const space = (over: Partial<Space> = {}): Space => ({
   slug: 'press-alert', title: 'Пуш', dir: '/cfg/spaces/press-alert', map: '# Пуш\n', mapMtimeMs: 10, state: 'Суть\n', stateMtimeMs: 20, docs: [], history: [],
   createdAt: '', updatedAt: '', dirs: ['/a', '/b'], ...over,
@@ -69,9 +69,11 @@ test('пространства: форма — снимок без хвосто�
 });
 
 test('поле пространства: пусто — без пространства, неверный слаг — ошибка, новый — заведётся, существующий — что даст', () => {
-  const options = [{ ...item('press-alert', 'Пуш', 'Суть'), hasMap: true, docs: 2 }];
+  const options = [{ ...item('press-alert', 'Пуш', 'Суть'), hasMap: true, docs: 2, hasState: true }];
   assert.equal(spaceFieldNote('', options).text, 'Без пространства: только папка и теги знаний');
   assert.equal(spaceFieldNote('Bad Slug', options).tone, 'err');
   assert.match(spaceFieldNote('new-one', options).text, /^new-one: новое пространство — заведётся пустым/);
   assert.equal(spaceFieldNote(' press-alert ', options).text, 'Пуш: карта — памятью · документов: 2 · состояние — в контексте');
+  // превью из карты — ещё не состояние
+  assert.match(spaceFieldNote('press-alert', [{ ...options[0]!, hasState: false }]).text, /состояния ещё нет$/);
 });

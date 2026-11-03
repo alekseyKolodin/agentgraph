@@ -41,7 +41,7 @@ export function spaceFieldNote(value: string, options: SpaceListItem[]): { text:
   if (!SPACE_SLUG_RE.test(slug)) return { text: t('Слаг пространства: строчные латинские буквы, цифры и дефис'), tone: 'err' };
   const s = options.find((o) => o.slug === slug);
   if (!s) return { text: t('{slug}: новое пространство — заведётся пустым, карту заполнишь на его странице', { slug }), tone: '' };
-  const what = [s.hasMap ? t('карта — памятью') : t('карты нет'), s.docs ? t('документов: {n}', { n: s.docs }) : '', s.preview ? t('состояние — в контексте') : t('состояния ещё нет')];
+  const what = [s.hasMap ? t('карта — памятью') : t('карты нет'), s.docs ? t('документов: {n}', { n: s.docs }) : '', s.hasState ? t('состояние — в контексте') : t('состояния ещё нет')];
   return { text: `${spaceLabel(s)}: ${what.filter(Boolean).join(' · ')}`, tone: '' };
 }
 

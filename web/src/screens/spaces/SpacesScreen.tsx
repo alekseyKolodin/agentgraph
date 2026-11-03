@@ -354,12 +354,9 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
   return (
     <div className={styles.editorGrid}>
       <section className={cx('panel', styles.editor)}>
-        <form
+        {/* не <form>: во вкладке «Документы» своя форма нового документа, а вложенные формы браузер отправил бы сам */}
+        <div
           className={cx('form', styles.editorForm)}
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSave();
-          }}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 's') {
               e.preventDefault();
@@ -388,7 +385,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                 </>
               )}
               <button type="button" className="btn small ghost danger" onClick={onRemove}>{t('Удалить')}</button>
-              <button type="submit" className="btn primary" disabled={!dirty}>{t('Сохранить')}</button>
+              <button type="button" className="btn primary" disabled={!dirty} title={t('Сохранить карту, состояние и настройки (⌘S)')} onClick={onSave}>{t('Сохранить')}</button>
             </span>
           </div>
           {(msg.text || conflict) && (
@@ -451,7 +448,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               <p className="muted small">{t('Папка пространства: {dir}. Запись в неё у сессий закрыта (документ пишется инструментом space_write с твоим подтверждением), у этапов запуска — тоже.', { dir: tildePath(s.dir, home) })}</p>
             </div>
           )}
-        </form>
+        </div>
       </section>
       <aside className={styles.activity} aria-label={t('Сессии и запуски пространства')}>
         <h3>{t('Сессии и запуски')} <span className="muted small">{itemsCount(s.sessions.length, s.runs.length)}</span></h3>

@@ -360,6 +360,7 @@ export type SpaceListItem = {
   preview: string;
   docs: number;
   hasMap: boolean;
+  hasState: boolean;
   migratedFrom?: { tag: string; at: string };
 };
 
