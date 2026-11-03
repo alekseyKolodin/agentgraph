@@ -11,6 +11,7 @@ import {
   continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionTags, summarizeSession,
 } from '../../api/sessions';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { setDocRunTitle } from '../../components/shell/docTitle';
 import { TagField } from '../../components/TagInput';
 import { useToast } from '../../components/Toast';
 import { clock } from '../../lib/format';
@@ -19,6 +20,7 @@ import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canSummarize, chipHint, pendingNote, sessionStatusLabel, sessionTone, summaryNote } from '../../lib/sessions';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
+import { SessionName } from './SessionName';
 import { ICON } from './icons';
 import styles from './Session.module.css';
 
@@ -96,13 +98,18 @@ function Session({ s }: { s: SessionView }) {
   useEffect(() => {
     if (s.live) setScreenOnly(false);
   }, [s.live]);
+  // имя сессии — в заголовке вкладки, как имя запуска; переименование видно и там
+  useEffect(() => {
+    setDocRunTitle(s.name);
+    return () => setDocRunTitle('');
+  }, [s.name]);
   const tone = sessionTone(s);
   const summarize = canSummarize(s);
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
         <Link to="/sessions" className={styles.back} title={t('Все сессии')}>{ICON.back}{t('Сессии')}</Link>
-        <Title s={s} onSaved={setS} />
+        <SessionName s={s} as="h1" pencil="always" className={styles.title} title={s.name} />
         <span className={cx(styles.status, styles[tone], s.status === 'working' && styles.pulse)}>
           <span className={styles.dot} aria-hidden="true" />
           {sessionStatusLabel(s)}
@@ -145,43 +152,6 @@ function Session({ s }: { s: SessionView }) {
             ? <>{t('Транскрипт:')} <span className="mono">{tildePath(s.transcriptPath, home)}</span></>
             : t('Транскрипта нет: не было ни одного сообщения')}
       </footer>
-    </div>
-  );
-}
-
-/** Название с правкой на месте: Enter — сохранить, Esc — отменить. */
-function Title({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => void }) {
-  const [edit, setEdit] = useState<string | null>(null);
-  const toast = useToast();
-  const save = async (name: string) => {
-    setEdit(null);
-    if (!name.trim() || name.trim() === s.name) return;
-    try {
-      onSaved(await renameSession(s.id, name));
-    } catch (err) {
-      toast(errorText(err));
-    }
-  };
-  if (edit !== null) {
-    return (
-      <input
-        className={styles.rename}
-        aria-label={t('Название сессии')}
-        autoFocus
-        value={edit}
-        onChange={(e) => setEdit(e.target.value)}
-        onBlur={() => void save(edit)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') void save(edit);
-          if (e.key === 'Escape') setEdit(null);
-        }}
-      />
-    );
-  }
-  return (
-    <div className={styles.title}>
-      <h1 title={s.name}>{s.name}</h1>
-      <button type="button" className={styles.iconBtn} aria-label={t('Переименовать сессию')} title={t('Переименовать')} onClick={() => setEdit(s.name)}>{ICON.pencil}</button>
     </div>
   );
 }

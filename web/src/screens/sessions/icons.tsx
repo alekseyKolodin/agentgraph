@@ -9,7 +9,6 @@ const icon = (d: ReactNode) => (
 
 export const ICON = {
   back: icon(<path d="M15 18l-6-6 6-6" />),
-  pencil: icon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>),
   folder: icon(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
   stop: icon(<rect x="6" y="6" width="12" height="12" rx="2" />),
   clock: icon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),

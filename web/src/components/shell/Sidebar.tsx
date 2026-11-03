@@ -8,6 +8,7 @@ import { useSessions } from '../../api/sessions';
 import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
 import { getLang, saveLang, t } from '../../lib/i18n';
 import { sessionSub } from '../../lib/sessions';
+import { RENAME_HOST, SessionName } from '../../screens/sessions/SessionName';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
@@ -109,7 +110,7 @@ function LiveSessions({ sessions }: { sessions: SessionView[] }) {
       {sessions.map((s) => (
         <li
           key={s.id}
-          className={[styles.lrun, s.status === 'waiting' ? styles.wait : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : ''].filter(Boolean).join(' ')}
+          className={[styles.lrun, s.status === 'waiting' ? styles.wait : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : '', RENAME_HOST].filter(Boolean).join(' ')}
           tabIndex={0}
           title={`${s.name}\n${sessionSub(s)}`}
           onClick={() => open(s.id)}
@@ -119,7 +120,7 @@ function LiveSessions({ sessions }: { sessions: SessionView[] }) {
         >
           <span className={styles.lrunDot} aria-hidden="true" />
           <span className={styles.lrunMain}>
-            <span className={styles.lrunTitle}>{s.name}</span>
+            <SessionName s={s} textClassName={styles.lrunTitle} onOpen={() => open(s.id)} />
             <span className={styles.lrunSub}>{sessionSub(s)}</span>
           </span>
           <span className={styles.lrunIt} title={t('Сессия Claude Code в терминале')}>›_</span>

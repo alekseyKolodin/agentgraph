@@ -1,7 +1,7 @@
 // Запросы сессий терминала (/api/sessions*). Экран терминала, кроме этого, держит WebSocket — screens/sessions/SessionTerminal.tsx.
 // Список нужен сайдбару («Сейчас») и странице «Сессии»: пока есть живые сессии, он обновляется сам — статус
 // «работает / ждёт тебя» меняется хуками claude, а не действиями в этой вкладке.
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { SessionList, SessionPermissionMode, SessionView } from '@server/api-types';
 import { api } from './client';
 
@@ -47,6 +47,22 @@ const IDLE_POLL_MS = 30_000;
 export function putSession(qc: QueryClient, v: SessionView): void {
   qc.setQueryData(sessionKeys.one(v.id), v);
   qc.setQueryData<SessionList>(sessionKeys.list, (l) => l && { ...l, sessions: l.sessions.map((x) => (x.id === v.id ? v : x)) });
+}
+
+/** Длина имени сессии — как SESSION_NAME_MAX в src/sessions.ts. */
+export const SESSION_NAME_MAX = 80;
+
+/**
+ * Переименование: ответ сервера — сразу в кэш сессии и списка (шапка, таблица, «Сейчас», заголовок вкладки). Опрос,
+ * начатый до правки, снимаем: его ответ вернул бы старое имя до следующего опроса.
+ */
+export function useRenameSession(): (id: string, name: string) => Promise<void> {
+  const qc = useQueryClient();
+  return async (id, name) => {
+    const v = await renameSession(id, name);
+    await Promise.all([qc.cancelQueries({ queryKey: sessionKeys.list, exact: true }), qc.cancelQueries({ queryKey: sessionKeys.one(id), exact: true })]);
+    putSession(qc, v);
+  };
 }
 
 export function useSessions(enabled: boolean) {

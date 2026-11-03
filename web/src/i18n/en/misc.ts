@@ -7,6 +7,7 @@ export const misc: Record<string, string> = {
   'Выбрать папку в Finder': 'Choose a folder in Finder',
   'Показать в Finder': 'Show in Finder',
   'Выбрать…': 'Choose…',
+  'Переименовать — или двойной клик по имени': 'Rename — or double-click the name',
   'Загружаю…': 'Loading…',
   'Саммари тега · {slug}': 'Tag summary · {slug}',
   'Саммари пока нет': 'No summary yet',

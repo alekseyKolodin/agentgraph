@@ -18,6 +18,7 @@ import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canSummarize, sessionStatusLabel, sessionTone } from '../../lib/sessions';
 import { LS } from '../../lib/storage';
+import { RENAME_HOST, SessionName } from './SessionName';
 import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -239,10 +240,10 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
         </thead>
         <tbody>
           {sessions.map((s) => (
-            <tr key={s.id} className={s.live ? '' : styles.ended}>
+            <tr key={s.id} className={cx(!s.live && styles.ended, RENAME_HOST)}>
               <td><span className={cx(styles.status, styles[sessionTone(s)])}><span className={styles.dot} aria-hidden="true" />{sessionStatusLabel(s)}</span></td>
               <td className={styles.name}>
-                <Link to={`/sessions/${s.id}`} title={s.name}>{s.name}</Link>
+                <SessionName s={s} to={`/sessions/${s.id}`} title={s.name} />
                 {s.summaryPending && <span className={styles.pending}>{t('саммари не обновлено: приложение закрыли')}</span>}
               </td>
               <td><span className={styles.tagList}>{s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind={c.kind} />)}</span></td>
