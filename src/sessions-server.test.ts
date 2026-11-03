@@ -97,6 +97,8 @@ before(async () => {
     env: () => ({ PATH: '/bin', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-desktop', CLAUDE_CODE_OAUTH_TOKEN: 'keep' }),
     deliveryAfterMs: 60_000,
     summarize: fakeSummary,
+    // имя по первому сообщению — в sessions-server.name.test.ts; здесь подбор не отвечает: имя по умолчанию остаётся
+    title: () => new Promise<never>(() => {}),
   });
   port = await freePort();
   await startServer({ port, host: '127.0.0.1', defaultCwd: path.join(root, 'proj'), notify: false });

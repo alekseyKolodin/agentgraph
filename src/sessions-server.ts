@@ -16,6 +16,8 @@ import type {
   SessionList, SessionPermissionMode, SessionStatus, SessionSummary, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, TagKind,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
+import { nothingToName, pickSessionTitle } from './session-title.js';
+import type { RunTitleReport } from './run-title.js';
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { createTag, queueTagSummary, readTag, runTagSlugs, writeTagSummary } from './tags.js';
@@ -33,6 +35,14 @@ import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } f
 export type SessionRecord = {
   id: string;
   name: string;
+  /**
+   * Имя по умолчанию (теги или папка), выданное при старте без имени: пока поле есть и name равно ему, после первого
+   * сообщения имя заменит короткое имя по тексту (session-title.ts). Переименование и первый подбор поле снимают; у
+   * записей старше автоимени его нет — их имя не трогается никогда.
+   */
+  defaultName?: string;
+  /** Подбор имени по первому сообщению: стоимость и ошибка, если имя не подобралось. */
+  nameSession?: { costUsd: number; error?: string };
   cwd: string;
   tags: string[];
   model?: string;
@@ -76,6 +86,8 @@ type Live = {
   spawnedAt: number;
   lastHookAt: number;
   sockets: Map<WebSocket, Conn>;
+  /** Идёт подбор имени по первому сообщению: остановка сервера его прерывает. */
+  naming?: AbortController;
   watch?: ReturnType<typeof setInterval>;
   summarizing: boolean;
   /** Процесс гасит остановка сервера: саммари не пишем, ставим пометку. */
@@ -98,6 +110,11 @@ export type SessionDeps = {
   deliveryAfterMs: number;
   /** Сессия саммари тега (Agent SDK). */
   summarize: (req: SessionRequest) => Promise<SessionResult>;
+  /**
+   * Имя сессии по первому сообщению (haiku без инструментов); signal — остановка сервера. title в ответе уже очищен
+   * (parseRunTitle): одна строка до TITLE_MAX знаков — его присваивают как есть.
+   */
+  title: (text: string, signal: AbortSignal) => Promise<RunTitleReport>;
 };
 
 const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -113,6 +130,7 @@ export const defaultSessionDeps = (): SessionDeps => ({
   env: () => process.env,
   deliveryAfterMs: 15_000,
   summarize: (req) => runSession(req, () => {}),
+  title: (text, signal) => pickSessionTitle(text, { signal }),
 });
 
 /** Ошибка с HTTP-кодом для ответа маршрута. */
@@ -294,6 +312,7 @@ export class SessionManager {
       lastActivityAt: now,
       turns: 0,
     };
+    if (typeof body.name !== 'string' || !body.name.trim()) rec.defaultName = rec.name;
     const s = newLive(rec, 'starting');
     this.sessions.set(id, s);
     try {
@@ -408,6 +427,8 @@ export class SessionManager {
 
   rename(id: string, body: Record<string, unknown>): SessionView {
     const s = this.get(id);
+    // имя задаёт человек: даже совпав с именем по умолчанию, оно останется — подбор по первому сообщению его не тронет
+    if (typeof body.name === 'string') delete s.rec.defaultName;
     if (typeof body.name !== 'string') throw new SessionError(400, 'name — строка');
     s.rec.name = sessionName(body.name, s.rec.tags, s.rec.cwd);
     this.save(s);
@@ -628,6 +649,7 @@ export class SessionManager {
       });
     }
     if (r.turn) this.appendTurn(s, r.turn);
+    if (r.turn && 'prompt' in r.turn) this.nameFrom(s, r.turn.prompt);
     if (p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
     this.changed(s);
     return r.reply;
@@ -798,6 +820,41 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Имя по первому сообщению — только пока имя сессии то, что выдано по умолчанию при старте (defaultName), один подбор
+   * на сессию: его конец (имя модели или ошибка) снимает поле. Переименованную сессию подбор не трогает — ни до
+   * сообщения, ни пока идёт. Называть нечего (пусто, одни картинки, /clear) — ждём следующего сообщения; подбор,
+   * прерванный остановкой сервера, повторится со следующим сообщением после «Продолжить». Удалённую за это время
+   * сессию не записываем.
+   */
+  private nameFrom(s: Live, prompt: string): void {
+    const r = s.rec;
+    if (r.defaultName === undefined) return;
+    if (r.name !== r.defaultName) {
+      // имя задал человек: подбор не нужен (поле уйдёт на диск вместе с ходом)
+      delete r.defaultName;
+      return;
+    }
+    if (s.naming || this.stopping || nothingToName(prompt)) return;
+    const abort = new AbortController();
+    s.naming = abort;
+    void this.deps.title(prompt, abort.signal)
+      .then((res) => {
+        if (abort.signal.aborted || this.sessions.get(r.id) !== s) return;
+        r.nameSession = { costUsd: res.costUsd, ...(res.error ? { error: res.error } : {}) };
+        // имя модели уже очищено, как имя запуска: одна строка до 60 знаков
+        if (res.title && r.name === r.defaultName) r.name = res.title;
+        if (res.error) console.error(`сессия ${r.id}: имя не подобралось —`, res.error);
+        delete r.defaultName;
+        this.save(s);
+        this.changed(s);
+      })
+      .catch((err: unknown) => console.error('сессия: имя —', errMsg(err)))
+      .finally(() => {
+        if (s.naming === abort) s.naming = undefined;
+      });
+  }
+
   /** Последний экран завершённой сессии на диске: после перезапуска сервера его покажет и новое подключение. */
   private saveScreen(s: Live): void {
     if (!s.screen) return;
@@ -836,6 +893,8 @@ export class SessionManager {
       for (const ws of s.sockets.keys()) ws.terminate();
       s.sockets.clear();
       if (s.pty?.alive) s.appClosed = true;
+      // подбор имени не дождался бы ответа: гасим, имя подберётся после «Продолжить»
+      s.naming?.abort();
     }
     // саммари: идущие гасим, ждущие в очереди тега не начнутся — иначе держали бы и запуски в той же очереди
     for (const abort of this.summaries.values()) abort.abort();
@@ -870,6 +929,7 @@ function readRecord(file: string, id: string): SessionRecord | undefined {
     ...raw,
     id,
     name: typeof raw.name === 'string' ? raw.name : id.slice(0, 8),
+    defaultName: typeof raw.defaultName === 'string' ? raw.defaultName : undefined,
     cwd: raw.cwd,
     tags: strings(raw.tags),
     saveTag: raw.saveTag !== false,
