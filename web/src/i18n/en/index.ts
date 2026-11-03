@@ -13,5 +13,6 @@ import { ai } from './ai';
 import { fix } from './fix';
 import { compose } from './compose';
 import { session } from './session';
+import { space } from './space';
 
-export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session };
+export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space };

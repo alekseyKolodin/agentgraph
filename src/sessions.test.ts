@@ -4,11 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  childPermissionMode, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionTags, resumeTarget,
-  safeRealpath, sessionArgs, sessionContext, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, sessionTagDirs, tagDelta, SESSION_PROMPT_MAX,
+  childPermissionMode, contextDelta, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionCtx,
+  resumeTarget, safeRealpath, sessionArgs, sessionContext, sessionDirs, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_PROMPT_MAX,
   type HookDeps, type HookState, type SessionLaunch,
 } from './sessions.js';
-import { createTag, readTag, tagDir, tagsDir, updateTag, writeTagSummary } from './tags.js';
+import { createTag, readTag, tagDir, tagsDir, updateTag } from './tags.js';
+import { addSpaceDoc, createSpace, readSpace, spaceDir, spacesDir, writeSpaceState } from './spaces.js';
+
+/** Пространство и теги знаний на диске — как их читает сессия. */
+const ctxOf = (space: string | undefined, tags: string[]) => readSessionCtx(space, tags, { space: readSpace, tag: readTag });
 
 function withConfigDir(fn: (root: string) => void) {
   return () => {
@@ -44,7 +48,8 @@ test('sessionArgs: новый разговор — --session-id, названи�
   assert.deepEqual(args.slice(0, 2), ['--session-id=11111111-2222-4333-8444-555555555555', '--name=-dash name']);
   assert.ok(!args.includes('--model') && !args.includes('--permission-mode'));
   assert.ok(!args.some((a) => a.includes('append-system-prompt') || a === '--bare' || a === '--strict-mcp-config'));
-  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read,mcp__agentgraph__tag_read');
+  // без подтверждения — только чтение тегов знаний: space_write и session_new спрашивают человека
+  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read');
   assert.deepEqual(args.flatMap((a, i) => (a === '--add-dir' ? [args[i + 1]] : [])), ['/data/tags/a', '/files']);
 
   const settings = JSON.parse(flagValue(args, '--settings'));
@@ -56,11 +61,14 @@ test('sessionArgs: новый разговор — --session-id, названи�
     const h = settings.hooks[e][0].hooks[0];
     assert.deepEqual([h.type, h.url, h.headers], ['http', 'http://127.0.0.1:4755/api/sessions/11111111-2222-4333-8444-555555555555/hook', { 'X-Agentgraph-Session': 'tok123' }]);
   }
-  // PreToolUse — только на session_new: остальные инструменты хук не задерживает
-  assert.equal(settings.hooks.PreToolUse[0].matcher, 'mcp__agentgraph__session_new');
+  // PreToolUse — только на session_new и space_write: остальные инструменты хук не задерживает
+  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write']);
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
+  // отдельные файлы — одним правилом
+  const withFiles = JSON.parse(flagValue(sessionArgs(launch({ denyDirs: [], denyFiles: ['/s/*/space.json'] })), '--settings'));
+  assert.deepEqual(withFiles.permissions.deny, ['Edit(//s/*/space.json)']);
 
   const mcp = JSON.parse(flagValue(args, '--mcp-config'));
   assert.deepEqual(mcp, {
@@ -181,26 +189,39 @@ test('sessionEnv: вычищает только маркеры хоста и с�
 });
 
 test(
-  'launchDirs: пути тегов внутри проекта и содержащие его не трогаются; запрет записи — на всю папку тегов, артефакты и открытые папки',
+  'launchDirs: пути внутри проекта и содержащие его не трогаются; запрет записи — на всю папку тегов, всю папку пространств, артефакты и открытые папки',
   withConfigDir(() => {
     const root = tagsDir();
+    const spaces = spacesDir();
     const art = '/ag/runs/r1/artifacts';
-    const r = launchDirs(['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, '/odd(dir)', '/glob[1]', art], '/p/shop', '/s/files', [art]);
-    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, art, '/s/files']);
-    assert.deepEqual(r.denyDirs, [root, art, '/specs']);
+    const r = launchDirs(['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, `${spaces}/feat`, '/odd(dir)', '/glob[1]', art], '/p/shop', '/s/files', [art]);
+    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, `${spaces}/feat`, art, '/s/files']);
+    assert.deepEqual(r.denyDirs, [root, spaces, art, '/specs']);
+    assert.deepEqual(r.denyFiles, []);
   }),
 );
 
 test(
-  'launchDirs: проект в домашней папке — папка тегов и артефакты внутри него всё равно закрыты для записи',
+  'launchDirs: проект в домашней папке — папки тегов, пространств и артефакты внутри него всё равно закрыты для записи',
   withConfigDir((home) => {
     const root = tagsDir();
     const art = path.join(home, 'ag', 'runs', 'r1', 'artifacts');
     const r = launchDirs([art], home, '/s/files', [art]);
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs, [root, art]);
+    assert.deepEqual(r.denyDirs, [root, spacesDir(), art]);
     // cwd внутри папки тегов — её не закрываем: это и есть проект
-    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, []);
+    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, [spacesDir()]);
+  }),
+);
+
+test(
+  'launchDirs: сессия в папке пространства правит его карту и документы как проект, но space.json любого пространства закрыт',
+  withConfigDir(() => {
+    const own = path.join(spacesDir(), 'feat');
+    const r = launchDirs([own], own, '/s/files');
+    assert.deepEqual(r.addDirs, ['/s/files']);
+    assert.deepEqual(r.denyDirs, [tagsDir()]);
+    assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '*', 'space.json'), path.join(spacesDir(), '.migrated.json')]);
   }),
 );
 
@@ -213,77 +234,99 @@ test('findClaude: сначала PATH, потом CLI из пакета SDK; н�
 });
 
 test(
-  'sessionContext: блок тега задачи без маркеров и без «опиши задачу ниже», теги знаний строкой с knowledge_read',
+  'sessionContext: пространство — шапка, карта памятью (запущено с ним) или «прочитай», документы, состояние данными, space_write; теги знаний строкой',
   withConfigDir(() => {
-    createTag('checkout', 'Корзина');
-    updateTag('checkout', { notes: 'Пустая корзина падает' });
-    writeTagSummary('checkout', '**Суть** валидация', { id: 'r1', flow: 'f', finishedAt: '2026-01-01', status: 'done' });
-    createTag('fresh');
-    createTag('api', undefined, 'knowledge');
+    createSpace('checkout', { title: 'Корзина', gist: 'валидация' });
+    writeSpaceState('checkout', '**Суть** валидация', { id: 'r1', at: '', kind: 'run' });
+    addSpaceDoc('checkout', { name: 'spec.md', data: Buffer.from('# Спека').toString('base64') });
+    createTag('api');
     updateTag('api', { description: 'Когда трогаешь API' });
-    const text = sessionContext(readSessionTags(['checkout', 'fresh', 'api', 'missing'], readTag));
-    assert.match(text, /^Контекст тегов agentgraph для этой сессии\./);
-    assert.ok(text.includes('Тег задачи: checkout — Корзина\nЗаметки к тегу:\nПустая корзина падает'));
-    assert.ok(text.includes('<source-data>'));
-    assert.ok(text.includes('Тег задачи: fresh\nТег новый: заметок и саммари ещё нет.'));
-    assert.ok(!text.includes('<!-- tag:') && !text.includes('опиши задачу'));
+    const ctx = ctxOf('checkout', ['api', 'missing']);
+    const text = sessionContext(ctx, 'checkout');
+    assert.match(text, /^Контекст agentgraph для этой сессии: пространство и теги знаний\./);
+    assert.ok(text.includes('Пространство agentgraph «Корзина» (checkout)'));
+    assert.match(text, /уже в контексте как память/);
+    assert.ok(text.includes(path.join(spaceDir('checkout'), 'docs', 'spec.md')));
+    assert.ok(text.includes('<source-data>\n**Суть** валидация\n</source-data>'));
+    assert.match(text, /space_write/);
     assert.ok(text.includes('knowledge_read') && text.includes('- api: Когда трогаешь API'));
-    assert.equal(sessionContext({ task: [], knowledge: [] }), '');
+    // процесс запущен без этого пространства — карта не в памяти
+    assert.match(sessionContext(ctx, undefined), /прочитай её инструментом Read/);
+    assert.equal(sessionContext({ knowledge: [] }), '');
+    // удалённое пространство и тег задачи среди тегов — в контекст не идут
+    assert.deepEqual(ctxOf('nope', []), { knowledge: [] });
   }),
 );
 
 test(
-  'sessionContext: не влезло в бюджет — теги задач строкой с tag_read; и так не влезло — обрезка с пометкой',
+  'sessionContext: не влезло в бюджет — короче список документов, потом теги «целиком» строкой; и так не влезло — обрезка с пометкой',
   withConfigDir(() => {
-    for (const slug of ['a', 'b', 'c']) {
-      createTag(slug);
-      updateTag(slug, { notes: `Первая строка ${slug}\n` + 'x'.repeat(3900) });
-    }
-    const tags = readSessionTags(['a', 'b', 'c'], readTag);
-    const text = sessionContext(tags);
-    assert.ok(text.length <= CONTEXT_BUDGET);
-    assert.ok(text.includes('инструментом tag_read со слагом'));
-    assert.ok(text.includes('- a: Первая строка a (знаков заметок: 3916)'));
-    assert.ok(!text.includes('xxxx'));
-    const cut = sessionContext(tags, 200);
+    createSpace('s');
+    for (let i = 0; i < 30; i++) addSpaceDoc('s', { name: `doc-${String(i).padStart(2, '0')}-${'x'.repeat(150)}.md`, data: Buffer.from('x').toString('base64') });
+    createTag('big');
+    updateTag('big', { notes: 'Первая строка big\n' + 'y'.repeat(3900), inline: true });
+    const ctx = ctxOf('s', ['big']);
+    const text = sessionContext(ctx, 's');
+    assert.ok(text.length <= CONTEXT_BUDGET, String(text.length));
+    assert.ok(text.includes('…и ещё 25:'), 'документы — пять и «ещё»');
+    assert.ok(text.includes('yyyy'), 'тег целиком ещё влезает');
+    const tight = sessionContext(ctx, 's', 2500);
+    assert.ok(tight.includes('Документов пространства: 30'));
+    assert.ok(tight.includes('- big: Первая строка big'));
+    assert.ok(!tight.includes('yyyy'));
+    const cut = sessionContext(ctx, 's', 200);
     assert.equal(cut.length, 200);
-    assert.ok(cut.endsWith('…(контекст тегов обрезан по лимиту хука)'));
+    assert.ok(cut.endsWith('…(контекст agentgraph обрезан по лимиту хука)'));
   }),
 );
 
 test(
-  'tagDelta: блоки добавленных и строки о снятых; изменений нет — пусто',
+  'contextDelta: новое пространство — раздел с «прочитай карту», снятое — строка; теги — строки добавленных и снятых; изменений нет — пусто',
   withConfigDir(() => {
-    createTag('a');
-    createTag('b', undefined, 'knowledge');
-    const tags = readSessionTags(['a', 'b'], readTag);
-    assert.equal(tagDelta(tags, ['a', 'b']), '');
-    const d = tagDelta(tags, ['a', 'old']);
-    assert.match(d, /^Теги agentgraph этой сессии изменились\./);
-    assert.ok(d.includes('- b: описания нет') && !d.includes('Тег задачи: a'));
-    assert.ok(d.includes('Тег old снят: его контекст выше больше не действует.'));
+    createSpace('a', { title: 'А' });
+    createSpace('b', { title: 'Б' });
+    createTag('k1');
+    createTag('k2');
+    assert.equal(contextDelta(ctxOf('a', ['k1']), { space: 'a', tags: ['k1'] }, 'a'), '');
+    const swap = contextDelta(ctxOf('b', ['k1', 'k2']), { space: 'a', tags: ['k1', 'old'] }, 'a');
+    assert.match(swap, /^Контекст agentgraph этой сессии изменился\./);
+    assert.ok(swap.includes('Пространство a снято'));
+    assert.ok(swap.includes('Пространство agentgraph «Б» (b)'));
+    assert.match(swap, /прочитай её инструментом Read/);
+    assert.ok(swap.includes('- k2: описания нет') && !swap.includes('- k1'));
+    assert.ok(swap.includes('Тег old снят'));
+    const gone = contextDelta(ctxOf(undefined, []), { space: 'a', tags: [] }, 'a');
+    assert.ok(gone.includes('Пространство a снято') && !gone.includes('Пространство agentgraph'));
+    // вернули пространство, с которым запущен процесс, — карта снова «уже в памяти»
+    assert.match(contextDelta(ctxOf('a', []), { tags: [] }, 'a'), /уже в контексте как память/);
   }),
 );
 
 const deps = (root = '/nowhere'): HookDeps => ({
-  readTags: (slugs) => readSessionTags(slugs, readTag),
-  readTargets: (t) => sessionReadTargets(t, path.join(root, 'runs')),
+  readCtx: (space, tags) => ctxOf(space, tags),
+  readTargets: (c) => sessionReadTargets(c, path.join(root, 'runs')),
   realpath: safeRealpath,
 });
 const state = (o: Partial<HookState> = {}): HookState => ({ tags: [], injected: null, status: 'starting', claudeSessionIds: [], started: false, turns: 0, ...o });
 
 test(
-  'хуки: SessionStart любого source отдаёт полный контекст, запоминает разговор; доставлено — все теги',
+  'хуки: SessionStart любого source отдаёт полный контекст, запоминает разговор; доставлено — пространство и все теги',
   withConfigDir(() => {
     createTag('a');
+    createSpace('feat', { title: 'Фича' });
     const OLD = '11111111-2222-4333-8444-555555555555';
     const NEW = '99999999-2222-4333-8444-555555555555';
-    const r = handleHook(state({ tags: ['a'], injected: ['a'], claudeSessionIds: [OLD] }), { hook_event_name: 'SessionStart', source: 'clear', session_id: NEW, transcript_path: `/t/${NEW}.jsonl` }, deps());
+    const r = handleHook(
+      state({ space: 'feat', launchSpace: 'feat', tags: ['a'], injected: { space: 'feat', tags: ['a'] }, claudeSessionIds: [OLD] }),
+      { hook_event_name: 'SessionStart', source: 'clear', session_id: NEW, transcript_path: `/t/${NEW}.jsonl` },
+      deps(),
+    );
     const out = r.reply.hookSpecificOutput as { hookEventName: string; additionalContext: string };
     assert.equal(out.hookEventName, 'SessionStart');
-    assert.ok(out.additionalContext.includes('Тег задачи: a'));
+    assert.ok(out.additionalContext.includes('Пространство agentgraph «Фича» (feat)'));
+    assert.ok(out.additionalContext.includes('- a: описания нет'));
     assert.deepEqual(r.patch, { claudeSessionIds: [OLD, NEW], transcriptPath: `/t/${NEW}.jsonl`, started: true, status: 'waiting' });
-    assert.deepEqual(r.delivered, ['a']);
+    assert.deepEqual(r.delivered, { space: 'feat', tags: ['a'] });
   }),
 );
 
@@ -293,14 +336,16 @@ test(
     createTag('a');
     createTag('b');
     const first = handleHook(state({ tags: ['a'] }), { hook_event_name: 'UserPromptSubmit', prompt: 'почини' }, deps());
-    assert.ok(JSON.stringify(first.reply).includes('Контекст тегов agentgraph'));
-    assert.deepEqual([first.patch.status, first.patch.turns, first.delivered, first.turn], ['working', 1, ['a'], { prompt: 'почини' }]);
-    const same = handleHook(state({ tags: ['a'], injected: ['a'], turns: 1 }), { hook_event_name: 'UserPromptSubmit', prompt: 'ещё' }, deps());
+    assert.ok(JSON.stringify(first.reply).includes('Контекст agentgraph для этой сессии'));
+    assert.deepEqual([first.patch.status, first.patch.turns, first.delivered, first.turn], ['working', 1, { tags: ['a'] }, { prompt: 'почини' }]);
+    const same = handleHook(state({ tags: ['a'], injected: { tags: ['a'] }, turns: 1 }), { hook_event_name: 'UserPromptSubmit', prompt: 'ещё' }, deps());
     assert.deepEqual([same.reply, same.delivered], [{}, undefined]);
-    const batch = handleHook(state({ tags: ['a', 'b'], injected: ['a'], status: 'working' }), { hook_event_name: 'PostToolBatch' }, deps());
+    createSpace('feat');
+    const batch = handleHook(state({ space: 'feat', tags: ['a', 'b'], injected: { tags: ['a'] }, status: 'working' }), { hook_event_name: 'PostToolBatch' }, deps());
     const ctx = (batch.reply.hookSpecificOutput as { additionalContext: string }).additionalContext;
-    assert.ok(ctx.includes('Тег задачи: b') && !ctx.includes('Тег задачи: a'));
-    assert.deepEqual([batch.delivered, batch.turn, batch.patch.turns], [['a', 'b'], undefined, undefined]);
+    assert.ok(ctx.includes('- b: описания нет') && !ctx.includes('- a:'));
+    assert.ok(ctx.includes('Пространство agentgraph feat'));
+    assert.deepEqual([batch.delivered, batch.turn, batch.patch.turns], [{ space: 'feat', tags: ['a', 'b'] }, undefined, undefined]);
   }),
 );
 
@@ -309,19 +354,22 @@ test(
   withConfigDir(() => {
     createTag('a');
     createTag('b');
-    const r = handleHook(state({ tags: ['a', 'b'], injected: ['a'], status: 'working' }), { hook_event_name: 'PostToolBatch', agent_id: 'sub-1' }, deps());
+    const r = handleHook(state({ tags: ['a', 'b'], injected: { tags: ['a'] }, status: 'working' }), { hook_event_name: 'PostToolBatch', agent_id: 'sub-1' }, deps());
     assert.deepEqual([r.reply, r.delivered, r.patch.status], [{}, undefined, 'working']);
     assert.equal(parseHookInput({ hook_event_name: 'PostToolBatch', agent_id: 'sub-1' })?.agent_id, 'sub-1');
   }),
 );
 
-test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new', () => {
+test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new и space_write', () => {
   assert.equal(handleHook(state(), { hook_event_name: 'UserPromptSubmit', prompt: 'x', permission_mode: 'plan' }, deps()).patch.permissionMode, 'plan');
   assert.equal(handleHook(state({ permissionMode: 'plan' }), { hook_event_name: 'Stop', permission_mode: 'plan' }, deps()).patch.permissionMode, undefined);
   assert.equal(handleHook(state(), { hook_event_name: 'PostToolBatch', agent_id: 'a1', permission_mode: 'auto' }, deps()).patch.permissionMode, undefined);
   assert.deepEqual(parseHookInput({ hook_event_name: 'Stop', permission_mode: 'auto' }), { hook_event_name: 'Stop', permission_mode: 'auto' });
-  const ask = handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__session_new', permission_mode: 'auto' }, deps()).reply;
-  assert.equal((ask.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask');
+  for (const tool of ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write']) {
+    const ask = handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, permission_mode: 'auto' }, deps()).reply;
+    assert.equal((ask.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask', tool);
+  }
+  assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__knowledge_read' }, deps()).reply, {});
   assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash' }, deps()).reply, {});
 });
 
@@ -349,10 +397,10 @@ test(
     fs.mkdirSync(specs);
     fs.writeFileSync(path.join(specs, 'a.md'), 'x');
     fs.symlinkSync('/etc', path.join(specs, 'etc'));
-    createTag('k', undefined, 'knowledge');
+    createTag('k');
     updateTag('k', { dirs: [specs] });
     const ask = (tool: string, input: Record<string, unknown>) =>
-      handleHook(state({ tags: ['k'], injected: ['k'] }), { hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input }, deps(root)).reply;
+      handleHook(state({ tags: ['k'], injected: { tags: ['k'] } }), { hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input }, deps(root)).reply;
     const allow = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
     // без updatedPermissions: addDirectories сделал бы папку рабочей, а в acceptEdits — открытой на запись
     assert.deepEqual(ask('Read', { file_path: path.join(specs, 'a.md') }), allow);
@@ -374,9 +422,9 @@ test(
     const notes = path.join(root, 'notes.md');
     fs.writeFileSync(notes, 'x');
     fs.writeFileSync(path.join(root, 'id_rsa'), 'secret');
-    createTag('k', undefined, 'knowledge');
+    createTag('k');
     updateTag('k', { dirs: [notes] });
-    const t = sessionReadTargets(readSessionTags(['k'], readTag), path.join(root, 'runs'));
+    const t = sessionReadTargets(ctxOf(undefined, ['k']), path.join(root, 'runs'));
     assert.deepEqual(t, { dirs: [], files: [notes] });
     const ask = (tool: string, input: Record<string, unknown>) => permissionReply({ hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input }, t, safeRealpath);
     assert.ok(ask('Read', { file_path: notes }).hookSpecificOutput);
@@ -405,19 +453,26 @@ test('idleAgents: простаивающие разговоры из `claude age
 });
 
 test(
-  'теги: сессии не вытесняют запуски из списка тега, tagReadDirs их пропускает',
+  'пространство на ходу: PermissionRequest пропускает чтение в его папке, его путях и артефактах; файл-путь — только его; папки сессии — своя папка пространства и пути',
   withConfigDir((root) => {
-    createTag('a');
-    for (let i = 0; i < 25; i++) writeTagSummary('a', 's', { id: `r${i}`, flow: 'f', finishedAt: '2026-01-01', status: 'done' });
-    for (let i = 0; i < 12; i++) writeTagSummary('a', 's', { id: `s${i}`, flow: 'session', finishedAt: '2026-01-01', status: 'done', kind: 'session', title: 'x' });
-    const runs = readTag('a')!.runs;
-    assert.equal(runs.filter((r) => r.kind === 'session').length, 10);
-    assert.equal(runs.filter((r) => r.kind !== 'session').length, 20);
-    assert.equal(runs[0].id, 's11');
+    const specs = path.join(root, 'specs');
+    fs.mkdirSync(specs);
+    const note = path.join(root, 'note.md');
+    fs.writeFileSync(note, 'x');
+    fs.writeFileSync(path.join(root, 'secret'), 'x');
     const runsDir = path.join(root, 'runs');
-    fs.mkdirSync(path.join(runsDir, 's11', 'artifacts'), { recursive: true });
-    fs.mkdirSync(path.join(runsDir, 'r24', 'artifacts'), { recursive: true });
-    assert.deepEqual(sessionTagDirs(readSessionTags(['a'], readTag), runsDir), [path.join(runsDir, 'r24', 'artifacts')]);
-    assert.ok(fs.existsSync(tagDir('a')));
+    fs.mkdirSync(path.join(runsDir, 'r1', 'artifacts'), { recursive: true });
+    createSpace('feat', { dirs: [specs, note] });
+    writeSpaceState('feat', 'ok', { id: 'r1', at: '', kind: 'run' });
+    const ctx = ctxOf('feat', []);
+    const t = sessionReadTargets(ctx, runsDir);
+    assert.deepEqual(t.dirs.sort(), [spaceDir('feat'), specs, path.join(runsDir, 'r1', 'artifacts')].sort());
+    assert.deepEqual(t.files, [note]);
+    const ask = (input: Record<string, unknown>) => permissionReply({ hook_event_name: 'PermissionRequest', tool_name: 'Read', tool_input: input }, t, safeRealpath);
+    assert.ok(ask({ file_path: path.join(spaceDir('feat'), 'CLAUDE.md') }).hookSpecificOutput);
+    assert.ok(ask({ file_path: note }).hookSpecificOutput);
+    assert.deepEqual(ask({ file_path: path.join(root, 'secret') }), {});
+    assert.deepEqual(sessionDirs(ctx, runsDir), [spaceDir('feat'), specs, root, path.join(runsDir, 'r1', 'artifacts')]);
+    assert.ok(fs.existsSync(tagDir('nothing')) === false);
   }),
 );

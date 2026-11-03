@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
-import { Badge, TagBadge } from '../../components/Badge';
+import { Badge, SpaceBadge, TagBadge } from '../../components/Badge';
 import { openRunFile } from '../../components/file/FileDialog';
 import { flowGraphModel, type GraphSpec } from '../../lib/graph/model';
 import type { GraphRunState } from '../../lib/graph/run-state';
@@ -95,7 +95,9 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
     inspectNode({ kind: n.kind === 'call' ? 'phase' : n.kind, name: n.name, block: n.block, key: n.key });
   };
   const sel = runState.inspect;
-  const startChips = [...(r.tags || []).map((t) => <TagBadge key={`t${t}`} slug={t} />), ...(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)];
+  // пространство (у старого запуска — его теги задачи: они перенесены в пространства с теми же слагами) и теги знаний
+  const spaces = r.space ? [r.space] : r.tags || [];
+  const startChips = [...spaces.map((s) => <SpaceBadge key={`s${s}`} slug={s} />), ...(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)];
 
   return (
     <section

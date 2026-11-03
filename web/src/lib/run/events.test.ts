@@ -92,15 +92,15 @@ test('вопросы, ответы и пауза обновляют список
   assert.equal(st.run.pauseReason, undefined);
 });
 
-test('саммари тега: идёт, затем отчёт без дублей; имя запуска и стоимость подбора', () => {
+test('состояние пространства: идёт, затем отчёт без двойной стоимости; имя запуска и стоимость подбора', () => {
   const st = liveState(detail());
-  applyRunEvent(st, { type: 'tag_summary_start', tag: 'front', file: 'f' });
-  assert.equal(st.tagPending?.tag, 'front');
-  const rep = { tag: 'front', ok: true, costUsd: 0.2 };
-  applyRunEvent(st, { type: 'tag_summary', tag: 'front', report: rep });
-  applyRunEvent(st, { type: 'tag_summary', tag: 'front', report: rep });
-  assert.equal(st.tagPending, null);
-  assert.equal(st.run.tagSummaries?.length, 1);
+  applyRunEvent(st, { type: 'space_state_start', space: 'front', file: 'f' });
+  assert.equal(st.statePending?.space, 'front');
+  const rep = { space: 'front', ok: true, costUsd: 0.2 };
+  applyRunEvent(st, { type: 'space_state', space: 'front', report: rep });
+  applyRunEvent(st, { type: 'space_state', space: 'front', report: rep });
+  assert.equal(st.statePending, null);
+  assert.deepEqual(st.run.stateUpdate, rep);
   assert.equal(st.run.totalCostUsd, 0.2);
   applyRunEvent(st, { type: 'title', title: 'Кнопка', totalCostUsd: 0.3 });
   assert.equal(st.run.title, 'Кнопка');

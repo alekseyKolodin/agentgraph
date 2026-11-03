@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canSummarize, chipHint, fileUris, osc52Text, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, summaryNote } from './sessions';
+import {
+  canUpdateState, chipHint, fileUris, osc52Text, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, spaceChipHint, stateNote,
+} from './sessions';
 
 test('статус сессии: подписи и тон точки; выход без SessionStart — отдельный исход', () => {
   assert.deepEqual([sessionStatusLabel({ status: 'working' }), sessionTone({ status: 'working' })], ['Работает', 'live']);
@@ -12,20 +14,24 @@ test('статус сессии: подписи и тон точки; выход
   assert.equal(sessionStatusLabel({ status: 'ended', exitCode: 1, outcome: 'failed' }), 'Не запустилась · код 1');
 });
 
-test('строка «Сейчас»: сессия · папка · состояние', () => {
+test('строка «Сейчас»: сессия · пространство, без него — папка · состояние', () => {
   assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'сессия · shop · ждёт тебя');
   assert.equal(sessionSub({ cwd: '/p/api', status: 'working' }), 'сессия · api · работает');
+  assert.equal(sessionSub({ cwd: '/p/api', status: 'working', space: 'press-alert' }), 'сессия · press-alert · работает');
 });
 
-test('теги на ходу: подсказка у чипа и строка о недоставленном', () => {
-  assert.equal(chipHint({ slug: 'a', kind: 'task', state: 'on' }), '');
-  assert.match(chipHint({ slug: 'a', kind: 'task', state: 'pending' }), /со следующим своим шагом/);
-  assert.equal(pendingNote([{ slug: 'a', kind: 'task', state: 'on' }]), '');
+test('пространство и теги на ходу: подсказка у чипа и строка о недоставленном', () => {
+  assert.equal(chipHint({ state: 'on' }), '');
+  assert.match(chipHint({ state: 'pending' }), /со следующим своим шагом/);
+  assert.equal(pendingNote([{ slug: 'a', state: 'on' }]), '');
   assert.equal(
-    pendingNote([{ slug: 'billing', kind: 'task', state: 'pending' }, { slug: 'legacy-cart', kind: 'task', state: 'removed' }]),
+    pendingNote([{ slug: 'billing', state: 'pending' }, { slug: 'legacy-cart', state: 'removed' }]),
     'billing и снятие legacy-cart дойдут до модели со следующим её шагом или твоим сообщением',
   );
-  assert.equal(pendingNote([{ slug: 'b', kind: 'task', state: 'pending' }]), 'b дойдёт до модели со следующим её шагом или твоим сообщением');
+  assert.equal(pendingNote([{ slug: 'b', state: 'pending' }]), 'b дойдёт до модели со следующим её шагом или твоим сообщением');
+  assert.match(spaceChipHint({ slug: 'p', state: 'pending' }, true), /«Перезапустить»/);
+  assert.ok(!spaceChipHint({ slug: 'p', state: 'on' }, true).includes('Перезапустить'));
+  assert.match(spaceChipHint({ slug: 'p', state: 'on', missing: true }, true), /Пространства p больше нет/);
 });
 
 test('адрес WebSocket — тот же хост, что у страницы', () => {
@@ -39,26 +45,24 @@ test('перетащенный файл: путь экранируется ка�
   assert.deepEqual(fileUris('# comment\r\nfile:///Users/me/a%20b.png\r\nhttps://x.y/z\nfile://other-host/c'), ['/Users/me/a b.png']);
 });
 
-const task = [{ slug: 'checkout', kind: 'task' as const, state: 'on' as const }];
-const know = [{ slug: 'api', kind: 'knowledge' as const, state: 'on' as const }];
-
-test('«Обновить саммари»: только с тегом задачи, только когда есть новые ходы и саммари не пишется', () => {
-  assert.equal(canSummarize({ chips: know, newTurns: 3 }).show, false);
-  assert.deepEqual(canSummarize({ chips: task, newTurns: 0 }), { show: true, ok: false, why: 'Новых ходов с прошлого саммари нет' });
-  assert.equal(canSummarize({ chips: task, newTurns: 2, summarizing: true }).ok, false);
-  assert.equal(canSummarize({ chips: task, newTurns: 2 }).ok, true);
+test('«Обновить состояние»: только с пространством (не удалённым), только когда есть новые ходы и состояние не пишется', () => {
+  assert.equal(canUpdateState({ newTurns: 3 }).show, false);
+  assert.equal(canUpdateState({ space: 'p', spaceChip: { slug: 'p', state: 'on', missing: true }, newTurns: 3 }).show, false);
+  assert.deepEqual(canUpdateState({ space: 'p', newTurns: 0 }), { show: true, ok: false, why: 'Новых ходов с прошлого обновления нет' });
+  assert.equal(canUpdateState({ space: 'p', newTurns: 2, updatingState: true }).ok, false);
+  assert.equal(canUpdateState({ space: 'p', newTurns: 2 }).ok, true);
 });
 
-test('состояние саммари: пишется, приложение закрыли, записано, ошибки по тегам; без тегов задач — ничего', () => {
+test('состояние пространства: пишется, приложение закрыли, записано, ошибка; без пространства — ничего', () => {
   const now = new Date('2026-10-27T14:55:00');
   const at = new Date('2026-10-27T14:52:00').toISOString();
-  assert.equal(summaryNote({ chips: know }), null);
-  assert.equal(summaryNote({ chips: task })?.text, 'Саммари тегов задач: не обновлялось');
-  assert.equal(summaryNote({ chips: task, summarizing: true })?.text, 'Саммари тегов задач: пишу…');
-  assert.deepEqual(summaryNote({ chips: task, summaryPending: 'app-closed' })?.tone, 'warn');
-  assert.deepEqual(summaryNote({ chips: task, summary: { at, tags: ['checkout', 'billing'], costUsd: 0.01 } }, now), { text: 'Саммари записано в checkout и billing · 14:52', tone: 'ok', title: '$0.010' });
-  const err = summaryNote({ chips: task, summary: { at, tags: ['a'], errors: { b: 'таймаут' }, costUsd: 0 } }, now);
-  assert.deepEqual([err?.text, err?.tone, err?.title], ['Саммари записано в a, ошибка в b', 'err', 'b: таймаут']);
+  assert.equal(stateNote({}), null);
+  assert.equal(stateNote({ space: 'p' })?.text, 'Состояние пространства: не обновлялось');
+  assert.equal(stateNote({ space: 'p', updatingState: true })?.text, 'Состояние пространства: пишу…');
+  assert.equal(stateNote({ space: 'p', statePending: 'app-closed' })?.tone, 'warn');
+  assert.deepEqual(stateNote({ space: 'p', stateUpdate: { at, space: 'p', ok: true, costUsd: 0.01 } }, now), { text: 'Состояние записано в p · 14:52', tone: 'ok', title: '$0.010' });
+  const err = stateNote({ space: 'p', stateUpdate: { at, space: 'p', ok: false, error: 'таймаут', costUsd: 0 } }, now);
+  assert.deepEqual([err?.text, err?.tone, err?.title], ['Состояние не записано: ошибка', 'err', 'таймаут']);
 });
 
 test('OSC 52: текст из base64 в UTF-8, любой буфер; запрос буфера, пустое и не base64 — null', () => {

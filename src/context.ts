@@ -9,10 +9,11 @@ import { CLAUDEAI_TOOL_PREFIX, NO_CLAUDEAI_CONNECTORS_ENV, sessionOptions } from
 import { connectorName, connectorToolName, isConnector, waitForConnectors } from './connectors.js';
 import { loadFlow, resolveFlowFile } from './flows.js';
 import { buildRequest, dirsTail, handoffTail, resolveAddDirs, resolvePlugins } from './runner.js';
+import { readSpace, spaceContext, spaceReadDirs, type Space } from './spaces.js';
 import { flowBlocks, flowPhases, isCallBlock, type Phase } from './schema.js';
 import { ARTIFACTS_DIR, artifactAccess, hasArtifacts } from './artifacts.js';
 import { RUNS_DIR } from './paths.js';
-import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, type Tag, type TagKind } from './tags.js';
+import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, type Tag } from './tags.js';
 import type { ContextFile, ContextFileSaved, ContextKnowledge, ContextPrompt, ContextPromptPart, ContextView, MemoryFile } from './api-types.js';
 
 export type ContextRequest = {
@@ -23,6 +24,8 @@ export type ContextRequest = {
   phase?: string;
   /** Модель запуска: этап и defaults flow её перекрывают, как в раннере. */
   model?: string;
+  /** Пространство (слаг): его папки — доп. директориями, как у сессии и этапа в нём; карта — среди memoryFiles. */
+  space?: string;
 };
 
 export type ContextOptions = {
@@ -62,10 +65,27 @@ export class ContextError extends Error {
   }
 }
 
+/** Пространство запроса: нет на диске — 404 (выбрали удалённое), неверный слаг — 400. */
+function contextSpace(slug: string | undefined): Space | undefined {
+  if (!slug) return undefined;
+  let space: Space | undefined;
+  try {
+    space = readSpace(slug);
+  } catch (err) {
+    throw new ContextError(400, (err as Error).message);
+  }
+  if (!space) throw new ContextError(404, `Пространства ${slug} нет`);
+  return space;
+}
+
 /** Опции сессии без промпта: без flow — как у любой сессии, с этапом — как у раннера для этого этапа. */
 export function contextOptions(req: ContextRequest): ContextOptions {
   const warnings: string[] = [];
-  if (!req.flow) return { options: sessionOptions({ cwd: req.cwd, prompt: '', model: req.model, foreground: true }), addDirs: [], knowledge: [], warnings };
+  const space = contextSpace(req.space);
+  const spaceDirs = space ? spaceReadDirs(space, RUNS_DIR) : [];
+  const plain = (model?: string) =>
+    sessionOptions({ cwd: req.cwd, prompt: '', model, foreground: true, ...(spaceDirs.length ? { additionalDirectories: spaceDirs } : {}) });
+  if (!req.flow) return { options: plain(req.model), addDirs: [], knowledge: [], warnings };
   let file: string;
   try {
     file = resolveFlowFile(req.flow);
@@ -80,7 +100,7 @@ export function contextOptions(req: ContextRequest): ContextOptions {
   if (req.phase && !phase) throw new ContextError(404, `В flow ${spec.name} нет этапа ${req.phase}`);
   if (!phase) {
     // flow без этапа: от него только модель по умолчанию
-    return { options: sessionOptions({ cwd: req.cwd, prompt: '', model: spec.defaults?.model ?? req.model, foreground: true }), addDirs: [], knowledge: [], warnings };
+    return { options: plain(spec.defaults?.model ?? req.model), addDirs: [], knowledge: [], warnings };
   }
   // раннер до запуска падает в checkAddDirs; здесь показываем, что этап получит, и предупреждаем
   const addDirs = resolveAddDirs(phase, req.cwd).map((d) => ({ path: d, exists: Boolean(fs.statSync(d, { throwIfNoEntry: false })?.isDirectory()) }));
@@ -98,8 +118,8 @@ export function contextOptions(req: ContextRequest): ContextOptions {
     } catch {
       tag = undefined;
     }
-    if (!tag) warnings.push(`Нет тега знаний ${slug} (блок ${block!.name}): запуск упадёт до старта. Заведи его на странице «Теги» с видом «знание».`);
-    else if (tag.kind !== 'knowledge') warnings.push(`${slug} в knowledge блока ${block!.name} — тег задачи, а не области знаний: запуск упадёт до старта.`);
+    if (!tag) warnings.push(`Нет тега знаний ${slug} (блок ${block!.name}): запуск упадёт до старта. Заведи его на странице «Знания».`);
+    else if (tag.kind !== 'knowledge') warnings.push(`${slug} в knowledge блока ${block!.name} — старый тег задачи (теперь пространство), а не область знаний: запуск упадёт до старта.`);
     else known.push(tag);
     return { slug, exists: Boolean(tag), ...(tag ? { kind: tag.kind } : {}), ...(tag?.kind === 'knowledge' ? knowledgeView(tag) : {}) };
   });
@@ -108,7 +128,7 @@ export function contextOptions(req: ContextRequest): ContextOptions {
   const access = hasArtifacts(spec) ? artifactAccess(phase) : undefined;
   const artDir = path.join(RUNS_DIR, '<id запуска>', ARTIFACTS_DIR);
   // инструмент чтения по ключу — тот же MCP-сервер, что у раннера (без файлов: на странице только его описание)
-  const request = buildRequest(spec, phase, '', { cwd: req.cwd, runsDir: '', model: req.model }, access ? { dir: artDir, access, sources: [] } : undefined, known);
+  const request = buildRequest(spec, phase, '', { cwd: req.cwd, runsDir: '', model: req.model, ...(spaceDirs.length ? { spaceDirs } : {}) }, access ? { dir: artDir, access, sources: [] } : undefined, known);
   const plugins = request.plugins?.filter((d) => !missingPlugins.includes(d));
   const options = sessionOptions({ ...request, additionalDirectories: request.additionalDirectories.filter((d) => d !== artDir), plugins });
   if (access?.read.length) {
@@ -118,7 +138,7 @@ export function contextOptions(req: ContextRequest): ContextOptions {
         (access.implicit.length ? `. Только для своих артефактов добавлены ${access.implicit.join(', ')}.` : '.'),
     );
   }
-  const prompt = promptParts(phase, addDirs.map((d) => d.path), known);
+  const prompt = promptParts(phase, addDirs.map((d) => d.path), known, space);
   warnings.push(...promptWarnings(prompt));
   return { options, addDirs, knowledge, prompt, warnings };
 }
@@ -130,10 +150,11 @@ const VAR_RE = /\{\{\s*([a-z_]+(?:\.[A-Za-z0-9_.-]+)*)\s*\}\}/g;
  * handoff, доп. директории, строки тегов по запросу одной частью, каждый тег целиком — своей. Раздел артефактов и
  * вложения появляются только у запуска и сюда не входят.
  */
-export function promptParts(phase: Phase, dirs: string[], known: Tag[]): ContextPrompt {
+export function promptParts(phase: Phase, dirs: string[], known: Tag[], space?: Space): ContextPrompt {
   const parts: ContextPromptPart[] = [{ name: 'Промпт этапа (шаблон)', kind: 'prompt', chars: phase.prompt.length }];
   if (phase.handoff?.trim()) parts.push({ name: 'Чем закончить ответ (handoff)', kind: 'handoff', chars: handoffTail(phase.handoff).length });
   if (dirs.length) parts.push({ name: 'Список доп. директорий', kind: 'dirs', chars: dirsTail(dirs).length });
+  if (space) parts.push({ name: `Пространство ${space.slug}: шапка, документы, состояние`, kind: 'space', chars: spaceContext(space, { where: 'phase', mapLoaded: true }).length });
   const onDemand = known.filter((t) => !t.inline);
   if (onDemand.length) parts.push({ name: `Теги знаний по запросу: ${onDemand.map((t) => t.slug).join(', ')}`, kind: 'knowledge-lines', chars: knowledgeBlock(onDemand).length });
   for (const t of known.filter((t) => t.inline)) parts.push({ name: `Тег знаний ${t.slug} целиком`, kind: 'knowledge-inline', chars: knowledgeSection(t).length });
@@ -149,7 +170,7 @@ export function promptWarnings(p: ContextPrompt): string[] {
   if (inlineChars >= PROMPT_INLINE_MIN && inlineChars > p.chars * PROMPT_INLINE_SHARE) {
     out.push(
       `Теги знаний целиком (${inline.map((x) => x.name.replace(/^Тег знаний | целиком$/g, '')).join(', ')}) занимают ${Math.round((inlineChars / p.chars) * 100)}% промпта этапа ` +
-        `(${inlineChars} знаков) и уйдут в каждую итерацию. Сними у них «Всегда вставлять заметки в промпт целиком» на странице «Теги»: этап получит строку с описанием и откроет тег инструментом knowledge_read, когда понадобится.`,
+        `(${inlineChars} знаков) и уйдут в каждую итерацию. Сними у них «Всегда вставлять заметки в промпт целиком» на странице «Знания»: этап получит строку с описанием и откроет тег инструментом knowledge_read, когда понадобится.`,
     );
   }
   if (p.chars > PROMPT_CHARS_WARN) {
@@ -202,7 +223,7 @@ const editable = new Set<string>();
 /** Поколение данных: запись файла его меняет, и листинг, начатый до записи, в кэш уже не попадёт. */
 let gen = 0;
 
-const cacheKey = (r: ContextRequest) => [r.cwd, r.flow ?? '', r.phase ?? '', r.model ?? ''].join('|');
+const cacheKey = (r: ContextRequest) => [r.cwd, r.flow ?? '', r.phase ?? '', r.model ?? '', r.space ?? ''].join('|');
 
 export function getContext(req: ContextRequest & { force?: boolean }, deps: ContextDeps = { query }): Promise<ContextView> {
   const key = cacheKey(req);
@@ -290,6 +311,7 @@ async function fetchContext(req: ContextRequest, deps: ContextDeps): Promise<Con
       systemPromptText: custom ? [sp.prompt].flat().join('\n\n') : undefined,
       addDirs,
       knowledge,
+      ...(req.space ? { space: req.space } : {}),
       ...(prompt ? { prompt } : {}),
       warnings,
       at: new Date().toISOString(),

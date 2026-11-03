@@ -1,22 +1,25 @@
-// Страница «Сессии» /sessions (макет Sessions): новая сессия — папка, теги, «Дополнительно» (название, модель, режим
-// разрешений, саммари при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху.
-// ?tags=a,b — форма открыта с этими тегами (кнопка «Открыть сессию с тегом» на странице тега).
+// Страница «Сессии» /sessions (макет Sessions): новая сессия — папка, пространство, теги знаний, «Дополнительно»
+// (название, модель, режим разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые
+// сверху. ?space=x — форма открыта с этим пространством (кнопка «Новая сессия» на странице пространства), &cwd= — и с
+// папкой («Сессия в папке»); ?tags=a,b — с этими тегами знаний (кнопка на странице тега).
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { SessionPermissionMode, SessionView, TagKind } from '@server/api-types';
-import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useTags } from '../../api';
-import { continueSession, createSession, putSession, sessionKeys, summarizeSession, useSessions } from '../../api/sessions';
+import type { SessionPermissionMode, SessionView } from '@server/api-types';
+import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
+import { continueSession, createSession, putSession, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
-import { TagBadge } from '../../components/Badge';
+import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
+import { SpaceField } from '../../components/SpaceField';
 import { TagInput } from '../../components/TagInput';
 import { baseName, feedTime } from '../../lib/format';
 import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canSummarize, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { canUpdateState, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { SPACE_SLUG_RE } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import styles from './Sessions.module.css';
 
@@ -35,10 +38,14 @@ export function SessionsScreen() {
   const on = useFeature('sessions');
   const list = useSessions(on);
   const [params] = useSearchParams();
-  const preset = (params.get('tags') ?? '').split(',').map((s) => s.trim()).filter((s) => TAG_SLUG_RE.test(s));
+  const preset: Preset = {
+    tags: (params.get('tags') ?? '').split(',').map((s) => s.trim()).filter((s) => TAG_SLUG_RE.test(s)),
+    space: SPACE_SLUG_RE.test(params.get('space') ?? '') ? params.get('space')! : '',
+    cwd: params.get('cwd') ?? '',
+  };
   const sessions = list.data?.sessions ?? [];
   const [open, setOpen] = useState<boolean | null>(null);
-  const formOpen = open ?? (preset.length > 0 || (list.isSuccess && !sessions.length));
+  const formOpen = open ?? (preset.tags.length > 0 || Boolean(preset.space) || (list.isSuccess && !sessions.length));
   if (!on) {
     return (
       <div className="empty">
@@ -53,13 +60,13 @@ export function SessionsScreen() {
       <div className="view-head">
         <div>
           <h1>{t('Сессии')}</h1>
-          <p className="muted">{t('Обычная сессия Claude Code в терминале — без flow, но с контекстом тегов.')}</p>
+          <p className="muted">{t('Обычная сессия Claude Code в терминале — без flow, но в пространстве и с тегами знаний.')}</p>
         </div>
         <button type="button" className="btn" aria-expanded={formOpen} aria-controls="new-session" onClick={() => setOpen(!formOpen)}>
           {t('Новая сессия')}
         </button>
       </div>
-      {formOpen && <NewSession preset={preset} onCancel={() => setOpen(false)} full={list.data ? live >= list.data.max : false} max={list.data?.max ?? 0} />}
+      {formOpen && <NewSession key={`${preset.space}|${preset.cwd}|${preset.tags.join(',')}`} preset={preset} onCancel={() => setOpen(false)} full={list.data ? live >= list.data.max : false} max={list.data?.max ?? 0} />}
       <section className={styles.all} aria-label={t('Все сессии')}>
         <h2>{t('Все сессии')} <span className={styles.count}>{sessions.length}</span></h2>
         {list.error && <p className="msg err">{errorText(list.error)}</p>}
@@ -70,25 +77,27 @@ export function SessionsScreen() {
 }
 
 type Msg = { text: string; tone: '' | 'err' };
+type Preset = { tags: string[]; space: string; cwd: string };
 
-function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCancel: () => void; full: boolean; max: number }) {
+function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel: () => void; full: boolean; max: number }) {
   const config = useConfig().data;
   const qc = useQueryClient();
   const navigate = useNavigate();
   const recent = recentChips(useRecentDirs(useFeature('recent-dirs')).data ?? []);
   const tagList = useTags(true).data?.tags ?? [];
-  const [cwd, setCwd] = useState(() => LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '');
-  const [tags, setTags] = useState<string[]>(preset);
+  const spaceList = useSpaces(useFeature('spaces')).data?.spaces ?? [];
+  const [cwd, setCwd] = useState(() => preset.cwd || LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '');
+  const [space, setSpace] = useState(preset.space);
+  const [tags, setTags] = useState<string[]>(preset.tags);
   const [tagText, setTagText] = useState('');
-  const [kinds, setKinds] = useState<Map<string, TagKind>>(new Map());
   const [name, setName] = useState('');
   const [model, setModel] = useState('');
   const [mode, setMode] = useState<SessionPermissionMode | ''>('');
-  const [saveTag, setSaveTag] = useState(true);
+  const [saveState, setSaveState] = useState(true);
   const [msg, setMsg] = useState<Msg>({ text: '', tone: '' });
   const [busy, setBusy] = useState(false);
-  const kindOf = (slug: string): TagKind => kinds.get(slug) ?? tagList.find((x) => x.slug === slug)?.kind ?? 'task';
 
+  /** Тег знаний — только существующий: пустой из формы бесполезен, его заводят на странице «Знания». */
   const addTag = (raw: string) => {
     const slug = raw.trim();
     if (!slug) return;
@@ -96,11 +105,10 @@ function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCance
     setTagText('');
     setMsg({ text: '', tone: '' });
     if (tags.includes(slug)) return;
-    setTags((list) => [...list, slug]);
-    // вид тега — для чипа; нового тега ещё нет: заведётся тегом задачи
+    if (tagList.some((x) => x.slug === slug)) return setTags((list) => [...list, slug]);
     fetchTag(slug).then(
-      (r) => setKinds((m) => new Map(m).set(slug, r.kind)),
-      (err: unknown) => setMsg(err instanceof ApiError && err.status === 404 ? { text: t('{slug}: новый тег — заведётся тегом задачи', { slug }), tone: '' } : { text: errorText(err), tone: 'err' }),
+      () => setTags((list) => (list.includes(slug) ? list : [...list, slug])),
+      (err: unknown) => setMsg({ text: err instanceof ApiError && err.status === 404 ? t('Тега знаний {slug} нет: заведи его на странице «Знания»', { slug }) : errorText(err), tone: 'err' }),
     );
   };
 
@@ -113,18 +121,20 @@ function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCance
       // примерный размер терминала по окну: claude перерисуется под него при подключении
       const s = await createSession({
         cwd: cwd.trim(),
-        tags: tagText.trim() && TAG_SLUG_RE.test(tagText.trim()) && !tags.includes(tagText.trim()) ? [...tags, tagText.trim()] : tags,
+        ...(space.trim() ? { space: space.trim() } : {}),
+        tags,
         ...(name.trim() ? { name: name.trim() } : {}),
         ...(model ? { model } : {}),
         ...(mode ? { permissionMode: mode } : {}),
-        saveTag,
+        saveState,
         cols: Math.max(80, Math.floor((window.innerWidth - 380) / 8)),
         rows: Math.max(24, Math.floor((window.innerHeight - 190) / 17)),
       });
       LS.setRaw(CWD_KEY, s.cwd);
       qc.setQueryData(sessionKeys.one(s.id), s);
       void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
-      void qc.invalidateQueries({ queryKey: keys.tags });
+      // новый слаг сервер завёл пустым пространством: подсказки и страница «Пространства» — заново
+      void qc.invalidateQueries({ queryKey: keys.spaces });
       void navigate(`/sessions/${s.id}`);
     } catch (err) {
       setMsg({ text: errorText(err), tone: 'err' });
@@ -150,28 +160,29 @@ function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCance
           ))}
         </div>
       )}
+      <SpaceField listId="new-session-spaces" className={styles.tags} value={space} onChange={setSpace} options={spaceList} />
       <div className={styles.tags}>
         <TagInput
-          label={t('Теги')}
+          label={t('Теги знаний')}
           listId="new-session-tags"
           options={tagList.filter((x) => !tags.includes(x.slug))}
-          placeholder={t('впиши тег или новый слаг и нажми Enter')}
+          placeholder={t('правила для этой работы: выбери тег знаний и нажми Enter')}
           text={tagText}
           onText={setTagText}
           onAdd={addTag}
           tags={tags}
-          kindOf={kindOf}
+          kindOf={() => 'knowledge'}
           onRemove={(slug) => setTags((list) => list.filter((x) => x !== slug))}
           removeTitle={t('Убрать тег')}
         />
-        <p className="muted small">{t('Теги задач: их заметки и саммари уходят в начало сессии. Теги знаний: строка в контексте, полный текст — по запросу. Новый слаг станет тегом задачи. Можно и без тегов.')}</p>
+        <p className="muted small">{t('Строка каждого тега — в контексте, полный текст Claude возьмёт инструментом knowledge_read. Можно и без тегов.')}</p>
       </div>
       <details className={styles.more}>
         <summary>{t('Дополнительно')}</summary>
         <div className={styles.moreBody}>
           <label>
             <span>{t('Название')}</span>
-            <input name="name" placeholder={tags.join(' · ') || baseName(cwd) || t('по тегам или папке')} value={name} onChange={(e) => setName(e.target.value)} />
+            <input name="name" placeholder={[space.trim(), ...tags].filter(Boolean).join(' · ') || baseName(cwd) || t('по пространству или папке')} value={name} onChange={(e) => setName(e.target.value)} />
           </label>
           <label>
             <span>{t('Модель')}</span>
@@ -188,10 +199,10 @@ function NewSession({ preset, onCancel, full, max }: { preset: string[]; onCance
           </label>
         </div>
         <label className={styles.check}>
-          <input type="checkbox" checked={saveTag} onChange={(e) => setSaveTag(e.target.checked)} />
+          <input type="checkbox" checked={saveState} onChange={(e) => setSaveState(e.target.checked)} />
           <span>
-            <span>{t('Обновлять саммари тегов задач при выходе')}</span>
-            <span className="muted small">{t('Короткая сессия haiku на каждый тег задачи, как после запуска flow. Можно и вручную — кнопкой в сессии.')}</span>
+            <span>{t('Обновлять состояние пространства при выходе')}</span>
+            <span className="muted small">{t('Короткая сессия haiku перепишет «где мы сейчас» по ходам этой сессии, как после запуска flow. Можно и вручную — кнопкой в сессии.')}</span>
           </span>
         </label>
       </details>
@@ -230,7 +241,7 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
           <tr>
             <th scope="col">{t('Статус')}</th>
             <th scope="col">{t('Название')}</th>
-            <th scope="col">{t('Теги')}</th>
+            <th scope="col">{t('Пространство и теги')}</th>
             <th scope="col">{t('Папка')}</th>
             <th scope="col" className={styles.num}>{t('Ходов')}</th>
             <th scope="col">{t('Активность')}</th>
@@ -243,9 +254,14 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
               <td><span className={cx(styles.status, styles[sessionTone(s)])}><span className={styles.dot} aria-hidden="true" />{sessionStatusLabel(s)}</span></td>
               <td className={styles.name}>
                 <Link to={`/sessions/${s.id}`} title={s.name}>{s.name}</Link>
-                {s.summaryPending && <span className={styles.pending}>{t('саммари не обновлено: приложение закрыли')}</span>}
+                {s.statePending && <span className={styles.pending}>{t('состояние не обновлено: приложение закрыли')}</span>}
               </td>
-              <td><span className={styles.tagList}>{s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind={c.kind} />)}</span></td>
+              <td>
+                <span className={styles.tagList}>
+                  {s.space && <SpaceBadge slug={s.space} link />}
+                  {s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind="knowledge" />)}
+                </span>
+              </td>
               <td className={styles.dir} title={tildePath(s.cwd, home)}>{baseName(s.cwd)}</td>
               <td className={styles.num}>{s.turns}</td>
               <td className={styles.when}>{s.status === 'working' ? t('сейчас') : feedTime(s.lastActivityAt)}</td>
@@ -254,10 +270,10 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
                   <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
                 ) : (
                   <span className={styles.acts}>
-                    {s.summaryPending && canSummarize(s).ok && (
-                      <button type="button" className="btn small" disabled={busy === s.id} onClick={() => void run(s.id, () => summarizeSession(s.id), false)}>{t('Обновить саммари')}</button>
+                    {s.statePending && canUpdateState(s).ok && (
+                      <button type="button" className="btn small" disabled={busy === s.id} onClick={() => void run(s.id, () => updateSessionState(s.id), false)}>{t('Обновить состояние')}</button>
                     )}
-                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
+                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
                       {t('Продолжить')}
                     </button>
                   </span>

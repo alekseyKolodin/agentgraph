@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import { pickRunTitle } from './run-title.js';
-import { withTagsInput } from './tags.js';
+/** Ввод старого запуска: блоки тегов задач (их до пространств вставлял сервер) перед самой задачей. */
+const withTagsInput = (task: string, tags: { slug: string; summary: string }[]) =>
+  [...tags.map((t) => `<!-- tag:${t.slug} -->\nТег задачи: ${t.slug}\n<source-data>\n${t.summary}\n</source-data>\n<!-- /tag -->`), task].filter(Boolean).join('\n\n');
 import type { SessionRequest, SessionResult } from './agent.js';
 
 const result = (over: Partial<SessionResult> = {}): SessionResult =>

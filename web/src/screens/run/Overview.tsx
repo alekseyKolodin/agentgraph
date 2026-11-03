@@ -4,9 +4,9 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode 
 import { Link } from 'react-router';
 import type { ConditionReport, PhaseReport, RunNote, RunReport } from '@server/api-types';
 import { fetchRunFile, setMaxIterations, errorText } from '../../api';
-import { Badge, TagBadge } from '../../components/Badge';
+import { Badge, SpaceBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { openRunFile, openTagSummary } from '../../components/file/FileDialog';
+import { openRunFile, openSpaceState } from '../../components/file/FileDialog';
 import { SafeMarkdown } from '../../components/MdText';
 import { PathText } from '../../components/PathLink';
 import { AnsweredCard } from '../../components/question/QuestionCard';
@@ -19,7 +19,7 @@ import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
   blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, phaseSpent, spentChipInfo, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
-  runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
+  runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
 import { art } from './artStore';
@@ -380,7 +380,7 @@ function RunFinal({ r }: { r: RunReport }) {
   const multi = blocks.length > 1;
   const facts = finalFacts(r);
   const fb = finalFeedback(r);
-  const tags = r.tags?.length || r.autoTag?.error ? tagFinalLines(r) : null;
+  const spaces = r.space || r.tags?.length || r.autoSpace?.error || r.autoTag?.error ? stateFinalLines(r) : null;
   const final = r.final ?? [];
   return (
     <div>
@@ -398,16 +398,16 @@ function RunFinal({ r }: { r: RunReport }) {
         )}
         {r.error && <div className="error">{r.error}</div>}
         {art.on && r.artifacts && <ArtFinalLine />}
-        {tags?.autoTagError && <div className={styles.tagLine}><span className="warn">{t('Тег не заведён: {why}', { why: tags.autoTagError })}</span></div>}
-        {tags?.lines.map((l) => (
-          <div key={l.tag} className={styles.tagLine}>
-            <Link to={`/tags/${l.tag}`}><TagBadge slug={l.tag} /></Link>
-            {l.auto && <span className="muted small">{t('заведён автоматически')}</span>}
+        {spaces?.autoError && <div className={styles.tagLine}><span className="warn">{t('Пространство не заведено: {why}', { why: spaces.autoError })}</span></div>}
+        {spaces?.lines.map((l) => (
+          <div key={l.space} className={styles.tagLine}>
+            <SpaceBadge slug={l.space} link />
+            {l.auto && <span className="muted small">{t('заведено автоматически')}</span>}
             {l.state === 'ok' ? (
               <>
                 <span className="ok">{l.text}</span>
                 <span className="muted">{`≈${usd(l.costUsd)}`}</span>
-                <button className="btn small" onClick={() => void openTagSummary(l.tag)}>{t('саммари')}</button>
+                <button className="btn small" onClick={() => void openSpaceState(l.space)}>{t('состояние')}</button>
               </>
             ) : <span className={l.state === 'error' ? 'warn' : 'muted'}>{l.text}</span>}
           </div>

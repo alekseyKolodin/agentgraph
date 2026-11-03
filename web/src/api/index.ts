@@ -16,4 +16,7 @@ export {
   runAnalysis, runFileUrl, saveRunFlow, saveArtifact, setMaxIterations, stopChat, type RunFlowView,
 } from './run';
 export { addTagAttachment, createTag, deleteTag, deleteTagAttachment, fetchTags, saveTag } from './tags';
+export {
+  addSpaceDoc, createSpace, deleteSpace, deleteSpaceDoc, fetchSpace, fetchSpaceContext, fetchSpaceDoc, fetchSpaces, saveSpace, saveSpaceDoc, useSpaces,
+} from './spaces';
 export { fetchContext, fetchContextFile, saveContextFile } from './context';

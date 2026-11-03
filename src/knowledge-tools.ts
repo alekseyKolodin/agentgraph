@@ -1,7 +1,7 @@
 // Инструмент чтения тегов знаний по запросу: MCP-сервер внутри процесса на сессию этапа (как artifact-tools.ts у артефактов).
 // В промпт этапа идёт по строке на тег знаний (knowledgeBlock в tags.ts), а полный текст — заметки, пути и вложения — этап
 // получает knowledge_read со слагом, когда он ему понадобился. Только теги знаний своего блока и только чтение.
-// Тег читается с диска при каждом вызове: правки на странице «Теги» во время запуска видны сразу.
+// Тег читается с диска при каждом вызове: правки на странице «Знания» во время запуска видны сразу.
 import path from 'node:path';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
@@ -33,7 +33,7 @@ export function knowledgeReadText(slugs: string[], slug: string, where: 'phase' 
   const paths = existingTagPaths(tag).listed;
   if (paths.length) body.push(`Пути (только чтение): ${paths.join(', ')}`);
   if (tag.attachments.length) body.push('Вложения (открой инструментом Read):', ...tag.attachments.map((f) => `- ${path.join(attachDir(slug), f)}`));
-  if (body.length === 1) body.push('Тег пуст: заполни заметки, пути или вложения на странице «Теги».');
+  if (body.length === 1) body.push('Тег пуст: заполни заметки, пути или вложения на странице «Знания».');
   return body.join('\n');
 }
 

@@ -382,9 +382,9 @@ test(
     process.env.AGENTGRAPH_CONFIG_DIR = path.join(dir, 'cfg');
     try {
       const { createTag, updateTag } = await import('./tags.js');
-      createTag('qa', 'QA', 'knowledge');
+      createTag('qa', 'QA');
       updateTag('qa', { description: 'правила проверки', notes: 'коротко' });
-      createTag('big', 'Большой', 'knowledge');
+      createTag('big', 'Большой');
       updateTag('big', { notes: 'x'.repeat(3000), inline: true });
       const cwd = path.join(dir, 'proj');
       fs.mkdirSync(path.join(cwd, 'extra'), { recursive: true });

@@ -12,7 +12,8 @@ import { startServer, stopServer } from './server.js';
 import { SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
-import { createTag, queueTagSummary, readTag, updateTag } from './tags.js';
+import { createTag, tagDir, updateTag } from './tags.js';
+import { createSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 
 class FakePty implements PtyProcess {
@@ -53,11 +54,11 @@ class FakePty implements PtyProcess {
 }
 
 const spawned: FakePty[] = [];
-/** Сессии саммари тегов: настоящий Agent SDK не вызывается, ответ — готовое саммари. */
+/** Сессии состояния пространства: настоящий Agent SDK не вызывается, ответ — готовое состояние. */
 const summaries: SessionRequest[] = [];
 const fakeSummary = async (req: SessionRequest): Promise<SessionResult> => {
   summaries.push(req);
-  return { ok: true, subtype: 'success', text: '', structured: { summary: `саммари №${summaries.length}` }, costUsd: 0.01, turns: 1, durationMs: 1, errors: [] };
+  return { ok: true, subtype: 'success', text: '', structured: { state: `состояние №${summaries.length}` }, costUsd: 0.01, turns: 1, durationMs: 1, errors: [] };
 };
 const kit: PtyKit = {
   spawn: (file, args, opts) => {
@@ -132,11 +133,11 @@ test('фича sessions есть в /api/config, когда pty загрузил
   assert.ok(r.body.features.includes('sessions'));
 });
 
-test('создание: claude без shell в папке проекта, окружение без маркеров хоста, теги ждут SessionStart', async () => {
-  createTag('checkout', 'Корзина');
-  updateTag('checkout', { notes: 'Пустая корзина падает' });
-  const r = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['checkout', 'new-one'], cols: 100, rows: 30 });
-  assert.equal(r.status, 201);
+test('создание: claude без shell в папке проекта, окружение без маркеров хоста; новое пространство заводится, его папка — в --add-dir, контекст ждёт SessionStart', async () => {
+  createTag('rules', 'Правила');
+  updateTag('rules', { notes: 'Пиши тесты' });
+  const r = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'checkout', tags: ['rules'], cols: 100, rows: 30 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
   const p = spawned.at(-1)!;
   assert.equal(p.file, '/fake/bin/claude');
   assert.equal(p.args[0], `--session-id=${r.body.id}`);
@@ -145,25 +146,43 @@ test('создание: claude без shell в папке проекта, окр
   assert.equal(p.opts.env.CLAUDECODE, undefined);
   assert.equal(p.opts.env.CLAUDE_CODE_ENTRYPOINT, undefined);
   assert.equal(p.opts.env.CLAUDE_CODE_OAUTH_TOKEN, 'keep');
-  assert.deepEqual([r.body.status, r.body.live, r.body.name], ['starting', true, 'checkout · new-one']);
-  assert.deepEqual(r.body.chips, [{ slug: 'checkout', kind: 'task', state: 'pending' }, { slug: 'new-one', kind: 'task', state: 'pending' }]);
+  // карта пространства — родным механизмом: его папка в --add-dir, CLAUDE.md из доп. папок включён
+  const addDirs = p.args.flatMap((a, i) => (a === '--add-dir' ? [p.args[i + 1]] : []));
+  assert.ok(addDirs.includes(spaceDir('checkout')), addDirs.join('\n'));
+  assert.equal(p.opts.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, '1');
+  // и закрыта для записи вместе со всей папкой пространств
+  const deny: string[] = JSON.parse(p.args[p.args.indexOf('--settings') + 1]).permissions.deny;
+  assert.ok(deny.includes(`Edit(/${path.dirname(spaceDir('checkout'))}/**)`), deny.join('\n'));
+  assert.deepEqual([r.body.status, r.body.live, r.body.name, r.body.space, r.body.saveState], ['starting', true, 'checkout · rules', 'checkout', true]);
+  assert.deepEqual(r.body.chips, [{ slug: 'rules', state: 'pending' }]);
+  assert.deepEqual(r.body.spaceChip, { slug: 'checkout', state: 'pending' });
   assert.ok(fs.existsSync(path.join(root, 'sessions', r.body.id, 'session.json')));
-  // новый слаг завёлся тегом задачи
-  assert.equal((await call<{ kind: string }>('GET', '/api/tags/new-one')).body.kind, 'task');
+  assert.equal((await call('GET', '/api/spaces/checkout')).status, 200);
   await until(async () => (await view(r.body.id)).claudeVersion === '2.1.311');
 });
 
-test('ошибки создания: нет папки, лишний режим разрешений — 400, на диске ничего не остаётся', async () => {
+test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
   const before = spawned.length;
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'нет') })).status, 400);
-  const bad = await call<{ error: string }>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['zz-new'], permissionMode: 'bypassPermissions' });
+  const bad = await call<{ error: string }>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'zz-new', permissionMode: 'bypassPermissions' });
   assert.equal(bad.status, 400);
-  assert.equal((await call('GET', '/api/tags/zz-new')).status, 404);
+  assert.equal((await call('GET', '/api/spaces/zz-new')).status, 404);
+  const missing = await call<{ error: string }>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['zz-tag'] });
+  assert.deepEqual([missing.status, /Тега знаний zz-tag нет/.test(missing.body.error)], [400, true]);
+  fs.mkdirSync(tagDir('zz-task'), { recursive: true });
+  fs.writeFileSync(path.join(tagDir('zz-task'), 'tag.json'), JSON.stringify({ slug: 'zz-task', kind: 'task', createdAt: '', updatedAt: '', runs: [] }));
+  const task = await call<{ error: string }>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['zz-task'] });
+  assert.deepEqual([task.status, /выбери пространство zz-task/.test(task.body.error)], [400, true]);
+  assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'proj'), saveTag: true })).status, 400);
+  assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: '../x' })).status, 400);
   assert.equal(spawned.length, before);
 });
 
-test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, тег на ходу ждёт следующего шага', async () => {
-  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['checkout'] });
+test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, пространство и тег на ходу ждут следующего шага', async () => {
+  createSpace('hk-space', { title: 'Корзина', gist: 'Пустая корзина падает' });
+  writeSpaceState('hk-space', 'Суть: корзина', { id: 'r0', at: '', kind: 'run' });
+  createTag('checkout');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'hk-space', tags: ['checkout'] });
   const p = spawned.at(-1)!;
   const token = tokenOf(p);
   assert.equal((await hook(s.id, 'f'.repeat(64), { hook_event_name: 'SessionStart' })).status, 404);
@@ -172,19 +191,28 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   const start = await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id, transcript_path: `/t/${s.id}.jsonl` });
   assert.equal(start.status, 200);
-  assert.ok(JSON.stringify(start.body).includes('Пустая корзина падает'));
+  const first = (start.body.hookSpecificOutput as { additionalContext: string }).additionalContext;
+  assert.ok(first.includes('Пространство agentgraph «Корзина» (hk-space)') && first.includes('уже в контексте как память') && first.includes('Суть: корзина'));
   let v = await view(s.id);
-  assert.deepEqual([v.status, v.chips], ['waiting', [{ slug: 'checkout', kind: 'task', state: 'on' }]]);
+  assert.deepEqual([v.status, v.chips, v.spaceChip], ['waiting', [{ slug: 'checkout', state: 'on' }], { slug: 'hk-space', state: 'on' }]);
 
   createTag('billing');
   v = (await call<SessionView>('PUT', `/api/sessions/${s.id}/tags`, { tags: ['billing'] })).body;
-  assert.deepEqual(v.chips, [{ slug: 'billing', kind: 'task', state: 'pending' }, { slug: 'checkout', kind: 'task', state: 'removed' }]);
+  assert.deepEqual(v.chips, [{ slug: 'billing', state: 'pending' }, { slug: 'checkout', state: 'removed' }]);
+  // пространство на ходу: новое слаг — пустое пространство, чип ждёт следующего шага
+  v = (await call<SessionView>('PUT', `/api/sessions/${s.id}/space`, { space: 'hk-other' })).body;
+  assert.deepEqual([v.space, v.spaceChip], ['hk-other', { slug: 'hk-other', state: 'pending' }]);
+  assert.equal((await call('PUT', `/api/sessions/${s.id}/space`, { space: '../x' })).status, 400);
 
   const prompt = await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'почини', session_id: s.id });
   const ctx = (prompt.body.hookSpecificOutput as { additionalContext: string }).additionalContext;
-  assert.ok(ctx.includes('Тег задачи: billing') && ctx.includes('Тег checkout снят'));
+  assert.ok(ctx.includes('- billing: описания нет') && ctx.includes('Тег checkout снят'), ctx);
+  assert.ok(ctx.includes('Пространство hk-space снято') && ctx.includes('Пространство agentgraph hk-other') && ctx.includes('прочитай её инструментом Read') === false, ctx);
   v = await view(s.id);
-  assert.deepEqual([v.status, v.turns, v.chips], ['working', 1, [{ slug: 'billing', kind: 'task', state: 'on' }]]);
+  assert.deepEqual([v.status, v.turns, v.chips, v.spaceChip], ['working', 1, [{ slug: 'billing', state: 'on' }], { slug: 'hk-other', state: 'on' }]);
+  // снять пространство: снятие ждёт следующего шага
+  v = (await call<SessionView>('PUT', `/api/sessions/${s.id}/space`, { space: null })).body;
+  assert.deepEqual([v.space, v.spaceChip], [undefined, { slug: 'hk-other', state: 'removed' }]);
 
   // /clear: SessionEnd с reason clear сессию не завершает
   await hook(s.id, token, { hook_event_name: 'SessionEnd', reason: 'clear', session_id: s.id });
@@ -202,10 +230,11 @@ test('хуки: чужой токен и без токена — 404; SessionSta
   assert.deepEqual([v.status, v.live, v.exitCode, v.outcome], ['ended', false, 129, undefined]);
 });
 
-test('session_new: новая сессия из терминала — папка, теги и модель как у этой, режим — всегда этой; экран этой получает ссылку', async () => {
+test('session_new: новая сессия из терминала — папка, пространство, теги и модель как у этой, режим — всегда этой; экран этой получает ссылку', async () => {
   createTag('cart', 'Корзина');
+  createSpace('sn-space');
   fs.mkdirSync(path.join(root, 'api'), { recursive: true });
-  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['cart'], model: 'sonnet', permissionMode: 'plan', cols: 110, rows: 33 });
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'sn-space', tags: ['cart'], model: 'sonnet', permissionMode: 'plan', cols: 110, rows: 33 });
   const token = tokenOf(spawned.at(-1)!);
   const ws = new WebSocket(`ws://127.0.0.1:${port}/api/sessions/${s.id}/ws`, { origin: `http://127.0.0.1:${port}` });
   const got: SessionWsServer[] = [];
@@ -229,14 +258,19 @@ test('session_new: новая сессия из терминала — папк�
   assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'plan');
   await until(() => got.some((m) => m.t === 'opened'));
   const opened = got.find((m) => m.t === 'opened') as Extract<SessionWsServer, { t: 'opened' }>;
-  assert.deepEqual([opened.session.cwd, opened.session.tags, opened.session.live], [path.join(root, 'api'), ['cart'], true]);
+  assert.deepEqual([opened.session.cwd, opened.session.space, opened.session.tags, opened.session.live], [path.join(root, 'api'), 'sn-space', ['cart'], true]);
   assert.match(ok.content[0].text, new RegExp(`^Сессия «${opened.session.name}» открыта`));
 
-  // теги — только существующие: опечатка не заводит пустой тег; [] — без тегов
+  // теги и пространство — только существующие: опечатка не заводит пустое; [] и null — без них
   const typo = await tool({ tags: ['cart', 'no-such-tag'] });
-  assert.deepEqual([typo.isError, typo.content[0].text], [true, 'Тегов no-such-tag в agentgraph нет: новой сессии можно дать только существующие']);
+  assert.deepEqual([typo.isError, /Тега знаний no-such-tag нет/.test(typo.content[0].text)], [true, true]);
   assert.equal((await call('GET', '/api/tags/no-such-tag')).status, 404);
   assert.equal((await tool({ tags: ['../x'] })).isError, true);
+  const noSpace = await tool({ space: 'no-such-space' });
+  assert.deepEqual([noSpace.isError, /Пространства no-such-space в agentgraph нет/.test(noSpace.content[0].text)], [true, true]);
+  assert.equal((await call('GET', '/api/spaces/no-such-space')).status, 404);
+  assert.equal((await tool({ space: null, tags: [] })).isError, undefined);
+  assert.equal(spawned.at(-1)!.args.some((a) => a === spaceDir('sn-space')), false);
   // режим переключили Shift+Tab (хук принёс default) — новая сессия получает текущий: manual
   await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'x', session_id: s.id, permission_mode: 'default' });
   assert.equal((await tool({ tags: [], model: 'haiku' })).isError, undefined);
@@ -317,10 +351,10 @@ test('WebSocket: чужой Origin, без Origin и чужой Host — отк�
 
 const uuid = (n: number) => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`;
 
-test('журнал ходов и саммари при выходе: сессия haiku на каждый тег задачи, запись в тег как сессия, ходы учтены', async () => {
-  createTag('sum-task');
-  createTag('sum-know', undefined, 'knowledge');
-  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['sum-task', 'sum-know'], name: 'корзина' });
+test('журнал ходов и состояние при выходе: сессия haiku пишет STATE.md пространства как сессия, ходы учтены', async () => {
+  createSpace('sum-space', { title: 'Корзина' });
+  createTag('sum-know');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'sum-space', tags: ['sum-know'], name: 'корзина' });
   const p = spawned.at(-1)!;
   const token = tokenOf(p);
   await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: uuid(1), transcript_path: path.join(root, `${uuid(1)}.jsonl`) });
@@ -329,19 +363,45 @@ test('журнал ходов и саммари при выходе: сесси�
   assert.equal((await view(s.id)).newTurns, 1);
   const before = summaries.length;
   p.exit(0);
-  await until(async () => Boolean((await view(s.id)).summary));
+  await until(async () => Boolean((await view(s.id)).stateUpdate));
   const v = await view(s.id);
-  assert.deepEqual([v.summary?.tags, v.summary?.errors, v.newTurns, v.summarizing], [['sum-task'], undefined, 0, undefined]);
-  // тег знаний саммари не получает; в промпте — ход сессии, без транскрипта
+  assert.deepEqual([v.stateUpdate?.space, v.stateUpdate?.ok, v.stateUpdate?.error, v.newTurns, v.updatingState], ['sum-space', true, undefined, 0, undefined]);
+  // одна сессия состояния на пространство; в промпте — ход сессии и карта, без транскрипта
   assert.equal(summaries.length, before + 1);
   const req = summaries.at(-1)!;
   assert.ok(req.prompt.includes('почини пустую корзину') && req.prompt.includes('Поправил validate.ts') && !req.prompt.includes(`${uuid(1)}.jsonl`));
+  assert.ok(req.prompt.includes(path.join(spaceDir('sum-space'), 'CLAUDE.md')));
   assert.equal(req.model, 'haiku');
-  const tag = readTag('sum-task')!;
-  assert.equal(tag.summary.trim(), `саммари №${summaries.length}`);
-  assert.deepEqual({ ...tag.runs[0], finishedAt: '' }, { id: s.id, flow: 'session', finishedAt: '', status: 'done', kind: 'session', title: 'корзина' });
-  // новых ходов нет — кнопке нечего делать
-  assert.equal((await call('POST', `/api/sessions/${s.id}/summary`)).status, 409);
+  const space = readSpace('sum-space')!;
+  assert.equal(space.state.trim(), `состояние №${summaries.length}`);
+  assert.deepEqual({ ...space.history[0], at: '' }, { id: s.id, at: '', kind: 'session', title: 'корзина' });
+  // новых ходов нет — кнопке нечего делать; без пространства — тоже 409
+  assert.equal((await call('POST', `/api/sessions/${s.id}/state`)).status, 409);
+  // страница пространства видит сессию
+  const detail = (await call<{ sessions: { id: string }[] }>('GET', '/api/spaces/sum-space')).body;
+  assert.ok(detail.sessions.some((x) => x.id === s.id));
+});
+
+test('space_write из терминала: документ в docs/ пространства сессии; без пространства, CLAUDE.md и путь наружу — ошибка текстом', async () => {
+  createSpace('sw-space');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'sw-space' });
+  const token = tokenOf(spawned.at(-1)!);
+  const write = async (args: Record<string, unknown>) =>
+    (await call<{ result: { content: Array<{ text: string }>; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'space_write', arguments: args } }, { 'X-Agentgraph-Session': token })).body.result;
+  const ok = await write({ name: 'decisions.md', text: '# Решения\nвыбрали X' });
+  assert.equal(ok.isError, undefined, ok.content[0].text);
+  assert.equal(fs.readFileSync(path.join(spaceDir('sw-space'), 'docs', 'decisions.md'), 'utf8'), '# Решения\nвыбрали X');
+  for (const bad of [{ name: 'CLAUDE.md', text: 'x' }, { name: '../space.json', text: '{}' }, { name: 'x.json', text: '{}' }]) {
+    assert.equal((await write(bad)).isError, true, JSON.stringify(bad));
+  }
+  assert.ok(!fs.existsSync(path.join(spaceDir('sw-space'), 'docs', 'CLAUDE.md')));
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: null });
+  const none = await write({ name: 'a.md', text: 'x' });
+  assert.deepEqual([none.isError, /нет пространства/.test(none.content[0].text)], [true, true]);
+  // PreToolUse на space_write — «спросить» даже в auto
+  const pre = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__space_write', permission_mode: 'auto' });
+  assert.equal((pre.body.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask');
+  await call('POST', `/api/sessions/${s.id}/end`);
 });
 
 test('«Продолжить»: транскрипта нет — новый разговор, есть — --resume последнего; открытый экран переходит к новому процессу', async () => {
@@ -382,7 +442,7 @@ test('«Продолжить»: транскрипта нет — новый р�
   await call('POST', `/api/sessions/${s.id}/end`);
 });
 
-test('«Перезапустить с тегами»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками, саммари не пишется', async () => {
+test('«Перезапустить»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками (пространство на ходу — в --add-dir), состояние не пишется', async () => {
   createTag('rs-task');
   const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: ['rs-task'] });
   const old = spawned.at(-1)!;
@@ -392,15 +452,20 @@ test('«Перезапустить с тегами»: старый процес�
   await hook(s.id, tokenOf(old), { hook_event_name: 'UserPromptSubmit', session_id: uuid(3), prompt: 'шаг' });
   const specs = path.join(root, 'rs-specs');
   fs.mkdirSync(specs, { recursive: true });
-  createTag('rs-know', undefined, 'knowledge');
+  createTag('rs-know');
   updateTag('rs-know', { dirs: [specs] });
   await call('PUT', `/api/sessions/${s.id}/tags`, { tags: ['rs-task', 'rs-know'] });
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: 'rs-space' });
   const before = summaries.length;
   const r = await call<SessionView>('POST', `/api/sessions/${s.id}/restart`);
   assert.deepEqual([r.status, r.body.live], [200, true]);
   const fresh = spawned.at(-1)!;
   assert.deepEqual([old.killed, fresh.args[0]], [['SIGHUP'], `--resume=${uuid(3)}`]);
   assert.ok(fresh.args.includes(specs));
+  assert.ok(fresh.args.includes(spaceDir('rs-space')));
+  // после перезапуска карта нового пространства — уже память: SessionStart говорит «уже в контексте»
+  const restarted = await hook(s.id, tokenOf(fresh), { hook_event_name: 'SessionStart', session_id: uuid(3), transcript_path: tp });
+  assert.match((restarted.body.hookSpecificOutput as { additionalContext: string }).additionalContext, /Пространство agentgraph rs-space/);
   assert.notEqual(tokenOf(fresh), tokenOf(old));
   // старый токен больше не открывает хуки
   assert.equal((await hook(s.id, tokenOf(old), { hook_event_name: 'Stop' })).status, 404);
@@ -408,7 +473,7 @@ test('«Перезапустить с тегами»: старый процес�
   assert.equal(summaries.length, before);
   assert.equal((await view(s.id)).newTurns, 1);
   await call('POST', `/api/sessions/${s.id}/end`);
-  await until(async () => (await view(s.id)).summary !== undefined);
+  await until(async () => (await view(s.id)).stateUpdate !== undefined);
   assert.equal(summaries.length, before + 1);
 });
 
@@ -450,40 +515,54 @@ test('остановка сервера: новые сессии после stop
   await assert.rejects(mgr.create({ cwd: path.join(root, 'proj') }, port, root), (err: unknown) => err instanceof SessionError && err.status === 503);
 });
 
-test('выход приложения: саммари не пишется, у сессии пометка; после перезапуска сервера сессии с диска — завершённые', async () => {
+test('выход приложения: состояние не пишется, у сессии пометка; после перезапуска сервера сессии с диска — завершённые, старая запись с тегом задачи — с пространством', async () => {
   const dir = path.join(root, 'sessions-restart');
   const deps = { ...sessionManager().deps, dir };
   const mgr = new SessionManager(deps);
   await mgr.available();
-  createTag('app-task');
-  const v = await mgr.create({ cwd: path.join(root, 'proj'), tags: ['app-task'] }, port, root);
+  createSpace('app-space');
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), space: 'app-space' }, port, root);
   const live = mgr.sessions.get(v.id)!;
   const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
   mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(4), prompt: 'шаг' }, res);
   const before = summaries.length;
   await mgr.stopAll(1000);
   assert.equal(summaries.length, before);
-  assert.equal(mgr.view(live).summaryPending, 'app-closed');
-  // сервер упал, пока шла другая сессия: в session.json нет endedAt
+  assert.equal(mgr.view(live).statePending, 'app-closed');
+  // сервер упал, пока шла другая сессия — запись до пространств: тег задачи (перенесётся в пространство), тег знаний,
+  // saveTag и итог саммари; в session.json нет endedAt
+  fs.mkdirSync(tagDir('app-legacy'), { recursive: true });
+  fs.writeFileSync(path.join(tagDir('app-legacy'), 'tag.json'), JSON.stringify({ slug: 'app-legacy', kind: 'task', createdAt: '', updatedAt: '', runs: [] }));
+  // перенос идёт раз на процесс, а тег появился после него: как при следующем старте сервера
+  migrateTaskTags({ force: true });
+  createTag('app-know');
   const crashed = uuid(5);
   fs.mkdirSync(path.join(dir, crashed));
-  fs.writeFileSync(path.join(dir, crashed, 'session.json'), JSON.stringify({ id: crashed, name: 'упавшая', cwd: root, tags: ['app-task'], saveTag: true, claudeSessionIds: [], createdAt: '2026-10-27T10:00:00.000Z', lastActivityAt: '2026-10-27T11:00:00.000Z', turns: 2 }));
+  fs.writeFileSync(path.join(dir, crashed, 'session.json'), JSON.stringify({
+    id: crashed, name: 'упавшая', cwd: root, tags: ['app-know', 'app-legacy'], saveTag: true, claudeSessionIds: [], createdAt: '2026-10-27T10:00:00.000Z', lastActivityAt: '2026-10-27T11:00:00.000Z', turns: 2,
+    summary: { at: '2026-10-27T10:30:00.000Z', tags: ['app-legacy'], costUsd: 0.01 }, summarizedTurns: 1,
+  }));
   fs.mkdirSync(path.join(dir, 'not-a-session'));
   fs.writeFileSync(path.join(dir, uuid(6) + '.json'), '{}');
 
   const next = new SessionManager(deps);
   assert.equal(await next.available(), true);
   const list = next.list().sessions;
-  assert.deepEqual(list.map((x) => [x.id, x.live, x.status, x.summaryPending]).sort(), [[crashed, false, 'ended', 'app-closed'], [v.id, false, 'ended', 'app-closed']].sort());
-  assert.equal(list.find((x) => x.id === crashed)?.endedAt, '2026-10-27T11:00:00.000Z');
-  // «Обновить саммари» по завершённой — по журналу ходов
-  next.startSummary(v.id);
-  await until(() => next.view(next.get(v.id)).summary !== undefined);
-  assert.equal(next.view(next.get(v.id)).summaryPending, undefined);
+  assert.deepEqual(list.map((x) => [x.id, x.live, x.status, x.statePending]).sort(), [[crashed, false, 'ended', 'app-closed'], [v.id, false, 'ended', 'app-closed']].sort());
+  const old = list.find((x) => x.id === crashed)!;
+  assert.equal(old.endedAt, '2026-10-27T11:00:00.000Z');
+  assert.deepEqual([old.space, old.tags, old.saveState, old.newTurns, old.stateUpdate?.ok], ['app-legacy', ['app-know'], true, 1, true]);
+  assert.deepEqual(next.spaceSessions('app-legacy').map((x) => [x.id, x.legacy]), [[crashed, true]]);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, crashed, 'session.json'), 'utf8'));
+  assert.deepEqual([saved.space, saved.legacyTaskTags, saved.saveState, 'saveTag' in saved, 'summary' in saved], ['app-legacy', ['app-legacy'], true, false, false]);
+  // «Обновить состояние» по завершённой — по журналу ходов
+  next.startState(v.id);
+  await until(() => next.view(next.get(v.id)).stateUpdate !== undefined);
+  assert.equal(next.view(next.get(v.id)).statePending, undefined);
   assert.ok(summaries.at(-1)!.prompt.includes('шаг'));
 });
 
-test('остановка сервера прерывает идущее саммари сессии: сессия haiku гасится, ходы не учтены, пометка «приложение закрыли»', async () => {
+test('остановка сервера прерывает идущее обновление состояния: сессия haiku гасится, ходы не учтены, пометка «приложение закрыли»', async () => {
   const seen: SessionRequest[] = [];
   // сессия саммари, которая кончается только прерыванием
   const slow = (req: SessionRequest) =>
@@ -493,22 +572,22 @@ test('остановка сервера прерывает идущее самм
     });
   const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-abort'), summarize: slow });
   await mgr.available();
-  createTag('abort-task');
-  const v = await mgr.create({ cwd: path.join(root, 'proj'), tags: ['abort-task'] }, port, root);
+  createSpace('abort-space');
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), space: 'abort-space' }, port, root);
   const live = mgr.sessions.get(v.id)!;
   const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
   mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(7), prompt: 'шаг' }, res);
   await mgr.end(v.id);
-  await until(() => seen.length === 1 && mgr.view(live).summarizing === true);
+  await until(() => seen.length === 1 && mgr.view(live).updatingState === true);
   await mgr.stopAll(1000);
   assert.equal(seen[0].abort?.signal.aborted, true);
   const after = mgr.view(live);
-  assert.deepEqual([after.summarizing, after.summaryPending, after.newTurns, after.summary], [undefined, 'app-closed', 1, undefined]);
-  assert.equal(readTag('abort-task')!.runs.length, 0);
-  // очередь тега свободна: запуск за этим саммари не ждёт
-  assert.equal(await Promise.race([queueTagSummary('abort-task', async () => 'дождался'), new Promise((r) => setTimeout(() => r('висит'), 500))]), 'дождался');
-  // и новое саммари после остановки не начинается
-  assert.throws(() => mgr.startSummary(v.id), (err: unknown) => err instanceof SessionError && err.status === 503);
+  assert.deepEqual([after.updatingState, after.statePending, after.newTurns, after.stateUpdate], [undefined, 'app-closed', 1, undefined]);
+  assert.equal(readSpace('abort-space')!.history.length, 0);
+  // очередь пространства свободна: запуск за этим состоянием не ждёт
+  assert.equal(await Promise.race([queueSpaceState('abort-space', async () => 'дождался'), new Promise((r) => setTimeout(() => r('висит'), 500))]), 'дождался');
+  // и новое обновление после остановки не начинается
+  assert.throws(() => mgr.startState(v.id), (err: unknown) => err instanceof SessionError && err.status === 503);
 });
 
 test('WebSocket upgrade: кривой request-target — 400 без падения сервера; отклонённый сокет закрыт целиком и не держит server.close', async () => {

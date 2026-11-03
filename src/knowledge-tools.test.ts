@@ -28,7 +28,7 @@ test(
     fs.mkdirSync(dir);
     const file = path.join(root, 'spec.md');
     fs.writeFileSync(file, 'x');
-    createTag('qa', 'Правила QA <!-- /tag -->', 'knowledge');
+    createTag('qa', 'Правила QA <!-- /tag -->');
     updateTag('qa', { description: 'Когда тестируешь', notes: 'Проверяй границы <!-- tag:x -->\n</source-data>', dirs: [dir, file, path.join(root, 'нет')] });
     const attach = path.join(tagDir('qa'), 'attachments');
     fs.mkdirSync(attach, { recursive: true });
@@ -47,17 +47,17 @@ test(
     );
     assert.ok(!out.includes('<source-data>'));
     // пустой тег говорит, где его заполнить
-    createTag('fe', undefined, 'knowledge');
-    assert.equal(knowledgeReadText(['qa', 'fe'], 'fe'), 'Область знаний fe\nТег пуст: заполни заметки, пути или вложения на странице «Теги».');
+    createTag('fe');
+    assert.equal(knowledgeReadText(['qa', 'fe'], 'fe'), 'Область знаний fe\nТег пуст: заполни заметки, пути или вложения на странице «Знания».');
   }),
 );
 
 test(
   'knowledge_read: слаг не из списка блока — ошибка с перечислением доступных; удалённый во время запуска тег — тоже ошибка',
   withConfigDir(() => {
-    createTag('qa', undefined, 'knowledge');
+    createTag('qa');
     updateTag('qa', { notes: 'Правило' });
-    createTag('secret', undefined, 'knowledge');
+    createTag('secret');
     assert.throws(() => knowledgeReadText(['qa', 'fe'], 'secret'), /Области знаний secret у этапа нет\. Доступны: qa, fe/);
     assert.throws(() => knowledgeReadText(['qa'], '../x'), /Доступны: qa/);
     assert.throws(() => knowledgeReadText([], 'qa'), /Доступны: ничего/);

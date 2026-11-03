@@ -4,14 +4,16 @@
 // Вход из «Запустить…» с главной приходит в location.state.intake; черновик разового запуска уходит со spec из конструктора.
 import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Intake } from '@server/api-types';
 import {
-  ApiError, errorText, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useTags,
+  ApiError, errorText, fetchSpaceContext, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useSpaces,
+  useTags,
 } from '../../api';
-import { TagBadge } from '../../components/Badge';
+import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
+import { SpaceField } from '../../components/SpaceField';
 import { TagInput } from '../../components/TagInput';
 import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
@@ -20,8 +22,8 @@ import { t } from '../../lib/i18n';
 import { modelOptions } from '../../lib/flow/tools';
 import {
   appendDir, ATTACH_ACCEPT, attachName, attachOverLimit, attachTypeError, attachWarn, CONN_WARN_TEXT, connWarn, dirLines, fileSize,
-  KIND_LABEL, recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagContext,
-  tagNewMsg, wantsAutoTag, withWorktreeNote, worktreeProject, worktreeRequest, type RunLink,
+  recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
+  worktreeRequest, type RunLink,
 } from '../../lib/run-form';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
@@ -47,7 +49,8 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const defaultCwd = config?.defaultCwd ?? '';
   const can = {
     tags: useFeature('tags'),
-    autoTag: useFeature('auto-tag'),
+    spaces: useFeature('spaces'),
+    autoSpace: useFeature('auto-space'),
     attachments: useFeature('attachments'),
     addDirs: useFeature('run-add-dirs'),
     recent: useFeature('recent-dirs'),
@@ -58,6 +61,11 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const projects = info?.projects ?? [];
   const recent = recentChips(useRecentDirs(can.recent).data ?? []);
   const tagList = useTags(can.tags).data?.tags ?? [];
+  const spaceList = useSpaces(can.spaces).data?.spaces ?? [];
+  // что пространство даст этапам — тот же текст, что сервер допишет в конец промптов
+  const spaceSlug = f.space.trim();
+  const spaceKnown = spaceList.some((s) => s.slug === spaceSlug);
+  const spaceCtx = useQuery({ queryKey: ['spaces', spaceSlug, 'context'], queryFn: () => fetchSpaceContext(spaceSlug), enabled: can.spaces && spaceKnown });
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
@@ -91,9 +99,10 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     if (runForm.formSeq === st.formSeq && !fresh) return;
     resetForm(summary, defaultCwd, st.formSeq);
     if (can.integrations) unlink();
-    // недавние папки и теги — заново при каждом открытии flow, как loadRecentDirs и loadTags в openFlow
+    // недавние папки, теги и пространства — заново при каждом открытии flow, как loadRecentDirs и loadTags в openFlow
     void qc.invalidateQueries({ queryKey: recentDirsKey });
     void qc.invalidateQueries({ queryKey: keys.tags });
+    void qc.invalidateQueries({ queryKey: keys.spaces });
     if (fresh) {
       setForm({ input: intake.input, ...(intake.source.project ? { cwd: intake.source.project } : {}), intakeKey, focusSeq: runForm.focusSeq + 1 });
       showLink({ source: intake.source, branch: intake.branch, project: intake.source.project });
@@ -163,9 +172,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   };
   const [drop, setDrop] = useState(false);
 
-  // ---------- теги
-  const kindOf = (tag: string) => f.tagInfo.get(tag)?.kind || 'task';
-  const hasTask = f.tags.some((tag) => kindOf(tag) === 'task');
+  // ---------- теги знаний: только существующие — пустой тег из формы бесполезен
   const addTag = async () => {
     const slug = runForm.tagText.trim();
     setForm({ tagMsg: NO_MSG });
@@ -182,10 +189,14 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       const r = await fetchTag(slug);
       // пока шёл запрос, тег убрали или открыли другой flow: панель не трогаем
       if (seq !== runForm.tagSeq || !runForm.tags.includes(slug)) return;
-      setForm({ tagInfo: new Map(runForm.tagInfo).set(slug, { kind: r.kind || 'task', title: r.title || '', input: r.input || '' }), tagMsg: { text: tagAddedMsg(slug, r), tone: '' } });
+      setForm({ tagInfo: new Map(runForm.tagInfo).set(slug, { title: r.title || '', input: r.input || '' }), tagMsg: { text: tagAddedMsg(slug, r), tone: '' } });
     } catch (err) {
       if (seq !== runForm.tagSeq) return;
-      setForm({ tagMsg: err instanceof ApiError && err.status === 404 ? { text: tagNewMsg(slug), tone: '' } : { text: errorText(err), tone: 'err' } });
+      // нет тега или это старый тег задачи — из запуска убираем, причину показываем
+      setForm({
+        tags: runForm.tags.filter((x) => x !== slug),
+        tagMsg: { text: err instanceof ApiError && err.status === 404 && err.code !== 'moved_to_space' ? tagMissingMsg(slug) : errorText(err), tone: 'err' },
+      });
     }
   };
   const removeTag = (slug: string) => {
@@ -251,9 +262,9 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         setForm({ msg: NO_MSG });
         return;
       }
-      // автотег: без выбранного тега задачи (новый слаг — тоже тег задачи) сервер сначала спросит модель, это секунды
-      const autoTag = can.autoTag && wantsAutoTag(runForm.autoTag, runForm.tags, runForm.tagInfo);
-      setForm({ msg: { text: autoTag ? t('Завожу тег и запускаю…') : t('Запускаю…'), tone: '' } });
+      // автопространство: без выбранного пространства сервер сначала спросит модель, это секунды
+      const autoSpace = can.autoSpace && runForm.autoSpace && !runForm.space.trim();
+      setForm({ msg: { text: autoSpace ? t('Завожу пространство и запускаю…') : t('Запускаю…'), tone: '' } });
       // путь worktree — разовый, рабочей директорией по умолчанию для следующих запусков он не становится
       if (!(can.integrations && runForm.link?.worktree)) LS.setRaw('agentgraph.cwd', runForm.cwd.trim());
       LS.setRaw('agentgraph.budget', runForm.budget);
@@ -269,15 +280,16 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         link: runForm.link,
         attach: runForm.attach,
         addDirs: runForm.addDirs,
+        space: runForm.space,
+        saveState: runForm.saveState,
+        autoSpace,
         tags: runForm.tags,
-        saveTag: runForm.saveTag,
-        autoTag,
-        can: { integrations: can.integrations, attachments: can.attachments, addDirs: can.addDirs, tags: can.tags },
+        can: { integrations: can.integrations, attachments: can.attachments, addDirs: can.addDirs, tags: can.tags, spaces: can.spaces },
       }));
       setForm({ msg: NO_MSG });
-      // запуск уже идёт: окно ошибки не ждём, новый тег — сразу в список поля «Теги»
-      if (r.autoTag && 'error' in r.autoTag && r.autoTag.error) void notify(t('Тег не заведён: {err}. Запуск идёт без тега.', { err: r.autoTag.error }));
-      else if (r.autoTag && 'slug' in r.autoTag) void qc.invalidateQueries({ queryKey: keys.tags });
+      // запуск уже идёт: окно ошибки не ждём; новое пространство (вписанное или автопространство) — сразу в список
+      if (r.autoSpace && 'error' in r.autoSpace && r.autoSpace.error) void notify(t('Пространство не заведено: {err}. Запуск идёт без пространства.', { err: r.autoSpace.error }));
+      if (runForm.space.trim() || r.autoSpace) void qc.invalidateQueries({ queryKey: keys.spaces });
       // вложения ушли в этот запуск: «Открыть flow» не должно молча приложить их к следующему
       if (gen === runForm.extrasSeq) resetExtras();
       await qc.invalidateQueries({ queryKey: keys.runs });
@@ -299,6 +311,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const multiBlock = (summary?.blocks?.length ?? 0) > 1;
   const models = modelOptions(f.modelBase);
   const sum = runMoreSum({
+    space: f.space,
     tags: f.tags,
     attach: f.attach.length,
     addDirs: f.addDirs,
@@ -403,60 +416,68 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           <span className={cx(styles.runMoreSum, sum.set && styles.set)}>{sum.text}</span>
         </summary>
         <div className={styles.runMoreBody}>
+          {can.spaces && (
+            <div className={styles.runTag}>
+              <SpaceField listId="run-space-list" value={f.space} onChange={(space) => setForm({ space })} options={spaceList} />
+              {spaceKnown && spaceCtx.data && (
+                <div className={styles.runTagContext} title={t('Что сервер допишет в конец промпта каждого этапа; карта пространства придёт памятью. Поле «Задача» остаётся только задачей')}>
+                  <details>
+                    <summary><SpaceBadge slug={spaceSlug} />{' '}<span className="muted small">{t('в конец промптов этапов · карта — памятью')}</span></summary>
+                    <pre className={styles.tagContextText}>{spaceCtx.data.phase}</pre>
+                  </details>
+                </div>
+              )}
+              {spaceSlug ? (
+                <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
+                  <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
+                  <span>{t('Обновить состояние пространства после запуска')}</span>
+                </label>
+              ) : can.autoSpace && (
+                <label className={styles.inlineCheck} title={t('ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…), после «готово» запишет его состояние. Существующие не переиспользуются: чтобы продолжить фичу, выбери её пространство в поле выше')}>
+                  <input
+                    type="checkbox"
+                    name="autoSpace"
+                    checked={f.autoSpace}
+                    onChange={(e) => {
+                      LS.setRaw('agentgraph.autoSpace', e.target.checked ? '1' : '0');
+                      setForm({ autoSpace: e.target.checked });
+                    }}
+                  />
+                  <span>{t('Завести пространство автоматически')}</span>
+                </label>
+              )}
+            </div>
+          )}
           {can.tags && (
             <div className={styles.runTag}>
               <TagInput
-                label={t('Теги')}
-                labelTitle={t('Тег задачи — саммари фичи из прошлых запусков: встанет в начало задачи, описывать фичу заново не нужно. Тег знаний — что должны знать этапы (фронтенд, бэкенд, QA): уйдёт в промпты этапов каждого блока. Тегов может быть несколько. Новый слаг — новый тег задачи. Править теги — на странице «Теги»')}
+                label={t('Теги знаний')}
+                labelTitle={t('Что должны знать этапы (фронтенд, бэкенд, QA): в промпт каждого блока уйдёт строка с описанием, полный текст этап возьмёт инструментом knowledge_read. Тегов может быть несколько. Заводят и правят их на странице «Знания»')}
                 listId="run-tag-list"
-                options={tagList}
-                placeholder={t('без тегов — или выбери из списка, или впиши новый и нажми Enter: loyalty-card')}
+                options={tagList.filter((x) => !f.tags.includes(x.slug))}
+                placeholder={t('без тегов — или выбери тег знаний из списка и нажми Enter')}
                 text={f.tagText}
                 onText={(tagText) => setForm({ tagText })}
                 onAdd={() => void addTag()}
                 tags={f.tags}
-                kindOf={kindOf}
+                kindOf={() => 'knowledge'}
                 onRemove={removeTag}
                 removeTitle={t('Убрать тег из запуска')}
               />
               {f.tags.length > 0 && (
-                <div className={styles.runTagContext} title={t('Что сервер вставит от выбранных тегов: тег задачи — в начало задачи, тег знаний — в конец промптов этапов. Поле «Задача» остаётся только задачей')}>
+                <div className={styles.runTagContext} title={t('Что сервер допишет в конец промптов этапов каждого блока от выбранных тегов знаний')}>
                   {f.tags.map((tag) => {
-                    const c = tagContext(f.tagInfo.get(tag));
+                    const info = f.tagInfo.get(tag);
                     return (
                       <details key={tag}>
                         <summary>
-                          <TagBadge slug={tag} kind={c.kind} />{` ${f.tagInfo.get(tag)?.title || ''} `}<span className="muted small">{`${KIND_LABEL[c.kind]} · ${c.where}`}</span>
+                          <TagBadge slug={tag} />{` ${info?.title || ''} `}<span className="muted small">{t('в конец промптов этапов каждого блока')}</span>
                         </summary>
-                        <pre className={styles.tagContextText}>{c.text}</pre>
+                        <pre className={styles.tagContextText}>{info?.input ?? t('Загружаю…')}</pre>
                       </details>
                     );
                   })}
                 </div>
-              )}
-              {can.autoTag && (
-                <label
-                  className={styles.inlineCheck}
-                  title={hasTask ? t('Тег задачи уже выбран: новый не заведётся') : t('ИИ по тексту задачи заведёт новый тег задачи (слаг занят — с суффиксом -2…), после «готово» запишет его саммари. Существующие теги не переиспользуются: чтобы продолжить фичу, выберите её тег в поле «Теги»')}
-                >
-                  <input
-                    type="checkbox"
-                    name="autoTag"
-                    checked={f.autoTag}
-                    disabled={hasTask}
-                    onChange={(e) => {
-                      LS.setRaw('agentgraph.autoTag', e.target.checked ? '1' : '0');
-                      setForm({ autoTag: e.target.checked });
-                    }}
-                  />
-                  <span>{t('Завести тег задачи автоматически')}</span>
-                </label>
-              )}
-              {hasTask && (
-                <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия по каждому тегу перепишет его саммари: суть, где код, решения, где читать подробнее')}>
-                  <input type="checkbox" name="saveTag" checked={f.saveTag} onChange={(e) => setForm({ saveTag: e.target.checked })} />
-                  <span>{t('Обновить саммари тегов после запуска')}</span>
-                </label>
               )}
               <span className={msgClass(f.tagMsg)}>{f.tagMsg.text}</span>
             </div>

@@ -71,9 +71,9 @@ export function headerStatus(r: RunView): string {
 
 /**
  * «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; токены идущих этапов
- * (их стоимость придёт только с концом этапа, а лимит подписки тратится уже сейчас); идущее саммари тега.
+ * (их стоимость придёт только с концом этапа, а лимит подписки тратится уже сейчас); идущее обновление состояния пространства.
  */
-export function runMeta(r: RunView, tagPending: LiveState['tagPending'], running: Iterable<PendingPhase> = []): string {
+export function runMeta(r: RunView, statePending: LiveState['statePending'], running: Iterable<PendingPhase> = []): string {
   const blocks = runBlocks(r);
   let progress = t('итерация {i}/{n}', { i: r.iterations, n: r.maxIterations ?? '?' });
   if (blocks.length > 1) {
@@ -83,7 +83,7 @@ export function runMeta(r: RunView, tagPending: LiveState['tagPending'], running
   let spent = 0;
   for (const x of running) spent += x.ctx?.spent ?? 0;
   const live = spent > 0 ? ` · ${t('идёт ≈{n} токенов', { n: tokensShort(spent) })}` : '';
-  return `${progress} · ≈${usd(r.totalCostUsd)}${live}${tagPending ? ` · ${t('обновляю саммари тега {tag}…', { tag: tagPending.tag })}` : ''}`;
+  return `${progress} · ≈${usd(r.totalCostUsd)}${live}${statePending ? ` · ${t('обновляю состояние пространства {space}…', { space: statePending.space })}` : ''}`;
 }
 
 /** Лимит итераций можно менять у живого запуска, пока блок с циклом не завершился. */
@@ -580,19 +580,24 @@ export function finalFeedback(r: RunReport): ConditionReport | undefined {
   return last && !last.done && last.feedback ? last : undefined;
 }
 
-export type TagLine = { tag: string; state: 'ok' | 'error' | 'skip'; text: string; costUsd?: number; auto: boolean };
+/** Строка «Итога» о состоянии пространства; space — слаг пространства (у старого запуска — его тега задачи). */
+export type StateLine = { space: string; state: 'ok' | 'error' | 'skip'; text: string; costUsd?: number; auto: boolean };
 
-/** Строки о тегах в «Итоге»: обновилось ли саммари каждого тега; autoTagError — тег не заведён. */
-export function tagFinalLines(r: Pick<RunReport, 'tags' | 'tagSummaries' | 'autoTag'>): { autoTagError?: string; lines: TagLine[] } {
+/**
+ * Строки о пространстве в «Итоге»: обновилось ли его состояние; autoError — пространство не заведено. Старый запуск
+ * (до пространств) — по строке на тег задачи: его саммари — теперь состояние пространства с тем же слагом.
+ */
+export function stateFinalLines(r: Pick<RunReport, 'space' | 'stateUpdate' | 'autoSpace' | 'tags' | 'tagSummaries' | 'autoTag'>): { autoError?: string; lines: StateLine[] } {
+  const line = (space: string, u: { ok: boolean; costUsd: number; error?: string; skipped?: string } | undefined, auto: boolean): StateLine => {
+    if (u?.ok) return { space, state: 'ok', text: t('Состояние пространства обновлено'), costUsd: u.costUsd, auto };
+    if (u?.error) return { space, state: 'error', text: t('Состояние не обновлено: {why}', { why: u.error }), auto };
+    return { space, state: 'skip', text: u?.skipped ? t('Состояние не обновлено: {why}', { why: u.skipped }) : t('Состояние не обновлено'), auto };
+  };
+  const autoError = r.autoSpace?.error ?? r.autoTag?.error;
+  const err = autoError ? { autoError } : {};
+  if (r.space) return { ...err, lines: [line(r.space, r.stateUpdate, r.autoSpace?.slug === r.space)] };
   const byTag = new Map((r.tagSummaries || []).map((s) => [s.tag, s]));
-  const lines = (r.tags || []).map((tag): TagLine => {
-    const s = byTag.get(tag);
-    const auto = r.autoTag?.slug === tag;
-    if (s?.ok) return { tag, state: 'ok', text: t('Саммари тега обновлено'), costUsd: s.costUsd, auto };
-    if (s?.error) return { tag, state: 'error', text: t('Саммари тега не обновлено: {why}', { why: s.error }), auto };
-    return { tag, state: 'skip', text: s?.skipped ? t('Саммари тега не обновлено: {why}', { why: s.skipped }) : t('Саммари тега не обновлено'), auto };
-  });
-  return { ...(r.autoTag?.error ? { autoTagError: r.autoTag.error } : {}), lines };
+  return { ...err, lines: (r.tags || []).map((tag) => line(tag, byTag.get(tag), r.autoTag?.slug === tag)) };
 }
 
 // ---------- граф: инспектор и переход в «Обзор»

@@ -10,12 +10,12 @@ export function textMatches(fields: (string | null | undefined)[], words: string
   return words.every((w) => hay.includes(w));
 }
 
-type RunLike = { id: string; flow: string; title?: string; input?: string; tags?: string[]; knowledge?: string[]; cwd?: string; source?: { key: string } };
+type RunLike = { id: string; flow: string; title?: string; input?: string; space?: string; knowledge?: string[]; cwd?: string; source?: { key: string } };
 
-/** Запуск: имя, flow, задача, теги задачи и знаний, папка проекта (последний сегмент cwd), id и ключ источника. */
+/** Запуск: имя, flow, задача, пространство, теги знаний, папка проекта (последний сегмент cwd), id и ключ источника. */
 export function runMatches(run: RunLike, words: string[]): boolean {
   const folder = String(run.cwd ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-  return textMatches([run.title, run.flow, run.input, ...(run.tags ?? []), ...(run.knowledge ?? []), folder, run.id, run.source?.key], words);
+  return textMatches([run.title, run.flow, run.input, run.space, ...(run.knowledge ?? []), folder, run.id, run.source?.key], words);
 }
 
 /** Flow: имя, папка и описание. */

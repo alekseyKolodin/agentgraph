@@ -148,6 +148,7 @@ function LangSwitch() {
 }
 
 export function Sidebar() {
+  const spaces = useFeature('spaces');
   const tags = useFeature('tags');
   const context = useFeature('context');
   const sessions = useFeature('sessions');
@@ -169,14 +170,17 @@ export function Sidebar() {
             {questions > 0 && <span className={styles.brandCount} title={t('Вопросов ждут ответа')}>{questions}</span>}
           </NavLink>
         </li>
+        {spaces && (
+          <li><NavLink to="/spaces" title={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')}>{t('Пространства')}</NavLink></li>
+        )}
         {tags && (
-          <li><NavLink to="/tags" title={t('Теги задач: саммари фичи, заметки, пути и вложения, которые подставляются в запуск')}>{t('Теги')}</NavLink></li>
+          <li><NavLink to="/tags" title={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')}>{t('Знания')}</NavLink></li>
         )}
         {context && (
           <li><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
         )}
         {sessions && (
-          <li><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, с контекстом тегов')}>{t('Сессии')}</NavLink></li>
+          <li><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, в пространстве и с тегами знаний')}>{t('Сессии')}</NavLink></li>
         )}
       </ul>
       <LiveSection />

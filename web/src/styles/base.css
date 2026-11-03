@@ -172,6 +172,9 @@ dialog h2 { margin: 0 0 8px; font-size: var(--fs-h2); }
 .attach-x:hover { color: var(--st-fail); }
 .badge.tag { border: 1px solid currentColor; font-weight: 500; }
 .badge.tag.knowledge { border-style: dashed; color: var(--st-ok); }
+/* пространство: нейтральная пилюля с ромбом — не статус и не сигнал, цветом не выделяется */
+.badge.space { border: 1px solid var(--line-strong); color: var(--ink-2); font-weight: 500; text-decoration: none; }
+a.badge.space:hover { color: var(--ink); border-color: var(--ink-3); }
 /* разовый запуск: flow не сохранён в flows/ */
 .badge.adhoc { border: 1px dashed currentColor; font-weight: 500; }
 

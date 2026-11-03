@@ -18,8 +18,9 @@ import { startServer, stopServer } from './server.js';
 import { execveRestart } from './update.js';
 import { RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import { c, fmtUsd } from './ui.js';
-import { createTag, listTags, readTag, runTagSlugs, splitRunTags, tagsRunDirs, withTagsInput } from './tags.js';
-import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
+import { knowledgeTags, listTags, runTagSlugs } from './tags.js';
+import { createSpace, listSpaces, readSpace, spaceReadDirs, spaceSlug, type Space } from './spaces.js';
+import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { pickRunTitle } from './run-title.js';
 import { evalDir, formatEvalTable, loadTasks, runEval } from './eval.js';
 
@@ -34,7 +35,8 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
   agentgraph show <flow|file.yaml> показать план flow
   agentgraph eval <flow|file.yaml> --tasks <tasks.yaml> [--runs N] [--compare <flow2|file.yaml>] [--json out.json]
                                    сквозной eval: прогнать набор задач через flow, посчитать долю решённых
-  agentgraph tags                  список тегов (задачи и области знаний) с началом саммари или заметок
+  agentgraph spaces                список пространств (фича или проект: карта, документы, состояние «где мы сейчас»)
+  agentgraph tags                  список тегов знаний с описанием или началом заметок
   agentgraph ui                    поднять веб-интерфейс (по умолчанию http://127.0.0.1:4747)
 
 Опции:
@@ -45,12 +47,14 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
   --max-iterations <n>    переопределить лимит итераций (у каждого блока с циклом)
   --max-budget <usd>      лимит стоимости, $: остановить запуск, если оценка превысит
   --model <id>            модель по умолчанию для всех сессий
-  --tag <slug>            тег (можно несколько раз). Тег задачи: саммари, заметки и пути — в задачу, после done — обновить саммари.
-                          Тег знаний: в промпты этапов каждого блока — строка с описанием, полный текст этап берёт инструментом
-                          knowledge_read по запросу (тег с «всегда в промпт» — целиком). Новый слаг — тег задачи
-  --no-save-tag           с --tag: не обновлять саммари тегов задачи после запуска
-  --auto-tag              без тега задачи среди --tag: ИИ по тексту задачи заведёт новый тег задачи (слаг занят — с суффиксом -2…),
-                          после done запишет его саммари. Продолжить фичу — --tag <её слаг>
+  --space <slug>          пространство запуска: его карта (CLAUDE.md) — памятью у всех этапов, документы — по запросу,
+                          состояние «где мы сейчас» — в конец промпта каждого этапа; после done — обновить состояние.
+                          Нового слага — пустое пространство (карту заполни на странице пространства)
+  --no-save-state         с --space: не обновлять состояние пространства после запуска
+  --auto-space            без --space: ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…),
+                          после done запишет его состояние. Продолжить фичу — --space <её слаг>
+  --knowledge <slug>      тег знаний (можно несколько раз): в промпты этапов каждого блока — строка с описанием, полный
+                          текст этап берёт инструментом knowledge_read (тег с «всегда в промпт» — целиком)
   --port <n>              порт для ui
   --no-notify             ui: без системных уведомлений о вопросах агента и конце запуска
   -v, --verbose           печатать ход сессий (текст и вызовы инструментов)
@@ -70,7 +74,7 @@ Eval (agentgraph eval):
                           проявляются в одном из двух прогонов)
   --compare <flow2>       второй flow на том же наборе: в итоге раздел «перевернувшиеся задачи»
   --json <file>           копия results.json по этому пути (основной — runs/evals/<дата>-<flow>[-vs-<flow2>]/results.json)
-  --max-budget, --model, --max-iterations действуют на каждый запуск; --tag, --auto-tag, --once, -o, --input с eval несовместимы.
+  --max-budget, --model, --max-iterations действуют на каждый запуск; --space, --auto-space, --knowledge, --once, -o, --input с eval несовместимы.
   Вопросы агента (AskUserQuestion) в eval отклоняются, пауз нет: flow с AskUserQuestion и pause_marker для eval не годятся.
   Запуски eval лежат в runs/ как обычные (имя «eval <flow> · <задача> #<n>») и видны в UI.
 `;
@@ -87,6 +91,11 @@ async function main(): Promise<number> {
       'max-iterations': { type: 'string' },
       'max-budget': { type: 'string' },
       model: { type: 'string' },
+      space: { type: 'string' },
+      'no-save-state': { type: 'boolean', default: false },
+      'auto-space': { type: 'boolean', default: false },
+      knowledge: { type: 'string', multiple: true },
+      // теги задач заменены пространствами: старые флаги — только чтобы подсказать новые
       tag: { type: 'string', multiple: true },
       'no-save-tag': { type: 'boolean', default: false },
       'auto-tag': { type: 'boolean', default: false },
@@ -124,26 +133,42 @@ async function main(): Promise<number> {
   };
 
   const [cmd, ...rest] = positionals;
-  if (values.once && ['gen', 'edit', 'run', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--once — только для формы agentgraph "<задача>": сгенерировать и запустить без сохранения');
+  const noRun = ['gen', 'edit', 'show', 'ui', 'tags', 'spaces', 'eval'];
+  if (values.once && ['run', ...noRun].includes(cmd)) return fail('--once — только для формы agentgraph "<задача>": сгенерировать и запустить без сохранения');
   if (values.once && values.out) return fail('--once не сохраняет flow: убери -o или --once');
-  const tags = runTagSlugs(values.tag);
-  const autoTag = values['auto-tag'];
-  if (autoTag && values['no-save-tag']) return fail('--auto-tag с --no-save-tag: автотег без саммари бесполезен');
-  if (values['no-save-tag'] && !tags.length) return fail('--no-save-tag — только вместе с --tag');
-  if (tags.length && ['gen', 'edit', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--tag — только для запуска: agentgraph run <flow> --tag <slug>');
-  if (autoTag && ['gen', 'edit', 'show', 'ui', 'tags', 'eval'].includes(cmd)) return fail('--auto-tag — только для запуска: agentgraph run <flow> --auto-tag');
+  if (values.tag?.length || values['no-save-tag'] || values['auto-tag']) {
+    return fail('Теги задач заменены пространствами: --space <slug> (вместо тега задачи), --no-save-state, --auto-space; теги знаний — --knowledge <slug>');
+  }
+  const space = spaceSlug(values.space);
+  const knowledge = runTagSlugs(values.knowledge);
+  const autoSpace = values['auto-space'];
+  if (autoSpace && values['no-save-state']) return fail('--auto-space с --no-save-state: автопространство без состояния бесполезно');
+  if (autoSpace && space) return fail('--auto-space заводит новое пространство: с --space <slug> он ни к чему');
+  if (values['no-save-state'] && !space) return fail('--no-save-state — только вместе с --space');
+  if ((space || knowledge.length) && noRun.includes(cmd)) return fail('--space и --knowledge — только для запуска: agentgraph run <flow> --space <slug>');
+  if (autoSpace && noRun.includes(cmd)) return fail('--auto-space — только для запуска: agentgraph run <flow> --auto-space');
   if (cmd !== 'eval' && (values.tasks || values.runs || values.compare || values.json)) return fail('--tasks, --runs, --compare и --json — только для eval: agentgraph eval <flow> --tasks <tasks.yaml>');
   if (cmd === 'eval' && values.out) return fail('eval ничего не генерирует: убери -o');
   if (cmd === 'eval' && values.input) return fail('eval берёт задачи из --tasks: убери --input');
   switch (cmd) {
+    case 'spaces': {
+      const list = listSpaces();
+      if (!list.length) console.log(c.dim('Пространств нет: заведи на странице «Пространства» или при запуске, agentgraph run <flow> --space <slug>'));
+      for (const s of list) {
+        const first = s.preview.split('\n').find((l) => l.trim()) ?? '';
+        const what = [s.hasMap ? 'карта' : 'без карты', `документов: ${s.docs}`, s.updatedAt.slice(0, 16).replace('T', ' ')];
+        console.log(`${c.bold(s.slug)}${s.title ? ` — ${s.title}` : ''} ${c.dim(`· ${what.join(' · ')}`)}`);
+        console.log(c.dim(`  ${first || 'состояния ещё нет'}`));
+      }
+      return 0;
+    }
     case 'tags': {
       const list = listTags();
-      if (!list.length) console.log(c.dim('Тегов нет: заведи при запуске, agentgraph run <flow> --tag <slug>'));
+      if (!list.length) console.log(c.dim('Тегов знаний нет: заведи на странице «Знания»'));
       for (const t of list) {
         const first = t.preview.split('\n').find((l) => l.trim()) ?? '';
-        const knows = t.kind === 'knowledge';
-        console.log(`${c.bold(t.slug)}${t.title ? ` — ${t.title}` : ''} ${c.dim(`· ${knows ? 'знание' : `задача · запусков: ${t.runs}`} · ${t.updatedAt.slice(0, 16).replace('T', ' ')}`)}`);
-        console.log(c.dim(`  ${first || (knows ? 'заметок ещё нет' : 'саммари ещё нет')}`));
+        console.log(`${c.bold(t.slug)}${t.title ? ` — ${t.title}` : ''} ${c.dim(`· знание · ${t.updatedAt.slice(0, 16).replace('T', ' ')}`)}`);
+        console.log(c.dim(`  ${first || 'заметок ещё нет'}`));
       }
       return 0;
     }
@@ -186,9 +211,9 @@ async function main(): Promise<number> {
       if (!rest[0]) return fail('Укажи flow: agentgraph run flows/<name>.yaml');
       const spec = loadFlow(rest[0]);
       if (values.input) spec.input = values.input;
-      const tagOpts = await withTags(spec, tags, !values['no-save-tag'], autoTag);
+      const spaceOpts = await withSpace(spec, space, knowledge, !values['no-save-state'], autoSpace);
       printPlan(spec);
-      const report = await runFlow(spec, { ...runOpts, ...tagOpts, nameRun: nameRunFor(spec) });
+      const report = await runFlow(spec, { ...runOpts, ...spaceOpts, nameRun: nameRunFor(spec) });
       return report.status === 'done' ? 0 : 2;
     }
     case 'show': {
@@ -242,8 +267,8 @@ async function main(): Promise<number> {
     default: {
       const task = positionals.join(' ').trim();
       const { spec } = await generate(task, cwd, values.out, values.model, abort, !values.once);
-      const tagOpts = await withTags(spec, tags, !values['no-save-tag'], autoTag);
-      const report = await runFlow(spec, { ...runOpts, adhoc: values.once, ...tagOpts, nameRun: nameRunFor(spec) });
+      const spaceOpts = await withSpace(spec, space, knowledge, !values['no-save-state'], autoSpace);
+      const report = await runFlow(spec, { ...runOpts, adhoc: values.once, ...spaceOpts, nameRun: nameRunFor(spec) });
       return report.status === 'done' ? 0 : 2;
     }
   }
@@ -255,32 +280,38 @@ function nameRunFor(spec: FlowSpec): NonNullable<RunOptions['nameRun']> {
 }
 
 /**
- * Теги запуска, как у сервера: несуществующие заводятся тегами задачи, блоки тегов задачи — в начало задачи, папки чтения —
- * отдельно от addDirs; теги знаний — в knowledge запуска (их разделы раннер добавит этапам каждого блока).
- * autoTag и нет тега задачи — новый тег заводит ИИ по тексту задачи (pickAutoTag); сбой подбора — запуск без тега.
+ * Пространство и теги знаний запуска, как у сервера: нового слага — пустое пространство, папки пространства — отдельно
+ * от addDirs; теги знаний — в knowledge запуска (их разделы раннер добавит этапам каждого блока). autoSpace без
+ * --space — новое пространство заводит ИИ по тексту задачи (pickAutoSpace); сбой подбора — запуск без пространства.
  */
-async function withTags(spec: FlowSpec, slugs: string[], saveTag: boolean, autoTag: boolean): Promise<Pick<RunOptions, 'tags' | 'saveTag' | 'tagDirs' | 'knowledge' | 'autoTag'>> {
-  for (const s of slugs) createTag(s);
-  const split = splitRunTags(slugs);
-  let picked: AutoTagReport | undefined;
-  if (autoTag && !split.task.length) {
-    process.stdout.write(`${c.cyan('✎')} Завожу тег задачи … `);
-    picked = await pickAutoTag(spec.input ?? '', { flow: spec.name });
-    const tag = picked.slug ? readTag(picked.slug) : undefined;
-    if (tag) {
-      split.task.push(tag);
-      console.log(`${c.green('✓')} Тег заведён: ${c.bold(tag.slug)}${tag.title ? ` — ${tag.title}` : ''} ${c.dim(`оценка ${fmtUsd(picked.costUsd)}`)}`);
-    } else console.log(c.yellow(`Тег не заведён: ${picked.error ?? 'тега нет на диске'}. Запуск пойдёт без тега`));
-  } else if (autoTag) console.log(c.dim('--auto-tag ни на что не влияет: тег задачи уже выбран через --tag'));
-  const { task, knowledge } = split;
-  if (task.length) spec.input = withTagsInput(spec.input ?? '', task);
-  for (const t of task) console.log(c.dim(`Тег ${t.slug}: ${t.summary.trim() || t.notes.trim() ? 'добавлен в задачу' : 'новый, саммари ещё нет'}`));
+async function withSpace(
+  spec: FlowSpec,
+  slug: string | undefined,
+  knowledgeSlugs: string[],
+  saveState: boolean,
+  autoSpace: boolean,
+): Promise<Pick<RunOptions, 'space' | 'saveState' | 'spaceDirs' | 'knowledge' | 'autoSpace'>> {
+  const knowledge = knowledgeTags(knowledgeSlugs);
+  let space: Space | undefined;
+  if (slug) {
+    space = readSpace(slug) ?? createSpace(slug);
+    console.log(c.dim(`Пространство ${space.slug}: ${space.map.trim() ? 'карта — памятью этапов' : 'карты нет'}, ${space.state.trim() ? 'состояние — в промпты этапов' : 'состояния ещё нет'}`));
+  }
+  let picked: AutoSpaceReport | undefined;
+  if (autoSpace) {
+    process.stdout.write(`${c.cyan('✎')} Завожу пространство … `);
+    picked = await pickAutoSpace(spec.input ?? '', { flow: spec.name });
+    space = picked.slug ? readSpace(picked.slug) : undefined;
+    if (space) console.log(`${c.green('✓')} Пространство заведено: ${c.bold(space.slug)}${space.title ? ` — ${space.title}` : ''} ${c.dim(`оценка ${fmtUsd(picked.costUsd)}`)}`);
+    else console.log(c.yellow(`Пространство не заведено: ${picked.error ?? 'его нет на диске'}. Запуск пойдёт без пространства`));
+  }
   for (const t of knowledge) console.log(c.dim(`Тег знаний ${t.slug}: уйдёт в промпты этапов каждого блока`));
-  if (!saveTag) console.log(c.dim(task.length ? 'Саммари тегов после запуска не обновится' : '--no-save-tag ни на что не влияет: тегов задачи среди выбранных нет'));
+  if (space && !saveState) console.log(c.dim('Состояние пространства после запуска не обновится'));
   return {
-    ...(task.length ? { tags: task.map((t) => t.slug), saveTag, tagDirs: tagsRunDirs(task, RUNS_DIR) } : {}),
+    // автопространство без состояния бесполезно: галочка для него не действует
+    ...(space ? { space: space.slug, saveState: picked ? true : saveState, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
     ...(knowledge.length ? { knowledge: knowledge.map((t) => t.slug) } : {}),
-    ...(picked ? { autoTag: picked } : {}),
+    ...(picked ? { autoSpace: picked } : {}),
   };
 }
 

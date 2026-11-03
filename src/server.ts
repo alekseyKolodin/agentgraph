@@ -56,25 +56,37 @@ import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fi
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
   addTagAttachmentReply,
-  createTag,
   createTagReply,
   deleteTagAttachmentReply,
   deleteTagReply,
-  readTag,
+  knowledgeTags,
   resolveKnowledge,
   runTagSlugs,
-  splitRunTags,
   stripTagBlocks,
   tagReply,
   tagsListReply,
-  tagsRunDirs,
   updateTagReply,
-  withTagsInput,
-  type Tag,
 } from './tags.js';
-import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
+import {
+  addSpaceDocReply,
+  createSpace,
+  createSpaceReply,
+  deleteSpaceDocReply,
+  deleteSpaceReply,
+  readSpace,
+  readSpaceMeta,
+  spaceContextReply,
+  spaceDocReply,
+  spaceReadDirs,
+  spaceReply,
+  spacesListReply,
+  spaceSlug,
+  updateSpaceReply,
+  writeSpaceDocReply,
+} from './spaces.js';
+import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { liveSessionNames, sessionsAvailable, sessionsRoute, sessionsUpgrade, stopSessions } from './sessions-server.js';
+import { liveSessionNames, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -246,7 +258,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'spaces', 'recent-dirs-hide', 'auto-space', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -440,6 +452,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
         flow,
         phase: (flow && q.get('phase')) || undefined,
         model: q.get('model') || undefined,
+        space: q.get('space') || undefined,
         force: q.get('force') === '1',
       })) satisfies ContextView);
     } catch (err) {
@@ -461,8 +474,35 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
   }
 
-  // --- теги: краткое саммари фичи между запусками (src/tags.ts). Слаг берём регэкспом без декодирования:
-  // кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из tags.ts
+  // --- пространства (src/spaces.ts): фича или проект — карта, документы, состояние, их сессии и запуски. Слаг берём
+  // регэкспом без декодирования: кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из spaces.ts
+  if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply());
+  if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply((await readJson(req)) as Record<string, unknown>));
+  if ((m = p.match(/^\/api\/spaces\/([^/]+)$/))) {
+    const slug = m[1];
+    if (method === 'GET') {
+      // сессии — из реестра сессий терминала (без node-pty их нет), запуски — из runs/
+      const sessions = await spaceSessions(slug).catch(() => []);
+      return reply(res, spaceReply(slug, () => ({ runs: spaceRuns(slug), sessions })));
+    }
+    if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
+    if (method === 'DELETE') return reply(res, deleteSpaceReply(slug));
+  }
+  if (method === 'GET' && (m = p.match(/^\/api\/spaces\/([^/]+)\/context$/))) return reply(res, spaceContextReply(m[1], RUNS_DIR));
+  if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
+  if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {
+    let name: string;
+    try {
+      name = decodeURIComponent(m[2]);
+    } catch {
+      return sendJson(res, 400, { error: 'Неверное имя документа' });
+    }
+    if (method === 'GET') return reply(res, spaceDocReply(m[1], name));
+    if (method === 'PUT') return reply(res, writeSpaceDocReply(m[1], name, (await readJson(req, RUN_BODY_MAX)) as { text?: unknown; base?: unknown }));
+    if (method === 'DELETE') return reply(res, deleteSpaceDocReply(m[1], name));
+  }
+
+  // --- теги знаний (src/tags.ts): правила и справка для этапов и сессий. Слаг — как у пространств
   if (method === 'GET' && p === '/api/tags') return reply(res, tagsListReply());
   if (method === 'POST' && p === '/api/tags') return reply(res, createTagReply((await readJson(req)) as { slug?: unknown; title?: unknown; kind?: unknown }));
   if ((m = p.match(/^\/api\/tags\/([^/]+)$/))) {
@@ -523,11 +563,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       worktree?: unknown;
       attachments?: unknown;
       addDirs?: unknown;
-      /** Теги любого вида (слаги): несуществующие заводятся тегами задачи; блок тега задачи вставляется во ввод, если его там ещё нет, тег знаний уходит в knowledge запуска. */
+      /** Пространство (слаг): нового слага — пустое пространство; null или пусто — без пространства. */
+      space?: unknown;
+      /** Обновить состояние пространства после запуска; по умолчанию — да. */
+      saveState?: unknown;
+      /** Завести новое пространство по тексту задачи (auto-space.ts), если пространство не выбрано; состояние после done — всегда. */
+      autoSpace?: unknown;
+      /** Теги знаний (слаги), только существующие: их раздел получит каждый блок. Тег задачи — 400 с подсказкой про пространство. */
       tags?: unknown;
-      /** Обновить саммари тегов после запуска; по умолчанию — да. */
+      /** Поля тегов задач до пространств: 400 с подсказкой, а не молча без пространства. */
       saveTag?: unknown;
-      /** Завести новый тег задачи по тексту задачи (auto-tag.ts), если тег задачи не выбран; саммари после done — всегда. */
       autoTag?: unknown;
     };
     let spec: FlowSpec;
@@ -538,61 +583,42 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       throw new HttpError(400, errMsg(err));
     }
     if (body.input?.trim()) spec.input = body.input.trim();
-    // блоки тегов — не задача: ввод из одних блоков (тег выбран, задача не вписана) — та же ошибка
+    // блоки тегов старых версий — не задача: ввод из одних блоков — та же ошибка
     if (!stripTagBlocks(spec.input ?? '')) return sendJson(res, 400, { error: spec.input === undefined ? 'Введи задачу: у flow нет поля input' : 'Введи задачу' });
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
     // всё проверяем до startRun: при ошибке папка запуска не создаётся
     let attachments: Attachment[];
     let addDirs: string[];
-    let tags: string[];
+    let knowledge: string[];
+    let slug: string | undefined;
     try {
+      if (body.saveTag !== undefined || body.autoTag !== undefined) throw new Error('Теги задач заменены пространствами: space, saveState и autoSpace вместо tags с тегом задачи, saveTag и autoTag');
       attachments = validateAttachments(body.attachments);
       addDirs = runAddDirs(body.addDirs, cwd);
-      tags = runTagSlugs(body.tags);
-      if (body.saveTag !== undefined && typeof body.saveTag !== 'boolean') throw new Error('saveTag — true или false');
-      if (body.autoTag !== undefined && typeof body.autoTag !== 'boolean') throw new Error('autoTag — true или false');
-      // битый tag.json — тоже 400, а не 500
-      for (const t of tags) readTag(t);
-    } catch (err) {
-      throw new HttpError(400, errMsg(err));
-    }
-    // теги заводятся последними: ошибка 400 выше не оставит пустой тег на диске. Новый слаг — тег задачи
-    // (вид «знание» задаётся на странице «Теги»); выбранные делятся по виду
-    let tagDirs: string[] = [];
-    let taskTags: string[] = [];
-    let knowledge: string[] = [];
-    let saveTag = body.saveTag !== false;
-    if (tags.length) {
-      for (const t of tags) createTag(t);
-      const split = splitRunTags(tags);
-      taskTags = split.task.map((t) => t.slug);
-      knowledge = split.knowledge.map((t) => t.slug);
-      // скилл и любой клиент API шлют ввод без блоков: вставляем сами; блоки, вставленные руками, не трогаем
-      if (split.task.length) {
-        spec.input = withTagsInput(spec.input ?? '', split.task);
-        tagDirs = tagsRunDirs(split.task, RUNS_DIR);
-      }
-    }
-    // несуществующий тег знаний в knowledge блока — 400 до создания папки запуска, как директории
-    try {
+      // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
+      knowledge = knowledgeTags(runTagSlugs(body.tags)).map((t) => t.slug);
+      slug = spaceSlug(body.space);
+      if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
+      if (body.autoSpace !== undefined && typeof body.autoSpace !== 'boolean') throw new Error('autoSpace — true или false');
+      // битый space.json — тоже 400
+      if (slug) readSpaceMeta(slug);
+      // несуществующий тег знаний в knowledge блока — 400 до создания папки запуска, как директории
       resolveKnowledge(spec, knowledge);
     } catch (err) {
       throw new HttpError(400, errMsg(err));
     }
     const links = runLinks(body, cwd);
-    // автотег — после всех проверок: запрос, который получил бы 400, не тратит денег. Выбран тег задачи руками —
-    // галочка не действует. Сбой подбора — не ошибка запуска: он идёт без тега, причина — в ответе и run.json
-    let autoTag: AutoTagReport | undefined;
-    if (body.autoTag === true && !taskTags.length) {
-      autoTag = await pickAutoTag(spec.input ?? '', { flow: spec.name, source: links.source });
-      const tag = autoTag.slug ? readTag(autoTag.slug) : undefined;
-      if (tag) {
-        taskTags = [tag.slug];
-        spec.input = withTagsInput(spec.input ?? '', [tag]);
-        tagDirs = tagsRunDirs([tag], RUNS_DIR);
-        // автотег без саммари бесполезен: галочка «Обновить саммари» для него не действует
-        saveTag = true;
-      }
+    let saveState = body.saveState !== false;
+    // пространство заводится последним: ошибка 400 выше не оставит пустое пространство на диске
+    let space = slug ? readSpace(slug) ?? createSpace(slug) : undefined;
+    // автопространство — после всех проверок: запрос, который получил бы 400, не тратит денег. Выбрано пространство —
+    // галочка не действует. Сбой подбора — не ошибка запуска: он идёт без пространства, причина — в ответе и run.json
+    let autoSpace: AutoSpaceReport | undefined;
+    if (body.autoSpace === true && !space) {
+      autoSpace = await pickAutoSpace(spec.input ?? '', { flow: spec.name, source: links.source });
+      space = autoSpace.slug ? readSpace(autoSpace.slug) : undefined;
+      // автопространство без состояния бесполезно: галочка «Обновить состояние» для него не действует
+      if (space) saveState = true;
     }
     const id = startRun(spec, {
       cwd,
@@ -603,12 +629,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       addDirs,
       attachments,
       adhoc,
-      ...(taskTags.length ? { tags: taskTags, saveTag, tagDirs } : {}),
+      ...(space ? { space: space.slug, saveState, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
       ...(knowledge.length ? { knowledge } : {}),
-      ...(autoTag ? { autoTag } : {}),
+      ...(autoSpace ? { autoSpace } : {}),
     }, opts);
-    const autoTagReply = autoTag && (autoTag.slug ? { slug: autoTag.slug, ...(autoTag.title ? { title: autoTag.title } : {}) } : { error: autoTag.error });
-    return sendJson(res, 201, { id, ...(autoTagReply ? { autoTag: autoTagReply } : {}) } satisfies RunStarted);
+    const autoSpaceReply = autoSpace && (autoSpace.slug ? { slug: autoSpace.slug, ...(autoSpace.title ? { title: autoSpace.title } : {}) } : { error: autoSpace.error });
+    return sendJson(res, 201, { id, ...(autoSpaceReply ? { autoSpace: autoSpaceReply } : {}) } satisfies RunStarted);
   }
 
   // Продолжение завершённого запуска текущей версией флоу: done-блоки не повторяются (continuationFrom).
@@ -887,14 +913,14 @@ function startRun(
     artifactsFrom?: { runId: string; runDir: string };
     /** Разовый запуск: flow не из flows/ (см. adhoc.ts). */
     adhoc?: boolean;
-    /** Теги задачи, галочка обновления их саммари и папки чтения из тегов (см. tags.ts). */
-    tags?: string[];
-    saveTag?: boolean;
-    tagDirs?: string[];
+    /** Пространство, галочка обновления его состояния и папки пространства (см. spaces.ts). */
+    space?: string;
+    saveState?: boolean;
+    spaceDirs?: string[];
     /** Теги знаний на весь запуск. */
     knowledge?: string[];
-    /** Итог автотега: в run.json, стоимость — в итог запуска. */
-    autoTag?: AutoTagReport;
+    /** Итог автопространства: в run.json, стоимость — в итог запуска. */
+    autoSpace?: AutoSpaceReport;
     /** Имя исходного запуска (продолжение): без подбора моделью. */
     title?: string;
   },
@@ -992,7 +1018,7 @@ function launchRun(
       const next = lr.running[0];
       lr.current = next ? { block: next.block, iteration: next.iteration, title: next.title } : null;
     } else if (e.type === 'condition_start') lr.current = { block: e.block, iteration: e.iteration, title: 'проверка условия' };
-    else if (e.type === 'tag_summary_start') lr.current = { block: '', iteration: 0, title: `саммари тега ${e.tag}` };
+    else if (e.type === 'space_state_start') lr.current = { block: '', iteration: 0, title: `состояние пространства ${e.space}` };
     else if (e.type === 'condition' || e.type === 'end') {
       lr.current = null;
       lr.running = [];
@@ -1076,7 +1102,7 @@ function launchRun(
       ...(opts.adhoc ? { adhoc: true as const } : {}),
       ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
-      ...(opts.tags?.length ? { tags: opts.tags, saveTag: opts.saveTag !== false } : {}),
+      ...(opts.space ? { space: opts.space, saveState: opts.saveState !== false } : {}),
       ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
       ...(opts.title ? { title: opts.title } : {}),
       ...(opts.parent ? { parent: opts.parent } : {}),
@@ -1407,7 +1433,8 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   // вызванный блоком-вызовом запуск продолжается вместе с родителем: отдельно он оторвался бы от связки
   if (prev.parent) throw new HttpError(400, childContinueReason(prev.parent));
   const spec = specOf(prev);
-  spec.input = prev.input;
+  // старый запуск нёс в задаче блоки тегов задач с саммари на момент старта: теперь свежее состояние даёт раздел пространства
+  spec.input = prev.space || !prev.tags?.length ? prev.input : stripTagBlocks(prev.input);
   let cont: Continuation;
   try {
     cont = continuationFrom(prev, spec, {
@@ -1444,8 +1471,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     artifactsFrom: { runId: prevId, runDir: path.join(RUNS_DIR, prevId) },
     // продолжение разового запуска тоже разовое: его снимок — тот же flow
     adhoc: prev.adhoc,
-    // теги и галочка наследуются; ввод уже с блоками тегов. Папки чтения пересчитываются по нынешним тегам: старые могли удалить
-    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    // пространство и галочка наследуются (у старого запуска — его перенесённый тег задачи); папки пересчитываются по
+    // нынешнему пространству: старые могли удалить
+    ...inheritedSpace(prev),
     // теги знаний тоже наследуются; их разделы раннер пересчитает по нынешнему состоянию тегов
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     // имя наследуется, модель заново не зовётся
@@ -1579,7 +1607,8 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   } catch (err) {
     throw new HttpError(400, errMsg(err));
   }
-  spec.input = prev.input;
+  // старый запуск нёс в задаче блоки тегов задач с саммари на момент старта: теперь свежее состояние даёт раздел пространства
+  spec.input = prev.space || !prev.tags?.length ? prev.input : stripTagBlocks(prev.input);
   const id = startRun(spec, {
     cwd: prev.cwd,
     maxBudgetUsd: o.maxBudgetUsd,
@@ -1589,7 +1618,7 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
     adhoc: prev.adhoc,
-    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    ...inheritedSpace(prev),
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     ...(prev.title ? { title: prev.title } : {}),
   }, srv);
@@ -1853,7 +1882,7 @@ function listRuns(): RunSummary[] {
       worktree: r.worktree,
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
-      ...(r.tags?.length ? { tags: r.tags } : {}),
+      ...(runSpace(r) ? { space: runSpace(r) } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
       ...(r.parent ? { parent: r.parent } : {}),
     });
@@ -1894,15 +1923,38 @@ function finishedRun(id: string): { dir: string; file: string } | { code: number
   return { dir, file: path.join(dir, 'run.json') };
 }
 
-/** Теги по слагам из отчёта; испорченный или удалённый тег пропускается. */
-function readTagsSafe(slugs: string[]): Tag[] {
-  return slugs.flatMap((slug) => {
-    try {
-      return readTag(slug) ?? [];
-    } catch {
-      return [];
-    }
-  });
+/**
+ * Пространство запуска: его space, у старого запуска (до пространств) — первый тег задачи, перенесённый в пространство
+ * с тем же слагом. Чтобы не тянуть битый отчёт в 500, ошибки чтения — «без пространства».
+ */
+function runSpace(r: Pick<RunReport, 'space' | 'tags'>): string | undefined {
+  return r.space ?? r.tags?.[0];
+}
+
+/**
+ * Продолжение и перезапуск наследуют пространство и галочку состояния; папки — по нынешнему пространству (его пути и
+ * артефакты могли измениться). Удалённое пространство — продолжение без него.
+ */
+function inheritedSpace(prev: RunReport): { space?: string; saveState?: boolean; spaceDirs?: string[] } {
+  const slug = runSpace(prev);
+  let space;
+  try {
+    space = slug ? readSpace(slug) : undefined;
+  } catch {
+    space = undefined;
+  }
+  if (!space) return {};
+  return { space: space.slug, saveState: (prev.space ? prev.saveState : prev.saveTag) !== false, spaceDirs: spaceReadDirs(space, RUNS_DIR) };
+}
+
+/** Запуски пространства для его страницы: свежие сверху; legacy — запуск до пространств с этим тегом задачи. */
+function spaceRuns(slug: string) {
+  return listRuns()
+    .filter((r) => r.space === slug)
+    .map((r) => {
+      const legacy = !readReport(r.id)?.space;
+      return { id: r.id, flow: r.flow, ...(r.title ? { title: r.title } : {}), status: r.status, startedAt: r.startedAt, ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}), input: r.input, ...(legacy ? { legacy: true as const } : {}) };
+    });
 }
 
 function readReport(id: string): RunReport | undefined {

@@ -13,18 +13,20 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  SessionList, SessionPermissionMode, SessionStatus, SessionSummary, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, TagKind,
+  SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, SpaceSession,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
-import { createTag, queueTagSummary, readTag, runTagSlugs, writeTagSummary } from './tags.js';
-import { dropRunPaths, parseTagSummary, sessionTagSummaryRequest, type SessionTurn } from './tag-summary.js';
+import { knowledgeTags, readTag, runTagSlugs } from './tags.js';
+import { createSpace, queueSpaceState, readSpace, readSpaceMeta, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS } from './spaces.js';
+import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
 import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import {
-  findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionTags, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
-  childPermissionMode, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, sessionTagDirs, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type HookState,
+  findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
+  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_TOKEN_HEADER, TRUST_PROMPT_RE, type Delivered, type HookState,
+  type SessionCtx,
 } from './sessions.js';
 import { mcpReply, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
@@ -34,10 +36,16 @@ export type SessionRecord = {
   id: string;
   name: string;
   cwd: string;
+  /** Пространство (слаг). У сессии до пространств — её первый тег задачи (перенесён в пространство). */
+  space?: string;
+  /** Теги знаний (слаги). */
   tags: string[];
+  /** Сессия до пространств: все её теги задач — по ним она видна на странице каждого перенесённого пространства. */
+  legacyTaskTags?: string[];
   model?: string;
   permissionMode?: SessionPermissionMode;
-  saveTag: boolean;
+  /** Обновлять состояние пространства при выходе. */
+  saveState: boolean;
   /** Разговоры Claude этой сессии по порядку: /clear и /resume начинают новый, «Продолжить» берёт последний. */
   claudeSessionIds: string[];
   transcriptPath?: string;
@@ -48,11 +56,11 @@ export type SessionRecord = {
   outcome?: 'untrusted' | 'failed';
   turns: number;
   claudeVersion?: string;
-  /** Ходов (из turns), уже ушедших в саммари тегов задач. */
+  /** Ходов (из turns), уже ушедших в состояние пространства (раньше — в саммари тегов задач). */
   summarizedTurns?: number;
-  summary?: SessionSummary;
-  /** Саммари при выходе не записано: приложение закрыли (Cmd+Q) или сервер остановился, пока сессия шла. */
-  summaryPending?: 'app-closed';
+  stateUpdate?: SessionStateUpdate;
+  /** Состояние при выходе не записано: приложение закрыли (Cmd+Q) или сервер остановился, пока сессия шла. */
+  statePending?: 'app-closed';
 };
 
 /** Подключённый экран: сокет, к какому процессу он подцеплен и его размер (с ним же — к новому процессу). */
@@ -66,7 +74,10 @@ type Live = {
   pty: PtySession | null;
   screen?: { d: string; cols: number; rows: number };
   status: SessionStatus;
-  injected: string[] | null;
+  /** Что модель уже получила: пространство и теги знаний; null — SessionStart не приходил. */
+  injected: Delivered | null;
+  /** Пространство, с которым запущен процесс: его папка в --add-dir, карта — в памяти claude. */
+  launchSpace?: string;
   started: boolean;
   /** Режим разрешений claude сейчас (из хуков; Shift+Tab его меняет) — его получит сессия из session_new. */
   mode?: string;
@@ -77,10 +88,11 @@ type Live = {
   lastHookAt: number;
   sockets: Map<WebSocket, Conn>;
   watch?: ReturnType<typeof setInterval>;
-  summarizing: boolean;
-  /** Процесс гасит остановка сервера: саммари не пишем, ставим пометку. */
+  /** Пишется состояние пространства. */
+  updatingState: boolean;
+  /** Процесс гасит остановка сервера: состояние не пишем, ставим пометку. */
   appClosed?: boolean;
-  /** «Перезапустить с тегами»: выход старого процесса — не конец сессии, саммари не нужно. */
+  /** «Перезапустить»: выход старого процесса — не конец сессии, состояние не нужно. */
   restarting?: boolean;
 };
 
@@ -94,9 +106,9 @@ export type SessionDeps = {
   dir: string;
   runsDir: string;
   env: () => NodeJS.ProcessEnv;
-  /** Через сколько без SessionStart показывать «теги не доставлены». */
+  /** Через сколько без SessionStart показывать «контекст не доставлен». */
   deliveryAfterMs: number;
-  /** Сессия саммари тега (Agent SDK). */
+  /** Сессия состояния пространства (Agent SDK). */
   summarize: (req: SessionRequest) => Promise<SessionResult>;
 };
 
@@ -142,7 +154,7 @@ export class SessionManager {
   /** Сервер останавливается: новых сессий и подключений не принимаем — их claude никто бы не погасил. */
   private stopping = false;
   private loaded = false;
-  /** Идущие саммари тегов: остановка сервера прерывает их и ждёт, пока запишется пометка. */
+  /** Идущие сессии состояния: остановка сервера прерывает их и ждёт, пока запишется пометка. */
   private readonly summaries = new Map<Promise<void>, AbortController>();
 
   constructor(readonly deps: SessionDeps) {}
@@ -162,7 +174,7 @@ export class SessionManager {
 
   /**
    * Сессии с диска: после перезапуска сервера они завершены. Шедшая в момент остановки (session.json без endedAt —
-   * сервер упал или его погасили) — завершена сейчас, а её ходы без саммари — с пометкой «приложение закрыли».
+   * сервер упал или его погасили) — завершена сейчас, а её ходы без состояния — с пометкой «приложение закрыли».
    */
   private load(): void {
     if (this.loaded) return;
@@ -180,7 +192,7 @@ export class SessionManager {
       const s = newLive(rec, 'ended');
       if (!rec.endedAt) {
         rec.endedAt = rec.lastActivityAt;
-        if (this.wantsSummary(s)) rec.summaryPending = 'app-closed';
+        if (this.wantsState(s)) rec.statePending = 'app-closed';
         // не записалось (нет прав, нет места) — сессия всё равно в списке, остальные тоже
         try {
           this.save(s);
@@ -202,10 +214,21 @@ export class SessionManager {
   }
 
   list(): SessionList {
-    const kinds = kindCache();
-    const views = [...this.sessions.values()].map((s) => this.view(s, kinds));
+    const views = [...this.sessions.values()].map((s) => this.view(s));
     views.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivityAt.localeCompare(a.lastActivityAt));
     return { sessions: views, max: LIVE_SESSIONS_MAX };
+  }
+
+  /** Сессии пространства для его страницы: живые сверху, потом свежие; legacy — сессия до пространств с этим тегом задачи. */
+  spaceSessions(slug: string): SpaceSession[] {
+    return [...this.sessions.values()]
+      .filter((s) => s.rec.space === slug || s.rec.legacyTaskTags?.includes(slug))
+      .map((s): SpaceSession => {
+        const live = Boolean(s.pty?.alive);
+        const legacy = Boolean(s.rec.legacyTaskTags?.includes(slug));
+        return { id: s.rec.id, name: s.rec.name, status: live ? s.status : 'ended', live, cwd: s.rec.cwd, lastActivityAt: s.rec.lastActivityAt, turns: s.rec.turns, ...(legacy ? { legacy: true as const } : {}) };
+      })
+      .sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivityAt.localeCompare(a.lastActivityAt));
   }
 
   get(id: string): Live {
@@ -214,11 +237,13 @@ export class SessionManager {
     return s;
   }
 
-  view(s: Live, kinds = kindCache()): SessionView {
+  view(s: Live): SessionView {
     const r = s.rec;
     const live = Boolean(s.pty?.alive);
-    const chips: SessionTagChip[] = r.tags.map((slug) => ({ slug, kind: kinds(slug), state: live && !s.injected?.includes(slug) ? 'pending' : 'on' }));
-    if (live && s.injected) for (const slug of s.injected.filter((x) => !r.tags.includes(x))) chips.push({ slug, kind: kinds(slug), state: 'removed' });
+    const got = s.injected;
+    const chips: SessionTagChip[] = r.tags.map((slug) => ({ slug, state: live && !got?.tags.includes(slug) ? 'pending' : 'on' }));
+    if (live && got) for (const slug of got.tags.filter((x) => !r.tags.includes(x))) chips.push({ slug, state: 'removed' });
+    const spaceChip = this.spaceChip(s, live);
     const delivery = this.delivery(s);
     return {
       id: r.id,
@@ -226,11 +251,13 @@ export class SessionManager {
       cwd: r.cwd,
       status: live ? s.status : 'ended',
       live,
+      ...(r.space ? { space: r.space } : {}),
+      ...(spaceChip ? { spaceChip } : {}),
       tags: r.tags,
       chips,
       ...(r.model ? { model: r.model } : {}),
       ...(r.permissionMode ? { permissionMode: r.permissionMode } : {}),
-      saveTag: r.saveTag,
+      saveState: r.saveState,
       createdAt: r.createdAt,
       lastActivityAt: r.lastActivityAt,
       ...(r.endedAt ? { endedAt: r.endedAt } : {}),
@@ -241,11 +268,29 @@ export class SessionManager {
       ...(r.claudeVersion ? { claudeVersion: r.claudeVersion } : {}),
       ...(r.transcriptPath ? { transcriptPath: r.transcriptPath } : {}),
       newTurns: newTurns(r),
-      ...(r.summary ? { summary: r.summary } : {}),
-      ...(s.summarizing ? { summarizing: true as const } : {}),
-      ...(r.summaryPending ? { summaryPending: r.summaryPending } : {}),
+      ...(r.stateUpdate ? { stateUpdate: r.stateUpdate } : {}),
+      ...(s.updatingState ? { updatingState: true as const } : {}),
+      ...(r.statePending ? { statePending: r.statePending } : {}),
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
     };
+  }
+
+  /**
+   * Чип пространства: выбранное на ходу — pending, пока не дошло до модели; снятое — removed, пока снятие не дошло;
+   * пространство удалили — missing (сессия идёт без него).
+   */
+  private spaceChip(s: Live, live: boolean): SessionSpaceChip | undefined {
+    const cur = s.rec.space;
+    const got = s.injected?.space;
+    let missing = false;
+    try {
+      missing = Boolean(cur && !readSpaceMeta(cur));
+    } catch {
+      missing = true;
+    }
+    const extra = missing ? { missing: true as const } : {};
+    if (cur) return { slug: cur, state: live && got !== cur && !missing ? 'pending' : 'on', ...extra };
+    return live && got ? { slug: got, state: 'removed' } : undefined;
   }
 
   /** Живая сессия, чьи теги ещё не доставлены: диалог доверия на экране — сразу, иначе — через deliveryAfterMs. */
@@ -265,30 +310,35 @@ export class SessionManager {
     const cwd = path.resolve(typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : defaultCwd);
     if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Директория не найдена: ${cwd}`);
     let tags: string[];
+    let space: string | undefined;
     let flags: ReturnType<typeof sessionFlags>;
     let prompt: string | undefined;
     try {
-      tags = runTagSlugs(body.tags);
-      for (const t of tags) readTag(t);
+      if (body.saveTag !== undefined) throw new Error('Теги задач заменены пространствами: space и saveState вместо тега задачи и saveTag');
+      // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
+      tags = knowledgeTags(runTagSlugs(body.tags)).map((t) => t.slug);
+      space = spaceSlug(body.space);
+      if (space) readSpaceMeta(space);
       flags = sessionFlags(body);
       prompt = sessionPrompt(body.prompt);
-      if (body.saveTag !== undefined && typeof body.saveTag !== 'boolean') throw new Error('saveTag — true или false');
+      if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
     } catch (err) {
       throw new SessionError(400, errMsg(err));
     }
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
-    // теги — последними: ошибка выше не оставит пустой тег на диске. Новый слаг — тег задачи
-    for (const t of tags) createTag(t);
+    // пространство — последним: ошибка выше не оставит пустое пространство на диске. Новый слаг — пустое пространство
+    if (space && !readSpaceMeta(space)) createSpace(space);
     const id = randomUUID();
     const now = new Date().toISOString();
     const rec: SessionRecord = {
       id,
-      name: sessionName(body.name, tags, cwd),
+      name: sessionName(body.name, [...(space ? [space] : []), ...tags], cwd),
       cwd,
+      ...(space ? { space } : {}),
       tags,
       ...flags,
-      saveTag: body.saveTag !== false,
+      saveState: body.saveState !== false,
       claudeSessionIds: [],
       createdAt: now,
       lastActivityAt: now,
@@ -305,20 +355,22 @@ export class SessionManager {
     return this.view(s);
   }
 
-  /** Новый процесс claude для сессии: новый токен, папки и запреты по текущим тегам. */
+  /** Новый процесс claude для сессии: новый токен, папки и запреты по текущим пространству и тегам знаний. */
   private spawn(s: Live, kit: PtyKit, bin: string, port: number, conv: { claudeSessionId: string; resume: boolean; prompt?: string }, size: { cols: number; rows: number }): void {
     const r = s.rec;
     const filesDir = this.filesDir(r.id);
     fs.mkdirSync(filesDir, { recursive: true });
-    const tags = readSessionTags(r.tags, readTag);
-    const artifacts = sessionReadTargets(tags, this.deps.runsDir).dirs.filter((d) => isInside(d, this.deps.runsDir));
-    const dirs = launchDirs(sessionTagDirs(tags, this.deps.runsDir), r.cwd, filesDir, artifacts);
+    const ctx = this.ctx(r);
+    const artifacts = sessionReadTargets(ctx, this.deps.runsDir).dirs.filter((d) => isInside(d, this.deps.runsDir));
+    const dirs = launchDirs(sessionDirs(ctx, this.deps.runsDir), r.cwd, filesDir, artifacts);
     s.token = randomBytes(32).toString('hex');
     const args = sessionArgs({ id: r.id, token: s.token, port, ...conv, name: r.name, ...dirs, model: r.model, permissionMode: r.permissionMode });
-    // CLAUDE.md ищется только в папках тегов: папка перетащенных файлов — не повод
+    // CLAUDE.md ищется только в папках пространства и тегов: папка перетащенных файлов — не повод
     const proc = kit.spawn(bin, args, { name: 'xterm-256color', ...size, cwd: r.cwd, env: sessionEnv(this.deps.env(), dirs.addDirs.length > 1) });
     const pty = new PtySession(proc, kit.mirror(size.cols, size.rows), size);
-    Object.assign(s, { pty, status: 'starting', injected: null, started: false, mode: undefined, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
+    // карта в памяти, только если папка пространства и правда ушла в --add-dir (не внутри cwd, без спецсимволов)
+    const launchSpace = ctx.space && (dirs.addDirs.includes(ctx.space.dir) || isInside(r.cwd, ctx.space.dir)) ? ctx.space.slug : undefined;
+    Object.assign(s, { pty, status: 'starting', injected: null, launchSpace, started: false, mode: undefined, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
     delete r.endedAt;
     delete r.exitCode;
     delete r.outcome;
@@ -377,10 +429,10 @@ export class SessionManager {
       const outcome = s.sawTrust ? 'untrusted' : code !== 0 ? 'failed' : undefined;
       if (outcome) s.rec.outcome = outcome;
     }
-    if (!s.restarting && this.wantsSummary(s)) {
-      // при остановке сервера сессия саммари не успела бы и тратила бы деньги без спроса: пометка и кнопка
-      if (s.appClosed) s.rec.summaryPending = 'app-closed';
-      else void this.summarize(s).catch((err: unknown) => console.error('сессия: саммари —', errMsg(err)));
+    if (!s.restarting && this.wantsState(s)) {
+      // при остановке сервера сессия состояния не успела бы и тратила бы деньги без спроса: пометка и кнопка
+      if (s.appClosed) s.rec.statePending = 'app-closed';
+      else void this.summarize(s).catch((err: unknown) => console.error('сессия: состояние —', errMsg(err)));
     }
     pty.broadcast({ t: 'x', code });
     this.changed(s);
@@ -390,17 +442,43 @@ export class SessionManager {
 
   // --- правки
 
+  /** Пространство и существующие теги знаний записи сессии на этот момент. */
+  private ctx(r: SessionRecord): SessionCtx {
+    return readSessionCtx(r.space, r.tags, { space: readSpace, tag: readTag });
+  }
+
+  /** Теги знаний сессии: только существующие теги знаний; живой сессии — со следующим шагом. */
   setTags(id: string, body: Record<string, unknown>): SessionView {
     const s = this.get(id);
     let tags: string[];
     try {
-      tags = runTagSlugs(body.tags);
-      for (const t of tags) readTag(t);
+      tags = knowledgeTags(runTagSlugs(body.tags)).map((t) => t.slug);
     } catch (err) {
       throw new SessionError(400, errMsg(err));
     }
-    for (const t of tags) createTag(t);
     s.rec.tags = tags;
+    this.save(s);
+    this.changed(s);
+    return this.view(s);
+  }
+
+  /**
+   * Пространство сессии: слаг (нового — пустое пространство) или null — без пространства. Живой сессии раздел придёт со
+   * следующим шагом, а карта в память — после «Перезапустить» (--add-dir живого claude не меняется); завершённой — при
+   * «Продолжить». Состояние при выходе пишется в новое пространство.
+   */
+  setSpace(id: string, body: Record<string, unknown>): SessionView {
+    const s = this.get(id);
+    let space: string | undefined;
+    try {
+      space = spaceSlug(body.space);
+      if (space) readSpaceMeta(space);
+    } catch (err) {
+      throw new SessionError(400, errMsg(err));
+    }
+    if (space && !readSpaceMeta(space)) createSpace(space);
+    if (space) s.rec.space = space;
+    else delete s.rec.space;
     this.save(s);
     this.changed(s);
     return this.view(s);
@@ -409,7 +487,7 @@ export class SessionManager {
   rename(id: string, body: Record<string, unknown>): SessionView {
     const s = this.get(id);
     if (typeof body.name !== 'string') throw new SessionError(400, 'name — строка');
-    s.rec.name = sessionName(body.name, s.rec.tags, s.rec.cwd);
+    s.rec.name = sessionName(body.name, [...(s.rec.space ? [s.rec.space] : []), ...s.rec.tags], s.rec.cwd);
     this.save(s);
     this.changed(s);
     return this.view(s);
@@ -423,7 +501,7 @@ export class SessionManager {
   }
 
   /**
-   * «Продолжить»: новый процесс claude в той же папке с текущими тегами (папки и запреты — заново). Транскрипт последнего
+   * «Продолжить»: новый процесс claude в той же папке с текущими пространством и тегами (папки и запреты — заново). Транскрипт последнего
    * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же.
    */
   async resume(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
@@ -446,9 +524,9 @@ export class SessionManager {
   }
 
   /**
-   * «Перезапустить с тегами»: --add-dir в живом claude не меняется, а папки тегов, добавленных на ходу, нужны ему без
-   * вопросов. Процесс гасится и поднимается заново тем же разговором (--resume) с пересчитанными папками; экран
-   * переходит к новому процессу, саммари на этом выходе не пишется.
+   * «Перезапустить»: --add-dir в живом claude не меняется, а карта пространства и папки тегов, выбранных на ходу, нужны ему
+   * без вопросов. Процесс гасится и поднимается заново тем же разговором (--resume) с пересчитанными папками; экран
+   * переходит к новому процессу, состояние на этом выходе не пишется.
    */
   async restart(id: string, port: number): Promise<SessionView> {
     const s = this.get(id);
@@ -466,81 +544,71 @@ export class SessionManager {
   /** Удалить запись сессии agentgraph (папку с журналом и файлами); транскрипт Claude остаётся. Живую — нельзя. */
   remove(id: string): void {
     const s = this.get(id);
-    if (s.pty?.alive || s.summarizing) throw new SessionError(409, s.summarizing ? 'Пишется саммари: дождись его' : 'Сессия ещё идёт: сначала заверши её');
+    if (s.pty?.alive || s.updatingState) throw new SessionError(409, s.updatingState ? 'Пишется состояние пространства: дождись его' : 'Сессия ещё идёт: сначала заверши её');
     for (const ws of s.sockets.keys()) ws.terminate();
     fs.rmSync(path.join(this.deps.dir, s.rec.id), { recursive: true, force: true });
     this.sessions.delete(s.rec.id);
   }
 
-  // --- саммари тегов задач
+  // --- состояние пространства
 
-  /** Есть что записать: галочка, ходы после прошлого саммари и хоть один тег задачи. */
-  private wantsSummary(s: Live): boolean {
-    return s.rec.saveTag && newTurns(s.rec) > 0 && readSessionTags(s.rec.tags, readTag).task.length > 0;
+  /** Есть что записать: галочка, ходы после прошлого обновления и пространство на диске. */
+  private wantsState(s: Live): boolean {
+    return s.rec.saveState && newTurns(s.rec) > 0 && Boolean(this.ctx(s.rec).space);
   }
 
-  /** «Обновить саммари»: в любой момент, только ходы после прошлого саммари. Ответ — сразу, саммари пишется в фоне. */
-  startSummary(id: string): SessionView {
+  /** «Обновить состояние»: в любой момент, только ходы после прошлого обновления. Ответ — сразу, состояние пишется в фоне. */
+  startState(id: string): SessionView {
     const s = this.get(id);
-    if (s.summarizing) throw new SessionError(409, 'Саммари уже пишется');
+    if (s.updatingState) throw new SessionError(409, 'Состояние уже пишется');
     if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
-    if (!newTurns(s.rec)) throw new SessionError(409, 'Новых ходов с прошлого саммари нет');
-    if (!readSessionTags(s.rec.tags, readTag).task.length) throw new SessionError(409, 'У сессии нет тегов задач: саммари есть только у них');
-    void this.summarize(s).catch((err: unknown) => console.error('сессия: саммари —', errMsg(err)));
+    if (!newTurns(s.rec)) throw new SessionError(409, 'Новых ходов с прошлого обновления нет');
+    if (!this.ctx(s.rec).space) throw new SessionError(409, 'У сессии нет пространства: состояние пишется только в пространство');
+    void this.summarize(s).catch((err: unknown) => console.error('сессия: состояние —', errMsg(err)));
     return this.view(s);
   }
 
   /**
-   * Сессия haiku на каждый тег задачи, по очереди: прошлое саммари тега и ходы с прошлого саммари → новое саммари.
-   * Записи тега идут через queueTagSummary: две сессии одного тега не затрут друг друга. Ошибка одного тега не мешает
-   * остальным; ходы считаются учтёнными, только если записались все теги.
+   * Сессия haiku: прошлое состояние пространства и ходы с прошлого обновления → новое состояние. Запись идёт через
+   * queueSpaceState: сессия и запуск одного пространства не затрут друг друга. Ошибка — ходы не считаются учтёнными.
    */
   private summarize(s: Live): Promise<void> {
     const abort = new AbortController();
-    const p: Promise<void> = this.runSummary(s, abort).finally(() => this.summaries.delete(p));
+    const p: Promise<void> = this.runState(s, abort).finally(() => this.summaries.delete(p));
     this.summaries.set(p, abort);
     return p;
   }
 
   /**
-   * Прерывание (остановка сервера): идущая сессия саммари гасится, ждущие в очереди тега не начинаются; ходы не
-   * считаются учтёнными, у сессии — пометка «приложение закрыли».
+   * Прерывание (остановка сервера): идущая сессия состояния гасится, ждущая в очереди не начинается; ходы не считаются
+   * учтёнными, у сессии — пометка «приложение закрыли».
    */
-  private async runSummary(s: Live, abort: AbortController): Promise<void> {
-    if (s.summarizing) return;
+  private async runState(s: Live, abort: AbortController): Promise<void> {
+    if (s.updatingState) return;
     const all = readTurns(this.turnsFile(s.rec.id));
     const from = Math.min(s.rec.summarizedTurns ?? 0, all.length);
     const turns = all.slice(from);
-    const task = readSessionTags(s.rec.tags, readTag).task;
-    if (!turns.length || !task.length) return;
-    s.summarizing = true;
+    const slug = this.ctx(s.rec).space?.slug;
+    if (!turns.length || !slug) return;
+    s.updatingState = true;
     this.changed(s);
-    const summary: SessionSummary = { at: '', tags: [], costUsd: 0 };
-    const errors: Record<string, string> = {};
+    const update: SessionStateUpdate = { at: '', space: slug, ok: false, costUsd: 0 };
     try {
-      for (const tag of task) {
-        if (abort.signal.aborted) break;
-        try {
-          // в очереди тега могли ждать долго: за это время сервер начал останавливаться
-          summary.costUsd += await queueTagSummary(tag.slug, () => (abort.signal.aborted ? Promise.reject(new Error('остановлено')) : this.summarizeTag(s, tag.slug, turns, abort)));
-          summary.tags.push(tag.slug);
-        } catch (err) {
-          if (!abort.signal.aborted) errors[tag.slug] = errMsg(err);
-        }
-      }
+      // в очереди пространства могли ждать долго: за это время сервер начал останавливаться
+      update.costUsd = await queueSpaceState(slug, () => (abort.signal.aborted ? Promise.reject(new Error('остановлено')) : this.writeState(s, slug, turns, abort)));
+      update.ok = true;
+    } catch (err) {
+      if (!abort.signal.aborted) update.error = errMsg(err);
     } finally {
-      s.summarizing = false;
-      summary.at = new Date().toISOString();
-      if (abort.signal.aborted) {
-        s.rec.summaryPending = 'app-closed';
-        if (summary.tags.length) s.rec.summary = summary;
-      } else {
-        if (Object.keys(errors).length) summary.errors = errors;
-        else {
+      s.updatingState = false;
+      update.at = new Date().toISOString();
+      if (abort.signal.aborted && !update.ok) s.rec.statePending = 'app-closed';
+      else {
+        if (update.ok) {
           s.rec.summarizedTurns = from + turns.length;
-          delete s.rec.summaryPending;
+          delete s.rec.statePending;
         }
-        s.rec.summary = summary;
+        s.rec.stateUpdate = update;
       }
       try {
         this.save(s);
@@ -550,17 +618,19 @@ export class SessionManager {
     }
   }
 
-  /** Одно саммари тега; пока шла сессия, саммари переписал запуск — считаем ещё раз от нового. Возвращает стоимость. */
-  private async summarizeTag(s: Live, slug: string, turns: SessionTurn[], abort: AbortController): Promise<number> {
+  /** Одно обновление состояния; пока шла сессия, состояние переписал запуск — считаем ещё раз от нового. Возвращает стоимость. */
+  private async writeState(s: Live, slug: string, turns: SessionTurn[], abort: AbortController): Promise<number> {
     let cost = 0;
     for (let attempt = 0; ; attempt++) {
-      const prev = readTag(slug)?.summary ?? '';
-      const res = await this.deps.summarize(sessionTagSummaryRequest(s.rec, slug, prev, turns, { model: 'haiku', abort }));
+      const space = readSpace(slug);
+      if (!space) throw new Error(`пространства ${slug} нет: его удалили`);
+      const prev = space.state;
+      const res = await this.deps.summarize(sessionStateRequest(s.rec, space, prev, turns, { model: 'haiku', abort }));
       if (abort.signal.aborted) throw new Error('остановлено');
       cost += res.costUsd;
-      const text = dropRunPaths(parseTagSummary(res), this.deps.runsDir);
-      if (attempt === 0 && (readTag(slug)?.summary ?? '') !== prev) continue;
-      writeTagSummary(slug, text, { id: s.rec.id, flow: 'session', finishedAt: new Date().toISOString(), status: 'done', kind: 'session', title: s.rec.name });
+      const text = dropRunPaths(parseSpaceState(res), this.deps.runsDir);
+      if (attempt === 0 && (readSpace(slug)?.state ?? '') !== prev) continue;
+      writeSpaceState(slug, text, { id: s.rec.id, at: new Date().toISOString(), kind: 'session', title: s.rec.name });
       return cost;
     }
   }
@@ -592,12 +662,14 @@ export class SessionManager {
     return s;
   }
 
-  /** Хук: ответ и правка состояния; доставленный набор тегов запоминается, только когда ответ ушёл. */
+  /** Хук: ответ и правка состояния; доставленный контекст запоминается, только когда ответ ушёл. */
   hook(s: Live, raw: unknown, res: ServerResponse): Record<string, unknown> {
     const input = parseHookInput(raw);
     if (!input) throw new SessionError(400, 'Это не вход хука Claude Code');
     const state: HookState = {
+      ...(s.rec.space ? { space: s.rec.space } : {}),
       tags: s.rec.tags,
+      ...(s.launchSpace ? { launchSpace: s.launchSpace } : {}),
       injected: s.injected,
       status: s.status,
       claudeSessionIds: s.rec.claudeSessionIds,
@@ -607,8 +679,8 @@ export class SessionManager {
       permissionMode: s.mode,
     };
     const r = handleHook(state, input, {
-      readTags: (slugs) => readSessionTags(slugs, readTag),
-      readTargets: (tags) => sessionReadTargets(tags, this.deps.runsDir),
+      readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
+      readTargets: (ctx) => sessionReadTargets(ctx, this.deps.runsDir),
       realpath: safeRealpath,
     });
     const p = r.patch;
@@ -633,39 +705,53 @@ export class SessionManager {
     return r.reply;
   }
 
-  /** MCP дочернего claude: теги сессии на момент вызова и session_new — новая сессия рядом с этой. */
+  /** MCP дочернего claude: пространство и теги знаний на момент вызова, документ пространства, новая сессия рядом. */
   mcp(s: Live, body: unknown, port: number): Promise<McpReply> {
     return mcpReply(body, {
-      tags: () => {
-        const t = readSessionTags(s.rec.tags, readTag);
-        return { task: t.task.map((x) => x.slug), knowledge: t.knowledge.map((x) => x.slug) };
+      scope: () => {
+        const c = this.ctx(s.rec);
+        return { ...(c.space ? { space: c.space.slug } : {}), knowledge: c.knowledge.map((x) => x.slug) };
       },
       open: (args) => this.openFrom(s, args, port),
+      writeDoc: (name, text) => {
+        const space = this.ctx(s.rec).space;
+        if (!space) throw new Error('У этой сессии нет пространства: документ некуда записать. Пространство выбирают в agentgraph, в строке сессии');
+        const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
+        return path.join(space.dir, 'docs', doc.name);
+      },
     });
   }
 
   /**
-   * session_new из терминала сессии s. Чего модель не задала — как у s: папка, теги, модель, запись саммари в теги.
-   * Режим разрешений модель не выбирает: текущий режим s, а не известен — режим запуска или manual (childPermissionMode).
-   * Теги — любые существующие: опечатка модели не заводит пустой тег. Первое сообщение — с пометкой, что его написала
-   * модель: claude не примет его за slash-команду или `!`, а модель новой сессии видит, чей это текст. Открытые экраны
-   * s получают ссылку на новую сессию.
+   * session_new из терминала сессии s. Чего модель не задала — как у s: папка, пространство, теги знаний, модель, запись
+   * состояния. Режим разрешений модель не выбирает: текущий режим s, а не известен — режим запуска или manual
+   * (childPermissionMode). Пространство и теги — только существующие: опечатка модели не заводит пустое. Первое
+   * сообщение — с пометкой, что его написала модель: claude не примет его за slash-команду или `!`, а модель новой
+   * сессии видит, чей это текст. Открытые экраны s получают ссылку на новую сессию.
    */
   private async openFrom(s: Live, args: SessionNewArgs, port: number): Promise<SessionView> {
     const r = s.rec;
     const prompt = args.prompt && `Задача из сессии agentgraph «${r.name}»: этот текст написал Claude по просьбе пользователя.\n\n${args.prompt}`;
-    // слаг проверяется до чтения с диска: «../x» не должен стать путём
-    const missing = args.tags ? runTagSlugs(args.tags).filter((t) => !readTag(t)) : [];
-    if (missing.length) throw new SessionError(400, `Тегов ${missing.join(', ')} в agentgraph нет: новой сессии можно дать только существующие`);
+    let space: string | undefined;
+    let tags: string[];
+    try {
+      // слаг проверяется до чтения с диска: «../x» не должен стать путём
+      space = args.space === null ? undefined : args.space !== undefined ? spaceSlug(args.space) : this.ctx(r).space?.slug;
+      if (space && !readSpaceMeta(space)) throw new Error(`Пространства ${space} в agentgraph нет: новой сессии можно дать только существующее`);
+      tags = args.tags ? knowledgeTags(runTagSlugs(args.tags)).map((t) => t.slug) : this.ctx(r).knowledge.map((t) => t.slug);
+    } catch (err) {
+      throw new SessionError(400, errMsg(err));
+    }
     const cwd = args.cwd?.trim() ? path.resolve(r.cwd, args.cwd.trim().replace(/^~(?=$|\/)/, os.homedir())) : r.cwd;
     const v = await this.create(
       {
         cwd,
-        tags: args.tags ?? r.tags.filter((t) => readTag(t)),
+        ...(space ? { space } : {}),
+        tags,
         name: args.name,
         model: args.model ?? r.model,
         permissionMode: childPermissionMode(s.mode, r.permissionMode),
-        saveTag: r.saveTag,
+        saveState: r.saveState,
         prompt,
         ...(s.pty ? { cols: s.pty.cols, rows: s.pty.rows } : {}),
       },
@@ -849,35 +935,80 @@ export class SessionManager {
 }
 
 function newLive(rec: SessionRecord, status: SessionStatus): Live {
-  return { rec, token: '', pty: null, status, injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Map(), summarizing: false };
+  return { rec, token: '', pty: null, status, injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Map(), updatingState: false };
 }
 
-/** Ходов после прошлого саммари. */
+/** Ходов после прошлого обновления состояния. */
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
-/** session.json с диска: битый или чужой (id не совпадает с папкой) — undefined, сессия не показывается. */
-function readRecord(file: string, id: string): SessionRecord | undefined {
-  let raw: Partial<SessionRecord>;
+/** Поля session.json до пространств: теги задач, галочка и итог их саммари. */
+type LegacyRecord = { saveTag?: unknown; summary?: { at?: unknown; tags?: unknown; errors?: Record<string, unknown>; costUsd?: unknown }; summaryPending?: unknown };
+
+/** Вид старого тега: тег знаний на диске — знание, остальное (тег задачи, удалённый тег) — задача, как раньше. */
+function isKnowledge(slug: string): boolean {
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<SessionRecord>;
+    return readTag(slug)?.kind === 'knowledge';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * session.json с диска: битый или чужой (id не совпадает с папкой) — undefined, сессия не показывается. Запись до
+ * пространств (без saveState): теги делятся по виду — первый тег задачи становится пространством (тег перенесён в
+ * пространство с тем же слагом), все теги задач — legacyTaskTags; saveTag — saveState; итог саммари — итог состояния.
+ */
+export function readRecord(file: string, id: string): SessionRecord | undefined {
+  let raw: Partial<SessionRecord> & LegacyRecord;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof raw;
   } catch {
     return undefined;
   }
   if (!raw || raw.id !== id || typeof raw.cwd !== 'string' || typeof raw.createdAt !== 'string') return undefined;
+  const { saveTag, summary, summaryPending, ...rest } = raw;
+  const tags = strings(raw.tags);
+  const legacy = raw.saveState === undefined && saveTag !== undefined;
+  const task = legacy ? tags.filter((t) => !isKnowledge(t)) : strings(raw.legacyTaskTags);
+  let space = typeof raw.space === 'string' ? raw.space : undefined;
+  if (legacy && !space) {
+    // пространство из тега есть, только если перенос прошёл (readSpace его запускает); удалённый тег — без пространства
+    space = task.find((t) => {
+      try {
+        return Boolean(readSpace(t));
+      } catch {
+        return false;
+      }
+    });
+  }
+  const state = legacy && summary && space ? legacyState(summary, space) : raw.stateUpdate;
   return {
-    ...raw,
+    ...rest,
     id,
     name: typeof raw.name === 'string' ? raw.name : id.slice(0, 8),
     cwd: raw.cwd,
-    tags: strings(raw.tags),
-    saveTag: raw.saveTag !== false,
+    ...(space ? { space } : {}),
+    tags: legacy ? tags.filter(isKnowledge) : tags,
+    ...(task.length ? { legacyTaskTags: task } : {}),
+    saveState: (legacy ? saveTag : raw.saveState) !== false,
     claudeSessionIds: strings(raw.claudeSessionIds),
     createdAt: raw.createdAt,
     lastActivityAt: typeof raw.lastActivityAt === 'string' ? raw.lastActivityAt : raw.createdAt,
     turns: Number.isFinite(raw.turns) ? Number(raw.turns) : 0,
+    ...(state ? { stateUpdate: state } : {}),
+    ...(raw.statePending === 'app-closed' || summaryPending === 'app-closed' ? { statePending: 'app-closed' as const } : {}),
   };
+}
+
+/** Итог саммари старой сессии как итог состояния её пространства (тег задачи с тем же слагом). */
+function legacyState(sum: NonNullable<LegacyRecord['summary']>, space: string): SessionStateUpdate | undefined {
+  if (typeof sum.at !== 'string') return undefined;
+  const ok = strings(sum.tags).includes(space);
+  const error = sum.errors && typeof sum.errors[space] === 'string' ? (sum.errors[space] as string) : undefined;
+  if (!ok && !error) return undefined;
+  return { at: sum.at, space, ok, ...(error ? { error } : {}), costUsd: Number.isFinite(sum.costUsd) ? Number(sum.costUsd) : 0 };
 }
 
 /** Ходы из журнала: сообщение открывает ход, ответ — последний к нему (Stop бывает и без нового сообщения). */
@@ -900,23 +1031,6 @@ export function readTurns(file: string): SessionTurn[] {
     else if (typeof e.answer === 'string' && out.length) out[out.length - 1].answer = e.answer;
   }
   return out;
-}
-
-/** Вид тега по слагу, с кэшем на один ответ; нет тега — задача. */
-function kindCache(): (slug: string) => TagKind {
-  const cache = new Map<string, TagKind>();
-  return (slug) => {
-    let k = cache.get(slug);
-    if (!k) {
-      try {
-        k = readTag(slug)?.kind ?? 'task';
-      } catch {
-        k = 'task';
-      }
-      cache.set(slug, k);
-    }
-    return k;
-  };
 }
 
 function sizeOf(body: Record<string, unknown>): { cols: number; rows: number } {
@@ -985,10 +1099,11 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     }
     if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'GET') return done(200, mgr.view(mgr.get(m[1])) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/tags$/)) && method === 'PUT') return done(200, mgr.setTags(m[1], asObject(await ctx.readJson())) satisfies SessionView);
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/space$/)) && method === 'PUT') return done(200, mgr.setSpace(m[1], asObject(await ctx.readJson())) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/name$/)) && method === 'PUT') return done(200, mgr.rename(m[1], asObject(await ctx.readJson())) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/end$/)) && method === 'POST') return done(200, (await mgr.end(m[1])) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/files$/)) && method === 'POST') return done(201, mgr.saveFile(m[1], await ctx.readJson(FILE_BODY_MAX)));
-    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/summary$/)) && method === 'POST') return done(202, mgr.startSummary(m[1]) satisfies SessionView);
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/state$/)) && method === 'POST') return done(202, mgr.startState(m[1]) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/continue$/)) && method === 'POST') {
       const body = asObject(await ctx.readJson());
       return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
@@ -1009,6 +1124,12 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
 export const sessionsAvailable = () => sessionManager().available();
 /** upgrade сервера: WebSocket экрана сессии; остальное — 404. */
 export const sessionsUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => sessionManager().upgrade(req, socket, head);
+/** Сессии пространства (его страница): сначала сессии с диска, если сервер их ещё не читал. */
+export async function spaceSessions(slug: string): Promise<SpaceSession[]> {
+  const mgr = sessionManager();
+  await mgr.available();
+  return mgr.spaceSessions(slug);
+}
 /** Остановка сервера: WebSocket и claude. */
 export const stopSessions = (timeoutMs?: number) => (manager ? manager.stopAll(timeoutMs) : Promise.resolve());
 /** Названия живых сессий: подтверждение выхода в десктопе. */

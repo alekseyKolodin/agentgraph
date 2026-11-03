@@ -14,7 +14,7 @@ const run: Run = {
   flow: 'coffee-feature',
   title: 'Имя запуска и Поиск',
   input: 'Нужно сделать у запусков имя',
-  tags: ['run-title-search'],
+  space: 'run-title-search',
   knowledge: ['frontend'],
   cwd: '/Users/me/espresso/',
   source: { key: 'CAFE-42' },
@@ -41,7 +41,7 @@ test('поиск: несколько слов — нужны все, в любы
   assert.equal(runHit(run, 'поиск backend'), false);
 });
 
-test('поиск запусков: по имени, flow, задаче, тегу, тегу знаний, папке проекта, id и источнику', () => {
+test('поиск запусков: по имени, flow, задаче, пространству, тегу знаний, папке проекта, id и источнику', () => {
   for (const q of ['имя запуска', 'coffee-feature', 'сделать', 'run-title', 'frontend', 'espresso', '16-36-01', 'CAFE-42']) assert.ok(runHit(run, q), q);
   // папка проекта — только последний сегмент cwd
   assert.equal(runHit(run, 'users'), false);
