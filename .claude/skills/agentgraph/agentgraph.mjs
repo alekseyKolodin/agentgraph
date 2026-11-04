@@ -83,7 +83,7 @@ const usesAsk = (f) => (f.phases || []).some((p) => p.tools.includes('AskUserQue
 async function spaces() {
   await need('spaces');
   const { spaces: list } = await api('GET', '/api/spaces');
-  return list.map((s) => ({ slug: s.slug, title: s.title || undefined, preview: s.preview || undefined, docs: s.docs, hasMap: s.hasMap, hasState: s.hasState, updatedAt: s.updatedAt }));
+  return list.map((s) => ({ slug: s.slug, title: s.title || undefined, cwd: s.cwd || undefined, preview: s.preview || undefined, docs: s.docs, hasMap: s.hasMap, hasState: s.hasState, updatedAt: s.updatedAt }));
 }
 
 async function flows() {
