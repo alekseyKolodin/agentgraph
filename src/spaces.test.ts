@@ -39,10 +39,15 @@ import {
   updateSpaceReply,
   writeSpaceDoc,
   writeSpaceDocReply,
+  spacesListReply,
+  spaceWorkdirOf,
+  spaceWorkOf,
+  type SpaceWork,
   writeSpaceState,
   type SpaceUpdate,
 } from './spaces.js';
 import { createTag, readTag, tagDir, tagsDir } from './tags.js';
+import type { SpaceListItem } from './api-types.js';
 
 function withConfigDir(fn: (root: string) => Promise<void> | void) {
   return async () => {
@@ -477,5 +482,42 @@ test(
     assert.ok(ctx.warnings.some((w) => /уходит в каждый запрос/.test(w)));
     assert.ok(ctx.warnings.some((w) => /Нет на диске/.test(w)));
     assert.equal(spaceContextReply('nope', root).status, 404);
+  }),
+);
+
+test(
+  'пространства: рабочая папка для форм — заданная, иначе папка последней работы; папка настроек и запусков не в счёт («Сессия в папке»)',
+  withConfigDir((root) => {
+    const runs = path.join(root, 'runs');
+    const work: SpaceWork[] = [
+      { space: 'p', cwd: '/code/app', at: '2026-11-01T10:00:00Z', from: 'run' },
+      // свежее, но в папке пространства — время берём, папку нет
+      { space: 'p', cwd: path.join(spacesDir(), 'p'), at: '2026-11-03T10:00:00Z', from: 'session' },
+      { space: 'p', cwd: path.join(runs, 'r1'), at: '2026-11-02T10:00:00Z', from: 'session' },
+      { space: 'q', at: '2026-11-04T10:00:00Z', from: 'run' },
+    ];
+    const m = spaceWorkOf(work, runs);
+    assert.deepEqual(m.get('p'), { at: '2026-11-03T10:00:00Z', path: '/code/app', from: 'run' });
+    assert.deepEqual(m.get('q'), { at: '2026-11-04T10:00:00Z' });
+    assert.deepEqual(spaceWorkdirOf(undefined, m.get('p')), { path: '/code/app', from: 'run' });
+    assert.deepEqual(spaceWorkdirOf('/code/own', m.get('p')), { path: '/code/own', from: 'space' });
+    assert.equal(spaceWorkdirOf(undefined, m.get('q')), undefined);
+    createSpace('p');
+    const list = spacesListReply(m).body as { spaces: SpaceListItem[] };
+    assert.deepEqual([list.spaces[0].workdir, list.spaces[0].lastWorkAt], [{ path: '/code/app', from: 'run' }, '2026-11-03T10:00:00Z']);
+  }),
+);
+
+test(
+  'пространства: документ с зарезервированным именем, лежащий с прошлых версий (AGENTS.md), открывается и удаляется',
+  withConfigDir(() => {
+    createSpace('p');
+    fs.mkdirSync(path.join(spaceDir('p'), 'docs'));
+    fs.writeFileSync(path.join(spaceDir('p'), 'docs', 'AGENTS.md'), '# старый\n');
+    assert.equal(readSpaceDoc('p', 'AGENTS.md').text, '# старый\n');
+    assert.equal(deleteSpaceDoc('p', 'AGENTS.md'), true);
+    // записать новый с таким именем по-прежнему нельзя
+    assert.throws(() => writeSpaceDoc('p', 'AGENTS.md', 'x'), /AGENTS\.md здесь нельзя/);
+    assert.throws(() => readSpaceDoc('p', '../space.json'), /Неверное имя документа/);
   }),
 );

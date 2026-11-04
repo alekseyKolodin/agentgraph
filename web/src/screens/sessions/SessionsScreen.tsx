@@ -3,11 +3,11 @@
 // разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху. ?space=x — форма
 // открыта с этим пространством и его папкой (кнопка «Новая сессия» на странице пространства), &cwd= — с этой папкой
 // («Сессия в папке»); ?tags=a,b — с этими тегами знаний.
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView } from '@server/api-types';
-import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useRuns, useSpaces, useTags } from '../../api';
+import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
 import { continueSession, createSession, putSession, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
@@ -21,7 +21,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canUpdateState, sessionStatusLabel, sessionTone } from '../../lib/sessions';
-import { lastWork, SPACE_SLUG_RE, spaceWorkdir, workdirNote } from '../../lib/spaces';
+import { SPACE_SLUG_RE, spaceWorkdir, workdirNote } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import styles from './Sessions.module.css';
 
@@ -88,11 +88,8 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const recent = recentChips(useRecentDirs(useFeature('recent-dirs')).data ?? []);
   const tagList = useTags(true).data?.tags ?? [];
   const spacesOn = useFeature('spaces');
-  const spaceList = useSpaces(spacesOn).data?.spaces ?? [];
-  const sessionList = useSessions(true).data?.sessions;
-  const runList = useRuns().data;
-  // где пространства работали последними: их папку форма подставит, если у пространства нет своей рабочей
-  const work = useMemo(() => lastWork(sessionList ?? [], runList ?? []), [sessionList, runList]);
+  const spacesQuery = useSpaces(spacesOn);
+  const spaceList = spacesQuery.data?.spaces ?? [];
   const [cwd, setCwd] = useState(() => preset.cwd || LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '');
   /** Слаг пространства, которое подставило папку; правка папки руками — ''. */
   const [cwdFrom, setCwdFrom] = useState('');
@@ -111,27 +108,36 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
     setCwd(path);
     setCwdFrom('');
   };
-  /** Выбор пространства подставляет его рабочую папку (или папку последней работы в нём); нет такой — папка как была. */
+  /**
+   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём). Папку, вписанную руками или
+   * пришедшую ссылкой (&cwd=), не трогаем — под полем появится «подставить папку пространства».
+   */
   const pickSpace = (slug: string) => {
     setSpace(slug);
-    const wd = spaceWorkdir(slug, spaceList, work);
-    if (!wd) return;
-    cwdTouched.current = true;
+    const wd = spaceWorkdir(slug, spaceList);
+    if (!wd || (cwdTouched.current && !cwdFrom)) return;
     setCwd(wd.path);
     setCwdFrom(slug);
   };
-  // ?space=x без &cwd=: папку пространства подставляем, когда придут списки, — один раз и если папку ещё не трогали
-  const cwdTouched = useRef(Boolean(preset.cwd) || !preset.space);
+  const applyWorkdir = (path: string) => {
+    setCwd(path);
+    setCwdFrom(space.trim());
+  };
+  // папку задали руками или ссылкой — выбор пространства её не затирает; ?space=x без &cwd= — подставим, когда придёт список
+  const cwdTouched = useRef(Boolean(preset.cwd));
+  const presetDone = useRef(Boolean(preset.cwd) || !preset.space);
   useEffect(() => {
-    if (cwdTouched.current) return;
-    const wd = spaceWorkdir(preset.space, spaceList, work);
+    if (presetDone.current || cwdTouched.current) return;
+    const wd = spaceWorkdir(preset.space, spaceList);
+    if (!spacesQuery.isSuccess) return;
+    presetDone.current = true;
     if (!wd) return;
-    cwdTouched.current = true;
     setCwd(wd.path);
     setCwdFrom(preset.space);
-  }, [spaceList, work]);
-  const workdir = spaceWorkdir(space, spaceList, work);
+  }, [spaceList]);
+  const workdir = spaceWorkdir(space, spaceList);
   const cwdNote = cwdFrom && cwdFrom === space.trim() && workdir && workdir.path === cwd.trim() ? workdirNote(spaceList.find((x) => x.slug === cwdFrom), cwdFrom, workdir) : '';
+  const cwdOffer = !cwdNote && workdir && workdir.path !== cwd.trim() ? workdir : undefined;
 
   /** Тег знаний — только существующий: пустой из формы бесполезен, его заводят на странице «Знания». */
   const addTag = (raw: string) => {
@@ -181,7 +187,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   return (
     <form id="new-session" className={cx('form', styles.form)} aria-label={t('Новая сессия')} onSubmit={(e) => void submit(e)}>
       <h2>{t('Новая сессия')}</h2>
-      {spacesOn && <SpacePicker id="new-session-space" className={styles.tags} value={space} onChange={pickSpace} options={spaceList} work={work} />}
+      {spacesOn && <SpacePicker id="new-session-space" className={styles.tags} value={space} onChange={pickSpace} options={spaceList} loading={spacesQuery.isPending} />}
       <label>
         <span>{t('Папка')}</span>
         <div className="path-field">
@@ -190,6 +196,12 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         </div>
       </label>
       {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
+      {cwdOffer && (
+        <span className={cx('muted small', styles.cwdFrom)}>
+          {t('Папка пространства: {path}', { path: cwdOffer.path })}{' '}
+          <button type="button" className="btn small ghost" onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
+        </span>
+      )}
       {recent.length > 0 && (
         <div className={cx('chips', styles.recent)}>
           <span className="muted small">{t('Недавние:')}</span>
@@ -214,7 +226,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         />
         <p className="muted small">{t('Строка каждого тега — в контексте, полный текст Claude возьмёт инструментом knowledge_read. Можно и без тегов.')}</p>
       </div>
-      <ModelPreview space={space} tags={tags} where="session" options={spaceList} />
+      <ModelPreview space={space} tags={tags} where="session" options={spaceList} loaded={!spacesQuery.isPending} />
       <details className={styles.more}>
         <summary>{t('Дополнительно')}</summary>
         <div className={styles.moreBody}>

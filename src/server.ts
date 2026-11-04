@@ -75,9 +75,13 @@ import {
   deleteSpaceDocReply,
   deleteSpaceReply,
   inheritRun,
+  listSpaces,
   readSpace,
   readSpaceMeta,
   reportSpace,
+  spaceWorkdirOf,
+  spaceWorkOf,
+  type SpaceWork,
   spaceContextReply,
   spaceDocReply,
   spaceReadDirs,
@@ -479,7 +483,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
 
   // --- пространства (src/spaces.ts): фича или проект — карта, документы, состояние, их сессии и запуски. Слаг берём
   // регэкспом без декодирования: кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из spaces.ts
-  if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply());
+  if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply(await allSpaceWork()));
   // «Модель получит»: тексты сессии и этапа тем же кодом, что их отправляет
   if (method === 'GET' && p === '/api/model-context') return reply(res, modelContextReply(url.searchParams));
   if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply(await readJson(req)));
@@ -488,7 +492,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (method === 'GET') {
       // сессии — из реестра сессий терминала (без node-pty их нет), запуски — из runs/
       const sessions = await spaceSessions(slug).catch(() => []);
-      return reply(res, spaceReply(slug, (s) => ({ runs: spaceRuns(slug, s.migratedFrom?.at), sessions })));
+      return reply(res, spaceReply(slug, (s) => {
+        const runs = spaceRuns(slug, s.migratedFrom?.at);
+        const work = spaceWorkOf([...sessions.map((x) => ({ space: slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session' as const })), ...runs.map((r) => ({ space: slug, cwd: r.cwd, at: r.startedAt, from: 'run' as const }))], RUNS_DIR);
+        const workdir = spaceWorkdirOf(s.cwd, work.get(slug));
+        return { runs, sessions, ...(workdir ? { workdir } : {}) };
+      }));
     }
     if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
     if (method === 'DELETE') return reply(res, deleteSpaceReply(slug));
@@ -1929,6 +1938,19 @@ function finishedRun(id: string): { dir: string; file: string } | { code: number
   const dir = path.resolve(RUNS_DIR, id);
   if (path.dirname(dir) !== path.resolve(RUNS_DIR)) return { code: 400, error: 'Неверный id запуска' };
   return { dir, file: path.join(dir, 'run.json') };
+}
+
+/**
+ * Последняя работа всех пространств: запуски — по сводкам (не в worktree, не дочерние), сессии — из реестра сессий.
+ * Что из неё подставят формы — решает spaceWorkOf (папки данных agentgraph не в счёт).
+ */
+async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
+  const work: SpaceWork[] = [];
+  for (const r of listRuns()) if (r.space && !r.parent) work.push({ space: r.space, ...(r.cwd && !r.worktree ? { cwd: r.cwd } : {}), at: r.startedAt, from: 'run' });
+  for (const s of listSpaces()) {
+    for (const x of await spaceSessions(s.slug).catch(() => [])) work.push({ space: s.slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session' });
+  }
+  return spaceWorkOf(work, RUNS_DIR);
 }
 
 /**

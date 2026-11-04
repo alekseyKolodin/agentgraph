@@ -22,7 +22,7 @@ import {
   runBlocks, runFinished, runPause, runSpaceOf, runSteps, runTask, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
-import { ART_DENIAL } from '../../lib/run/artifacts';
+import { denialText } from '../../lib/run/artifacts';
 import { art } from './artStore';
 import { ArtFinalLine, ArtIterMark, ArtStepLine } from './ArtifactsPanel';
 import { NoteBox, StepNotes } from './FixPanel';
@@ -88,7 +88,7 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
 function DenialLine({ denials }: { denials: Denial[] }) {
   return (
     <p className={cx('small', styles.denials)} title={t('Этап пытался писать туда, куда этапам нельзя: папки пространств, тегов знаний, запусков. Запись отклонена, этап продолжил работу')}>
-      {t('Отказано в записи: {list}', { list: denials.map((d) => `${d.tool}: ${ART_DENIAL[d.reason] || d.reason}${d.count > 1 ? ` ×${d.count}` : ''}`).join('; ') })}
+      {t('Отказано в записи: {list}', { list: denialText(denials) })}
     </p>
   );
 }

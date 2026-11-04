@@ -1,6 +1,6 @@
 // Страница «Пространства» и выбор пространства в формах без React и DOM: поиск, подписи, снимок формы и патч,
 // документы, история обновлений состояния, сессии и запуски пространства.
-import type { ModelContextView, RunSummary, SessionView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate } from '@server/api-types';
+import type { ModelContextView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate, SpaceWorkdir } from '@server/api-types';
 import { ctxTokens } from './context';
 import { plural, when } from './format';
 import { t } from './i18n';
@@ -31,10 +31,6 @@ export const spacePreview = (s: Pick<SpaceListItem, 'preview'>): string => s.pre
 export const spaceMetaLine = (s: Pick<SpaceListItem, 'hasMap' | 'docs' | 'updatedAt'>): string =>
   [s.hasMap ? t('карта') : t('без карты'), t('документов: {n}', { n: s.docs }), when(s.updatedAt)].filter(Boolean).join(' · ');
 
-/** Подпись в подсказках выбора: «Пуш-тревога · Суть: …». */
-export const spaceOptionLabel = (s: Pick<SpaceListItem, 'slug' | 'title' | 'preview'>): string =>
-  [s.title, s.preview.split('\n')[0]].filter(Boolean).join(' · ') || t('пространство без карты и состояния');
-
 /** Что даст выбранное пространство — строкой под полем; пустое — подсказка, неверный слаг — ошибка. */
 export function spaceFieldNote(value: string, options: SpaceListItem[]): { text: string; tone: '' | 'err' } {
   const slug = value.trim();
@@ -48,39 +44,13 @@ export function spaceFieldNote(value: string, options: SpaceListItem[]): { text:
 
 // ---------- выбор пространства в формах: рабочая папка и порядок «свежие сверху»
 
-/** Последняя работа в пространстве: папка и время сессии или запуска. */
-export type SpaceWork = { path: string; at: string; from: 'session' | 'run' };
+/** Откуда рабочая папка: задана у пространства, папка последней сессии или последнего запуска в нём (считает сервер). */
+export type { SpaceWorkdir } from '@server/api-types';
 
-/**
- * Последняя работа в каждом пространстве — по сессиям (время последней активности) и запускам (время старта). Запуски в
- * worktree пропускаются (папка временная), дочерние запуски блоков-вызовов — тоже (их папку задал родитель).
- */
-export function lastWork(
-  sessions: Pick<SessionView, 'space' | 'cwd' | 'lastActivityAt'>[],
-  runs: Pick<RunSummary, 'space' | 'cwd' | 'startedAt' | 'worktree' | 'parent'>[],
-): Map<string, SpaceWork> {
-  const out = new Map<string, SpaceWork>();
-  const add = (slug: string | undefined, path: string | undefined, at: string, from: SpaceWork['from']) => {
-    if (!slug || !path || !at) return;
-    const prev = out.get(slug);
-    if (!prev || prev.at < at) out.set(slug, { path, at, from });
-  };
-  for (const s of sessions) add(s.space, s.cwd, s.lastActivityAt, 'session');
-  for (const r of runs) if (!r.worktree && !r.parent) add(r.space, r.cwd, r.startedAt, 'run');
-  return out;
-}
-
-/** Откуда рабочая папка: задана у пространства, папка последней сессии или последнего запуска в нём. */
-export type SpaceWorkdir = { path: string; from: 'space' | 'session' | 'run' };
-
-/** Рабочая папка пространства для формы: заданная у пространства, иначе папка последней работы в нём; нет — undefined. */
-export function spaceWorkdir(slug: string, options: Pick<SpaceListItem, 'slug' | 'cwd'>[], work: Map<string, SpaceWork>): SpaceWorkdir | undefined {
+/** Рабочая папка пространства для формы — её посчитал сервер (SpaceListItem.workdir); нет пространства или папки — undefined. */
+export function spaceWorkdir(slug: string, options: Pick<SpaceListItem, 'slug' | 'workdir'>[]): SpaceWorkdir | undefined {
   const s = slug.trim();
-  if (!s) return undefined;
-  const own = options.find((o) => o.slug === s)?.cwd;
-  if (own) return { path: own, from: 'space' };
-  const w = work.get(s);
-  return w ? { path: w.path, from: w.from } : undefined;
+  return s ? options.find((o) => o.slug === s)?.workdir : undefined;
 }
 
 /** Подпись под полем папки, когда её подставило пространство. */
@@ -95,18 +65,16 @@ export type PickerRow = { kind: 'space'; s: SpaceListItem; at: string } | { kind
 
 /**
  * Строки выбора пространства: по запросу (слаг, заголовок, начало состояния), свежие сверху — по последней работе в
- * пространстве или его обновлению; внизу «без пространства» и, если вписан новый верный слаг, «+ новое пространство».
+ * пространстве или его обновлению; дальше «+ новое пространство», если вписан новый верный слаг (Enter на нём — оно, а не
+ * «без пространства»), и «без пространства» последней.
  */
-export function pickerRows(query: string, options: SpaceListItem[], work: Map<string, SpaceWork>): PickerRow[] {
-  const at = (s: SpaceListItem) => {
-    const w = work.get(s.slug)?.at ?? '';
-    return w > s.updatedAt ? w : s.updatedAt;
-  };
+export function pickerRows(query: string, options: SpaceListItem[]): PickerRow[] {
+  const at = (s: SpaceListItem) => (s.lastWorkAt && s.lastWorkAt > s.updatedAt ? s.lastWorkAt : s.updatedAt);
   const shown = filterSpaces(options, query).shown.map((s) => ({ kind: 'space' as const, s, at: at(s) }));
   shown.sort((a, b) => b.at.localeCompare(a.at));
   const q = query.trim();
   const fresh = SPACE_SLUG_RE.test(q) && !options.some((o) => o.slug === q);
-  return [...shown, { kind: 'none' }, ...(fresh ? [{ kind: 'new' as const, slug: q }] : [])];
+  return [...shown, ...(fresh ? [{ kind: 'new' as const, slug: q }] : []), { kind: 'none' }];
 }
 
 // ---------- «Модель получит»: строка-сводка превью

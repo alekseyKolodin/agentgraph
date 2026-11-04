@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { FlowSummary } from '@server/api-types';
 import { LS } from '../../lib/storage';
-import type { Attach, RunLink, TagInfo } from '../../lib/run-form';
+import type { Attach, RunLink } from '../../lib/run-form';
 import { NO_MSG, type Msg } from './store';
 
 export type RunFormState = {
@@ -22,13 +22,14 @@ export type RunFormState = {
   space: string;
   /** Слаг пространства, которое подставило директорию проекта; правка директории руками — ''. */
   cwdFrom: string;
+  /** Директорию задали руками (поле, недавние, «Выбрать…») или пришла из «Запустить…»: выбор пространства её не затирает. */
+  cwdTouched: boolean;
   saveState: boolean;
   /** «Завести пространство автоматически»: запоминается (agentgraph.autoSpace). */
   autoSpace: boolean;
   /** Вписанный, но ещё не добавленный тег знаний. */
   tagText: string;
   tags: string[];
-  tagInfo: Map<string, TagInfo>;
   tagMsg: Msg;
   attach: Attach[];
   addDirs: string;
@@ -52,8 +53,8 @@ export type RunFormState = {
 };
 
 export const runForm: RunFormState = {
-  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', cwdFrom: '', saveState: true, autoSpace: false,
-  tagText: '', tags: [], tagInfo: new Map(), tagMsg: NO_MSG, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
+  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', cwdFrom: '', cwdTouched: false, saveState: true, autoSpace: false,
+  tagText: '', tags: [], tagMsg: NO_MSG, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
   msg: NO_MSG, busy: false, formSeq: -1, extrasSeq: -1, tagSeq: 0, intakeKey: '', focusSeq: 0,
 };
 
@@ -102,12 +103,12 @@ export function resetForm(summary: FlowSummary | undefined, defaultCwd: string, 
     modelBase: LS.raw('agentgraph.model') || '',
     space: '',
     cwdFrom: '',
+    cwdTouched: false,
     saveState: true,
     // автопространство запоминается, как бюджет и модель; по умолчанию выключено: иначе пространство заводилось бы молча
     autoSpace: autoSpaceSaved(),
     tagText: '',
     tags: [],
-    tagInfo: new Map(),
     tagMsg: NO_MSG,
     tagSeq: runForm.tagSeq + 1,
     link: null,

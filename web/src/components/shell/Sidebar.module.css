@@ -35,7 +35,10 @@
 /* разделы — компактная сетка в две колонки, заполняется по колонкам: работа слева (главная, пространства, сессии),
    справка справа (знания, контекст). Пункт — ссылка на всю ячейку, счётчик вопросов — у правого края «Главной»: ничего
    не переносится и не прыгает, когда вопрос приходит или уходит */
-.side-nav { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(3, auto); grid-auto-flow: column; gap: 2px 4px; }
+.side-nav { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; gap: 2px 4px; }
+/* колонка задана пунктом: без фичи (пространств, сессий) справка не уезжает в левую колонку */
+.nav-work { grid-column: 1; }
+.nav-ref { grid-column: 2; }
 .side-nav a { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 10px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; font-size: var(--fs-small); font-weight: 500; white-space: nowrap; transition: background-color .12s; }
 .side-nav a:hover { background: var(--hover); color: var(--ink); }
 .side-nav a:global(.active) { background: var(--select); color: var(--ink); }

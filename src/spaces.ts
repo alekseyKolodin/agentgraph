@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configDir } from './settings.js';
 import type {
-  DenialReason, Space, SpaceContextView, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, Tag, TagRun,
+  DenialReason, Space, SpaceContextView, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
 } from './api-types.js';
 import { wrapData } from './intake.js';
 import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
@@ -508,9 +508,23 @@ export function docName(raw: unknown): string {
   return name;
 }
 
+/**
+ * Имя уже лежащего документа — для чтения и удаления: одно имя файла без папок, «..», скрытых, управляющих и невидимых
+ * символов. Мягче docName в одном: зарезервированное имя (AGENTS.md, загруженный до того, как имя закрыли) открывается и
+ * удаляется, а не застревает в docs/.
+ */
+function existingDocName(raw: unknown): string {
+  if (typeof raw !== 'string' || !raw.trim()) throw new SpaceError(400, 'Нужно имя документа');
+  const name = raw.trim();
+  if (name !== path.basename(name) || name.startsWith('.') || /[\u0000-\u001f\u007f\p{Zl}\p{Zp}\p{Cf}<>\\/]/u.test(name)) {
+    throw new SpaceError(400, `Неверное имя документа «${cleanLine(name, 80)}»`);
+  }
+  return name;
+}
+
 /** Существующий документ: обычный файл в docs/, не ссылка. */
 function docFile(slug: string, name: string): string {
-  const file = path.join(realDocsDir(slug), docName(name));
+  const file = path.join(realDocsDir(slug), existingDocName(name));
   const st = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!st) throw new SpaceError(404, `Документа ${name} нет`);
   if (!st.isFile()) throw new SpaceError(400, `${name} — не обычный файл`);
@@ -575,7 +589,7 @@ export function writeSpaceDoc(slug: string, rawName: unknown, text: unknown, o: 
 }
 
 export function deleteSpaceDoc(slug: string, name: string): boolean {
-  const file = path.join(realDocsDir(slug), docName(name));
+  const file = path.join(realDocsDir(slug), existingDocName(name));
   const st = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!st) return false;
   if (st.isDirectory()) throw new SpaceError(400, `${name} — папка: удали её в Finder`);
@@ -905,12 +919,47 @@ const bad = (err: unknown): ApiReply =>
   err instanceof SpaceError ? { status: err.status, body: { error: err.message } } : { status: 400, body: { error: err instanceof Error ? err.message : String(err) } };
 const notFound = (slug: string): ApiReply => ({ status: 404, body: { error: `Пространства ${slug} нет` } });
 
-export function spacesListReply(): ApiReply {
-  return { status: 200, body: { spaces: listSpaces() } };
+/** Работа в пространстве: сессия или запуск — где (папка) и когда. */
+export type SpaceWork = { space: string; cwd?: string; at: string; from: 'session' | 'run' };
+
+/**
+ * Последняя работа в каждом пространстве и папка, которую из неё подставят формы. Время — любой работы (порядок «свежие
+ * сверху»); папка — только не внутри папки настроек agentgraph и не внутри папки запусков: «Сессия в папке» пространства
+ * правит его карту, и её папка рабочей папкой проекта не становится (этапы не правили бы проект, а Bash писал бы в карту).
+ */
+export function spaceWorkOf(work: SpaceWork[], runsDir: string): Map<string, { at: string; path?: string; from?: 'session' | 'run' }> {
+  const cfg = path.resolve(configDir());
+  const runs = path.resolve(runsDir);
+  const usable = (p: string | undefined) => Boolean(p) && !isInside(path.resolve(p!), cfg) && !isInside(path.resolve(p!), runs);
+  const out = new Map<string, { at: string; path?: string; from?: 'session' | 'run'; pathAt?: string }>();
+  for (const w of work) {
+    if (!w.at) continue;
+    const cur = out.get(w.space) ?? { at: '' };
+    if (w.at > cur.at) cur.at = w.at;
+    if (usable(w.cwd) && (!cur.pathAt || w.at > cur.pathAt)) Object.assign(cur, { path: path.resolve(w.cwd!), from: w.from, pathAt: w.at });
+    out.set(w.space, cur);
+  }
+  return new Map([...out].map(([k, { pathAt: _p, ...v }]) => [k, v]));
+}
+
+/** Что подставят формы: заданная рабочая папка, иначе папка последней работы. */
+export function spaceWorkdirOf(cwd: string | undefined, work?: { path?: string; from?: 'session' | 'run' }): SpaceWorkdir | undefined {
+  if (cwd) return { path: cwd, from: 'space' };
+  return work?.path && work.from ? { path: work.path, from: work.from } : undefined;
+}
+
+/** Список пространств; work — их последняя работа (server.ts собирает её из запусков и сессий). */
+export function spacesListReply(work: Map<string, { at: string; path?: string; from?: 'session' | 'run' }> = new Map()): ApiReply {
+  const spaces = listSpaces().map((s) => {
+    const w = work.get(s.slug);
+    const workdir = spaceWorkdirOf(s.cwd, w);
+    return { ...s, ...(workdir ? { workdir } : {}), ...(w?.at ? { lastWorkAt: w.at } : {}) } satisfies SpaceListItem;
+  });
+  return { status: 200, body: { spaces } };
 }
 
 /** Пространство целиком; runs и sessions добавляет server.ts — у него запуски и реестр сессий. */
-export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions'> = () => ({ runs: [], sessions: [] })): ApiReply {
+export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions' | 'workdir'> = () => ({ runs: [], sessions: [] })): ApiReply {
   try {
     const s = readSpace(slug);
     return s ? { status: 200, body: { ...s, ...extra(s) } satisfies SpaceDetail } : notFound(slug);

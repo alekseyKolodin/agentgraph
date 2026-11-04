@@ -21,7 +21,7 @@ import { feedTime } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import {
-  dirLines, docLine, fieldCount, filterSpaces, itemsCount, lastWork, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText, spaceWorkdir,
+  dirLines, docLine, fieldCount, filterSpaces, itemsCount, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText,
   spaceFormOf, spaceItems, spaceLabel, spaceMetaLine, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, stateByText, type SpaceForm,
 } from '../../lib/spaces';
 import styles from './Spaces.module.css';
@@ -364,12 +364,9 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
   const toast = useToast();
   const items = spaceItems(s.sessions, s.runs);
   const mapLong = form.map.length > SPACE_MAP_WARN;
-  // папка «Новой сессии»: рабочая папка пространства, иначе папка его последней сессии или запуска
-  const workdir = spaceWorkdir(
-    s.slug,
-    [{ slug: s.slug, cwd: s.cwd }],
-    lastWork(s.sessions.map((x) => ({ space: s.slug, cwd: x.cwd, lastActivityAt: x.lastActivityAt })), s.runs.map((r) => ({ space: s.slug, cwd: r.cwd, startedAt: r.startedAt }))),
-  );
+  // папка «Новой сессии»: рабочая папка пространства, иначе папка его последней сессии или запуска (считает сервер;
+  // «Сессия в папке» пространства не в счёт)
+  const workdir = s.workdir;
   return (
     <div className={styles.editorGrid}>
       <section className={cx('panel', styles.editor)}>

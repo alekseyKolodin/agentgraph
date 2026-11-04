@@ -74,8 +74,6 @@ export function connWarn(input: string, summary: FlowSummary | undefined): boole
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const TAG_SLUG_ERROR = t('Слаг тега: строчные латинские буквы, цифры и дефис');
 
-/** Выбранный тег знаний с сервера: заголовок и раздел, который получат этапы. */
-export type TagInfo = { title: string; input: string };
 
 /** Подсказка в datalist поля «Теги знаний»: заголовок, иначе начало описания или заметок. */
 export const tagOptionLabel = (tag: TagListItem): string => tag.title || tag.preview.split('\n')[0] || t('заметок ещё нет');
@@ -144,7 +142,6 @@ export const staleWorktreeCwd = (cwd: string, worktreesDir: string | undefined, 
 // ---------- сводка «Дополнительно» и тело запуска
 
 export type MoreSumInput = {
-  space: string;
   tags: string[];
   attach: number;
   addDirs: string;

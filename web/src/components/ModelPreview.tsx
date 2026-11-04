@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import type { SpaceListItem } from '@server/api-types';
 import { errorText, useModelContext } from '../api';
+import { plural } from '../lib/format';
 import { t } from '../lib/i18n';
 import { docLine, modelSummary } from '../lib/spaces';
 import { MdText } from './MdText';
@@ -20,18 +21,24 @@ type Props = {
   tags: string[];
   where: 'session' | 'phase';
   options: SpaceListItem[];
+  /** Список пространств загружен: до этого существующее нельзя отличить от нового. */
+  loaded: boolean;
   className?: string;
 };
 
-export function ModelPreview({ space, tags, where, options, className }: Props) {
+const chars = (n: number) => `${n} ${plural(n, 'знак', 'знака', 'знаков')}`;
+
+export function ModelPreview({ space, tags, where, options, loaded, className }: Props) {
   const slug = space.trim();
-  const fresh = Boolean(slug) && !options.some((o) => o.slug === slug);
-  const query = useModelContext(fresh ? '' : slug, tags, Boolean((slug && !fresh) || tags.length));
+  const known = options.some((o) => o.slug === slug);
+  const fresh = loaded && Boolean(slug) && !known;
+  const query = useModelContext(known ? slug : '', tags, loaded && Boolean((slug && known) || tags.length));
   const [raw, setRaw] = useState(false);
   if (!slug && !tags.length) return null;
   const v = query.data;
   const freshLine = fresh ? t('◇ {slug} — новое пространство: заведётся пустым, карты и состояния у него нет', { slug }) : '';
-  const summary = [freshLine, v ? modelSummary(v) : query.isError ? errorText(query.error) : t('загружаю…')].filter(Boolean).join(' · ');
+  const busy = !loaded || query.isFetching;
+  const summary = [freshLine, v ? modelSummary(v) : query.isError ? errorText(query.error) : busy ? t('загружаю…') : ''].filter(Boolean).join(' · ');
   const text = v ? (where === 'session' ? v.session : v.phase) : '';
   return (
     <details className={cx(styles.preview, className)}>
@@ -55,7 +62,7 @@ export function ModelPreview({ space, tags, where, options, className }: Props) 
                   <section>
                     <h4>{t('Карта')} <span className="mono">CLAUDE.md</span></h4>
                     <p>
-                      {v.space.map.chars ? t('Памятью, как CLAUDE.md репозитория · {n} знаков', { n: v.space.map.chars }) : t('Карты нет: заполни её на странице пространства')}
+                      {v.space.map.chars ? t('Памятью, как CLAUDE.md репозитория · {n}', { n: chars(v.space.map.chars) }) : t('Карты нет: заполни её на странице пространства')}
                       {' '}<Link to={`/spaces/${encodeURIComponent(v.space.slug)}`}>{t('открыть пространство')}</Link>
                     </p>
                   </section>
@@ -80,7 +87,7 @@ export function ModelPreview({ space, tags, where, options, className }: Props) 
               {v.knowledge.length > 0 && (
                 <section>
                   <h4>{t('Знания')}</h4>
-                  <ul>{v.knowledge.map((k) => <li key={k.slug}><span className="mono">#{k.slug}</span> <span className="muted">{k.inline ? t('целиком: {n} знаков', { n: k.text.length }) : k.text.replace(/^-\s*/, '')}</span></li>)}</ul>
+                  <ul>{v.knowledge.map((k) => <li key={k.slug}><span className="mono">#{k.slug}</span> <span className="muted">{k.inline ? t('целиком: {n}', { n: chars(k.text.length) }) : k.text.replace(/^-\s*/, '')}</span></li>)}</ul>
                 </section>
               )}
             </div>

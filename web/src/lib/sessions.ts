@@ -30,7 +30,7 @@ export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | '
   }
 }
 
-/** Вторая строка в «Сейчас»: «сессия · press-alert · работает» — пространство, без него — папка. */
+/** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — пространство (без него — папка), статус, активность. */
 export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt'>>, now: Date = new Date()): string {
   const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? t('ждёт тебя') : t('запускается');
   // чем сессии различаются: пространство (без него — папка), статус и когда была активность — а не повтор папки

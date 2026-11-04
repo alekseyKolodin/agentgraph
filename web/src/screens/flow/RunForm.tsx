@@ -3,15 +3,14 @@
 // папка подставляется в директорию проекта с подписью «из пространства»), директория проекта и недавние папки, задача,
 // «Дополнительно» (теги знаний, вложения, доп. директории, worktree, лимиты, модель), «Запустить» в липкой панели.
 // Вход из «Запустить…» с главной приходит в location.state.intake; черновик разового запуска уходит со spec из конструктора.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Intake } from '@server/api-types';
 import {
-  ApiError, errorText, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useRuns,
+  ApiError, errorText, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs,
   useSpaces, useTags,
 } from '../../api';
-import { useSessions } from '../../api/sessions';
 import { ModelPreview } from '../../components/ModelPreview';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -27,7 +26,7 @@ import {
   recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
   worktreeRequest, type RunLink,
 } from '../../lib/run-form';
-import { lastWork, spaceWorkdir, workdirNote } from '../../lib/spaces';
+import { spaceWorkdir, workdirNote } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
 import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm } from './formStore';
@@ -64,11 +63,8 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const projects = info?.projects ?? [];
   const recent = recentChips(useRecentDirs(can.recent).data ?? []);
   const tagList = useTags(can.tags).data?.tags ?? [];
-  const spaceList = useSpaces(can.spaces).data?.spaces ?? [];
-  const sessionList = useSessions(useFeature('sessions')).data?.sessions;
-  const runList = useRuns().data;
-  // где пространства работали последними: их папку подставит выбор пространства, если у него нет своей рабочей
-  const work = useMemo(() => lastWork(sessionList ?? [], runList ?? []), [sessionList, runList]);
+  const spacesQuery = useSpaces(can.spaces);
+  const spaceList = spacesQuery.data?.spaces ?? [];
   const spaceSlug = f.space.trim();
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -108,7 +104,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     void qc.invalidateQueries({ queryKey: keys.tags });
     void qc.invalidateQueries({ queryKey: keys.spaces });
     if (fresh) {
-      setForm({ input: intake.input, ...(intake.source.project ? { cwd: intake.source.project } : {}), intakeKey, focusSeq: runForm.focusSeq + 1 });
+      setForm({ input: intake.input, ...(intake.source.project ? { cwd: intake.source.project, cwdTouched: true } : {}), intakeKey, focusSeq: runForm.focusSeq + 1 });
       showLink({ source: intake.source, branch: intake.branch, project: intake.source.project });
     }
   }, [st.formSeq, st.extrasSeq, intakeKey, config]);
@@ -141,19 +137,29 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     if (l?.worktree) showLink({ ...l, worktree: undefined });
   };
   const pickCwd = (path: string) => {
-    setForm({ cwd: path, cwdFrom: '' });
+    setForm({ cwd: path, cwdFrom: '', cwdTouched: true });
     cwdChanged();
   };
-  /** Выбор пространства подставляет его рабочую папку (или папку последней работы в нём); нет такой — директория как была. */
+  /**
+   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём). Директорию, вписанную руками,
+   * пришедшую из «Запустить…» и подготовленный worktree не трогаем — под полем появится «подставить папку пространства».
+   */
   const pickSpace = (slug: string) => {
     setForm({ space: slug });
-    const wd = spaceWorkdir(slug, spaceList, work);
-    if (!wd || wd.path === runForm.cwd) return setForm(wd ? { cwdFrom: slug } : {});
+    const wd = spaceWorkdir(slug, spaceList);
+    if (!wd || wd.path === runForm.cwd) return setForm({ cwdFrom: wd ? slug : '' });
+    if (runForm.cwdTouched || runForm.link?.worktree || runForm.link?.project) return;
     setForm({ cwd: wd.path, cwdFrom: slug });
     cwdChanged();
   };
-  const workdir = spaceWorkdir(f.space, spaceList, work);
+  const applyWorkdir = (path: string) => {
+    setForm({ cwd: path, cwdFrom: f.space.trim(), cwdTouched: false });
+    cwdChanged();
+  };
+  const workdir = spaceWorkdir(f.space, spaceList);
   const cwdNote = f.cwdFrom && f.cwdFrom === f.space.trim() && workdir && workdir.path === f.cwd.trim() ? workdirNote(spaceList.find((x) => x.slug === f.cwdFrom), f.cwdFrom, workdir) : '';
+  // пространство выбрано, а директория своя: предложить его папку, не подставляя молча
+  const cwdOffer = !cwdNote && workdir && workdir.path !== f.cwd.trim() ? workdir : undefined;
 
   // ---------- вложения
   const readAttachments = async (files: File[]) => {
@@ -203,7 +209,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       const r = await fetchTag(slug);
       // пока шёл запрос, тег убрали или открыли другой flow: панель не трогаем
       if (seq !== runForm.tagSeq || !runForm.tags.includes(slug)) return;
-      setForm({ tagInfo: new Map(runForm.tagInfo).set(slug, { title: r.title || '', input: r.input || '' }), tagMsg: { text: tagAddedMsg(slug, r), tone: '' } });
+      setForm({ tagMsg: { text: tagAddedMsg(slug, r), tone: '' } });
     } catch (err) {
       if (seq !== runForm.tagSeq) return;
       // нет тега или это старый тег задачи — из запуска убираем, причину показываем
@@ -214,9 +220,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     }
   };
   const removeTag = (slug: string) => {
-    const tagInfo = new Map(runForm.tagInfo);
-    tagInfo.delete(slug);
-    setForm({ tags: runForm.tags.filter((tag) => tag !== slug), tagInfo, tagMsg: NO_MSG });
+    setForm({ tags: runForm.tags.filter((tag) => tag !== slug), tagMsg: NO_MSG });
   };
 
   // ---------- worktree
@@ -233,7 +237,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         return;
       }
       // заметку видно в задаче до запуска: сервер сам ничего не дописывает
-      setForm({ cwd: r.path, input: withWorktreeNote(runForm.input, r.note) });
+      setForm({ cwd: r.path, cwdTouched: true, input: withWorktreeNote(runForm.input, r.note) });
       showLink({ ...(link || {}), project: wtProject, worktree: { path: r.path, branch: r.branch } });
       setForm({ wtMsg: { text: r.created ? t('создан') : t('уже был — переиспользую'), tone: 'ok' } });
     } catch (err) {
@@ -325,7 +329,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const multiBlock = (summary?.blocks?.length ?? 0) > 1;
   const models = modelOptions(f.modelBase);
   const sum = runMoreSum({
-    space: f.space,
     tags: f.tags,
     attach: f.attach.length,
     addDirs: f.addDirs,
@@ -372,7 +375,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     >
       {can.spaces && (
         <div className={styles.runTag}>
-          <SpacePicker id="run-space" value={f.space} onChange={pickSpace} options={spaceList} work={work} />
+          <SpacePicker id="run-space" value={f.space} onChange={pickSpace} options={spaceList} loading={spacesQuery.isPending} />
           {spaceSlug ? (
             <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
               <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
@@ -395,7 +398,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         </div>
       )}
       {/* что пространство и теги знаний дадут этапам — тот же текст, что сервер допишет в конец промптов; задача остаётся задачей */}
-      <ModelPreview space={f.space} tags={f.tags} where="phase" options={spaceList} />
+      <ModelPreview space={f.space} tags={f.tags} where="phase" options={spaceList} loaded={!spacesQuery.isPending} />
       <label>
         <span>{t('Директория проекта')}</span>
         <div className="path-field">
@@ -403,7 +406,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
             name="cwd"
             placeholder="/path/to/repo"
             value={f.cwd}
-            onChange={(e) => setForm({ cwd: e.target.value, cwdFrom: '' })}
+            onChange={(e) => setForm({ cwd: e.target.value, cwdFrom: '', cwdTouched: true })}
             onFocus={(e) => (cwdAtFocus.current = e.target.value)}
             onBlur={(e) => {
               if (e.target.value !== cwdAtFocus.current) cwdChanged();
@@ -418,6 +421,12 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         </div>
       </label>
       {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
+      {cwdOffer && (
+        <span className={cx('muted small', styles.cwdFrom)}>
+          {t('Папка пространства: {path}', { path: cwdOffer.path })}{' '}
+          <button type="button" className="btn small ghost" title={f.link?.worktree ? t('Директория worktree отвяжется от запуска') : undefined} onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
+        </span>
+      )}
       {recentRow(pickCwd)}
       <label>
         <span title={t('Подставится в {{input}}')}>{t('Задача')}</span>

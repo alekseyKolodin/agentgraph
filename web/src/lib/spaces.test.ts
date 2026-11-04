@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Space, SpaceRun, SpaceSession } from '@server/api-types';
 import {
-  dirLines, docLine, docSize, filterSpaces, itemsCount, lastWork, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
-  modelSummary, spaceOptionLabel, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirNote,
+  dirLines, docLine, docSize, filterSpaces, itemsCount, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
+  modelSummary, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirNote,
 } from './spaces';
 
 const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false, hasState: false });
@@ -22,8 +22,6 @@ test('пространства: поиск по слагу, заголовку �
   assert.equal(spaceLabel({ slug: 'a', title: 'А' }), 'А');
   assert.equal(spacePreview({ preview: 'раз\nдва' }), 'раз');
   assert.equal(spacePreview({ preview: '' }), 'состояния ещё нет');
-  assert.equal(spaceOptionLabel(item('a', 'А', 'суть\nещё')), 'А · суть');
-  assert.equal(spaceOptionLabel(item('a')), 'пространство без карты и состояния');
   assert.match(spaceMetaLine({ hasMap: true, docs: 3, updatedAt: '2026-10-24T10:00:00Z' }), /^карта · документов: 3 · .+/);
   assert.equal(spacesNoneText(0), 'Пространств пока нет — заведи первое выше');
   assert.equal(spacesNoneText(1), 'Ничего не нашлось');
@@ -82,40 +80,28 @@ test('поле пространства: пусто — без простран�
   assert.match(spaceFieldNote('press-alert', [{ ...options[0]!, hasState: false }]).text, /состояния ещё нет$/);
 });
 
-test('рабочая папка пространства: заданная у него, иначе папка последней сессии или запуска (не worktree и не дочернего); подпись — откуда', () => {
-  const sessions = [
-    { space: 'press-alert', cwd: '/code/android', lastActivityAt: '2026-11-01T10:00:00Z' },
-    { space: undefined, cwd: '/tmp', lastActivityAt: '2026-11-05T10:00:00Z' },
-  ];
-  const runs = [
-    { space: 'press-alert', cwd: '/code/api', startedAt: '2026-11-02T10:00:00Z' },
-    { space: 'press-alert', cwd: '/wt/x', startedAt: '2026-11-03T10:00:00Z', worktree: { path: '/wt/x', branch: 'b' } },
-    { space: 'kai', cwd: '/code/kai', startedAt: '2026-11-04T10:00:00Z', parent: { runId: 'p', block: 'b' } },
-  ];
-  const work = lastWork(sessions, runs as never);
-  assert.deepEqual(work.get('press-alert'), { path: '/code/api', at: '2026-11-02T10:00:00Z', from: 'run' });
-  assert.equal(work.has('kai'), false);
-  const opts = [{ slug: 'press-alert' }, { slug: 'own', cwd: '/code/own' }];
-  assert.deepEqual(spaceWorkdir('press-alert', opts, work), { path: '/code/api', from: 'run' });
-  assert.deepEqual(spaceWorkdir('own', opts, work), { path: '/code/own', from: 'space' });
-  assert.equal(spaceWorkdir('', opts, work), undefined);
-  assert.equal(spaceWorkdir('nope', opts, work), undefined);
+test('рабочая папка пространства — посчитанная сервером; подпись — откуда она', () => {
+  const opts = [{ slug: 'p', workdir: { path: '/code/api', from: 'run' as const } }, { slug: 'own', workdir: { path: '/code/own', from: 'space' as const } }, { slug: 'none' }];
+  assert.deepEqual(spaceWorkdir(' p ', opts), { path: '/code/api', from: 'run' });
+  assert.equal(spaceWorkdir('none', opts), undefined);
+  assert.equal(spaceWorkdir('', opts), undefined);
   assert.equal(workdirNote({ slug: 'own', title: 'Своё' }, 'own', { path: '/x', from: 'space' }), 'из пространства «Своё»: его рабочая папка');
   assert.match(workdirNote(undefined, 'p', { path: '/x', from: 'session' }), /^из пространства «p»: папка его последней сессии$/);
 });
 
-test('выбор пространства: свежие сверху по последней работе или обновлению, поиск, внизу «без пространства» и «+ новое» для нового слага', () => {
-  const a = { ...item('a', 'Альфа', 'суть альфы'), updatedAt: '2026-11-01T00:00:00Z' };
+
+test('выбор пространства: свежие сверху по последней работе или обновлению, поиск; «+ новое» для нового слага — перед «без пространства»', () => {
+  const a = { ...item('a', 'Альфа', 'суть альфы'), updatedAt: '2026-11-01T00:00:00Z', lastWorkAt: '2026-11-04T00:00:00Z' };
   const b = { ...item('b', 'Бета'), updatedAt: '2026-11-03T00:00:00Z' };
-  const work = new Map([['a', { path: '/x', at: '2026-11-04T00:00:00Z', from: 'session' as const }]]);
-  const rows = pickerRows('', [a, b], work);
-  assert.deepEqual(rows.map((r) => (r.kind === 'space' ? r.s.slug : r.kind)), ['a', 'b', 'none']);
-  assert.deepEqual(pickerRows('альфы', [a, b], work).map((r) => (r.kind === 'space' ? r.s.slug : r.kind)), ['a', 'none']);
-  assert.deepEqual(pickerRows('new-one', [a, b], work).at(-1), { kind: 'new', slug: 'new-one' });
-  // существующий слаг и неверный — без «+ новое»
-  assert.equal(pickerRows('a', [a, b], work).some((r) => r.kind === 'new'), false);
-  assert.equal(pickerRows('Bad Slug', [a, b], work).some((r) => r.kind === 'new'), false);
+  const kinds = (rows: ReturnType<typeof pickerRows>) => rows.map((r) => (r.kind === 'space' ? r.s.slug : r.kind));
+  assert.deepEqual(kinds(pickerRows('', [a, b])), ['a', 'b', 'none']);
+  assert.deepEqual(kinds(pickerRows('альфы', [a, b])), ['a', 'none']);
+  // новый слаг без совпадений: первой строкой — «+ новое», Enter выберет его
+  assert.deepEqual(pickerRows('new-one', [a, b]), [{ kind: 'new', slug: 'new-one' }, { kind: 'none' }]);
+  assert.equal(pickerRows('a', [a, b]).some((r) => r.kind === 'new'), false);
+  assert.equal(pickerRows('Bad Slug', [a, b]).some((r) => r.kind === 'new'), false);
 });
+
 
 test('модель получит: строка-сводка — карта и состояние в токенах (оценка), документы, папки, знания; без пространства — только знания', () => {
   const space = { slug: 'p', title: 'П', dir: '/c/p', map: { path: '/c/p/CLAUDE.md', chars: 3840 }, state: 'x'.repeat(640), docs: [{ name: 'a.md', size: 1, mtimeMs: 0, text: true }], dirs: ['/a', '/b'] };

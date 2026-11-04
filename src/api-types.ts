@@ -365,8 +365,17 @@ export type SpaceListItem = {
   hasState: boolean;
   /** Рабочая папка, заданная у пространства. */
   cwd?: string;
+  /**
+   * Что подставят формы сессии и запуска: заданная рабочая папка (space) или папка последней сессии или запуска в нём —
+   * не в worktree, не дочернего и не внутри папки настроек agentgraph или папки запусков («Сессия в папке» не в счёт).
+   */
+  workdir?: SpaceWorkdir;
+  /** Последняя сессия или запуск в пространстве: порядок «свежие сверху» в выборе пространства. */
+  lastWorkAt?: string;
   migratedFrom?: { tag: string; at: string };
 };
+
+export type SpaceWorkdir = { path: string; from: 'space' | 'session' | 'run' };
 
 /** Запуск на странице пространства; legacy — старый запуск с тегом задачи (до переноса тега в пространство); cwd — не у запуска в worktree. */
 export type SpaceRun = { id: string; flow: string; title?: string; status: string; startedAt: string; finishedAt?: string; input: string; cwd?: string; legacy?: true };
@@ -374,7 +383,7 @@ export type SpaceRun = { id: string; flow: string; title?: string; status: strin
 export type SpaceSession = { id: string; name: string; status: SessionStatus; live: boolean; cwd: string; lastActivityAt: string; turns: number; legacy?: true };
 
 /** GET /api/spaces/:slug: пространство, его запуски и сессии (свежие сверху; legacy — пришли из тега задачи). */
-export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[] };
+export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir };
 
 /**
  * GET /api/spaces/:slug/context: что пространство даёт модели. session — текст хука SessionStart новой сессии

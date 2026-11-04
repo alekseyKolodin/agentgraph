@@ -2,6 +2,12 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
+  'Папка пространства: {path}': 'The space’s folder: {path}',
+  'Памятью, как CLAUDE.md репозитория · {n}': 'As memory, like a repository’s CLAUDE.md · {n}',
+  'целиком: {n}': 'in full: {n}',
+  'знак|знака|знаков': 'character|characters',
+  'подставить': 'use it',
+  'Директория worktree отвяжется от запуска': 'The worktree folder will be unlinked from the run',
   'Этап пытался писать туда, куда этапам нельзя: папки пространств, тегов знаний, запусков. Запись отклонена, этап продолжил работу': 'The phase tried to write where phases may not: the spaces, knowledge tags or runs folders. The write was refused and the phase went on',
   'Отказано в записи: {list}': 'Writes refused: {list}',
   '◇ {slug} — новое пространство: заведётся пустым, карты и состояния у него нет': '◇ {slug} — a new space: it will be created empty, with no map and no state',
@@ -13,14 +19,12 @@ export const space: Record<string, string> = {
   'Точный текст, как его получит модель': 'The exact text, as the model gets it',
   'как есть': 'as is',
   '(пусто)': '(empty)',
-  'Памятью, как CLAUDE.md репозитория · {n} знаков': 'As memory, like a repository’s CLAUDE.md · {n} characters',
   'Карты нет: заполни её на странице пространства': 'No map yet: fill it in on the space page',
   'открыть пространство': 'open the space',
   'Состояние «где мы сейчас»': 'State “where we are now”',
   'Ещё нет: его запишет короткая сессия после первой работы в пространстве': 'Not yet: a short session writes it after the first work in the space',
   'Документы — по запросу': 'Documents — on request',
   'Папки — только чтение': 'Folders — read-only',
-  'целиком: {n} знаков': 'in full: {n} characters',
   'Карта — памятью при старте claude; остальное — хуком SessionStart, изменения — со следующим шагом.': 'The map comes as memory when claude starts; the rest through the SessionStart hook, changes with the next step.',
   'Раздел — в конце промпта каждого этапа, карта — памятью этапа. У блоков flow бывают и свои теги знаний.': 'The section goes at the end of every phase prompt, the map as the phase’s memory. Flow blocks can have knowledge tags of their own.',
   'карта {n} ток. — памятью': 'map {n} tok. — memory',
@@ -69,7 +73,6 @@ export const space: Record<string, string> = {
   'состояния ещё нет': 'no state yet',
   'Фича или проект: карта (CLAUDE.md) придёт памятью, как CLAUDE.md репозитория; документы — по запросу; состояние «где мы сейчас» — в контексте. После работы состояние перепишет короткая сессия':
     'A feature or a project: the map (CLAUDE.md) arrives as memory, like a repository\'s CLAUDE.md; documents on request; the "where we are now" state in context. After the work a short session rewrites the state',
-  'без пространства — или выбери из списка, или впиши новый слаг: press-alert': 'no space — or pick one from the list, or type a new slug: press-alert',
 
   // «Итог» запуска и окно файла
   'Состояние пространства · {slug}': 'Space state · {slug}',
@@ -83,13 +86,9 @@ export const space: Record<string, string> = {
   'состояние': 'state',
 
   // форма запуска
-  'пространство, знания, вложения, директории, worktree, лимиты, модель': 'space, knowledge, attachments, directories, worktree, limits, model',
   'Тега знаний {slug} нет: заведи его на странице «Знания»': 'There is no {slug} knowledge tag: create it on the "Knowledge" page',
   'Завожу пространство и запускаю…': 'Creating a space and starting…',
   'Пространство не заведено: {err}. Запуск идёт без пространства.': 'Space not created: {err}. The run goes without a space.',
-  'Что сервер допишет в конец промпта каждого этапа; карта пространства придёт памятью. Поле «Задача» остаётся только задачей':
-    'What the server appends to the end of every phase prompt; the space map arrives as memory. The "Task" field stays just the task',
-  'в конец промптов этапов · карта — памятью': 'to the end of phase prompts · map as memory',
   'После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее':
     'After a run with the "done" status a short session rewrites the space state: gist, where the code is, decisions, where to read more',
   'Обновить состояние пространства после запуска': 'Update the space state after the run',
@@ -99,8 +98,6 @@ export const space: Record<string, string> = {
   'Что должны знать этапы (фронтенд, бэкенд, QA): в промпт каждого блока уйдёт строка с описанием, полный текст этап возьмёт инструментом knowledge_read. Тегов может быть несколько. Заводят и правят их на странице «Знания»':
     'What the phases should know (frontend, backend, QA): every block\'s prompt gets a line with the description, the phase takes the full text with the knowledge_read tool. There can be several tags. They are created and edited on the "Knowledge" page',
   'без тегов — или выбери тег знаний из списка и нажми Enter': 'no tags — or pick a knowledge tag from the list and press Enter',
-  'Что сервер допишет в конец промптов этапов каждого блока от выбранных тегов знаний': 'What the server appends to the end of the phase prompts of every block from the chosen knowledge tags',
-  'в конец промптов этапов каждого блока': 'to the end of the phase prompts of every block',
 
   // сессии
   'Модель увидит это со следующим своим шагом или твоим сообщением': 'The model will see this with its next step or your message',
@@ -221,7 +218,6 @@ export const space: Record<string, string> = {
   'Этап запуска — в конце промпта каждого этапа': 'Run phase — at the end of every phase prompt',
   'карта': 'map',
   'без карты': 'no map',
-  'пространство без карты и состояния': 'a space without a map or state',
   'Пространств пока нет — заведи первое выше': 'No spaces yet — create the first one above',
   'сессия «{name}»': 'session «{name}»',
   'запуск {flow}': 'run {flow}',

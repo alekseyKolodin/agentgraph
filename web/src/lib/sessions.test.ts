@@ -14,7 +14,7 @@ test('статус сессии: подписи и тон точки; выход
   assert.equal(sessionStatusLabel({ status: 'ended', exitCode: 1, outcome: 'failed' }), 'Не запустилась · код 1');
 });
 
-test('строка «Сейчас»: сессия · пространство, без него — папка · состояние', () => {
+test('строка «Сейчас»: пространство (без него — папка) · статус · когда была активность', () => {
   assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'shop · ждёт тебя');
   assert.equal(sessionSub({ cwd: '/p/api', status: 'working' }), 'api · работает');
   // пространство вместо папки и время последней активности: три сессии в одной папке различимы

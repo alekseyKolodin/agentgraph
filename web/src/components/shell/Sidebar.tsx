@@ -1,6 +1,6 @@
 // Сайдбар (ui/index.html aside.sidebar): бренд, разделы со счётчиком вопросов, «Сейчас», Flow, Запуски.
 // Список flow — FlowList.tsx, список запусков — RunList.tsx. Свёрнутость секций, папок и проектов — fold.ts, ключи как в старом UI.
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router';
 import type { SessionView } from '@server/api-types';
 import { useFeature, useHome, useRuns } from '../../api';
@@ -102,6 +102,8 @@ function useLiveSessions(): SessionView[] {
 function LiveSessions({ sessions }: { sessions: SessionView[] }) {
   const navigate = useNavigate();
   const activeId = useMatch('/sessions/:id')?.params.id;
+  // «5 мин назад» во второй строке: у ждущей сессии данные не меняются — перерисовка раз в 30 секунд
+  useTick(30_000);
   if (!sessions.length) return null;
   const open = (id: string) => void navigate(`/sessions/${id}`);
   return (
@@ -127,6 +129,15 @@ function LiveSessions({ sessions }: { sessions: SessionView[] }) {
       ))}
     </ul>
   );
+}
+
+/** Перерисовка компонента раз в ms: относительное время («5 мин назад») идёт, даже когда данные не меняются. */
+function useTick(ms: number): void {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
 }
 
 /** Переключатель языка: запоминает выбор и перезагружает страницу — тексты берутся при загрузке. */
@@ -165,23 +176,23 @@ export function Sidebar() {
       {/* разделы — компактной сеткой в две колонки (работа: главная, пространства, сессии; справка: знания, контекст), по
           колонкам: счётчик вопросов не переносит пункты, а главное в сайдбаре — запуски и flow */}
       <ul className={styles.sideNav}>
-        <li>
+        <li className={styles.navWork}>
           <NavLink to="/" end title={t('Вопросы агентов и идущие запуски')}>
             {t('Главная')}
             {questions > 0 && <span className={styles.brandCount} title={t('Вопросов ждут ответа')}>{questions}</span>}
           </NavLink>
         </li>
         {spaces && (
-          <li><NavLink to="/spaces" title={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')}>{t('Пространства')}</NavLink></li>
+          <li className={styles.navWork}><NavLink to="/spaces" title={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')}>{t('Пространства')}</NavLink></li>
         )}
         {sessions && (
-          <li><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, в пространстве и с тегами знаний')}>{t('Сессии')}</NavLink></li>
+          <li className={styles.navWork}><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, в пространстве и с тегами знаний')}>{t('Сессии')}</NavLink></li>
         )}
         {tags && (
-          <li><NavLink to="/tags" title={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')}>{t('Знания')}</NavLink></li>
+          <li className={styles.navRef}><NavLink to="/tags" title={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')}>{t('Знания')}</NavLink></li>
         )}
         {context && (
-          <li><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
+          <li className={styles.navRef}><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
         )}
       </ul>
       <LiveSection />

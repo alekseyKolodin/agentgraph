@@ -1,16 +1,18 @@
 // Выбор пространства — один компонент для формы запуска, формы сессии и экрана сессии (.interface-design/system.md →
 // Space picker): поле показывает выбранное (заголовок и слаг), фокус или клик открывают список под ним — свежие сверху,
-// поиск по слагу, заголовку и началу состояния, внизу «без пространства» и «+ новое пространство» для вписанного слага.
+// поиск по слагу, заголовку и началу состояния, «+ новое пространство» для вписанного слага и «без пространства».
 // Клавиатура: ↑ ↓, Enter, Esc (закрыть и вернуть выбор), Tab. ARIA — combobox со listbox и aria-activedescendant.
 // Под полем (кроме compact) — строка: что даст выбранное пространство или ошибка слага.
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SpaceListItem } from '@server/api-types';
 import { feedTime } from '../lib/format';
 import { t } from '../lib/i18n';
-import { pickerRows, spaceFieldNote, spaceLabel, type PickerRow, type SpaceWork } from '../lib/spaces';
+import { pickerRows, spaceFieldNote, spaceLabel, type PickerRow } from '../lib/spaces';
 import styles from './SpacePicker.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
+/** Ключ строки: служебные строки не совпадут с пространством со слагом «none» или «new». */
+const rowKey = (r: PickerRow) => (r.kind === 'space' ? `s:${r.s.slug}` : `:${r.kind}`);
 
 type Props = {
   /** База id поля и списка: уникальная на странице. */
@@ -19,8 +21,8 @@ type Props = {
   value: string;
   onChange: (slug: string) => void;
   options: SpaceListItem[];
-  /** Последняя работа в пространствах (lastWork): порядок «свежие сверху» и время в строке. */
-  work: Map<string, SpaceWork>;
+  /** Список пространств ещё грузится: «новое пространство» под полем не показываем, пока не ясно, есть ли такое. */
+  loading?: boolean;
   label?: string;
   labelTitle?: string;
   /** Без подписи и строки под полем — в строке контекста экрана сессии. */
@@ -34,20 +36,26 @@ type Props = {
   onDone?: () => void;
 };
 
-export function SpacePicker({ id, value, onChange, options, work, label = t('Пространство'), labelTitle, compact, placeholder, className, inputClassName, autoFocus, onDone }: Props) {
+export function SpacePicker({ id, value, onChange, options, loading, label = t('Пространство'), labelTitle, compact, placeholder, className, inputClassName, autoFocus, onDone }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const input = useRef<HTMLInputElement>(null);
-  const rows = useMemo(() => pickerRows(query, options, work), [query, options, work]);
+  const list = useRef<HTMLUListElement>(null);
+  const rows = useMemo(() => pickerRows(query, options), [query, options]);
   const chosen = options.find((o) => o.slug === value);
   const listId = `${id}-list`;
   const optId = (i: number) => `${id}-opt-${i}`;
 
+  // активная строка — в видимой части списка (↑ ↓ по длинному списку)
+  useEffect(() => {
+    if (open) document.getElementById(optId(active))?.scrollIntoView({ block: 'nearest' });
+  }, [open, active]);
+
   const show = () => {
     if (open) return;
+    const all = pickerRows('', options);
     setQuery('');
-    setActive(Math.max(0, value ? rows.findIndex((r) => r.kind === 'space' && r.s.slug === value) : 0));
+    setActive(Math.max(0, value ? all.findIndex((r) => r.kind === 'space' && r.s.slug === value) : 0));
     setOpen(true);
   };
   const close = () => {
@@ -78,8 +86,10 @@ export function SpacePicker({ id, value, onChange, options, work, label = t('П�
       onDone?.();
     }
   };
-  const note = compact ? null : spaceFieldNote(value, options);
+  const note = compact ? null : loading && value && !chosen ? { text: '', tone: '' as const } : spaceFieldNote(value, options);
   const shown = open ? query : chosen ? spaceLabel(chosen) : value;
+  // пока список открыт и запрос пуст, в поле видно выбранное — плейсхолдером, а не «без пространства»
+  const hint = open && chosen ? spaceLabel(chosen) : placeholder ?? t('без пространства — выбери или впиши новый слаг');
 
   return (
     <div className={cx(styles.picker, compact && styles.compact, className)}>
@@ -90,7 +100,6 @@ export function SpacePicker({ id, value, onChange, options, work, label = t('П�
       )}
       <div className={styles.box}>
         <input
-          ref={input}
           id={`${id}-input`}
           role="combobox"
           aria-expanded={open}
@@ -99,7 +108,7 @@ export function SpacePicker({ id, value, onChange, options, work, label = t('П�
           aria-activedescendant={open && rows[active] ? optId(active) : undefined}
           aria-label={compact ? label : undefined}
           className={cx(styles.input, chosen && !open && styles.withSlug, inputClassName)}
-          placeholder={placeholder ?? t('без пространства — выбери или впиши новый слаг')}
+          placeholder={hint}
           autoComplete="off"
           spellCheck={false}
           autoFocus={autoFocus}
@@ -113,16 +122,26 @@ export function SpacePicker({ id, value, onChange, options, work, label = t('П�
           }}
           onKeyDown={onKey}
           onBlur={() => {
+            // вписанный слаг не пропадает молча: уход из поля в форме выбирает существующее с таким слагом, а новое — только
+            // если совпадений нет (иначе это был поиск). На экране сессии — нет: там выбор сразу меняет пространство сессии
+            const typed = query.trim();
+            if (open && !compact && typed) {
+              const exact = options.find((o) => o.slug === typed);
+              const fresh = rows.find((r) => r.kind === 'new');
+              if (exact && exact.slug !== value) onChange(exact.slug);
+              else if (!exact && fresh && !rows.some((r) => r.kind === 'space')) onChange(typed);
+            }
             close();
             if (compact) onDone?.();
           }}
         />
         {chosen && !open && chosen.title && <span className={styles.slug} aria-hidden="true">{chosen.slug}</span>}
         {open && (
-          <ul id={listId} role="listbox" className={styles.list} aria-label={t('Пространства')}>
+          // mousedown по самому списку (полоса прокрутки, отступы) не уводит фокус из поля и не закрывает список
+          <ul ref={list} id={listId} role="listbox" className={styles.list} aria-label={t('Пространства')} onMouseDown={(e) => e.preventDefault()}>
             {rows.map((r, i) => (
               <li
-                key={r.kind === 'space' ? r.s.slug : r.kind}
+                key={rowKey(r)}
                 id={optId(i)}
                 role="option"
                 aria-selected={i === active}
