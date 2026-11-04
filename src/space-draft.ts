@@ -46,8 +46,8 @@ export const DRAFT_CEILING: Record<SpaceDraftModel, number> = { haiku: 0.75, son
 /** Группировка 27 работ на haiku в калибровке — $0.045: потолок с запасом на 60 работ. */
 export const GROUPS_CEILING: Record<SpaceDraftModel, number> = { haiku: 0.25, sonnet: 0.5, opus: 1 };
 export const DRAFT_TIMEOUT_MS = 4 * 60_000;
-/** 27 работ на haiku — 44 с; 60 работ — примерно вдвое больше ответа. */
-export const GROUPS_TIMEOUT_MS = 150_000;
+/** 27 работ на haiku — 44–56 с (8 тыс. токенов выхода с размышлением); 60 работ — примерно вдвое больше ответа. */
+export const GROUPS_TIMEOUT_MS = 4 * 60_000;
 /** Сессия, которая не слушает abort, не задержит ответ дольше таймаута и этого запаса. */
 const ABORT_GRACE_MS = 5_000;
 /** Чтение проекта и проверка команд: обычно 10–20 вызовов. */
@@ -587,8 +587,11 @@ export function estimateCost(model: SpaceDraftModel, o: { start: number; request
   return Math.round((write + reads + per(o.output, p.output)) * 10_000) / 10_000;
 }
 
-/** Старт сессии Claude Code с Read/Grep/Glob и своим системным промптом (как у анализа flow) и без инструментов. */
-const START_TOOLS = 15_000;
+/**
+ * Старт сессии Claude Code со своим системным промптом, без промпта задачи: с Read/Grep/Glob и без инструментов.
+ * Калибровка 2026-11-04: черновик sonnet с промптом в 4,2 тыс. знаков — contextStart 6,1 тыс. токенов.
+ */
+const START_TOOLS = 5_000;
 const START_BARE = 4_000;
 
 export function draftEstimate(input: DraftInput): SpaceDraftEstimate {
@@ -795,9 +798,9 @@ export function groupsEstimate(items: GroupSource[], skipped: number, model: Spa
     model,
     items: items.length,
     skipped,
-    // выход — с размышлением: у имён запусков на haiku (несколько слов) он 400–1100 токенов
-    low: estimateCost(model, { start, requests: 1, read: 0, output: 1_500 }),
-    high: estimateCost(model, { start, requests: 2, read: 0, output: 8_000 }),
+    // выход — с размышлением и растёт с числом работ: 27 работ на haiku — 8 тыс. токенов (калибровка 2026-11-04)
+    low: estimateCost(model, { start, requests: 1, read: 0, output: 1_000 + 100 * items.length }),
+    high: estimateCost(model, { start, requests: 2, read: 0, output: 2_000 + 300 * items.length }),
     ceiling: GROUPS_CEILING[model],
   };
 }

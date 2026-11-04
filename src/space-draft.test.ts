@@ -365,13 +365,14 @@ test('предложение пространств: имена и тексты 
   assert.ok(g.items[0].at >= g.items[59].at);
 }));
 
-test('оценка группировки на haiku: 27 работ, как в калибровке, — диапазон накрывает её $0,045 и ниже потолка', withRoot((root) => {
+test('оценка группировки на haiku: 27 работ, как в калибровке, — диапазон накрывает её $0,045 и $0,050; 60 работ — дороже, но ниже потолка', withRoot((root) => {
   const at = (i: number) => `2026-10-${String(30 - i).padStart(2, '0')}T10:00:00Z`;
   const text = 'Придумай слоган для утренней кофейни у метро: открывается в 6 утра, свежая обжарка, бариста знают постоянных гостей по имени. '.repeat(3);
   const list: GroupSource[] = Array.from({ length: 27 }, (_, i) => ({ kind: 'run', id: `r${i}`, name: 'Слоган для утренней кофейни у метро', flow: 'example-blocks', cwd: root, at: at(i), text }));
   const e = groupsEstimate(list, 0, 'haiku');
-  assert.ok(e.low < 0.045 && e.high > 0.045, `${e.low}–${e.high}`);
-  assert.ok(e.high < e.ceiling);
+  assert.ok(e.low < 0.045 && e.high > 0.05, `${e.low}–${e.high}`);
+  const more = groupsEstimate([...list, ...list, ...list.slice(0, 6)].map((x, i) => ({ ...x, id: `r${i}` })), 0, 'haiku');
+  assert.ok(more.high > e.high && more.high < more.ceiling, `${more.high} < ${more.ceiling}`);
 }));
 
 test('разбор групп: только переданные работы, каждая в одной группе, слаг свободный и без повторов, папка — самая частая (считает код)', withRoot((root) => {
