@@ -705,17 +705,19 @@ function docsLine(space: Space, max: number): string {
 
 /**
  * Текст модели или недоверенный текст перед обёрткой source-data. wrapData (intake.ts) обезвреживает только ASCII-вариант
- * тега, а закрывающий тег пишут и сущностями (&lt;&#47;…), и с невидимыми символами внутри. Поэтому обезвреживается само
- * имя: после NFKC (полноширинные буквы → ASCII) и без невидимых символов (Default_Ignorable: zero-width, bidi, вариации)
- * каждое «source-data» (через любой дефис, пробел или подчёркивание, без учёта регистра) становится «source‑data» с
- * неразрывным дефисом — такой тег уже не закроет обёртку. Угловая скобка-сущность перед ним — тоже «‹».
+ * тега, а закрывающий тег пишут и сущностями (&lt;&#47;…), и с невидимыми символами внутри. Поэтому обезвреживается и
+ * имя, и скобка: после NFKC (полноширинные буквы → ASCII) и без невидимых символов (Default_Ignorable: zero-width, bidi,
+ * вариации) каждое «source-data» (через любой дефис, пробел или подчёркивание, без учёта регистра) становится
+ * «source‑data» с неразрывным дефисом, а угловая скобка перед ним — и настоящая, и сущностью — «‹». wrapData своё «<» уже
+ * не найдёт (имя другое), поэтому скобку ломаем здесь: иначе «</source‑data>» выглядел бы закрывающим тегом.
  */
 export function wrapModelData(text: string): string {
   const plain = text
     .normalize('NFKC')
     .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
     .replace(/&(?:lt|#0*60|#x0*3c);?(\s*(?:\/|&#0*47;?|&sol;)?\s*source)/gi, '‹$1')
-    .replace(/source[\s\p{Pd}_]*data/giu, 'source\u2011data');
+    .replace(/source[\s\p{Pd}_]*data/giu, 'source\u2011data')
+    .replace(/<(\s*\/?\s*source)/gi, '‹$1');
   return wrapData(plain);
 }
 
@@ -760,8 +762,11 @@ export function spaceContext(space: Space, o: SpaceContextOpts): string {
 
 // --- guard этапов: папки данных agentgraph только для чтения
 
-/** Папка под защитой guard этапа и что ответить на запись в неё (reason — в отчёт этапа). */
-export type ProtectedRoot = { dir: string; why: string; reason: DenialReason };
+/**
+ * Папка под защитой guard этапа и что ответить на запись в неё (reason — в отчёт этапа). fold — сравнивать без учёта
+ * регистра всегда (папки данных agentgraph: их путь не пишет пользователь, а том может не различать регистр).
+ */
+export type ProtectedRoot = { dir: string; why: string; reason: DenialReason; fold?: true };
 
 const SPACES_READONLY = `Папка пространств только для чтения: карту (${MAP_FILE}), состояние (${STATE_FILE}) и документы правит пользователь, а состояние после запуска запишет agentgraph. Результат работы пиши в проект или в артефакты запуска.`;
 const TAGS_READONLY = 'Папка тегов знаний только для чтения: теги правит пользователь на странице «Знания». Результат работы пиши в проект или в артефакты запуска.';
@@ -777,18 +782,12 @@ const spaceDirReadonly = (d: string) => `${d} — папка пространс�
  * чтение». Папка внутри проекта или содержащая его — сам проект: его этап правит.
  */
 export function phaseProtectedRoots(o: { runsDir: string; artifacts: boolean; spaceDirs?: string[]; cwd: string }, probe: Pick<PathProbe, 'realpath'> = nodeProbe): ProtectedRoot[] {
-  // корни заводим заранее: у несуществующей папки realpath нет, её путь остаётся в регистре кода, а путь агента
-  // «~/.agentgraph/Spaces/…» на томе без учёта регистра (APFS) — в своём, и строки бы не совпали
-  for (const d of [spacesDir(), tagsDir()]) {
-    try {
-      fs.mkdirSync(d, { recursive: true });
-    } catch {
-      /* не создалась (нет прав): dataDirsGuard сравнит такой корень без учёта регистра */
-    }
-  }
+  // папки пространств и тегов — без учёта регистра: их может ещё не быть (realpath нет, путь в регистре кода), а путь
+  // агента «~/.agentgraph/Spaces/…» на томе без учёта регистра (APFS) в своём регистре прошёл бы мимо. Заводить их
+  // ради realpath не нужно: guard не должен ничего писать в папку настроек
   const roots: ProtectedRoot[] = [
-    { dir: spacesDir(), why: SPACES_READONLY, reason: 'space-readonly' },
-    { dir: tagsDir(), why: TAGS_READONLY, reason: 'knowledge-readonly' },
+    { dir: spacesDir(), why: SPACES_READONLY, reason: 'space-readonly', fold: true },
+    { dir: tagsDir(), why: TAGS_READONLY, reason: 'knowledge-readonly', fold: true },
   ];
   const cwd = canonical(o.cwd, '/', probe);
   // проект внутри папки запусков (тесты, странная раскладка): закрыть её — закрыть сам проект
@@ -803,9 +802,9 @@ export function phaseProtectedRoots(o: { runsDir: string; artifacts: boolean; sp
 
 /**
  * Guard этапа (PreToolUse) по защищённым папкам: путь записи сверяется по realpath ближайшего существующего предка
- * (ссылка из проекта наружу не проходит). Корень, которого нет на диске, — без учёта регистра: realpath не дал его
- * настоящий регистр, а том может его не различать (запрет шире, но не уже). Bash не ловится — как у артефактов.
- * onDeny — счёт отказов в отчёт этапа. undefined — разрешено.
+ * (ссылка из проекта наружу не проходит). Корень с fold и корень, которого нет на диске, — без учёта регистра: realpath
+ * не дал его настоящий регистр, а том может его не различать (запрет шире, но не уже). Bash не ловится — как у
+ * артефактов. onDeny — счёт отказов в отчёт этапа. undefined — разрешено.
  */
 export function dataDirsGuard(
   roots: ProtectedRoot[],
@@ -815,7 +814,7 @@ export function dataDirsGuard(
   const fold = (s: string) => s.normalize('NFC').toLowerCase();
   const list = roots.map((r) => {
     const dir = canonical(r.dir, '/', probe);
-    return { ...r, dir, folded: probe.realpath(dir) === undefined ? fold(dir) : undefined };
+    return { ...r, dir, folded: r.fold || probe.realpath(dir) === undefined ? fold(dir) : undefined };
   });
   return (tool, input, ctx) => {
     if (!WRITE_TOOLS.includes(tool)) return undefined;
