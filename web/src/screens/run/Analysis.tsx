@@ -124,7 +124,7 @@ function Suggestion({ s }: { s: AnalysisSuggestion }) {
   return (
     <div className={cx(styles.sug, styles[s.severity])}>
       <div className={styles.sugHead}>
-        <span className={styles.kind}>{KIND_LABEL[s.kind]}</span>
+        <span className={cx('badge pending', styles.kind)}>{KIND_LABEL[s.kind]}</span>
         <span className={styles.sugTitle}>{s.title}</span>
         {s.phases.length > 0 && <span className={styles.phases}>{s.phases.map((p) => <code key={p}>{p}</code>)}</span>}
       </div>

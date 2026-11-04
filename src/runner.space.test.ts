@@ -210,11 +210,12 @@ test(
     assert.equal(saved(o).space, 'p');
     assert.equal(saved(o).saveState, false);
     assert.match(saved(o).stateUpdate.skipped, /галочка/);
+    assert.equal(saved(o).stateUpdate.skip, 'off');
   }),
 );
 
 test(
-  'пространство: запуск не done — сессии нет, причина в skipped',
+  'пространство: запуск не done — сессии нет, причина в skipped и кодом not-done (статус — у запуска)',
   withEnv(async (o) => {
     createSpace('p');
     let f = fake();
@@ -222,11 +223,13 @@ test(
     assert.equal(r.status, 'max_iterations');
     assert.equal(f.states().length, 0);
     assert.match(r.stateUpdate!.skipped!, /max_iterations/);
+    assert.equal(r.stateUpdate!.skip, 'not-done');
     f = fake();
     r = await runFlow(spec(), { ...o, ...inSpace('p', o.runsDir), runDir: path.join(o.runsDir, 'run-2'), session: async (req) => (isState(req) ? f.session(req) : result('x', { ok: false, subtype: 'error' })) });
     assert.equal(r.status, 'failed');
     assert.equal(f.states().length, 0);
     assert.match(r.stateUpdate!.skipped!, /failed/);
+    assert.equal(r.stateUpdate!.skip, 'not-done');
     f = fake();
     const abort = new AbortController();
     abort.abort();

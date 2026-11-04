@@ -1,16 +1,19 @@
 // Страница запуска (ui/app.js openRun, subscribe, renderRun и #view-run в ui/index.html): шапка с управлением, то, что ждёт
 // человека (ошибка, пауза и ответ на неё, вопросы агента), вкладки «Обзор / Граф / Лог / Артефакты». Состояние — store.ts,
 // логика без React — lib/run/. Поток /api/runs/:id/events открыт, пока запуск идёт; на это время опрос /api/runs выключен.
+// Шапка: имя (у завершённого — с переименованием на месте) и сразу за ним статус, главное действие, редкое и опасное
+// («Скрыть», «Удалить запуск…») — в меню «⋯», как у flow. Запуск не открылся — причина на экране, а не тихий уход.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { HomeRun, RunStreamEvent } from '@server/api-types';
+import type { HomeRun, RunRenamed, RunStreamEvent } from '@server/api-types';
 import {
-  abortRun, continueRun, deleteRun, errorText, keys, pauseRun, resumeRun, runFileUrl, setRunHidden, setRunStreamOpen, useConfig, useEventStream, useFeature,
-  useRuns,
+  abortRun, ApiError, continueRun, deleteRun, errorText, keys, pauseRun, resumeRun, runFileUrl, RUN_NAME_MAX, RUN_RENAMED, setRunHidden, setRunStreamOpen, useConfig,
+  useEventStream, useFeature, useRenameRun, useRuns,
 } from '../../api';
 import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { InlineRename } from '../../components/InlineRename';
 import { MdText } from '../../components/MdText';
 import { PathLink } from '../../components/PathLink';
 import { QuestionCard } from '../../components/question/QuestionCard';
@@ -39,7 +42,7 @@ import { FixPanel } from './FixPanel';
 import { answerKey, setPauseAnswer, usePauseAnswer } from './pauseAnswer';
 import { RunChat } from './RunChat';
 import { RunGraph } from './RunGraph';
-import { LogBody, LogRawToggle } from './RunLog';
+import { LogBody, LogRawToggle, PhaseLogs } from './RunLog';
 import { SaveFlowDialog } from './SaveFlowDialog';
 import { bump, closeRun, loadContinuable, markAnswered, openRun, RUN_TABS, runEvent, runState, resetLog, setRunTab, shownTab, useRunStore, type RunTab } from './store';
 import styles from './Run.module.css';
@@ -50,6 +53,8 @@ const TAB_LABEL: Record<RunTab, string> = { overview: t('Обзор'), graph: t(
 const RUNS_SOON_MS = 300;
 /** «идёт N мин» на графе стареет между событиями: у живого запуска освежаем раз в 30 секунд. */
 const LIVE_TICK_MS = 30_000;
+/** Открытие быстрее — «Загружаю…» не мигает. */
+const LOADING_SHOW_MS = 300;
 
 export function RunScreen() {
   const { id = '' } = useParams();
@@ -70,21 +75,51 @@ function RunPage({ id }: { id: string }) {
   const canManage = useFeature('run-manage');
   const canAdhoc = useFeature('adhoc-runs');
   const canChat = useFeature('run-chat');
+  const canRenameRun = useFeature('run-rename');
   const artOn = useFeature('artifacts');
   art.on = artOn;
   const feedOn = useFeature('feed');
   const runs = useRuns().data;
+  const renameRun = useRenameRun();
   const [saveOpen, setSaveOpen] = useState(false);
+  /** Запуск не открылся: причина (нет такого, сервер не ответил) — на экране вместо страницы. */
+  const [openErr, setOpenErr] = useState<{ text: string; missing: boolean } | null>(null);
+  const [slow, setSlow] = useState(false);
+  const [openSeq, setOpenSeq] = useState(0);
 
   useEffect(() => {
     if (artOn) artOpenRun(id);
-    openRun(id, canFlow).catch(() => navigate('/', { replace: true }));
+    setOpenErr(null);
+    setSlow(false);
+    let alive = true;
+    const slowTimer = setTimeout(() => setSlow(true), LOADING_SHOW_MS);
+    openRun(id, canFlow)
+      .catch((err: unknown) => {
+        if (alive) setOpenErr({ text: errorText(err), missing: err instanceof ApiError && err.status === 404 });
+      })
+      .finally(() => clearTimeout(slowTimer));
     return () => {
+      alive = false;
+      clearTimeout(slowTimer);
       // уход со страницы запуска: окно артефакта закрывается, черновик остаётся
       closeWin(true);
       closeRun();
     };
-  }, [id]);
+  }, [id, openSeq]);
+
+  // переименовали в этой вкладке (шапка, строка сайдбара — useRenameRun): шапка и заголовок вкладки — с новым именем.
+  // Другие вкладки узнают о нём событием title общего потока — оно обновляет списки; шапку там — перезагрузка
+  useEffect(() => {
+    const onRenamed = (e: Event) => {
+      const v = (e as CustomEvent<RunRenamed>).detail;
+      const cur = runState.st?.run;
+      if (!cur || cur.id !== v.id || cur.title === v.title) return;
+      cur.title = v.title;
+      bump();
+    };
+    window.addEventListener(RUN_RENAMED, onRenamed);
+    return () => window.removeEventListener(RUN_RENAMED, onRenamed);
+  }, []);
 
   const st = runState.id === id ? runState.st : null;
   const r = st?.run;
@@ -182,7 +217,24 @@ function RunPage({ id }: { id: string }) {
     void artConfirmLeave(id, askConfirm).then((ok) => (ok ? blocker.proceed() : blocker.reset()));
   }, [blocker.state]);
 
-  if (!st || !r) return null;
+  if (!st || !r) {
+    if (openErr) {
+      return (
+        <div className={styles.runMissing}>
+          <h1>{t('Запуск не открылся')}</h1>
+          <p>{openErr.text} <span className="muted mono small">{id}</span></p>
+          <p className="muted small">
+            {openErr.missing ? t('Его могли удалить, или ссылка старая. Остальные запуски — в списке слева.') : t('Сервер agentgraph не ответил как ожидалось. Можно повторить.')}
+          </p>
+          <div className="row">
+            {!openErr.missing && <button type="button" className="btn primary" onClick={() => setOpenSeq((n) => n + 1)}>{t('Повторить')}</button>}
+            <Link className={openErr.missing ? 'btn primary' : 'btn ghost'} to="/">{t('На главную')}</Link>
+          </div>
+        </div>
+      );
+    }
+    return slow ? <p className="muted">{t('Загружаю…')}</p> : null;
+  }
 
   const blocks = runBlocks(r);
   const multi = blocks.length > 1;
@@ -195,6 +247,9 @@ function RunPage({ id }: { id: string }) {
   const available = new Set<RunTab>(['overview', 'log', ...(flow ? ['graph' as const] : []), ...(artPanel ? ['artifacts' as const] : [])]);
   const tab = shownTab(available);
   const manage = canManage && !r.live && !LIVE_STATUSES.includes(r.status);
+  // имя идущего запуска пишет раннер (и подбор имени моделью) — переименовать можно, когда он закончится
+  const canRename = canRenameRun && !r.live && !LIVE_STATUSES.includes(r.status);
+  const name = r.title || r.flow;
   const hint = pause ? pauseHint(r, artPanel) : null;
 
   // ---------- действия
@@ -250,6 +305,8 @@ function RunPage({ id }: { id: string }) {
     await qc.invalidateQueries({ queryKey: keys.runs });
     void navigate(`/run/${res.id}`);
   };
+  // новое имя приходит в шапку событием RUN_RENAMED (слушатель выше) — так же, как при переименовании из сайдбара
+  const rename = (title: string) => renameRun(id, title);
   const flowAction = r.adhoc
     ? canAdhoc ? { label: t('Сохранить как flow'), run: () => setSaveOpen(true) } : null
     : { label: t('Открыть flow в конструкторе'), run: () => void openFlow(r.flow, 'builder') };
@@ -315,13 +372,27 @@ function RunPage({ id }: { id: string }) {
     <div className={styles.runRoot} data-run={id}>
       <header className={cx('view-head', styles.viewHead)}>
         <div>
-          <h1>
-            {r.title || r.flow}
+          {/* имя и статус — одной строкой: длинное имя обрезается многоточием (целиком — в подсказке), статус не переносится */}
+          <div className={styles.runTitle}>
+            <div className={styles.runName}>
+              {canRename ? (
+                <InlineRename
+                  as="h1"
+                  pencil="always"
+                  value={name}
+                  onSave={rename}
+                  max={RUN_NAME_MAX}
+                  label={t('Название запуска')}
+                  pencilLabel={t('Переименовать запуск «{name}»', { name })}
+                  title={name}
+                />
+              ) : <h1 title={name}>{name}</h1>}
+              <Badge status={headerStatus(r)} />
+            </div>
             {r.adhoc && <AdhocBadge />}
             {(r.space ? [r.space] : r.tags || []).map((s) => <SpaceBadge key={`s${s}`} slug={s} link />)}
             {(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)}
-            {' '}<Badge status={headerStatus(r)} />
-          </h1>
+          </div>
           {r.title && (
             <p className={cx('muted small', styles.runFlow)}>
               {r.adhoc ? <>{`flow ${r.flow} `}<span className="muted">{t('(разовый)')}</span></> : <>flow <Link to={`/flow/${r.flow}`} title={t('Открыть flow')}>{r.flow}</Link></>}
@@ -340,8 +411,7 @@ function RunPage({ id }: { id: string }) {
           {pause && <button className="btn primary" onClick={() => void resume()}>{resumeLabel}</button>}
           {continueVisible(r) && <button className="btn primary" title={continueTitle(r)} onClick={() => void cont()}>{t('Продолжить с места остановки')}</button>}
           {r.live && <button className="btn danger" onClick={() => void abort()}>{t('Остановить запуск')}</button>}
-          {manage && <button className="btn ghost" title={t('Убрать из списка запусков слева; файлы останутся')} onClick={() => void hide()}>{r.hidden ? t('Вернуть в список') : t('Скрыть')}</button>}
-          {manage && <button className="btn danger" title={t('Удалить папку запуска из runs/')} onClick={() => void remove()}>{t('Удалить')}</button>}
+          {manage && <RunMenu hidden={Boolean(r.hidden)} onHide={() => void hide()} onRemove={() => void remove()} />}
         </div>
       </header>
       {/* то, что ждёт человека, — над вкладками: видно с любой из них */}
@@ -428,10 +498,16 @@ function RunPage({ id }: { id: string }) {
       <section id="run-pane-log" className={cx(styles.runPane, styles.logPane)} role="tabpanel" hidden={tab !== 'log'}>
         <div>
           <div className={styles.logHead}>
-            <p className="muted small">{t('Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.')}</p>
+            <p className="muted small">
+              {runState.liveLog
+                ? t('Последние 3000 строк всех сессий. Весь лог этапа — кнопка «транскрипт» у этапа.')
+                : r.status === 'running'
+                  ? t('Запуск идёт не в этом окне (из CLI): лог — из транскриптов законченных этапов на момент открытия.')
+                  : t('Лог собран из транскриптов этапов: живой лог виден, пока запуск идёт.')}
+            </p>
             <LogRawToggle />
           </div>
-          <LogBody shown={tab === 'log'} />
+          {runState.liveLog ? <LogBody shown={tab === 'log'} /> : <PhaseLogs r={r} shown={tab === 'log'} />}
         </div>
       </section>
       <section id="run-pane-artifacts" className={styles.runPane} role="tabpanel" hidden={tab !== 'artifacts'}>
@@ -440,6 +516,53 @@ function RunPage({ id }: { id: string }) {
       {artOn && <ArtifactWindow onContinue={() => void cont()} />}
       {canChat && <RunChat runId={id} live={r.live} onAfterTurn={runsSoon} />}
       {r.adhoc && <SaveFlowDialog runId={id} flow={r.flow} open={saveOpen} onClose={() => setSaveOpen(false)} />}
+    </div>
+  );
+}
+
+/** «⋯» завершённого запуска: редкое и опасное — скрыть из списка и удалить папку, не рядом с главным действием (как у flow). */
+function RunMenu({ hidden, onHide, onRemove }: { hidden: boolean; onHide: () => void; onRemove: () => void }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // клик мимо и Esc закрывают, фокус — на первый пункт (как меню flow и сессии)
+  useEffect(() => {
+    if (!open) return;
+    box.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus();
+    const onClick = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      btn.current?.focus();
+    };
+    document.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('click', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  // фокус — на «⋯» до действия: пункт сейчас скроется, а диалог подтверждения вернёт фокус туда, откуда его открыли
+  const pick = (fn: () => void) => () => {
+    btn.current?.focus();
+    setOpen(false);
+    fn();
+  };
+  return (
+    <div className="menu-wrap">
+      <button ref={btn} type="button" className="btn ghost icon-more" aria-haspopup="menu" aria-expanded={open} aria-label={t('Действия с запуском')} title={t('Действия с запуском')} onClick={() => setOpen(!open)}>
+        ⋯
+      </button>
+      <div ref={box} className="menu" role="menu" hidden={!open}>
+        <button type="button" className="menu-item" role="menuitem" title={hidden ? t('Вернуть в список запусков слева') : t('Убрать из списка запусков слева; файлы останутся')} onClick={pick(onHide)}>
+          {hidden ? t('Вернуть в список') : t('Скрыть из списка')}
+        </button>
+        <button type="button" className="menu-item danger" role="menuitem" title={t('Удалить папку запуска из runs/ — с подтверждением')} onClick={pick(onRemove)}>
+          {t('Удалить запуск…')}
+        </button>
+      </div>
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
 import type {
   BlockNext, BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
-  RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, SpaceStateReport,
+  RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, SpaceStateReport, StateSkip,
 } from './api-types.js';
 import { flowBlocks, isCallBlock, NEXT_END, phaseSteps, type Block, type FlowSpec, type NextRule, type Phase, type PhaseStep, type Until } from './schema.js';
 import { emptyContext, render, type TemplateContext } from './template.js';
@@ -1268,13 +1268,14 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
  * перезаписала бы первое, считав прошлое состояние до его записи.
  */
 async function updateSpaceState(report: RunReport, final: FinalPhase[], slug: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<SpaceStateReport> {
-  const skip = (skipped: string): SpaceStateReport => ({ space: slug, ok: false, costUsd: 0, skipped });
-  if (opts.saveState === false) return skip('галочка «Обновить состояние пространства» снята');
-  if (report.status !== 'done') return skip(`запуск не завершён (${report.status})`);
+  // причина — кодом для UI (он пишет её словом бейджа и переводит) и текстом для CLI и скилла
+  const skip = (code: StateSkip, skipped: string): SpaceStateReport => ({ space: slug, ok: false, costUsd: 0, skipped, skip: code });
+  if (opts.saveState === false) return skip('off', 'галочка «Обновить состояние пространства» снята');
+  if (report.status !== 'done') return skip('not-done', `запуск не завершён (${report.status})`);
   // «Остановить» во время состояния прерывает сессию, запуск остаётся done
-  if (opts.abort?.signal.aborted) return skip('остановлено');
+  if (opts.abort?.signal.aborted) return skip('stopped', 'остановлено');
   // «Стоп» мог прийти, пока состояние ждало в очереди (её держала сессия терминала): тогда ни промпта, ни сессии
-  return queueSpaceState(slug, async () => (opts.abort?.signal.aborted ? skip('остановлено') : writeRunState(report, final, slug, opts, emit)));
+  return queueSpaceState(slug, async () => (opts.abort?.signal.aborted ? skip('stopped', 'остановлено') : writeRunState(report, final, slug, opts, emit)));
 }
 
 async function writeRunState(report: RunReport, final: FinalPhase[], slug: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<SpaceStateReport> {
