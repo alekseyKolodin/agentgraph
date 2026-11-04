@@ -1,7 +1,7 @@
 // Форма запуска без React и DOM (ui/app.js renderFlow, startRun, readAttachments, renderRunTags, addRunTag, renderRunMoreSum,
 // renderConnWarn, renderRecentDirs; ui/dash.js renderRunLink, prepareWorktree, runLinkPayload): вложения, теги, сводка
 // «Дополнительно», привязка к задаче, MR/PR или ветке и worktree, тело POST /api/runs.
-import type { FlowSummary, PhaseSummary, ProjectInfo, RecentDir, RunSource, RunWorktree, TagDetail, TagKind, TagListItem } from '@server/api-types';
+import type { FlowSummary, PhaseSummary, ProjectInfo, RecentDir, RunSource, RunWorktree, TagDetail, TagListItem } from '@server/api-types';
 import { plural } from './format';
 import { t } from './i18n';
 import { mrSign } from './dash';
@@ -69,36 +69,21 @@ export function connWarn(input: string, summary: FlowSummary | undefined): boole
   return link && none;
 }
 
-// ---------- теги
+// ---------- теги знаний
 
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const TAG_SLUG_ERROR = t('Слаг тега: строчные латинские буквы, цифры и дефис');
-export const KIND_LABEL: Record<TagKind, string> = { task: t('задача'), knowledge: t('знание') };
 
-/** Выбранный тег с сервера; у нового (404) записи нет — он заведётся тегом задачи. */
-export type TagInfo = { kind: TagKind; title: string; input: string };
 
-/** Подсказка в datalist поля «Теги»: «задача · заголовок». */
-export const tagOptionLabel = (tag: TagListItem): string =>
-  `${KIND_LABEL[tag.kind] || t('задача')} · ${tag.title || tag.preview.split('\n')[0] || (tag.kind === 'knowledge' ? t('заметок ещё нет') : t('саммари ещё нет'))}`;
+/** Подсказка в datalist поля «Теги знаний»: заголовок, иначе начало описания или заметок. */
+export const tagOptionLabel = (tag: TagListItem): string => tag.title || tag.preview.split('\n')[0] || t('заметок ещё нет');
 
 /** Сообщение под тегами после добавления. */
 export const tagAddedMsg = (slug: string, r: TagDetail): string =>
-  r.kind === 'knowledge'
-    ? t('{slug}: тег знаний — {state}', { slug, state: r.notes.trim() || r.attachments.length || (r.dirs || []).length ? t('этапы получат его знание') : t('тег пуст') })
-    : t('{slug}: {state} · запусков: {n}', { slug, state: r.summary.trim() || r.notes.trim() ? t('встанет в задачу') : t('саммари ещё нет'), n: r.runs.length });
+  t('{slug}: тег знаний — {state}', { slug, state: r.notes.trim() || r.attachments.length || (r.dirs || []).length ? t('этапы получат его знание') : t('тег пуст') });
 
-export const tagNewMsg = (slug: string): string => t('{slug}: новый тег — заведётся при запуске', { slug });
-
-/** Панель «что сервер вставит» по тегу: текст блока без маркеров и куда он уйдёт. */
-export function tagContext(info: TagInfo | undefined): { text: string; where: string; kind: TagKind } {
-  const kind = info?.kind || 'task';
-  return {
-    kind,
-    text: info ? info.input.replace(/<!-- \/?tag(?::[a-z0-9-]+)? -->\n?/g, '') : t('Новый тег: заведётся при запуске как тег задачи, саммари ещё нет.'),
-    where: kind === 'knowledge' ? t('уйдёт в конец промптов этапов каждого блока') : t('встанет в начало задачи'),
-  };
-}
+/** Тега знаний нет: из формы его не заводят — пустой бесполезен. */
+export const tagMissingMsg = (slug: string): string => t('Тега знаний {slug} нет: заведи его на странице «Знания»', { slug });
 
 // ---------- доп. директории и недавние папки
 
@@ -178,7 +163,7 @@ export function runMoreSum(f: MoreSumInput): { text: string; set: boolean } {
   if (f.maxIterations && f.maxIterations !== String(f.flowMaxIterations ?? '')) parts.push(t('до {n}', { n: iterTo(Number(f.maxIterations)) }));
   if (f.budget) parts.push(t('до {n}', { n: `$${f.budget}` }));
   if (f.modelLabel) parts.push(f.modelLabel);
-  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('теги, вложения, директории, worktree, лимиты, модель'), set: false };
+  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('знания, вложения, директории, worktree, лимиты, модель'), set: false };
 }
 
 export type RunBodyInput = {
@@ -193,11 +178,15 @@ export type RunBodyInput = {
   link: RunLink | null;
   attach: Attach[];
   addDirs: string;
+  /** Пространство (слаг); пусто — без пространства. */
+  space: string;
+  saveState: boolean;
+  /** Завести новое пространство по задаче: только без выбранного. */
+  autoSpace: boolean;
+  /** Теги знаний. */
   tags: string[];
-  saveTag: boolean;
-  autoTag: boolean;
   /** Фичи сервера: чего он не умеет, того в теле нет. */
-  can: { integrations: boolean; attachments: boolean; addDirs: boolean; tags: boolean };
+  can: { integrations: boolean; attachments: boolean; addDirs: boolean; tags: boolean; spaces: boolean };
 };
 
 /** Тело POST /api/runs — поля как у startRun старого UI. */
@@ -212,11 +201,8 @@ export function runBody(f: RunBodyInput): Record<string, unknown> {
     ...(f.can.integrations && f.link ? { source: f.link.source, worktree: f.link.worktree } : {}),
     ...(f.can.attachments && f.attach.length ? { attachments: f.attach.map(({ name, data }) => ({ name, data })) } : {}),
     ...(f.can.addDirs ? { addDirs: dirLines(f.addDirs) } : {}),
-    ...(f.can.tags && f.tags.length ? { tags: f.tags, saveTag: f.saveTag } : {}),
-    ...(f.autoTag ? { autoTag: true } : {}),
+    ...(f.can.spaces && f.space.trim() ? { space: f.space.trim(), saveState: f.saveState } : {}),
+    ...(f.can.spaces && f.autoSpace && !f.space.trim() ? { autoSpace: true } : {}),
+    ...(f.can.tags && f.tags.length ? { tags: f.tags } : {}),
   };
 }
-
-/** Автотег: только без выбранного тега задачи (новый слаг — тоже тег задачи). */
-export const wantsAutoTag = (checked: boolean, tags: string[], info: Map<string, TagInfo>): boolean =>
-  checked && !tags.some((t) => (info.get(t)?.kind || 'task') === 'task');

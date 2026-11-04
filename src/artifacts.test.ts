@@ -616,6 +616,34 @@ test('agent.ts: исключение внутри guard — отказ, cwd пр
   assert.equal(spec.permissionDecision, 'deny');
   assert.match(spec.permissionDecisionReason, /сломалось.*отклонён/);
 });
+test('canonical: вход — как у Claude Code (trim, ~, «..» лексически, обратный слэш — часть имени); висячая ссылка — по цели, а её цель — как у ядра', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-canon-')));
+  try {
+    fs.mkdirSync(path.join(dir, 'guarded', 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'proj', 'a', 'b', 'c'), { recursive: true });
+    const proj = path.join(dir, 'proj');
+    // висячая: цели ещё нет, а запись по ссылке создала бы guarded/CLAUDE.md
+    fs.symlinkSync(path.join(dir, 'guarded', 'CLAUDE.md'), path.join(proj, 'notes.md'));
+    assert.equal(canonical('notes.md', proj, nodeProbe), path.join(dir, 'guarded', 'CLAUDE.md'));
+    // цель висячей ссылки с «..» после ссылки: ядро разбирает её физически — sl/../CLAUDE.md при sl -> guarded/docs
+    fs.symlinkSync(path.join(dir, 'guarded', 'docs'), path.join(proj, 'sl'));
+    fs.symlinkSync('sl/../CLAUDE.md', path.join(proj, 'tricky.md'));
+    assert.equal(canonical('tricky.md', proj, nodeProbe), path.join(dir, 'guarded', 'CLAUDE.md'));
+    // «..» во входе — лексически, как его нормализует Claude Code: l/../../.. при l -> a/b/c уходит выше проекта, а не
+    // остаётся внутри (физический разбор разрешил бы Grep по домашней папке)
+    fs.symlinkSync(path.join(proj, 'a', 'b', 'c'), path.join(proj, 'l'));
+    assert.equal(canonical(`${proj}/l/../../..`, '/', nodeProbe), path.dirname(dir));
+    assert.equal(canonical('sl/../CLAUDE.md', proj, nodeProbe), path.join(proj, 'CLAUDE.md'));
+    // пробелы обрезаются, как у Claude Code: «  /abs» — абсолютный путь, а не папка «  » в проекте
+    assert.equal(canonical(`  ${path.join(dir, 'guarded')}`, proj, nodeProbe), path.join(dir, 'guarded'));
+    // обратный слэш — часть имени: a\..\..\x остаётся внутри папки
+    assert.equal(canonical('docs\\..\\..\\x.md', path.join(dir, 'guarded'), nodeProbe), path.join(dir, 'guarded', 'docs\\..\\..\\x.md'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
 
 test('отказы считаются по инструменту и причине', () => {
   const list: Parameters<typeof countDenial>[0] = [];

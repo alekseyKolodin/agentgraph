@@ -25,11 +25,12 @@ function fitName(stem: string, suffix: string, ext: string): string {
   return cps.join('') + suffix + ext;
 }
 
-// attachments/ уходит в additionalDirectories, а с ним Claude Code грузит CLAUDE.md оттуда как инструкции агента
-const RESERVED_NAMES = new Set(['claude.md', 'claude.local.md']);
+// attachments/ (и docs/ пространства) уходят в additionalDirectories, а с ними Claude Code грузит CLAUDE.md оттуда как
+// инструкции агента; AGENTS.md — тот же файл инструкций у других агентов (и у claude с ним в настройках)
+const RESERVED_NAMES = new Set(['claude.md', 'claude.local.md', 'agents.md']);
 
 /** Только имя файла: без каталогов, `..`, разделителей и управляющих символов (имя уходит в промпт), не длиннее 200 байт. Пустое — file.
- *  CLAUDE.md и CLAUDE.local.md (без учёта регистра) получают префикс attached-, чтобы вложение не стало инструкциями агентов. */
+ *  CLAUDE.md, CLAUDE.local.md и AGENTS.md (без учёта регистра) получают префикс attached-, чтобы вложение не стало инструкциями агентов. */
 export function safeAttachmentName(raw: string): string {
   const base = String(raw ?? '').replace(/[\x00-\x1f\x7f]/g, '').split(/[\\/]/).pop() ?? '';
   let name = base.trim().replace(/^\.+/, '');

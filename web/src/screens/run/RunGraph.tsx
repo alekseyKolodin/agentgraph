@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
-import { Badge, TagBadge } from '../../components/Badge';
+import { Badge, SpaceBadge, TagBadge } from '../../components/Badge';
 import { openRunFile } from '../../components/file/FileDialog';
 import { flowGraphModel, type GraphSpec } from '../../lib/graph/model';
 import type { GraphRunState } from '../../lib/graph/run-state';
@@ -13,7 +13,7 @@ import { t } from '../../lib/i18n';
 import { linkifyText } from '../../lib/md';
 import type { LiveState } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
-import { gotoTarget, inspectView, nodeFromKey, type InspectSel } from '../../lib/run/view';
+import { gotoTarget, inspectView, nodeFromKey, runSpaceOf, runTask, type InspectSel } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
 import { Feedback } from './Overview';
 import { openWin } from './artStore';
@@ -95,7 +95,10 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
     inspectNode({ kind: n.kind === 'call' ? 'phase' : n.kind, name: n.name, block: n.block, key: n.key });
   };
   const sel = runState.inspect;
-  const startChips = [...(r.tags || []).map((t) => <TagBadge key={`t${t}`} slug={t} />), ...(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)];
+  // пространство (у старого запуска — его теги задачи: они перенесены в пространства с теми же слагами) и теги знаний
+  const space = runSpaceOf(r);
+  // пилюля пространства — ссылка на его страницу (клик не уходит в узел)
+  const startChips = [...(space ? [<SpaceBadge key={`s${space}`} slug={space} link />] : []), ...(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)];
 
   return (
     <section
@@ -135,7 +138,7 @@ export function RunGraph({ st, spec, rs, artifacts, shown, implicit, flowAction 
             refitKey={r.id}
             run={rs}
             chip={knowledgeChip}
-            startSub={r.input || ''}
+            startSub={runTask(r.input)}
             startChips={startChips.length ? startChips : undefined}
             selectedKey={sel?.key ?? null}
             onNode={pick}

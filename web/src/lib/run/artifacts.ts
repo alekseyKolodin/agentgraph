@@ -16,7 +16,13 @@ export const ART_DENIAL: Record<string, string> = {
   'outside-artifacts': t('файл вне артефактов этапа'),
   'runs-dir': t('запись в папку запусков'),
   isolation: t('сабагент с изоляцией'),
+  'space-readonly': t('запись в папку пространства'),
+  'knowledge-readonly': t('запись в папку тегов знаний'),
 };
+
+/** Отказы записи этапа одной строкой: «Write: запись в папку пространства ×2; Edit: …». */
+export const denialText = (denials: Denial[]): string =>
+  denials.map((d) => `${d.tool}: ${ART_DENIAL[d.reason] || d.reason}${d.count > 1 ? ` ×${d.count}` : ''}`).join('; ');
 
 /** Артефакт на экране: из отчёта, события или списка; из списка — ещё путь, пропажа файла и правило правки. */
 export type ArtItem = ArtifactLite & Partial<Pick<ArtifactListItem, 'path' | 'missing' | 'editable' | 'reason' | 'message'>>;
@@ -146,7 +152,7 @@ export function allWarnings(r: WarnRun, steps: Map<string, StepInfo>, runWarning
 export function stepLine(s: StepInfo | null): { changed: string[]; denied: number; why: string; warnings: string[] } | null {
   if (!s) return null;
   const denied = s.denials.reduce((n, d) => n + (d.count || 0), 0);
-  const why = s.denials.map((d) => `${d.tool}: ${ART_DENIAL[d.reason] || d.reason}${d.count > 1 ? ` ×${d.count}` : ''}`).join('; ');
+  const why = denialText(s.denials);
   if (!s.changed.length && !denied && !s.warnings.length) return null;
   return { changed: s.changed, denied, why, warnings: s.warnings };
 }

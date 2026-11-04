@@ -1,8 +1,9 @@
 // Имя запуска: короткая сессия без инструментов по тексту задачи придумывает человекочитаемое имя. Идёт параллельно
 // этапам (раннер не ждёт её на старте, только перед концом), сбой подбора не роняет запуск: заголовком остаётся flow.
+// Сама сессия подбора (таймаут, остановка, разбор ответа) — pickTitle: ею же называется сессия терминала (session-title.ts).
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
-import { cleanTitle } from './auto-tag.js';
+import { cleanTitle } from './auto-space.js';
 import { wrapData, type RunSource } from './intake.js';
 import { replyIn, taskLang } from './lang.js';
 import { stripTagBlocks } from './tags.js';
@@ -11,7 +12,7 @@ export const RUN_TITLE_MODEL = 'haiku';
 /** Дольше не ждём: запуск идёт без имени, а конец запуска не задерживается. */
 export const RUN_TITLE_TIMEOUT_MS = 30_000;
 const TASK_MAX = 2000;
-const TITLE_MAX = 60;
+export const TITLE_MAX = 60;
 
 /** Итог подбора: имя или ошибка; стоимость — в totalCostUsd запуска. */
 export type RunTitleReport = { title?: string; error?: string; costUsd: number; tokens?: SessionTokens };
@@ -93,7 +94,15 @@ const errText = (err: unknown) => (err instanceof Error ? err.message : String(e
  */
 export async function pickRunTitle(input: string, ctx: RunTitleContext, deps: RunTitleDeps = {}): Promise<RunTitleReport> {
   if (!stripTagBlocks(input)) return { error: 'задача пуста: называть нечего', costUsd: 0 };
-  if (deps.signal?.aborted) return { error: 'запуск остановлен', costUsd: 0 };
+  return pickTitle((abort) => runTitleRequest(input, ctx, abort), deps);
+}
+
+/**
+ * Сессия подбора имени по готовому запросу: таймаут, остановка снаружи (deps.signal; stopText — текст этой ошибки) и
+ * разбор ответа (parseRunTitle). Наружу не бросает — { error }.
+ */
+export async function pickTitle(request: (abort: AbortController) => SessionRequest, deps: RunTitleDeps = {}, stopText = 'запуск остановлен'): Promise<RunTitleReport> {
+  if (deps.signal?.aborted) return { error: stopText, costUsd: 0 };
   const session = deps.session ?? ((req: SessionRequest) => runSession(req, () => {}));
   const timeoutMs = deps.timeoutMs ?? RUN_TITLE_TIMEOUT_MS;
   const abort = new AbortController();
@@ -107,13 +116,13 @@ export async function pickRunTitle(input: string, ctx: RunTitleContext, deps: Ru
     }, timeoutMs);
     onStop = () => {
       abort.abort();
-      reject(new Error('запуск остановлен'));
+      reject(new Error(stopText));
     };
     deps.signal?.addEventListener('abort', onStop, { once: true });
   });
   let res: SessionResult;
   try {
-    res = await Promise.race([session(runTitleRequest(input, ctx, abort)), stopped]);
+    res = await Promise.race([session(request(abort)), stopped]);
   } catch (err) {
     return { error: errText(err), costUsd: 0 };
   } finally {

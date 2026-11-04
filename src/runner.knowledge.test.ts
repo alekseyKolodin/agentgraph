@@ -7,14 +7,16 @@ import { parse as parseYaml } from 'yaml';
 import { runFlow, type RunOptions } from './runner.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import { FlowSchema, type FlowSpec } from './schema.js';
-import { createTag, KNOWLEDGE_LIST_HEAD, readTag, tagDir, updateTag, writeTagSummary } from './tags.js';
+import { createTag, KNOWLEDGE_LIST_HEAD, readTag, tagDir, updateTag } from './tags.js';
+import { createSpace, readSpace, writeSpaceState } from './spaces.js';
+import { isStateRequest } from './space-state.js';
 import { KNOWLEDGE_TOOLS_ALLOW } from './knowledge-tools.js';
 import { contextOptions } from './context.js';
 
 const result = (text: string, over: Partial<SessionResult> = {}): SessionResult =>
   ({ ok: true, subtype: 'success', text, costUsd: 0.01, turns: 1, durationMs: 10, errors: [], ...over });
 
-const isSummary = (req: SessionRequest) => Boolean(req.outputSchema && 'summary' in ((req.outputSchema as { properties?: object }).properties ?? {}));
+const isSummary = isStateRequest;
 const isJudge = (req: SessionRequest) => Boolean(req.outputSchema && 'done' in ((req.outputSchema as { properties?: object }).properties ?? {}));
 
 /** Два блока: у первого тег знаний qa, у второго — нет. */
@@ -48,7 +50,7 @@ function fake() {
   const reqs: SessionRequest[] = [];
   const session = async (req: SessionRequest): Promise<SessionResult> => {
     reqs.push(req);
-    if (isSummary(req)) return result('', { structured: { summary: 'Суть: новое' } });
+    if (isSummary(req)) return result('', { structured: { state: 'Суть: новое' } });
     if (isJudge(req)) return result('', { structured: { done: true, reason: '', feedback: '' } });
     return result('out');
   };
@@ -64,7 +66,7 @@ const QA_LINE = /\n- qa — Правила QA: Правила проверки \
 function qaTag(root: string) {
   const dir = path.join(root, 'qa-rules');
   fs.mkdirSync(dir, { recursive: true });
-  createTag('qa', 'Правила QA', 'knowledge');
+  createTag('qa', 'Правила QA');
   updateTag('qa', { description: 'Правила проверки', notes: QA_NOTES, dirs: [dir, path.join(root, 'нет')] });
   const attach = path.join(tagDir('qa'), 'attachments');
   fs.mkdirSync(attach, { recursive: true });
@@ -72,9 +74,15 @@ function qaTag(root: string) {
   return { dir, attach };
 }
 
+/** Старый тег задачи на диске (до пространств): его папку не удаляют, в knowledge он — ошибка. */
+function legacyTaskTag(slug: string) {
+  fs.mkdirSync(tagDir(slug), { recursive: true });
+  fs.writeFileSync(path.join(tagDir(slug), 'tag.json'), JSON.stringify({ slug, kind: 'task', createdAt: '', updatedAt: '', runs: [] }));
+}
+
 /** Тег знаний rules в режиме inline: короткое правило, которое должно быть в каждом промпте целиком. */
 function inlineTag() {
-  createTag('rules', 'Правила', 'knowledge');
+  createTag('rules', 'Правила');
   updateTag('rules', { notes: 'Коротко: пиши тесты', inline: true });
 }
 
@@ -121,14 +129,14 @@ test(
 );
 
 test(
-  'знания: тег знаний на весь запуск — строка у всех этапов, судья получает папки без текста и без инструмента; тег задачи — саммари, тег знаний — нет',
+  'знания: тег знаний на весь запуск — строка у всех этапов, судья получает папки без текста и без инструмента; состояние пишется только пространству',
   withEnv(async (o, root) => {
     const { dir } = qaTag(root);
-    createTag('feat');
-    writeTagSummary('feat', 'Суть: старое', { id: 'r0', flow: 'f', finishedAt: '', status: 'done' });
+    createSpace('feat');
+    writeSpaceState('feat', 'Суть: старое', { id: 'r0', at: '', kind: 'run', flow: 'f' });
     const f = fake();
     const r = await runFlow(spec({ loop: { max_iterations: 1, until: { type: 'judge', prompt: 'ok?' } } }, {}), {
-      ...o, tags: ['feat'], knowledge: ['qa'], session: f.session,
+      ...o, space: 'feat', knowledge: ['qa'], session: f.session,
     });
     assert.equal(r.status, 'done');
     assert.match(f.phase('сделай').prompt, QA_LINE);
@@ -143,8 +151,8 @@ test(
     assert.equal(f.reqs.filter(isSummary).length, 1);
     const s = saved(o);
     assert.deepEqual(s.knowledge, ['qa']);
-    assert.deepEqual(s.tags, ['feat']);
-    assert.deepEqual(s.tagSummaries.map((x: { tag: string }) => x.tag), ['feat']);
+    assert.equal(s.space, 'feat');
+    assert.equal(s.stateUpdate.space, 'feat');
   }),
 );
 
@@ -216,27 +224,27 @@ test(
     assert.match(r.error!, /блок one: тега знаний nope нет/);
     assert.equal(f.reqs.length, 0);
     assert.equal(saved(o).status, 'failed');
-    createTag('feat');
+    legacyTaskTag('feat');
     f = fake();
     r = await runFlow(spec({ knowledge: ['feat'] }), { ...o, runDir: path.join(o.runsDir, 'run-2'), session: f.session });
     assert.equal(r.status, 'failed');
-    assert.match(r.error!, /feat — тег задачи/);
+    assert.match(r.error!, /feat — старый тег задачи/);
     assert.equal(f.reqs.length, 0);
     // тег запуска — то же, с пометкой «запуск»
     f = fake();
     r = await runFlow(spec({}), { ...o, runDir: path.join(o.runsDir, 'run-3'), knowledge: ['feat'], session: f.session });
-    assert.match(r.error!, /запуск: feat — тег задачи/);
+    assert.match(r.error!, /запуск: feat — старый тег задачи/);
   }),
 );
 
 test(
-  'знания: продолжение наследует tags, saveTag и knowledge, строка списка пересчитывается по текущему тегу',
+  'знания: продолжение наследует space, saveState и knowledge, строка списка пересчитывается по текущему тегу',
   withEnv(async (o, root) => {
     qaTag(root);
-    createTag('feat');
+    createSpace('feat');
     const f = fake();
     const first = await runFlow(spec({}, { loop: { max_iterations: 1, until: { type: 'marker', marker: '<DONE>' } } }), {
-      ...o, tags: ['feat'], saveTag: false, knowledge: ['qa'], session: f.session,
+      ...o, space: 'feat', saveState: false, knowledge: ['qa'], session: f.session,
     });
     assert.equal(first.status, 'max_iterations');
     // как сервер: продолжение берёт поля из прошлого отчёта, тег к этому моменту изменили
@@ -245,20 +253,21 @@ test(
     const second = await runFlow(spec({}, {}), {
       ...o,
       runDir: path.join(o.runsDir, 'run-2'),
-      tags: first.tags,
-      saveTag: first.saveTag,
+      space: first.space,
+      saveState: first.saveState,
       knowledge: first.knowledge,
       continueFrom: { runId: first.id, skipBlocks: ['one'], phases: { work: 'out' }, prev: 'out', history: [] },
       session: g.session,
     });
     assert.equal(second.status, 'done');
     const s = saved({ ...o, runDir: path.join(o.runsDir, 'run-2') });
-    assert.deepEqual(s.tags, ['feat']);
-    assert.equal(s.saveTag, false);
+    assert.equal(s.space, 'feat');
+    assert.equal(s.saveState, false);
     assert.deepEqual(s.knowledge, ['qa']);
     assert.match(g.phase('проверь').prompt, /- qa — Правила QA: Новое описание/);
     assert.ok(!g.phase('проверь').prompt.includes('Правила проверки'));
-    assert.equal(readTag('feat')!.summary, '');
+    // галочка снята: состояние не писалось
+    assert.equal(readSpace('feat')!.state, '');
   }),
 );
 
@@ -267,7 +276,7 @@ test(
   withEnv(async (_o, root) => {
     const { dir } = qaTag(root);
     inlineTag();
-    createTag('feat');
+    legacyTaskTag('feat');
     const file = path.join(root, 'flow.yaml');
     fs.writeFileSync(file, `name: ctx-know
 blocks:
@@ -291,7 +300,7 @@ blocks:
       { slug: 'feat', exists: true, kind: 'task' },
     ]);
     assert.ok(c.warnings.some((w) => /Нет тега знаний nope/.test(w)), c.warnings.join('\n'));
-    assert.ok(c.warnings.some((w) => /feat .*тег задачи/.test(w)), c.warnings.join('\n'));
+    assert.ok(c.warnings.some((w) => /feat .*старый тег задачи/.test(w)), c.warnings.join('\n'));
     assert.ok((c.options.additionalDirectories ?? []).includes(dir));
     // инструмент знаний — в опциях сессии листинга, как в настоящем запуске
     assert.deepEqual(Object.keys(c.options.mcpServers ?? {}), ['knowledge']);

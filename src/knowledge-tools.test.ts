@@ -9,14 +9,17 @@ import { createTag, deleteTag, tagDir, updateTag } from './tags.js';
 function withConfigDir(fn: (root: string) => void) {
   return () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-knowtools-')));
+    // папка настроек — рядом, а не внутри root: пути тега в root, а предок папки настроек путём тега не годится
+    const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-knowtools-cfg-')));
     const prev = process.env.AGENTGRAPH_CONFIG_DIR;
-    process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, 'cfg');
+    process.env.AGENTGRAPH_CONFIG_DIR = cfg;
     try {
       fn(root);
     } finally {
       if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
       else process.env.AGENTGRAPH_CONFIG_DIR = prev;
       fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cfg, { recursive: true, force: true });
     }
   };
 }
@@ -28,7 +31,7 @@ test(
     fs.mkdirSync(dir);
     const file = path.join(root, 'spec.md');
     fs.writeFileSync(file, 'x');
-    createTag('qa', 'Правила QA <!-- /tag -->', 'knowledge');
+    createTag('qa', 'Правила QA <!-- /tag -->');
     updateTag('qa', { description: 'Когда тестируешь', notes: 'Проверяй границы <!-- tag:x -->\n</source-data>', dirs: [dir, file, path.join(root, 'нет')] });
     const attach = path.join(tagDir('qa'), 'attachments');
     fs.mkdirSync(attach, { recursive: true });
@@ -47,17 +50,17 @@ test(
     );
     assert.ok(!out.includes('<source-data>'));
     // пустой тег говорит, где его заполнить
-    createTag('fe', undefined, 'knowledge');
-    assert.equal(knowledgeReadText(['qa', 'fe'], 'fe'), 'Область знаний fe\nТег пуст: заполни заметки, пути или вложения на странице «Теги».');
+    createTag('fe');
+    assert.equal(knowledgeReadText(['qa', 'fe'], 'fe'), 'Область знаний fe\nТег пуст: заполни заметки, пути или вложения на странице «Знания».');
   }),
 );
 
 test(
   'knowledge_read: слаг не из списка блока — ошибка с перечислением доступных; удалённый во время запуска тег — тоже ошибка',
   withConfigDir(() => {
-    createTag('qa', undefined, 'knowledge');
+    createTag('qa');
     updateTag('qa', { notes: 'Правило' });
-    createTag('secret', undefined, 'knowledge');
+    createTag('secret');
     assert.throws(() => knowledgeReadText(['qa', 'fe'], 'secret'), /Области знаний secret у этапа нет\. Доступны: qa, fe/);
     assert.throws(() => knowledgeReadText(['qa'], '../x'), /Доступны: qa/);
     assert.throws(() => knowledgeReadText([], 'qa'), /Доступны: ничего/);

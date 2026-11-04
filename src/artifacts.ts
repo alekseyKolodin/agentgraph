@@ -567,7 +567,12 @@ export type PathProbe = {
   realpath: (p: string) => string | undefined;
   /** lstat без следования ссылке; undefined — пути нет. */
   lstat: (p: string) => { file: boolean; symlink: boolean; nlink: number } | undefined;
+  /** Цель ссылки (readlink); не ссылка или пути нет — undefined. Нужна для висячей ссылки: realpath у неё нет. */
+  readlink?: (p: string) => string | undefined;
 };
+
+/** Сколько ссылок подряд разворачивает canonical (как ELOOP у ядра): дальше путь берётся как есть. */
+const LINK_DEPTH = 32;
 
 /** ~ раскрывается, относительный путь — от cwd, затем лексическая нормализация. */
 export function expandPath(p: string, cwd: string): string {
@@ -576,20 +581,60 @@ export function expandPath(p: string, cwd: string): string {
 }
 
 /**
- * Канонический путь для сравнения: expandPath, затем realpath ближайшего существующего предка плюс остаток.
- * На APFS realpath.native даёт настоящий регистр имён, поэтому дальше сравнение точное.
+ * Канонический путь для сравнения. Вход нормализуется так же, как его нормализует Claude Code (trim, ~, лексический
+ * resolve): по этому пути он и пойдёт — хук PreToolUse у Read/Write/Edit/NotebookEdit уже получает его таким, а у Grep и
+ * Glob поиск идёт по нему же. «..» — лексически, обратный слэш — часть имени (posix). Дальше realpath ближайшего
+ * существующего предка плюс остаток; на APFS realpath.native даёт настоящий регистр имён, и сравнение точное. Висячая
+ * ссылка (realpath её нет, а запись по ней ядро уведёт в цель) сверяется по цели, а цель — как её разберёт ядро: от
+ * настоящей папки ссылки, по частям («..» после ссылки внутри цели — от цели той ссылки).
  */
-export function canonical(p: string, cwd: string, probe: Pick<PathProbe, 'realpath'>): string {
-  const abs = expandPath(p, cwd);
+export function canonical(p: string, cwd: string, probe: Pick<PathProbe, 'realpath'> & Partial<Pick<PathProbe, 'readlink'>>, depth = 0): string {
+  const abs = expandPath(p.trim(), cwd);
   const rest: string[] = [];
   for (let cur = abs; ; ) {
     const real = probe.realpath(cur);
     if (real !== undefined) return rest.length ? path.join(real, ...rest.reverse()) : real;
+    const target = depth < LINK_DEPTH ? probe.readlink?.(cur) : undefined;
+    if (target !== undefined) {
+      const dir = path.dirname(cur);
+      return path.join(linkTarget(probe.realpath(dir) ?? dir, target, probe, depth + 1), ...rest.reverse());
+    }
     const parent = path.dirname(cur);
     if (parent === cur) return abs;
     rest.push(path.basename(cur));
     cur = parent;
   }
+}
+
+/**
+ * Цель ссылки — как её разбирает ядро: от настоящей папки ссылки (base), по частям через «/»: существующее — realpath
+ * (ссылки развёрнуты), «..» — от настоящего родителя, висячая ссылка — по её цели, нет пути — остаток лексически.
+ */
+function linkTarget(base: string, target: string, probe: Pick<PathProbe, 'realpath'> & Partial<Pick<PathProbe, 'readlink'>>, depth: number): string {
+  const parts = target.split('/');
+  let cur = target.startsWith('/') ? path.parse(base).root : base;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      cur = path.dirname(cur);
+      continue;
+    }
+    const next = path.join(cur, part);
+    const real = probe.realpath(next);
+    if (real !== undefined) {
+      cur = real;
+      continue;
+    }
+    const inner = depth < LINK_DEPTH ? probe.readlink?.(next) : undefined;
+    if (inner !== undefined) {
+      cur = linkTarget(cur, inner, probe, depth + 1);
+      continue;
+    }
+    // такого пути нет: ядро на нём споткнётся (или создаст последний компонент), остаток — лексически
+    return path.resolve(next, ...parts.slice(i + 1).filter(Boolean));
+  }
+  return cur;
 }
 
 export function isInside(p: string, root: string): boolean {

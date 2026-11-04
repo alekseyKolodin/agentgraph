@@ -7,6 +7,25 @@
 .view-head > div:first-child { flex: 1 1 320px; min-width: 0; }
 .view-head > :global(.row) { flex: 0 1 auto; max-width: 100%; flex-wrap: wrap; }
 
+/* имя запуска и статус — одной строкой (имя с переименованием — общий InlineRename): длинное имя уступает место
+   многоточием, статус не переносится под имя; пилюли пространства и знаний — следом, переносятся первыми */
+.run-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; margin-bottom: 4px; }
+.run-title :global(.badge) { margin-left: 0; }
+.run-name { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.run-name > :global(.badge) { flex: none; }
+.run-name h1 { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* карандаш и поле — размеров шапки, как у имени сессии (шрифт поле берёт у имени само) */
+.run-name button { width: 28px; height: 28px; border-radius: var(--r-sm); }
+.run-name button svg { width: 14px; height: 14px; }
+.run-name input { min-width: 260px; }
+
+/* запуск не открылся: причина и выход, а не тихий уход на главную */
+.run-missing { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.run-missing h1 { margin: 0; font-size: var(--fs-h1); font-weight: 600; }
+.run-missing p { margin: 0; overflow-wrap: anywhere; }
+.run-missing :global(.row) { margin-top: 6px; }
+.run-missing :global(a.btn) { text-decoration: none; }
+
 /* flow под именем запуска */
 .run-flow { margin: -4px 0 4px; }
 .run-flow a { color: inherit; }
@@ -30,6 +49,10 @@
 
 .run-input { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; white-space: pre-wrap; }
 .run-input a { color: var(--live); overflow-wrap: anywhere; }
+/* пространство запуска — плашкой под задачей */
+.run-space { margin: 6px 0 0; gap: 8px; }
+/* отказы записи этапа у flow без артефактов */
+.denials { margin: 4px 0 0; color: var(--st-wait); }
 /* итог завершённого запуска */
 .run-final { margin: 12px 0; border-color: color-mix(in srgb, var(--live) 40%, var(--line)); gap: 10px; }
 .run-final > .head .title { font-size: var(--fs-h3); }
@@ -253,6 +276,16 @@
 .log-pane .log-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 8px; }
 .log-pane .log-head > p { margin: 0; min-width: 0; }
 .log-pane .log-head > button { flex: none; white-space: nowrap; }
+/* «Лог» запуска без живого потока — транскрипты этапов (RunLog.tsx, PhaseLogs): разделитель этапа — как у живого лога
+   (components/transcript, .phase), с итерацией и кнопкой окна транскрипта; текст — та же отрисовка, что в окне */
+.log-files { white-space: normal; }
+.log-files > p { margin: 0; }
+.log-phase + .log-phase { margin-top: 14px; }
+.log-phase-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; font-size: var(--fs-meta); color: var(--ink-3); }
+.log-phase-head::after { content: ''; flex: 1; height: 1px; background: var(--line); align-self: center; order: 9; }
+.log-phase-head > :global(.link-btn) { order: 10; font-size: var(--fs-meta); }
+.log-phase-name { font-family: var(--font-mono); color: var(--ink-2); font-weight: 600; }
+.log-raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--fs-meta); }
 
 /* вкладка «Граф»: холст и инспектор выбранного узла (есть, только когда узел выбран) */
 .run-graph-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }

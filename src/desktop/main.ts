@@ -218,7 +218,7 @@ async function confirmQuit(names: string[]): Promise<boolean> {
     defaultId: 0,
     cancelId: 1,
     message: 'Закрыть AgentGraph?',
-    detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСаммари тегов задач при таком выходе не пишется — его можно обновить позже.`,
+    detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСостояние пространства по этим сессиям при таком выходе не пишется — обновить его можно потом кнопкой «Обновить состояние» на экране сессии.`,
   };
   const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
   return r.response === 0;

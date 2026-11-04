@@ -4,7 +4,9 @@ import { jiraIntake, mrIntake } from './intake.js';
 import type { JiraIssue } from './jira.js';
 import type { MergeRequest } from './git.js';
 import { replyIn, taskLang } from './lang.js';
-import { withTagsInput } from './tags.js';
+/** Ввод старого запуска: блоки тегов задач (их до пространств вставлял сервер) перед самой задачей. */
+const withTagsInput = (task: string, tags: { slug: string; summary: string }[]) =>
+  [...tags.map((t) => `<!-- tag:${t.slug} -->\nТег задачи: ${t.slug}\n<source-data>\n${t.summary}\n</source-data>\n<!-- /tag -->`), task].filter(Boolean).join('\n\n');
 
 test('язык задачи: английская — en, русская с путями и именами функций — ru, пустая — ru', () => {
   assert.equal(taskLang('Make `npm test` and `npm run lint` pass. Fix the code, not the tests.'), 'en');

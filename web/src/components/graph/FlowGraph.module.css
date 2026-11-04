@@ -60,11 +60,13 @@
 .fg-node.ai-changed { border-color: var(--st-ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--st-ok) 45%, transparent); }
 .fg-title { font-weight: 600; font-size: var(--fs-small); line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .fg-num { color: var(--ink-2); font-weight: 600; margin-right: 6px; }
-.fg-sub { font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fg-in { font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-sub { font-size: var(--fs-cap); line-height: 1.3; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fg-in { font-size: var(--fs-cap); line-height: 1.3; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fg-in b { color: var(--ink); font-weight: 600; }
 .fg-in :global(.err) { color: var(--st-fail); }
-.fg-foot { margin-top: auto; display: flex; gap: 8px; align-items: center; font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fg-foot { margin-top: auto; display: flex; gap: 8px; align-items: center; font-size: var(--fs-cap); line-height: 1.3; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* строки этапа не сжимаются: высота узла (NODE_H, NODE_H_IN в lib/graph/model.ts) рассчитана на название в две строки */
+.fg-phase > * { flex-shrink: 0; }
 .fg-badge { margin-left: auto; font-size: var(--fs-cap); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .fg-badge:empty { display: none; }
 .fg-start { border-color: color-mix(in srgb, var(--live) 55%, var(--line)); background: color-mix(in srgb, var(--live) 7%, var(--panel)); }

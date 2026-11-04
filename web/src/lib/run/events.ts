@@ -32,7 +32,8 @@ export type LiveState = {
   /** Ключ — pendingKey: у параллельной группы в одной итерации идут несколько этапов. */
   pending: Map<string, PendingPhase>;
   condPending: PendingCond | null;
-  tagPending: { tag: string; file: string } | null;
+  /** Идёт сессия состояния пространства после done: что и где её промпт. */
+  statePending: { space: string; file: string } | null;
 };
 
 /** Что сделать после события, кроме перерисовки. */
@@ -55,7 +56,7 @@ export const pendingKey = (x: { block?: string; iteration: number; phase: string
 
 /** Состояние только что открытого запуска. */
 export function liveState(run: RunDetail): LiveState {
-  return { run: withQuestions(run), pending: new Map(), condPending: null, tagPending: null };
+  return { run: withQuestions(run), pending: new Map(), condPending: null, statePending: null };
 }
 
 const withQuestions = <T extends { questions?: QuestionRecord[] }>(r: T): T & { questions: QuestionRecord[] } => ({ ...r, questions: r.questions || [] });
@@ -137,16 +138,14 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       st.condPending = x;
       break;
     }
-    case 'tag_summary_start':
-      st.tagPending = { tag: e.tag, file: e.file };
+    case 'space_state_start':
+      st.statePending = { space: e.space, file: e.file };
       break;
-    case 'tag_summary': {
-      st.tagPending = null;
-      const list = (r.tagSummaries ||= []);
-      if (!list.some((s) => s.tag === e.tag)) {
-        r.totalCostUsd += e.report.costUsd;
-        list.push(e.report);
-      }
+    case 'space_state': {
+      st.statePending = null;
+      // переигрывание потока не удваивает стоимость
+      if (!r.stateUpdate) r.totalCostUsd += e.report.costUsd;
+      r.stateUpdate = e.report;
       break;
     }
     case 'condition':
@@ -220,7 +219,7 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       st.run = withQuestions({ ...e.report, live: false });
       st.pending.clear();
       st.condPending = null;
-      st.tagPending = null;
+      st.statePending = null;
       return { render: true, close: true, runsSoon: true, ended: true };
     case 'error':
       return { render: true, close: true };

@@ -5,7 +5,7 @@ import { liveState, type LiveState, type PendingPhase } from './events';
 import {
   blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
   blockNextNote, blockSkipNote, inspectView, spentChipInfo, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
-  summaryView, tagFinalLines, waitingNotes, type RunFold,
+  logPhases, runSpaceOf, runTask, summaryView, stateFinalLines, stateSkipText, waitingNotes, type RunFold,
 } from './view';
 
 const block = (name: string, over: Partial<BlockReport> = {}): BlockReport => ({
@@ -37,7 +37,7 @@ test('шапка: статус ждёт ответа / на паузе / идё�
   assert.equal(headerStatus(st({ status: 'failed' }, false).run), 'failed');
   assert.equal(runMeta(st({ totalCostUsd: 1.234 }).run, null), 'итерация 1/3 · ≈$1.23');
   const multi = st({ blocks: [block('a', { status: 'done' }), block('b', { index: 1, status: 'running' }), block('c', { index: 2, status: 'pending' })], iterations: 4 });
-  assert.equal(runMeta(multi.run, { tag: 'front', file: '' }), 'блок 2/3 · итераций: 4 · ≈$0.00 · обновляю саммари тега front…');
+  assert.equal(runMeta(multi.run, { space: 'front', file: '' }), 'блок 2/3 · итераций: 4 · ≈$0.00 · обновляю состояние пространства front…');
   assert.equal(runBlocks({ ...report(), blocks: undefined as unknown as BlockReport[] })[0]!.name, undefined);
 });
 
@@ -157,16 +157,43 @@ test('сводка живого: своё «сейчас», последний �
   assert.deepEqual(summaryView(ok, '', null).last, { ok: true, text: 'Итерация 1: условие выполнено — exit 0' });
 });
 
-test('итог: цифры, замечания последнего условия только при неуспехе, строки тегов', () => {
+test('итог: цифры, замечания последнего условия только при неуспехе, строки состояния пространства (и старых тегов задач)', () => {
   const r = report({ status: 'max_iterations', iterations: 2, totalCostUsd: 1, finishedAt: '2026-10-24T10:01:30Z', conditions: [cond(1), cond(2, { feedback: 'ещё' })] });
   assert.deepEqual(finalFacts(r), ['итераций: 2', '≈$1.00', '1м 30с']);
   assert.equal(finalFeedback(r)?.iteration, 2);
   assert.equal(finalFeedback({ ...r, status: 'done' }), undefined);
-  const tags = tagFinalLines({ tags: ['a', 'b', 'c'], tagSummaries: [{ tag: 'a', ok: true, costUsd: 0.1 }, { tag: 'b', ok: false, costUsd: 0, error: 'сбой' }], autoTag: { slug: 'a', costUsd: 0 } });
-  assert.deepEqual(tags.lines.map((l) => [l.state, l.text, l.auto]), [
-    ['ok', 'Саммари тега обновлено', true], ['error', 'Саммари тега не обновлено: сбой', false], ['skip', 'Саммари тега не обновлено', false],
+  const space = stateFinalLines({ space: 'p', stateUpdate: { space: 'p', ok: true, costUsd: 0.1 }, autoSpace: { slug: 'p', costUsd: 0 } });
+  assert.deepEqual(space.lines.map((l) => [l.space, l.state, l.text, l.auto]), [['p', 'ok', 'Состояние пространства обновлено', true]]);
+  assert.equal(stateFinalLines({ space: 'p', stateUpdate: { space: 'p', ok: false, costUsd: 0, skipped: 'галочка снята' } }).lines[0]?.text, 'Состояние не обновлено: галочка снята');
+  // старый запуск: по строке на тег задачи — теперь пространство с тем же слагом
+  const legacy = stateFinalLines({ tags: ['a', 'b', 'c'], tagSummaries: [{ tag: 'a', ok: true, costUsd: 0.1 }, { tag: 'b', ok: false, costUsd: 0, error: 'сбой' }], autoTag: { slug: 'a', costUsd: 0 } });
+  assert.deepEqual(legacy.lines.map((l) => [l.space, l.state, l.text, l.auto]), [
+    ['a', 'ok', 'Состояние пространства обновлено', true], ['b', 'error', 'Состояние не обновлено: сбой', false], ['c', 'skip', 'Состояние не обновлено', false],
   ]);
-  assert.equal(tagFinalLines({ autoTag: { error: 'нет имени', costUsd: 0 } }).autoTagError, 'нет имени');
+  assert.equal(stateFinalLines({ autoSpace: { error: 'нет имени', costUsd: 0 } }).autoError, 'нет имени');
+  assert.equal(stateFinalLines({ autoTag: { error: 'старое', costUsd: 0 } }).autoError, 'старое');
+});
+
+test('итог: причина пропуска состояния — по коду сервера словом бейджа, у старых запусков — по их тексту, незнакомая — как есть', () => {
+  const skip = (u: { skipped?: string; skip?: 'off' | 'not-done' | 'stopped' }, status?: RunReport['status']) =>
+    stateFinalLines({ space: 'p', stateUpdate: { space: 'p', ok: false, costUsd: 0, ...u }, ...(status ? { status } : {}) }).lines[0]?.text;
+  assert.equal(skip({ skip: 'not-done', skipped: 'запуск не завершён (aborted)' }, 'aborted'), 'Состояние не обновлено: запуск не завершён (прервано)');
+  assert.equal(skip({ skip: 'off', skipped: 'галочка «Обновить состояние пространства» снята' }), 'Состояние не обновлено: галочка «Обновить состояние пространства» снята');
+  assert.equal(skip({ skip: 'stopped', skipped: 'остановлено' }, 'done'), 'Состояние не обновлено: остановлено до записи состояния');
+  // запуски до кода skip: код — по тексту сервера, статус — запуска (тот же, что у бейджа)
+  assert.equal(skip({ skipped: 'запуск не завершён (failed)' }, 'failed'), 'Состояние не обновлено: запуск не завершён (ошибка)');
+  assert.equal(stateSkipText({ skipped: 'галочка «Обновить саммари тегов» снята' }), 'галочка «Обновить состояние пространства» снята');
+  assert.equal(stateSkipText({ skip: 'not-done' }), 'запуск не завершён');
+  assert.equal(stateSkipText({ skipped: 'что-то новое' }, 'done'), 'что-то новое');
+  // старый запуск с тегами задач: та же причина в строке каждого тега
+  const legacy = stateFinalLines({ status: 'aborted', tags: ['a'], tagSummaries: [{ tag: 'a', ok: false, costUsd: 0, skipped: 'запуск не завершён (aborted)' }] });
+  assert.equal(legacy.lines[0]?.text, 'Состояние не обновлено: запуск не завершён (прервано)');
+});
+
+test('лог без потока: этапы с транскриптом по порядку, у старых этапов без файлов — пропуск', () => {
+  const old = { ...phase('b', 1), files: undefined as unknown as PhaseReport['files'] };
+  assert.deepEqual(logPhases({ phases: [phase('a', 1), old, phase('c', 2)] }).map((p) => p.phase), ['a', 'c']);
+  assert.deepEqual(logPhases({ phases: [] }), []);
 });
 
 test('чипы карточки: модель и effort; контекст готового и идущего этапа', () => {
@@ -285,4 +312,14 @@ test('инспектор блока-вызова: дочерние запуск�
   assert.equal(blockNextNote({ next: { to: 'b', checks: [] } }, blocks), 'дальше: блок «Б»');
   assert.equal(blockNextNote({ next: { to: 'end', checks: [] } }, blocks), 'дальше: конец запуска');
   assert.equal(blockNextNote({}, blocks), '');
+});
+
+test('задача запуска: без блоков тегов задач старых запусков; пространство — space, у старого запуска — первый тег задачи', () => {
+  const old = '<!-- tag:kai -->\nТег задачи: kai\n<source-data>саммари</source-data>\n<!-- /tag -->\n\nПочини корзину';
+  assert.equal(runTask(old), 'Почини корзину');
+  assert.equal(runTask('Почини корзину'), 'Почини корзину');
+  assert.equal(runTask(undefined), '');
+  assert.equal(runSpaceOf({ space: 'p' }), 'p');
+  assert.equal(runSpaceOf({ tags: ['kai', 'other'] }), 'kai');
+  assert.equal(runSpaceOf({}), undefined);
 });

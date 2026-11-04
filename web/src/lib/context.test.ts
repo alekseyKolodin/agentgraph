@@ -39,6 +39,7 @@ test('контекст: токены коротко и путь с «~»', () =>
 test('контекст: запрос без пустых полей, force=1 у «Обновить»', () => {
   assert.equal(ctxQuery({ cwd: '/p q', flow: '', phase: '', model: '' }, false), 'cwd=%2Fp+q');
   assert.equal(ctxQuery({ cwd: '/p', flow: 'f', phase: 'a', model: 'm' }, true), 'cwd=%2Fp&flow=f&phase=a&model=m&force=1');
+  assert.equal(ctxQuery({ cwd: '/p', flow: '', phase: '', model: '', space: 'press-alert' }, false), 'cwd=%2Fp&space=press-alert');
 });
 
 test('контекст: подсказки директорий — по умолчанию, последняя и существующие недавние, по алфавиту без повторов', () => {
@@ -73,6 +74,7 @@ test('контекст: шапка — cwd, flow и этап, модель, вр
   assert.equal(ctxMeta(view(), now), '/p · модель opus · данные на 10:05');
   assert.equal(ctxMeta(view({ flow: 'f', phase: 'a' }), now), '/p · flow f, этап a · модель opus · данные на 10:05');
   assert.equal(ctxMeta(view({ flow: 'f' }), now), '/p · flow f · модель opus · данные на 10:05');
+  assert.equal(ctxMeta(view({ flow: 'f', space: 'press-alert' }), now), '/p · flow f, пространство press-alert · модель opus · данные на 10:05');
 });
 
 test('контекст: полоса — только занятое ненулевое по долям; легенда — все ненулевые, цвет только у занятого', () => {
