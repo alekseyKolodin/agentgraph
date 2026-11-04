@@ -76,7 +76,7 @@ test('«Стоп», пока состояние запуска ждало в о�
     const r = await run;
     assert.equal(r.status, 'done');
     assert.equal(states, 0);
-    assert.deepEqual(r.stateUpdate, { space: 'p', ok: false, costUsd: 0, skipped: 'остановлено' });
+    assert.deepEqual(r.stateUpdate, { space: 'p', ok: false, costUsd: 0, skipped: 'остановлено', skip: 'stopped' });
     assert.equal(fs.existsSync(path.join(runDir, 'space-state.prompt.md')), false);
     assert.equal(readSpace('p')!.history.length, 0);
   }));

@@ -19,6 +19,11 @@ export const runState = {
   flow: null as { id: string; spec: RunFlowView } | null,
   /** Подписаны на поток: запуск идёт, конец ещё не пришёл. */
   streaming: false,
+  /**
+   * Запуск шёл, когда страницу открыли: «Лог» — живой лог потока (он остаётся и после конца). Не шёл — потока нет,
+   * «Лог» собран из транскриптов этапов (RunLog.tsx, PhaseLogs).
+   */
+  liveLog: false,
   fold: { over: new Map(), older: new Set() } as RunFold,
   foldId: null as string | null,
   inspect: null as InspectSel | null,
@@ -97,7 +102,7 @@ export async function openRun(id: string, withFlow: boolean): Promise<void> {
     runState.fold = { over: new Map(), older: new Set() };
     runState.foldId = id;
   }
-  Object.assign(runState, { id, st: liveState(run), flow: null, streaming: run.live, inspect: null, followShown: '', reveal: null, tabOverride: null });
+  Object.assign(runState, { id, st: liveState(run), flow: null, streaming: run.live, liveLog: run.live, inspect: null, followShown: '', reveal: null, tabOverride: null });
   resetLog();
   bump();
   if (!withFlow) return;
@@ -116,7 +121,7 @@ export async function openRun(id: string, withFlow: boolean): Promise<void> {
 /** Ушли со страницы запуска: поток закроет компонент, ответы на опоздавшие запросы не применяются. */
 export function closeRun(): void {
   loadSeq++;
-  Object.assign(runState, { id: null, st: null, flow: null, streaming: false, inspect: null });
+  Object.assign(runState, { id: null, st: null, flow: null, streaming: false, liveLog: false, inspect: null });
 }
 
 /** Событие потока; что делать, кроме перерисовки, решает вызывающий (список запусков, продолжение). */

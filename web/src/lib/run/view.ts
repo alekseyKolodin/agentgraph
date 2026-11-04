@@ -1,7 +1,7 @@
 // Что показывает страница запуска (порт renderRun, renderRunSummary, blockIters, renderRunRibbons, renderRunFinal,
 // renderInspector, runGraphGoto из ui/app.js) — без React и DOM: компоненты только раскладывают готовые данные.
-import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens } from '@server/api-types';
-import { dur, excerpt, usd } from '../format';
+import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens, StateSkip } from '@server/api-types';
+import { dur, excerpt, statusLabel, usd } from '../format';
 import { t } from '../i18n';
 import { markdownFits } from '../md';
 import { ctxLabel, ctxLevel, tokensShort } from '../graph/text';
@@ -31,6 +31,10 @@ export function runBlocks(r: Pick<RunReport, 'blocks' | 'status' | 'iterations' 
 
 /** Запуск закончен (карточка «Итог»). Запуск из CLI, открытый в UI, приходит с live: false и статусом running — итога ещё нет. */
 export const runFinished = (r: { live?: boolean; status: string }): boolean => !r.live && r.status !== 'running';
+
+/** Этапы, из чьих транскриптов собран «Лог» запуска без живого потока: в порядке конца, у самых старых запусков файлов нет. */
+export const logPhases = <P extends { files?: { transcript?: string } }>(r: { phases: P[] }): (P & { files: { transcript: string } })[] =>
+  r.phases.filter((p): p is P & { files: { transcript: string } } => Boolean(p.files?.transcript));
 
 /** Агент ждёт ответа на вопрос. */
 export const runWaiting = (r: RunView): boolean => r.live && r.questions.some((q) => !q.answers);
@@ -580,6 +584,30 @@ export function finalFeedback(r: RunReport): ConditionReport | undefined {
   return last && !last.done && last.feedback ? last : undefined;
 }
 
+/**
+ * Причины пропуска, которые старые запуски писали только текстом (src/runner.ts до кода skip, раньше — саммари тегов задач):
+ * по ним — тот же код, что у новых.
+ */
+const LEGACY_SKIP: [RegExp, StateSkip][] = [
+  [/^галочка «Обновить (?:состояние пространства|саммари тегов?)» снята$/, 'off'],
+  [/^запуск не завершён \([a-z_]+\)$/, 'not-done'],
+  [/^остановлено$/, 'stopped'],
+];
+
+/**
+ * Почему состояние не обновлялось — словами интерфейса: по коду сервера (у старых запусков — по их тексту), «не завершён» —
+ * тем же словом, что бейдж статуса запуска. Незнакомый текст — как есть.
+ */
+export function stateSkipText(u: { skipped?: string; skip?: StateSkip }, status?: string): string {
+  const code = u.skip ?? LEGACY_SKIP.find(([re]) => re.test(u.skipped ?? ''))?.[1];
+  switch (code) {
+    case 'off': return t('галочка «Обновить состояние пространства» снята');
+    case 'not-done': return status ? t('запуск не завершён ({status})', { status: statusLabel(status) }) : t('запуск не завершён');
+    case 'stopped': return t('остановлено до записи состояния');
+    default: return u.skipped ?? '';
+  }
+}
+
 /** Строка «Итога» о состоянии пространства; space — слаг пространства (у старого запуска — его тега задачи). */
 export type StateLine = { space: string; state: 'ok' | 'error' | 'skip'; text: string; costUsd?: number; auto: boolean };
 
@@ -587,11 +615,14 @@ export type StateLine = { space: string; state: 'ok' | 'error' | 'skip'; text: s
  * Строки о пространстве в «Итоге»: обновилось ли его состояние; autoError — пространство не заведено. Старый запуск
  * (до пространств) — по строке на тег задачи: его саммари — теперь состояние пространства с тем же слагом.
  */
-export function stateFinalLines(r: Pick<RunReport, 'space' | 'stateUpdate' | 'autoSpace' | 'tags' | 'tagSummaries' | 'autoTag'>): { autoError?: string; lines: StateLine[] } {
-  const line = (space: string, u: { ok: boolean; costUsd: number; error?: string; skipped?: string } | undefined, auto: boolean): StateLine => {
+export function stateFinalLines(
+  r: Pick<RunReport, 'space' | 'stateUpdate' | 'autoSpace' | 'tags' | 'tagSummaries' | 'autoTag'> & Partial<Pick<RunReport, 'status'>>,
+): { autoError?: string; lines: StateLine[] } {
+  const line = (space: string, u: { ok: boolean; costUsd: number; error?: string; skipped?: string; skip?: StateSkip } | undefined, auto: boolean): StateLine => {
     if (u?.ok) return { space, state: 'ok', text: t('Состояние пространства обновлено'), costUsd: u.costUsd, auto };
     if (u?.error) return { space, state: 'error', text: t('Состояние не обновлено: {why}', { why: u.error }), auto };
-    return { space, state: 'skip', text: u?.skipped ? t('Состояние не обновлено: {why}', { why: u.skipped }) : t('Состояние не обновлено'), auto };
+    const why = u ? stateSkipText(u, r.status) : '';
+    return { space, state: 'skip', text: why ? t('Состояние не обновлено: {why}', { why }) : t('Состояние не обновлено'), auto };
   };
   const autoError = r.autoSpace?.error ?? r.autoTag?.error;
   const err = autoError ? { autoError } : {};

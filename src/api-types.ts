@@ -187,7 +187,7 @@ export type HomeEvent<T extends string = string> = {
   status?: string;
   /** У end, title и digest: итог запуска. */
   costUsd?: number;
-  /** Только у title: имя запуска от модели. */
+  /** Только у title: имя запуска — от модели или от человека (PUT /api/runs/:id/title, тогда без costUsd). */
   title?: string;
   /** Только у end дочернего запуска блока-вызова: о его конце не уведомляют — скажет конец родителя. */
   parent?: RunParent;
@@ -957,8 +957,15 @@ export type TagSummaryReport = { tag: string; ok: boolean; costUsd: number; erro
 /** Автотег старых запусков: заведённый тег задачи (slug, title) или ошибка подбора. Только чтение. */
 export type AutoTagReport = { slug?: string; title?: string; error?: string; costUsd: number; tokens?: SessionTokens };
 
-/** Итог сессии состояния пространства после запуска: обновлено (ok), пропущено (skipped — причина) или ошибка. */
-export type SpaceStateReport = { space: string; ok: boolean; costUsd: number; error?: string; skipped?: string; tokens?: SessionTokens };
+/**
+ * Почему состояние пространства после запуска не писалось: off — галочка «Обновить состояние» снята, not-done — запуск
+ * кончился не «готово» (каким — статус запуска), stopped — остановлен, пока ждало состояние. UI пишет причину по коду
+ * и переводит; skipped — тот же смысл текстом для CLI и скилла.
+ */
+export type StateSkip = 'off' | 'not-done' | 'stopped';
+
+/** Итог сессии состояния пространства после запуска: обновлено (ok), пропущено (skipped — причина, skip — её код) или ошибка. */
+export type SpaceStateReport = { space: string; ok: boolean; costUsd: number; error?: string; skipped?: string; skip?: StateSkip; tokens?: SessionTokens };
 
 /** Автопространство: заведённое пространство (slug — итоговый, с суффиксом, title) или ошибка подбора. */
 export type AutoSpaceReport = { slug?: string; title?: string; error?: string; costUsd: number; tokens?: SessionTokens };
@@ -1046,6 +1053,9 @@ export type RunReport = {
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };
+
+/** PUT /api/runs/:id/title { title }: имя от человека у завершённого запуска — уже очищенное, как его сохранил сервер. */
+export type RunRenamed = { id: string; title: string };
 
 // ---------- «Починить и продолжить» (src/run-fix.ts): указания, правка flow идущего запуска, повтор итерации
 

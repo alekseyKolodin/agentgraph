@@ -31,6 +31,7 @@ import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRun
 import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
 import { pickRunTitle } from './run-title.js';
+import { RunNameError, runName, writeRunName } from './run-name.js';
 import { writeDigest } from './run-digest.js';
 import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
@@ -43,7 +44,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -287,7 +288,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -805,6 +806,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     else delete raw.hidden;
     fs.writeFileSync(f.file, JSON.stringify(raw, null, 2));
     return sendJson(res, 200, { ok: true, hidden: body.hidden });
+  }
+
+  // Имя запуска от человека: { title } — у завершённого; идущий run.json переписывает раннер (и имя от модели — тоже он)
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/title$/)) && method === 'PUT') {
+    const body = await readJson(req);
+    let title: string;
+    try {
+      title = runName(body && typeof body === 'object' && !Array.isArray(body) ? (body as { title?: unknown }).title : undefined);
+    } catch (err) {
+      if (err instanceof RunNameError) return sendJson(res, 400, { error: err.message });
+      throw err;
+    }
+    const f = finishedRun(m[1]);
+    if ('error' in f) return sendJson(res, f.code, { error: f.code === 409 ? 'Запуск ещё идёт: переименовать его можно, когда он закончится' : f.error });
+    const saved = writeRunName(f.file, title);
+    // то же событие, что у имени от модели: списки запусков во всех вкладках перечитываются сразу, а не опросом
+    homeBroadcast({ type: 'title', runId: m[1], flow: saved.flow, title });
+    return sendJson(res, 200, { id: m[1], title } satisfies RunRenamed);
   }
 
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)$/)) && method === 'GET') {

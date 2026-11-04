@@ -9,7 +9,8 @@ export {
   type FlowAiProgressEvent, type FlowDetail, type FlowEdited, type FlowGenerated, type FlowSaved,
 } from './flows';
 export {
-  deleteRun, fetchTag, hideRecentDir, prepareWorktree, recentDirsKey, RUN_DELETED, setRunHidden, startRun, useRecentDirs,
+  deleteRun, fetchTag, hideRecentDir, prepareWorktree, recentDirsKey, renameRun, RUN_DELETED, RUN_NAME_MAX, RUN_RENAMED, setRunHidden, startRun, useRecentDirs,
+  useRenameRun,
 } from './runs';
 export {
   abortRun, clearChat, continueRun, fetchAnalysis, fetchArtifact, fetchArtifacts, fetchChat, fetchRun, fetchRunFile, fetchRunFlow, pauseRun, postChat, resumeRun,

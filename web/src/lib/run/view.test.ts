@@ -5,7 +5,7 @@ import { liveState, type LiveState, type PendingPhase } from './events';
 import {
   blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
   blockNextNote, blockSkipNote, inspectView, spentChipInfo, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
-  runSpaceOf, runTask, summaryView, stateFinalLines, waitingNotes, type RunFold,
+  logPhases, runSpaceOf, runTask, summaryView, stateFinalLines, stateSkipText, waitingNotes, type RunFold,
 } from './view';
 
 const block = (name: string, over: Partial<BlockReport> = {}): BlockReport => ({
@@ -172,6 +172,28 @@ test('итог: цифры, замечания последнего услови
   ]);
   assert.equal(stateFinalLines({ autoSpace: { error: 'нет имени', costUsd: 0 } }).autoError, 'нет имени');
   assert.equal(stateFinalLines({ autoTag: { error: 'старое', costUsd: 0 } }).autoError, 'старое');
+});
+
+test('итог: причина пропуска состояния — по коду сервера словом бейджа, у старых запусков — по их тексту, незнакомая — как есть', () => {
+  const skip = (u: { skipped?: string; skip?: 'off' | 'not-done' | 'stopped' }, status?: RunReport['status']) =>
+    stateFinalLines({ space: 'p', stateUpdate: { space: 'p', ok: false, costUsd: 0, ...u }, ...(status ? { status } : {}) }).lines[0]?.text;
+  assert.equal(skip({ skip: 'not-done', skipped: 'запуск не завершён (aborted)' }, 'aborted'), 'Состояние не обновлено: запуск не завершён (прервано)');
+  assert.equal(skip({ skip: 'off', skipped: 'галочка «Обновить состояние пространства» снята' }), 'Состояние не обновлено: галочка «Обновить состояние пространства» снята');
+  assert.equal(skip({ skip: 'stopped', skipped: 'остановлено' }, 'done'), 'Состояние не обновлено: остановлено до записи состояния');
+  // запуски до кода skip: код — по тексту сервера, статус — запуска (тот же, что у бейджа)
+  assert.equal(skip({ skipped: 'запуск не завершён (failed)' }, 'failed'), 'Состояние не обновлено: запуск не завершён (ошибка)');
+  assert.equal(stateSkipText({ skipped: 'галочка «Обновить саммари тегов» снята' }), 'галочка «Обновить состояние пространства» снята');
+  assert.equal(stateSkipText({ skip: 'not-done' }), 'запуск не завершён');
+  assert.equal(stateSkipText({ skipped: 'что-то новое' }, 'done'), 'что-то новое');
+  // старый запуск с тегами задач: та же причина в строке каждого тега
+  const legacy = stateFinalLines({ status: 'aborted', tags: ['a'], tagSummaries: [{ tag: 'a', ok: false, costUsd: 0, skipped: 'запуск не завершён (aborted)' }] });
+  assert.equal(legacy.lines[0]?.text, 'Состояние не обновлено: запуск не завершён (прервано)');
+});
+
+test('лог без потока: этапы с транскриптом по порядку, у старых этапов без файлов — пропуск', () => {
+  const old = { ...phase('b', 1), files: undefined as unknown as PhaseReport['files'] };
+  assert.deepEqual(logPhases({ phases: [phase('a', 1), old, phase('c', 2)] }).map((p) => p.phase), ['a', 'c']);
+  assert.deepEqual(logPhases({ phases: [] }), []);
 });
 
 test('чипы карточки: модель и effort; контекст готового и идущего этапа', () => {

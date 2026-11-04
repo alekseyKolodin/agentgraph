@@ -6,7 +6,9 @@
 /* агент ждёт пользователя: рамка и полоска, текст пометки — в свёрнутой строке */
 .run-artifacts.attn { border-color: var(--st-wait); box-shadow: inset 3px 0 0 var(--st-wait); }
 .art-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.art-head :global(.fold-head) { font-weight: 600; }
+/* заголовок панели — не раскрывашка: во вкладке «Артефакты» панель раскрыта всегда; фокус на нём ставит «Открыть артефакты» */
+.art-title { margin: 0; font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
+.art-title:focus { outline: none; }
 .art-head .push { margin-left: auto; gap: 8px; }
 .art-summary { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: var(--fs-small); color: var(--ink-2); min-width: 0; }
 .art-summary .sep { color: var(--line); }
@@ -27,7 +29,7 @@
 .art-row:first-child { border-top: 0; }
 .art-open { border: 0; background: transparent; color: var(--live); font: inherit; font-weight: 600; padding: 2px 0; cursor: pointer; text-align: left; }
 .art-open:hover { text-decoration: underline; }
-.art-open:focus-visible, .art-head :global(.fold-head):focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+.art-open:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
 .art-author { color: var(--ink); }
 /* без вложенного flex: пометки переносятся как строки текста */
 .art-marks { display: inline-block; line-height: 22px; }

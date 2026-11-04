@@ -13,12 +13,14 @@
 
 /* рекомендации: группа по серьёзности, у каждой — цветная полоска слева */
 .group { display: flex; flex-direction: column; gap: 6px; }
-.group-head { font-size: var(--fs-meta); font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: .02em; }
+/* подпись группы — тихая, обычным регистром («Пульт»: заголовки секций без капса с разрядкой) */
+.group-head { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .sug { border-left: 3px solid var(--line-strong); padding: 4px 0 4px 12px; display: flex; flex-direction: column; gap: 4px; }
 .sug.high { border-left-color: var(--st-fail); }
 .sug.medium { border-left-color: var(--st-wait); }
 .sug-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.kind { font-size: var(--fs-cap); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); background: var(--well); border-radius: var(--r-pill); padding: 1px 8px; white-space: nowrap; }
+/* вид правки — пилюлей .badge.pending (base.css), как бейджи статуса; здесь только место в строке */
+.kind { flex: none; }
 .sug-title { font-weight: 600; }
 .phases { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .phases code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); background: var(--well); border-radius: var(--r-xs); padding: 0 5px; }
