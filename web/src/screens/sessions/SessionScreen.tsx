@@ -274,7 +274,7 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
           {s.spaceChip && <SpaceChip c={s.spaceChip} live={s.live} onRemove={removable ? () => putSpace(null) : undefined} />}
           {(!s.space || s.spaceChip?.state === 'removed') && (
             <span title={s.live ? t('Раздел пространства придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯') : t('Пространство получит «Продолжить»')}>
-              <SpacePicker id="session-space" compact label={t('Выбрать пространство')} placeholder={t('+ пространство')} value="" onChange={addSpace} options={spaces} work={work} />
+              <SpacePicker id="session-space" compact inputClassName={styles.addTag} label={t('Выбрать пространство')} placeholder={t('+ пространство')} value="" onChange={addSpace} options={spaces} work={work} />
             </span>
           )}
           <span className={styles.sep} aria-hidden="true" />

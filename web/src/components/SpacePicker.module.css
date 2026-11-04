@@ -13,4 +13,3 @@
 .meta:empty { display: none; }
 .extra .title { font-weight: 400; color: var(--ink-2); }
 .compact { min-width: 220px; }
-.compact .input { font-size: var(--fs-meta); padding: 2px 8px; }

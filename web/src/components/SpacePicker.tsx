@@ -27,12 +27,14 @@ type Props = {
   compact?: boolean;
   placeholder?: string;
   className?: string;
+  /** Класс самого поля: на экране сессии — как у «+ тег». */
+  inputClassName?: string;
   autoFocus?: boolean;
   /** compact: выбор сделан или отменён (Esc, уход фокуса) — строка возвращается к чипу. */
   onDone?: () => void;
 };
 
-export function SpacePicker({ id, value, onChange, options, work, label = t('Пространство'), labelTitle, compact, placeholder, className, autoFocus, onDone }: Props) {
+export function SpacePicker({ id, value, onChange, options, work, label = t('Пространство'), labelTitle, compact, placeholder, className, inputClassName, autoFocus, onDone }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -96,7 +98,7 @@ export function SpacePicker({ id, value, onChange, options, work, label = t('П�
           aria-autocomplete="list"
           aria-activedescendant={open && rows[active] ? optId(active) : undefined}
           aria-label={compact ? label : undefined}
-          className={cx(styles.input, chosen && !open && styles.withSlug)}
+          className={cx(styles.input, chosen && !open && styles.withSlug, inputClassName)}
           placeholder={placeholder ?? t('без пространства — выбери или впиши новый слаг')}
           autoComplete="off"
           spellCheck={false}
