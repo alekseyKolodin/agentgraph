@@ -1,10 +1,12 @@
 // Общий поток событий всех запусков (ui/app.js connectEvents): главная, счётчик вопросов, «Сейчас», лента и уведомления.
-// Живёт в оболочке, на любом экране: без него, пока открыт один запуск, вопрос из другого flow было не увидеть.
+// Живёт в оболочке, на любом экране: без него, пока открыт один запуск, вопрос из другого flow было не увидеть. Сюда же
+// приходит «сессия терминала закончила ход и ждёт тебя» (session): список сессий — сразу, уведомление — если вкладка не на виду.
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeEvent } from '@server/api-types';
 import { keys, useEventStream, useFeature } from '../../api';
+import { sessionKeys } from '../../api/sessions';
 import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
@@ -73,6 +75,19 @@ export function useHomeEvents(): void {
     };
   };
 
+  // Сессия ждёт тебя после каждого хода: всплывашкой не дёргаем (янтарная точка в «Сейчас» видна на любом экране) —
+  // только системное уведомление, когда вкладка не на виду
+  const announceSession = (e: HomeEvent) => {
+    const s = e.session!;
+    if (!tabAway() || !browserNotifies()) return;
+    const n = new Notification(t('Сессия «{name}» ждёт тебя', { name: s.name }), { body: s.space ? `◇ ${s.space}` : t('Claude закончил ход'), tag: `session:${s.id}` });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      void navigate(`/sessions/${encodeURIComponent(s.id)}`);
+    };
+  };
+
   // notify=1 — уведомления покажет эта вкладка, системные с сервера не нужны; разрешение сменилось — переподключаемся
   useEventStream<HomeEvent>(`/api/events${permission === 'granted' ? '?notify=1' : ''}`, {
     // при переподключении события за время обрыва потеряны: забираем состояние заново
@@ -82,6 +97,12 @@ export function useHomeEvents(): void {
       if (feedOn) soon(keys.feed);
     },
     onEvent: (e) => {
+      // событие сессии терминала — не запуска: главную, запуски и ленту оно не меняет
+      if (e.type === 'session') {
+        if (e.session) announceSession(e);
+        soon(sessionKeys.list);
+        return;
+      }
       if (e.type === 'question' && e.question) announceQuestion(e);
       if (e.type === 'end') announceEnd(e);
       soon(keys.home);

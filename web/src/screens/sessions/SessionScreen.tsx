@@ -21,11 +21,12 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canUpdateState, chipHint, pendingNote, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
+import { canUpdateState, chipHint, noTranscriptWhy, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
 import { SPACE_SLUG_ERROR, SPACE_SLUG_RE } from '../../lib/spaces';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { SessionName } from './SessionName';
 import { ICON } from './icons';
+import { Loading } from './Loading';
 import styles from './Session.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -34,15 +35,20 @@ export function SessionScreen() {
   const { id = '' } = useParams();
   const q = useQuery({ queryKey: sessionKeys.one(id), queryFn: () => fetchSession(id) });
   if (q.error) {
+    // нет такой: сервер ответил бы тем же «Сессия не найдена», что и заголовок — объясняем, почему её может не быть
+    const gone = q.error instanceof ApiError && q.error.status === 404;
     return (
       <div className="empty">
-        <h1>{q.error instanceof ApiError && q.error.status === 404 ? t('Сессия не найдена') : t('Сессия не открылась')}</h1>
-        <p className="muted">{errorText(q.error)}</p>
-        <Link to="/sessions">{t('← Все сессии')}</Link>
+        <h1>{gone ? t('Сессия не найдена') : t('Сессия не открылась')}</h1>
+        <p className="muted">{gone ? t('Её удалили или ссылка устарела.') : errorText(q.error)}</p>
+        <div className={cx('row', styles.failActs)}>
+          {!gone && <button type="button" className="btn" onClick={() => void q.refetch()}>{t('Повторить')}</button>}
+          <Link to="/sessions">{t('← Все сессии')}</Link>
+        </div>
       </div>
     );
   }
-  if (!q.data) return null;
+  if (!q.data) return <Loading className={styles.loading} />;
   // другая сессия — новое состояние экрана (правка названия, скрытая карточка) и новый терминал
   return <Session key={q.data.id} s={q.data} />;
 }
@@ -118,12 +124,14 @@ function Session({ s }: { s: SessionView }) {
   }, [stateAt]);
   const tone = sessionTone(s);
   const update = canUpdateState(s);
+  // карточка завершённой на виду: главная кнопка — в ней, в шапке те же действия вторичные
+  const card = !s.live && !screenOnly;
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
         <Link to="/sessions" className={styles.back} title={t('Все сессии')}>{ICON.back}{t('Сессии')}</Link>
         <SessionName s={s} as="h1" pencil="always" className={styles.title} title={s.name} />
-        <span className={cx(styles.status, styles[tone], s.status === 'working' && styles.pulse)}>
+        <span className={cx(styles.status, styles[tone], s.status === 'working' && styles.pulse)} title={sessionExitTitle(s) || undefined}>
           <span className={styles.dot} aria-hidden="true" />
           {sessionStatusLabel(s)}
         </span>
@@ -131,7 +139,7 @@ function Session({ s }: { s: SessionView }) {
         <span className={styles.spacer} />
         <div className={styles.actions}>
           {!s.live && (
-            <button type="button" className="btn primary" disabled={act.busy} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами и пересчитанными папками') : t('Новый разговор в той же папке: в прошлом не было ни одного сообщения')} onClick={() => void act.resume()}>
+            <button type="button" className={card ? 'btn' : 'btn primary'} disabled={act.busy} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами и пересчитанными папками') : t('Новый разговор в той же папке: {why}', { why: noTranscriptWhy(s) })} onClick={() => void act.resume()}>
               {t('Продолжить')}
             </button>
           )}
@@ -156,15 +164,17 @@ function Session({ s }: { s: SessionView }) {
           live={s.live}
           onState={setS}
           onOpened={opened}
-          overlay={!s.live && !screenOnly && <Ended s={s} act={act} onHide={() => setScreenOnly(true)} />}
+          overlay={card && <Ended s={s} act={act} onHide={() => setScreenOnly(true)} />}
         />
       </section>
       <footer className={styles.foot}>
         {s.live
           ? [t('Ctrl-C дважды — выйти из Claude'), t('Shift+Enter — новая строка'), t('{key}+мышь — выделение терминала', { key: SELECT_KEY }), t('перезагрузка страницы сессию не прерывает'), ...(s.claudeVersion ? [`claude ${s.claudeVersion}`] : [])].join(' · ')
-          : s.transcriptPath
+          : s.transcriptPath && s.resumable !== false
             ? <>{t('Транскрипт:')} <span className="mono">{tildePath(s.transcriptPath, home)}</span></>
-            : t('Транскрипта нет: не было ни одного сообщения')}
+            : s.turns > 0
+              ? t('Транскрипт удалён')
+              : t('Транскрипта нет: не было ни одного сообщения')}
       </footer>
     </div>
   );
@@ -387,20 +397,14 @@ function Menu({ s, act }: { s: SessionView; act: Actions }) {
 
 /** Карточка поверх последнего экрана завершённой сессии: что случилось, что с саммари, «Продолжить». */
 function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () => void }) {
-  const code = s.exitCode ?? '?';
-  const text =
-    s.outcome === 'untrusted'
-      ? t('Claude вышел, не начав сессию: доверие к папке не принято. Контекст agentgraph не доставлялся.')
-      : s.outcome === 'failed'
-        ? t('claude завершился с кодом {code}, не начав сессию: причина — в выводе терминала.', { code })
-        : t('Claude вышел, код {code}.', { code });
+  const text = sessionEndText(s);
   const note = stateNote(s);
   const update = canUpdateState(s);
   return (
     <div className={styles.overlay}>
       <div className={styles.endCard} role="status">
         <h2>{s.outcome === 'untrusted' ? t('Папка не доверена') : t('Сессия завершена')}</h2>
-        <p className="muted">{text}{note ? ` ${note.text}` : ''}</p>
+        <p className="muted" title={sessionExitTitle(s) || undefined}>{text}{note ? ` ${note.text}` : ''}</p>
         <div className="row">
           <button type="button" className="btn primary" disabled={act.busy} onClick={() => void act.resume()}>{t('Продолжить')}</button>
           {update.show && <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>{t('Обновить состояние')}</button>}
@@ -409,7 +413,7 @@ function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () =>
         <p className={styles.hint}>
           {s.resumable
             ? t('«Продолжить» откроет тот же разговор (claude --resume) с текущими пространством и тегами и пересчитанными папками.')
-            : t('«Продолжить» откроет новый разговор в той же папке: в этом не было ни одного сообщения.')}
+            : t('«Продолжить» откроет новый разговор в той же папке: {why}.', { why: noTranscriptWhy(s) })}
         </p>
       </div>
     </div>

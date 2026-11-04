@@ -2,7 +2,7 @@
 // на ходу, адрес WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52, состояние
 // пространства.
 import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
-import { baseName, clock, feedTime } from './format';
+import { ago, baseName, clock, feedTime, plural } from './format';
 import { t } from './i18n';
 
 /** Тон точки и подписи: live — работает, wait — ход за тобой, off — завершена или запускается, fail — не запустилась. */
@@ -14,8 +14,8 @@ export function sessionTone(s: Pick<SessionView, 'status' | 'outcome'>): Session
   return s.outcome ? 'fail' : 'off';
 }
 
-/** Подпись статуса для шапки и таблицы. */
-export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | 'exitCode'>): string {
+/** Подпись статуса для шапки и таблицы. Код выхода claude — не здесь, а в подсказке (sessionExitTitle). */
+export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome'>): string {
   switch (s.status) {
     case 'starting':
       return t('Запускается');
@@ -25,9 +25,66 @@ export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | '
       return t('Ждёт тебя');
     default:
       if (s.outcome === 'untrusted') return t('Папка не доверена');
-      if (s.outcome === 'failed') return t('Не запустилась · код {code}', { code: s.exitCode ?? '?' });
-      return s.exitCode === undefined ? t('Завершена') : t('Завершена · код {code}', { code: s.exitCode });
+      if (s.outcome === 'failed') return t('Не запустилась');
+      return t('Завершена');
   }
+}
+
+/**
+ * Почему у завершённой нет транскрипта (resumable: false): не было ни одного сообщения или файл удалили (claude чистит
+ * старые сам, cleanupPeriodDays). «Продолжить» в обоих случаях начнёт новый разговор.
+ */
+export const noTranscriptWhy = (s: Pick<SessionView, 'turns'>): string =>
+  s.turns > 0 ? t('транскрипт прошлого разговора удалён') : t('в прошлом не было ни одного сообщения');
+
+/** Код выхода claude для подсказки у статуса завершённой сессии; неизвестен или сессия идёт — пусто. */
+export const sessionExitTitle = (s: Pick<SessionView, 'live' | 'exitCode'>): string =>
+  !s.live && s.exitCode !== undefined ? t('Код выхода claude: {code}', { code: s.exitCode }) : '';
+
+/** SIGHUP: так claude гасят «Завершить» и выход из приложения. */
+const SIGHUP_EXIT = 129;
+
+/** Что случилось с завершённой сессией — текст карточки поверх её последнего экрана. Неизвестный код не называем. */
+export function sessionEndText(s: Pick<SessionView, 'outcome' | 'exitCode' | 'endedBy'>): string {
+  if (s.outcome === 'untrusted') return t('Claude вышел, не начав сессию: доверие к папке не принято. Контекст agentgraph не доставлялся.');
+  if (s.outcome === 'failed') {
+    return s.exitCode === undefined
+      ? t('claude завершился, не начав сессию: причина — в выводе терминала.')
+      : t('claude завершился с кодом {code}, не начав сессию: причина — в выводе терминала.', { code: s.exitCode });
+  }
+  if (s.endedBy === 'button') return t('Сессию завершили кнопкой «Завершить».');
+  if (s.endedBy === 'app') return t('Claude остановлен вместе с приложением.');
+  // записи до endedBy: SIGHUP — значит, его погасил agentgraph
+  if (s.exitCode === SIGHUP_EXIT) return t('Claude остановлен кнопкой «Завершить» или вместе с приложением.');
+  if (s.exitCode === undefined || s.exitCode === 0) return t('Claude вышел.');
+  return t('Claude вышел с кодом {code}.', { code: s.exitCode });
+}
+
+/**
+ * Сессии на главной: ждущие — в «Ждёт тебя» (дольше ждущие сверху), работающие и запускающиеся — в «Идут». Диалог
+ * доверия к папке на экране — тоже ждёт тебя: без ответа claude не начнёт.
+ */
+export function homeSessions<S extends Pick<SessionView, 'live' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt'>>(list: S[]): { waiting: S[]; live: S[] } {
+  const since = (s: S) => s.waitingSince ?? s.lastActivityAt;
+  const waits = (s: S) => s.status === 'waiting' || s.delivery === 'trust';
+  return {
+    waiting: list.filter((s) => s.live && waits(s)).sort((a, b) => since(a).localeCompare(since(b))),
+    live: list.filter((s) => s.live && !waits(s) && (s.status === 'working' || s.status === 'starting')),
+  };
+}
+
+/** Подпись строки сессии на главной: «◇ press-alert · ждёт 5 мин» — пространство (без него — папка) и что с ней сейчас. */
+export function homeSessionMeta(s: Pick<SessionView, 'cwd' | 'space' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'turns'>, now: number = Date.now()): string {
+  const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
+  const state =
+    s.delivery === 'trust'
+      ? t('ждёт: доверие к папке')
+      : s.status === 'waiting'
+      ? t('ждёт {time}', { time: ago(s.waitingSince ?? s.lastActivityAt, now) })
+      : s.status === 'working'
+        ? t('работает')
+        : t('запускается');
+  return [where, state, ...(s.turns ? [`${s.turns} ${plural(s.turns, 'ход', 'хода', 'ходов')}`] : [])].join(' · ');
 }
 
 /** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — пространство (без него — папка), статус, активность. */

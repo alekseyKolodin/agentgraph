@@ -20,10 +20,11 @@ import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canUpdateState, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone } from '../../lib/sessions';
 import { pickWorkdir, SPACE_SLUG_RE, spaceWorkdir, workdirHint, type CwdState } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { RENAME_HOST, SessionName } from './SessionName';
+import { Loading } from './Loading';
 import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -71,9 +72,21 @@ export function SessionsScreen() {
       </div>
       {formOpen && <NewSession key={`${preset.space}|${preset.cwd}|${preset.tags.join(',')}`} preset={preset} onCancel={() => setOpen(false)} full={list.data ? live >= list.data.max : false} max={list.data?.max ?? 0} />}
       <section className={styles.all} aria-label={t('Все сессии')}>
-        <h2>{t('Все сессии')} <span className={styles.count}>{sessions.length}</span></h2>
-        {list.error && <p className="msg err">{errorText(list.error)}</p>}
-        {sessions.length > 0 ? <SessionTable sessions={sessions} /> : list.isSuccess && <p className="muted small">{t('Сессий ещё не было: открой первую формой выше.')}</p>}
+        {/* счётчик — только по ответу: при сбое «0» соврал бы, что сессий нет */}
+        <h2>{t('Все сессии')} {list.data && <span className={styles.count}>{sessions.length}</span>}</h2>
+        {list.error && (
+          <div className="row">
+            <p className="msg err">{t('Список сессий не загрузился: {error}', { error: errorText(list.error) })}</p>
+            <button type="button" className="btn small" onClick={() => void list.refetch()}>{t('Повторить')}</button>
+          </div>
+        )}
+        {sessions.length > 0 ? (
+          <SessionTable sessions={sessions} />
+        ) : list.isSuccess ? (
+          <p className="muted small">{t('Сессий ещё не было: открой первую формой выше.')}</p>
+        ) : (
+          list.isPending && <Loading className="small" />
+        )}
       </section>
     </div>
   );
@@ -270,53 +283,66 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
       setBusy('');
     }
   };
+  // ширины колонок задаёт строка заголовка (table-layout: fixed): действие — своей колонкой постоянной ширины, папка
+  // режется многоточием; узкой таблице папка уходит строкой под имя, а «Ходов» прячется (Sessions.module.css)
   return (
     <div className={styles.tableWrap}>
       <table className={styles.table}>
         <thead>
           <tr>
-            <th scope="col">{t('Статус')}</th>
+            <th scope="col" className={styles.colStatus}>{t('Статус')}</th>
             <th scope="col">{t('Название')}</th>
-            <th scope="col">{t('Пространство и теги')}</th>
-            <th scope="col">{t('Папка')}</th>
-            <th scope="col" className={styles.num}>{t('Ходов')}</th>
-            <th scope="col">{t('Активность')}</th>
-            <th scope="col"><span className={styles.sr}>{t('Действия')}</span></th>
+            <th scope="col" className={styles.colTags}>{t('Пространство и теги')}</th>
+            <th scope="col" className={styles.colDir}>{t('Папка')}</th>
+            <th scope="col" className={cx(styles.num, styles.colNum)}>{t('Ходов')}</th>
+            <th scope="col" className={styles.colWhen}>{t('Активность')}</th>
+            <th scope="col" className={styles.colAct}><span className={styles.sr}>{t('Действия')}</span></th>
           </tr>
         </thead>
         <tbody>
-          {sessions.map((s) => (
-            <tr key={s.id} className={cx(!s.live && styles.ended, RENAME_HOST)}>
-              <td><span className={cx(styles.status, styles[sessionTone(s)])}><span className={styles.dot} aria-hidden="true" />{sessionStatusLabel(s)}</span></td>
-              <td className={styles.name}>
-                <SessionName s={s} to={`/sessions/${s.id}`} title={s.name} />
-                {s.statePending && <span className={styles.pending}>{t('состояние не обновлено: приложение закрыли')}</span>}
-              </td>
-              <td>
-                <span className={styles.tagList}>
-                  {s.space && <SpaceBadge slug={s.space} link />}
-                  {s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind="knowledge" />)}
-                </span>
-              </td>
-              <td className={styles.dir} title={tildePath(s.cwd, home)}>{baseName(s.cwd)}</td>
-              <td className={styles.num}>{s.turns}</td>
-              <td className={styles.when}>{s.status === 'working' ? t('сейчас') : feedTime(s.lastActivityAt)}</td>
-              <td className={styles.act}>
-                {s.live ? (
-                  <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
-                ) : (
-                  <span className={styles.acts}>
-                    {s.statePending && canUpdateState(s).ok && (
-                      <button type="button" className="btn small" disabled={busy === s.id} onClick={() => void run(s.id, () => updateSessionState(s.id), false)}>{t('Обновить состояние')}</button>
-                    )}
+          {sessions.map((s) => {
+            const update = canUpdateState(s);
+            const dir = tildePath(s.cwd, home);
+            return (
+              <tr key={s.id} className={cx(!s.live && styles.ended, RENAME_HOST)}>
+                <td><span className={cx(styles.status, styles[sessionTone(s)])} title={sessionExitTitle(s) || undefined}><span className={styles.dot} aria-hidden="true" /><span className={styles.statusText}>{sessionStatusLabel(s)}</span></span></td>
+                <td className={styles.name}>
+                  <SessionName s={s} to={`/sessions/${s.id}`} title={s.name} />
+                  {/* имя по умолчанию — та же папка: второй строкой её не повторяем */}
+                  {baseName(s.cwd) !== s.name && <span className={styles.nameDir} title={dir}>{baseName(s.cwd)}</span>}
+                  {/* пометка и её действие — рядом: «Обновить состояние» нужно только такой сессии */}
+                  {s.statePending && (
+                    <span className={styles.pending}>
+                      {t('состояние не обновлено: приложение закрыли')}
+                      {update.ok && (
+                        <button type="button" className="btn small" disabled={busy === s.id} title={update.why} onClick={() => void run(s.id, () => updateSessionState(s.id), false)}>
+                          {t('Обновить состояние')}
+                        </button>
+                      )}
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <span className={styles.tagList}>
+                    {s.space && <SpaceBadge slug={s.space} link />}
+                    {s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind="knowledge" />)}
+                  </span>
+                </td>
+                <td className={cx(styles.dir, styles.colDir)} title={dir}>{baseName(s.cwd)}</td>
+                <td className={cx(styles.num, styles.colNum)}>{s.turns}</td>
+                <td className={cx(styles.when, styles.colWhen)}>{s.status === 'working' ? t('сейчас') : feedTime(s.lastActivityAt)}</td>
+                <td className={styles.act}>
+                  {s.live ? (
+                    <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
+                  ) : (
                     <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
                       {t('Продолжить')}
                     </button>
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
