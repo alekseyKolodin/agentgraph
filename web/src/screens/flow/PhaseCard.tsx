@@ -97,6 +97,16 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
     markDirty();
   };
 
+  const tools = (
+    <>
+      <PGroup group={p.group} />
+      <button className={styles.icon} title={i === 0 && bi > 0 ? t('В конец предыдущего блока') : t('Выше')} disabled={first} onClick={() => void act('up')}>↑</button>
+      <button className={styles.icon} title={i === block.phases.length - 1 && !last ? t('В начало следующего блока') : t('Ниже')} disabled={last} onClick={() => void act('down')}>↓</button>
+      <button className={styles.icon} title={t('Дублировать')} onClick={() => void act('dup')}>⧉</button>
+      <button className={cx(styles.icon, styles.danger)} title={t('Удалить')} onClick={() => void act('del')}>✕</button>
+    </>
+  );
+
   return (
     <div
       className={cx(styles.pcard, st.ai?.diff.phases.has(p.name) && styles.aiChanged, !pane && shownInPane && styles.paneSrc)}
@@ -105,15 +115,13 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
       data-i={i}
       onFocus={onFocus}
     >
+      {/* в инспекторе узко: группа и кнопки — строкой под названием, чтобы поле названия не урезалось */}
       <div className={styles.pcardHead}>
         <span className={styles.pnum}>{phaseNum(spec, bi, i)}</span>
         <input className={styles.pTitle} data-field="p-title" value={p.title || ''} placeholder={t('Название этапа')} onChange={(e) => set({ title: e.target.value })} />
-        <PGroup group={p.group} />
-        <button className={styles.icon} title={i === 0 && bi > 0 ? t('В конец предыдущего блока') : t('Выше')} disabled={first} onClick={() => void act('up')}>↑</button>
-        <button className={styles.icon} title={i === block.phases.length - 1 && !last ? t('В начало следующего блока') : t('Ниже')} disabled={last} onClick={() => void act('down')}>↓</button>
-        <button className={styles.icon} title={t('Дублировать')} onClick={() => void act('dup')}>⧉</button>
-        <button className={cx(styles.icon, styles.danger)} title={t('Удалить')} onClick={() => void act('del')}>✕</button>
+        {!pane && tools}
       </div>
+      {pane && <div className={styles.pcardTools}>{tools}</div>}
       <div className={cx(styles.pSection, styles.pVars)}>
         <div className={styles.pLabel} title={t('Клик вставляет {{переменную}} в промпт. Уже использованные подсвечены')}>{t('Переменные')}</div>
         <div className="chips">
