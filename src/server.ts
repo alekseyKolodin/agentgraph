@@ -95,7 +95,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -119,6 +119,8 @@ type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
 
 type LiveRun = {
   id: string;
+  /** Пространство запуска: удалить его нельзя, пока запуск идёт (run.json на диске может ещё не быть). */
+  space?: string;
   /** События для переигрывания новому подключению, уже в формате SSE. По не-log событиям клиент восстанавливает состояние, их храним все. */
   events: string[];
   /** Хвост лога (не больше LOG_REPLAY_MAX строк): весь лог этапа лежит в его транскрипте. */
@@ -511,16 +513,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
     if (method === 'DELETE') {
       // идущий запуск читает пространство на старте каждого этапа и пишет состояние в конце: удалять — после него
-      const running = listRuns().filter((r) => r.space === slug && (live.has(r.id) || r.status === 'running'));
-      if (running.length) return sendJson(res, 409, { error: `Пространство ${slug} у идущего запуска: ${running.map((r) => r.id).join(', ')} — дождись его конца или останови` });
-      // идущие сессии с ним — 409; завершённые отцепляются: заведённое потом с тем же слагом их ходов не получит
+      const ofSpace = (rs: { id: string; space?: string }[]) => rs.filter((r) => r.space === slug).map((r) => r.id);
+      const running = [...new Set([...ofSpace([...live.values()]), ...ofSpace(listRuns().filter((r) => r.status === 'running'))])];
+      if (running.length) return sendJson(res, 409, { error: `Пространство ${slug} у идущего запуска: ${running.join(', ')} — дождись его конца или останови` });
+      // идущая сессия в нём — 409; остальные отцепляются только после удаления (не удалилось — сессии как были):
+      // заведённое потом с тем же слагом их ходов не получит. Между проверкой и удалением await нет
       try {
-        releaseSpaceSessions(slug);
+        assertSpaceFree(slug);
       } catch (err) {
         if (err instanceof SessionError) return sendJson(res, err.status, { error: err.message });
         throw err;
       }
-      return reply(res, deleteSpaceReply(slug));
+      const deleted = deleteSpaceReply(slug);
+      if (deleted.status === 200) releaseSpaceSessions(slug);
+      return reply(res, deleted);
     }
   }
   if (method === 'GET' && (m = p.match(/^\/api\/spaces\/([^/]+)\/context$/))) return reply(res, spaceContextReply(m[1], RUNS_DIR));
@@ -1000,6 +1006,7 @@ function launchRun(
   const id = path.basename(runDir);
   const lr: LiveRun = {
     id,
+    ...(opts.space ? { space: opts.space } : {}),
     events: [],
     logs: [],
     clients: new Set(),

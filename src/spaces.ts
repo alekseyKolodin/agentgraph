@@ -491,10 +491,22 @@ export function legacySummaryOf(meta: Pick<SpaceMeta, 'migratedFrom'>): LegacySu
   return text ? { path: file, text: clampState(text), mtimeMs: st.mtimeMs } : undefined;
 }
 
+/**
+ * Удаление — всё или ничего: папка сначала переименовывается в скрытую (не вышло — пространство целое, ошибка уходит
+ * наверх, и сессии от него не отцепляют), потом стирается. Не стёрлось что-то внутри — пространства уже нет в списке,
+ * а остаток уберёт следующий старт (dropStaleMigrations).
+ */
 export function deleteSpace(slug: string): boolean {
   const dir = spaceDir(slug);
   if (!fs.existsSync(dir)) return false;
-  fs.rmSync(dir, { recursive: true, force: true });
+  const trash = path.join(path.dirname(dir), `.deleting-${slug}-${process.pid}`);
+  fs.rmSync(trash, { recursive: true, force: true });
+  fs.renameSync(dir, trash);
+  try {
+    fs.rmSync(trash, { recursive: true, force: true });
+  } catch (err) {
+    console.error(`пространство ${slug}: удалено, но ${trash} стёрлась не вся —`, err instanceof Error ? err.message : err);
+  }
   return true;
 }
 
@@ -964,7 +976,10 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Временные папки переноса процессов, которых уже нет (убит посреди migrateTag): папка тега цела, а мусор копился бы. */
+/**
+ * Временные папки процессов, которых уже нет: переноса (убит посреди migrateTag: папка тега цела, а мусор копился бы) и
+ * удаления (deleteSpace не стёр всё).
+ */
 function dropStaleMigrations(root: string): void {
   let names: string[];
   try {
@@ -973,7 +988,7 @@ function dropStaleMigrations(root: string): void {
     return;
   }
   for (const name of names) {
-    const m = /^\.migrating-[a-z0-9-]+-(\d+)$/.exec(name);
+    const m = /^\.(?:migrating|deleting)-[a-z0-9-]+-(\d+)$/.exec(name);
     if (!m || Number(m[1]) === process.pid || alive(Number(m[1]))) continue;
     fs.rmSync(path.join(root, name), { recursive: true, force: true });
   }

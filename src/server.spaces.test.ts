@@ -25,10 +25,13 @@ const { startServer, stopServer } = await import('./server.js');
 const { MAIN_BLOCK } = await import('./schema.js');
 const { spaceDir } = await import('./spaces.js');
 
-/** Что получил раннер: задача и опции пространства. Запуск сразу падает — run.json пишет сервер. */
+/** Что получил раннер: задача и опции пространства. Запуск падает (сразу или по hold.release) — run.json пишет сервер. */
 const started: { spec: FlowSpec; opts: RunOptions }[] = [];
+/** Задача «hold» держит запуск идущим, пока тест не позовёт release. */
+const hold = { release: () => {} };
 const fakeRunFlow = async (spec: FlowSpec, opts: RunOptions): Promise<never> => {
   started.push({ spec: { ...spec }, opts });
+  if (spec.input === 'hold') await new Promise<void>((resolve) => { hold.release = resolve; });
   throw new Error('поддельный раннер');
 };
 
@@ -161,4 +164,19 @@ test('продолжение старого запуска, чьё простр�
   assert.equal(opts.space, undefined);
   // удалённое пространство не воскресает: тег перенесён раньше
   assert.deepEqual(await slugs(), ['two']);
+});
+
+test('удаление пространства, пока его запуск идёт: 409 и пространство на месте; запуск кончился — удаляется', async () => {
+  assert.equal((await call('POST', '/api/spaces', { slug: 'busy' })).status, 201);
+  const r = await call<{ id: string }>('POST', '/api/runs', { flow: 'demo', input: 'hold', cwd: proj, space: 'busy' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  // run.json поддельный раннер не пишет: идущий запуск сервер знает сам
+  const busy = await call<{ error: string }>('DELETE', '/api/spaces/busy');
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, new RegExp(`идущего запуска: ${r.body.id}`));
+  assert.ok((await slugs()).includes('busy'));
+  hold.release();
+  for (let i = 0; i < 100 && (await call<{ status: string }>('GET', `/api/runs/${r.body.id}`)).body.status === 'running'; i++) await new Promise((res) => setTimeout(res, 20));
+  assert.equal((await call('DELETE', '/api/spaces/busy')).status, 200);
+  assert.ok(!(await slugs()).includes('busy'));
 });

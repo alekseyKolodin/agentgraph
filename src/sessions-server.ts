@@ -533,19 +533,27 @@ export class SessionManager {
   }
 
   /**
-   * Пространство удаляют (DELETE /api/spaces/:slug): живая сессия с ним — 409 (его папка у неё в --add-dir, ходы ушли бы
-   * в никуда); завершённые отцепляются — пространство снимается, ходы в нём не пишутся никуда, и заведённое потом с тем
-   * же слагом их не получит. Возвращает, сколько сессий отцеплено.
+   * Перед удалением пространства (DELETE /api/spaces/:slug): идущая сессия, у которой оно выбрано сейчас, — 409 (его
+   * папка у неё в --add-dir, следующие ходы ушли бы в никуда; смена пространства это снимает), и сессия, которая пишет
+   * его состояние, — тоже. Идущая сессия, у которой оно было раньше, не мешает: её прошлые ходы отцепит releaseSpace.
+   */
+  assertSpaceFree(slug: string): void {
+    this.load();
+    const busy = [...this.sessions.values()].filter((s) => (s.pty?.alive && s.rec.space === slug) || (s.updatingState && spaceUsedBy(s.rec, slug)));
+    if (busy.length) throw new SessionError(409, `Пространством ${slug} пользуются идущие сессии: ${busy.map((s) => `«${s.rec.name}»`).join(', ')} — заверши их или смени им пространство`);
+  }
+
+  /**
+   * Пространство удалено: сессии с ним отцепляются — пространство снимается, ходы в нём не пишутся никуда, и заведённое
+   * потом с тем же слагом их не получит. Зовётся после удаления (не удалилось — сессии как были). Возвращает, сколько
+   * сессий отцеплено.
    */
   releaseSpace(slug: string): number {
     this.load();
-    const uses = (r: SessionRecord) => r.space === slug || Boolean(r.legacyTaskTags?.includes(slug)) || Boolean(r.turnSpaces?.some((x) => x.space === slug && !x.gone));
-    const live = [...this.sessions.values()].filter((s) => (s.pty?.alive || s.updatingState) && uses(s.rec));
-    if (live.length) throw new SessionError(409, `Пространством ${slug} пользуются идущие сессии: ${live.map((s) => `«${s.rec.name}»`).join(', ')} — заверши их или смени им пространство`);
     let n = 0;
     for (const s of this.sessions.values()) {
       const r = s.rec;
-      if (!uses(r)) continue;
+      if (!spaceUsedBy(r, slug)) continue;
       const segs = r.space === slug ? withTurnSpace(r, undefined) : turnSpacesOf(r);
       r.turnSpaces = segs.map((x) => (x.space === slug ? { ...x, gone: true as const } : x));
       if (r.space === slug) delete r.space;
@@ -1139,6 +1147,10 @@ function spaceInstance(slug: string): string | undefined {
 /** Отрезки ходов записи; у записи без них (старая или без смены) все ходы — в её пространстве. */
 const turnSpacesOf = (r: SessionRecord): TurnSpace[] => (r.turnSpaces?.length ? r.turnSpaces : [{ from: 0, ...(r.space ? { space: r.space } : {}) }]);
 
+/** Сессия связана с пространством: выбрано сейчас, тег задачи до пространств или неотцеплённые прошлые ходы. */
+const spaceUsedBy = (r: SessionRecord, slug: string) =>
+  r.space === slug || Boolean(r.legacyTaskTags?.includes(slug)) || Boolean(r.turnSpaces?.some((x) => x.space === slug && !x.gone));
+
 /** Отрезки после смены пространства на space с текущего хода; смена без новых ходов заменяет последний отрезок. */
 function withTurnSpace(r: SessionRecord, space: string | undefined): TurnSpace[] {
   const segs = turnSpacesOf(r);
@@ -1385,6 +1397,8 @@ export const sessionsUpgrade = (req: IncomingMessage, socket: Duplex, head: Buff
 /** Сессии без пространства в папках пространства (его страница предлагает их добавить). */
 export const looseSpaceSessions = (folders: string[]) => sessionManager().looseSessions(folders);
 /** Пространство удаляют: идущие сессии с ним — SessionError 409, завершённые отцепляются (SessionManager.releaseSpace). */
+/** DELETE /api/spaces/:slug: проверка до удаления (SessionError 409) и отцепление после него. */
+export const assertSpaceFree = (slug: string) => sessionManager().assertSpaceFree(slug);
 export const releaseSpaceSessions = (slug: string) => sessionManager().releaseSpace(slug);
 /** Сессии пространства (его страница): сначала сессии с диска, если сервер их ещё не читал. */
 export async function spaceSessions(slug: string): Promise<SpaceSession[]> {

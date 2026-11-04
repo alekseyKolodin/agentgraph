@@ -251,6 +251,37 @@ test('удаление пространства: идущая сессия с н
   assert.equal((await call<{ sessions: unknown[] }>('GET', '/api/spaces/del-x')).body.sessions.length, 0);
 });
 
+test('удаление пространства: идущая сессия, у которой оно было раньше, не мешает — её прошлые ходы отцепляются; не удалилось — сессии как были', async () => {
+  createSpace('del-past');
+  createSpace('del-now');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'del-past' });
+  const token = tokenOf(spawned.at(-1)!);
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt: 'ход в past' });
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: 'del-now' });
+  assert.deepEqual((await view(s.id)).stateSpaces, ['del-past']);
+  // del-now выбрано у идущей сессии — 409; удаление не случилось, и сессию не тронули
+  const busy = await call<{ error: string }>('DELETE', '/api/spaces/del-now');
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, /заверши их или смени им пространство/);
+  // папку не удалить (родитель только для чтения) — ошибка, а сессии как были: отцепляют только после удаления
+  const spaces = path.dirname(spaceDir('del-past'));
+  fs.chmodSync(spaces, 0o555);
+  try {
+    assert.notEqual((await call('DELETE', '/api/spaces/del-past')).status, 200);
+  } finally {
+    fs.chmodSync(spaces, 0o755);
+  }
+  assert.ok(readSpace('del-past'));
+  assert.deepEqual((await view(s.id)).stateSpaces, ['del-past']);
+  // del-past было раньше — удаляется при идущей сессии, её прошлые ходы отцеплены, текущее пространство осталось
+  assert.equal((await call('DELETE', '/api/spaces/del-past')).status, 200);
+  const v = await view(s.id);
+  assert.deepEqual([v.live, v.space, v.stateSpaces], [true, 'del-now', []]);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => !(await view(s.id)).live && !(await view(s.id)).updatingState);
+});
+
 test('сессия в папке пространства: запись в пространство, заведённое после её старта, в новую папку и в другом регистре — отказ хука; своё — решают правила', () => {
   createSpace('wg-alpha');
   const cwd = spaceDir('wg-alpha');

@@ -399,11 +399,23 @@ test(
     fs.mkdirSync(spaceDir('empty'), { recursive: true });
     assert.equal(createSpace('empty', { gist: 'суть' }).map, 'суть\n');
     // процесс упал посреди переноса: его временная папка уходит, своя (живой pid) остаётся
+    // и посреди удаления (deleteSpace не стёр всё)
     const dead = path.join(spacesDir(), '.migrating-x-999999');
     const mine = path.join(spacesDir(), `.migrating-y-${process.pid}`);
-    for (const d of [dead, mine]) fs.mkdirSync(d, { recursive: true });
+    const deadDel = path.join(spacesDir(), '.deleting-z-999999');
+    for (const d of [dead, mine, deadDel]) fs.mkdirSync(d, { recursive: true });
     migrateTaskTags({ force: true });
-    assert.deepEqual([fs.existsSync(dead), fs.existsSync(mine)], [false, true]);
+    assert.deepEqual([fs.existsSync(dead), fs.existsSync(mine), fs.existsSync(deadDel)], [false, true, false]);
+    // удаление — всё или ничего: папку не переименовать (родитель только для чтения) — ошибка, пространство целое
+    fs.chmodSync(spacesDir(), 0o555);
+    try {
+      assert.throws(() => deleteSpace('empty'));
+    } finally {
+      fs.chmodSync(spacesDir(), 0o755);
+    }
+    assert.equal(readSpace('empty')!.map, 'суть\n');
+    assert.equal(deleteSpace('empty'), true);
+    assert.deepEqual(fs.readdirSync(spacesDir()).filter((f) => f.includes('empty')), []);
   }),
 );
 
