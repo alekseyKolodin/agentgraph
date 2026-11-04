@@ -24,7 +24,7 @@ import {
   summarize,
 } from './flows.js';
 import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { type AskAnswers } from './agent.js';
+import { type AskAnswers, type LogFn, type SessionRequest, type SessionResult } from './agent.js';
 import { editBase } from './edit.js';
 import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunOptions, type RunReport } from './runner.js';
@@ -95,7 +95,12 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import {
+  draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
+  type GroupSource,
+} from './space-draft.js';
+import type { SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -113,6 +118,8 @@ export type ServerOptions = {
   restart?: Restart;
   /** Раннер запусков: тесты API подменяют его, чтобы не звать настоящий Agent SDK. */
   runFlow?: typeof runFlow;
+  /** Сессия модели черновиков пространств (space-draft.ts): тесты подменяют её, настоящий claude не зовётся. */
+  draftSession?: (req: SessionRequest, log: LogFn) => Promise<SessionResult>;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -175,8 +182,15 @@ type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
-/** Идущие генерации и правки flow ИИ: живут, пока живо соединение; stopServer прерывает их. */
+/** Идущие генерации и правки flow ИИ и черновики пространств: живут, пока живо соединение; stopServer прерывает их. */
 const generations = new Set<AbortController>();
+/**
+ * Идущие черновики пространств: space:<slug> — черновик существующего (один на пространство), new:<n> — нового, groups —
+ * «Предложить пространства» (одна). Черновиков вместе — не больше DRAFTS_MAX: каждый тратит деньги.
+ */
+const spaceDrafts = new Set<string>();
+const DRAFTS_MAX = 2;
+let draftSeq = 0;
 /** Идущие анализы flow (POST /api/runs/:id/analysis): один на запуск, второй одновременно — 409 busy. */
 const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
@@ -273,7 +287,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -530,6 +544,47 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
   }
   if (method === 'GET' && (m = p.match(/^\/api\/spaces\/([^/]+)\/context$/))) return reply(res, spaceContextReply(m[1], RUNS_DIR));
+  // черновик пространства с моделью (src/space-draft.ts): ничего не пишет — сохраняет человек путями выше. С
+  // Accept: application/x-ndjson — поток хода, как у генерации flow; закрыли соединение — сессия прерывается
+  if (method === 'POST' && p === '/api/space-drafts') {
+    const body = await readJson(req);
+    let input: DraftInput;
+    try {
+      input = resolveDraftInput(body, await draftResolveDeps(body));
+    } catch (err) {
+      return sendJson(res, err instanceof SpaceError ? err.status : 400, { error: errMsg(err) });
+    }
+    if ((body as { estimate?: unknown }).estimate === true) return sendJson(res, 200, draftEstimate(input) satisfies SpaceDraftEstimate);
+    // проверка и пометка — синхронно, без await между ними
+    const key = input.space ? `space:${input.space.slug}` : `new:${++draftSeq}`;
+    if (spaceDrafts.has(key)) return sendJson(res, 409, { error: `Черновик пространства ${input.space!.slug} уже пишется`, code: 'busy' });
+    if ([...spaceDrafts].filter((k) => k !== 'groups').length >= DRAFTS_MAX) return sendJson(res, 409, { error: `Уже пишутся ${DRAFTS_MAX} черновика: дождись одного из них`, code: 'busy' });
+    spaceDrafts.add(key);
+    try {
+      return await respondFlowAi(req, res, generations, (ai) => draftReply(input, ai, draftDeps(opts)));
+    } finally {
+      spaceDrafts.delete(key);
+    }
+  }
+  // «Предложить пространства»: работа без пространства — группами (haiku без инструментов); создаёт их человек
+  if (method === 'POST' && p === '/api/space-groups') {
+    const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
+    let model: ReturnType<typeof draftModel>;
+    try {
+      model = draftModel(body?.model, SPACE_GROUPS_MODEL);
+    } catch (err) {
+      return sendJson(res, 400, { error: errMsg(err) });
+    }
+    const { items, skipped } = groupItems(await groupSources());
+    if (body?.estimate === true) return sendJson(res, 200, groupsEstimate(items, skipped, model) satisfies SpaceGroupsEstimate);
+    if (spaceDrafts.has('groups')) return sendJson(res, 409, { error: 'Предложение пространств уже готовится', code: 'busy' });
+    spaceDrafts.add('groups');
+    try {
+      return await respondFlowAi(req, res, generations, (ai) => groupsReply(items, skipped, model, ai, draftDeps(opts)));
+    } finally {
+      spaceDrafts.delete('groups');
+    }
+  }
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {
     let name: string;
@@ -1991,6 +2046,49 @@ async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
     for (const x of await spaceSessions(s.slug).catch(() => [])) work.push({ space: s.slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session', live: x.live });
   }
   return spaceWorkOf(work, RUNS_DIR);
+}
+
+/** Подмена сессии модели черновиков (тесты). */
+const draftDeps = (opts: ServerOptions): DraftDeps => (opts.draftSession ? { session: opts.draftSession } : {});
+
+/**
+ * Источники черновика: сессии — из реестра сессий терминала (асинхронно, поэтому заранее — по id из тела), запуски — по
+ * run.json с итогом последнего шага.
+ */
+async function draftResolveDeps(body: unknown): Promise<DraftResolveDeps> {
+  const raw = body && typeof body === 'object' ? (body as { sessions?: unknown }).sessions : undefined;
+  const found = new Map<string, DraftSession>();
+  for (const id of Array.isArray(raw) ? raw.slice(0, 20) : []) {
+    if (typeof id !== 'string' || found.has(id)) continue;
+    const s = await sessionDraftSource(id).catch(() => undefined);
+    if (s) found.set(id, s);
+  }
+  return {
+    session: (id) => found.get(id),
+    // папка запуска — по id, а не из run.json: её открывают модели на чтение
+    run: (id) => {
+      const r = readReport(id);
+      return r ? { ...withFinal(r), runDir: path.join(RUNS_DIR, id) } : undefined;
+    },
+    runsDir: RUNS_DIR,
+  };
+}
+
+/**
+ * Работа без пространства для «Предложить пространства»: сессии с хотя бы одним сообщением и запуски — не дочерние, не
+ * скрытые, не идущие, без пространства и без старых тегов задач.
+ */
+async function groupSources(): Promise<GroupSource[]> {
+  const out: GroupSource[] = [];
+  for (const s of await spacelessSessions().catch(() => [])) {
+    if (s.first.trim()) out.push({ kind: 'session', id: s.id, name: s.name, cwd: s.cwd, at: s.lastActivityAt, text: s.first });
+  }
+  for (const r of listRuns()) {
+    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running') continue;
+    const cwd = r.worktree?.path ?? r.cwd;
+    out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
+  }
+  return out;
 }
 
 /**

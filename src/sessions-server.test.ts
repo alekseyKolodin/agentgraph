@@ -64,6 +64,20 @@ const fakeSummary = async (req: SessionRequest): Promise<SessionResult> => {
   if (knobs.fail && req.prompt.includes(`Пространство: ${knobs.fail}\n`)) return { ok: false, subtype: 'error_during_execution', text: '', costUsd: 0.01, turns: 1, durationMs: 1, errors: ['сбой сессии состояния'] };
   return { ok: true, subtype: 'success', text: '', structured: { state: `состояние №${summaries.length}` }, costUsd: 0.01, turns: 1, durationMs: 1, errors: [] };
 };
+/** Черновики пространств: настоящий claude не зовётся; gate держит ответ, сессия слышит abort (закрытое соединение). */
+const drafts: SessionRequest[] = [];
+const draftKnobs: { gate?: Promise<void>; aborted?: boolean } = {};
+const fakeDraft = async (req: SessionRequest, log: (line: string) => void): Promise<SessionResult> => {
+  drafts.push(req);
+  log('Read README.md');
+  req.abort?.signal.addEventListener('abort', () => (draftKnobs.aborted = true), { once: true });
+  if (draftKnobs.gate) await Promise.race([draftKnobs.gate, new Promise((r) => req.abort?.signal.addEventListener('abort', r, { once: true }))]);
+  const props = (req.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+  const structured = 'groups' in props
+    ? { groups: [{ slug: 'cart-flow', title: 'Корзина', gist: 'чиним корзину', items: ['s1'] }] }
+    : { title: 'Корзина', slug: 'cart-flow', map: '# Корзина\n\n## Документы\n- docs/tests.md — перед MR', docs: [{ name: 'tests.md', text: '# Как прогнать тесты\nКогда открывать: перед MR' }], state: 'Суть: корзина', doubts: [] };
+  return { ok: true, subtype: 'success', text: '', structured, costUsd: 0.3, turns: 5, durationMs: 1, errors: [], model: 'claude-sonnet-5-5' };
+};
 const kit: PtyKit = {
   spawn: (file, args, opts) => {
     const p = new FakePty(file, args, opts);
@@ -106,7 +120,7 @@ before(async () => {
     title: () => new Promise<never>(() => {}),
   });
   port = await freePort();
-  await startServer({ port, host: '127.0.0.1', defaultCwd: path.join(root, 'proj'), notify: false });
+  await startServer({ port, host: '127.0.0.1', defaultCwd: path.join(root, 'proj'), notify: false, draftSession: fakeDraft });
   base = `http://127.0.0.1:${port}`;
 });
 
@@ -741,6 +755,93 @@ test('удаление: живую — нельзя, завершённую — 
   assert.equal((await call('DELETE', `/api/sessions/${s.id}`)).status, 200);
   assert.equal(fs.existsSync(path.join(root, 'sessions', s.id)), false);
   assert.equal((await call('GET', `/api/sessions/${s.id}`)).status, 404);
+});
+
+test('черновик пространства по ходам сессии: ходы — в source-data, ответ — черновик с ценой, ничего не записано; поток NDJSON — ход и done', async () => {
+  const proj = path.join(root, 'proj');
+  const { body: v } = await call<SessionView>('POST', '/api/sessions', { cwd: proj });
+  const token = tokenOf(spawned.at(-1)!);
+  await hook(v.id, token, { hook_event_name: 'SessionStart', session_id: v.id });
+  await hook(v.id, token, { hook_event_name: 'UserPromptSubmit', session_id: v.id, prompt: 'почини корзину-черновик' });
+  await hook(v.id, token, { hook_event_name: 'Stop', session_id: v.id, last_assistant_message: 'Поправил cart.ts' });
+  await call('POST', `/api/sessions/${v.id}/end`);
+  const spacesBefore = fs.existsSync(path.join(root, 'cfg', 'spaces')) ? fs.readdirSync(path.join(root, 'cfg', 'spaces')).length : 0;
+
+  const est = await call<{ low: number; high: number; ceiling: number; reads: string[] }>('POST', '/api/space-drafts', { sessions: [v.id], estimate: true });
+  assert.equal(est.status, 200);
+  assert.ok(est.body.low < est.body.high && est.body.high <= est.body.ceiling);
+  assert.deepEqual(est.body.reads, [proj]);
+  assert.equal(drafts.length, 0, 'оценка модель не зовёт');
+
+  const r = await call<{ draft: { slug: string; map: string; docs: { name: string }[] }; costUsd: number; warnings: string[] }>('POST', '/api/space-drafts', { sessions: [v.id], about: 'магазин' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([r.body.draft.slug, r.body.draft.docs.map((d) => d.name), r.body.costUsd], ['cart-flow', ['tests.md'], 0.3]);
+  assert.match(drafts.at(-1)!.prompt, /<source-data>\nИмя: [^\n]+\n\nХод 1\. Пользователь:\nпочини корзину-черновик\nОтвет модели:\nПоправил cart\.ts\n<\/source-data>/);
+  assert.deepEqual(drafts.at(-1)!.tools, ['Read', 'Grep', 'Glob']);
+  const spacesAfter = fs.existsSync(path.join(root, 'cfg', 'spaces')) ? fs.readdirSync(path.join(root, 'cfg', 'spaces')).length : 0;
+  assert.equal(spacesAfter, spacesBefore, 'черновик пространств не заводит');
+
+  const res = await fetch(base + '/api/space-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ about: 'магазин' }) });
+  const events = (await res.text()).trim().split('\n').map((l) => JSON.parse(l) as { type: string; line?: string; body?: { draft?: unknown; durationMs?: number } });
+  assert.deepEqual(events.map((e) => e.type), ['log', 'done']);
+  assert.equal(events[0].line, 'Read README.md');
+  assert.ok(events[1].body?.draft && typeof events[1].body.durationMs === 'number');
+
+  const bad = await call<{ error: string }>('POST', '/api/space-drafts', { sessions: ['0000000a-0000-4000-8000-0000000000ff'] });
+  assert.equal(bad.status, 400);
+  assert.equal((await call('POST', '/api/space-drafts', { space: 'no-such-space', about: 'x' })).status, 404);
+  assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('space-drafts'));
+});
+
+test('черновик пространства: второй по тому же пространству — 409 busy; закрытое соединение прерывает сессию модели', async () => {
+  createSpace('draft-busy', { title: 'Занято' });
+  let release = () => {};
+  draftKnobs.gate = new Promise<void>((r) => (release = r));
+  draftKnobs.aborted = false;
+  try {
+    const ctl = new AbortController();
+    const first = fetch(base + '/api/space-drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ space: 'draft-busy', about: 'x' }), signal: ctl.signal }).catch(() => undefined);
+    await until(() => drafts.some((d) => d.prompt.includes('draft-busy')));
+    const second = await call<{ code: string }>('POST', '/api/space-drafts', { space: 'draft-busy', about: 'x' });
+    assert.deepEqual([second.status, second.body.code], [409, 'busy']);
+    ctl.abort();
+    await first;
+    await until(() => draftKnobs.aborted === true);
+    // пометка снята — следующий черновик того же пространства идёт
+    release();
+    draftKnobs.gate = undefined;
+    await until(async () => (await call('POST', '/api/space-drafts', { space: 'draft-busy', about: 'x' })).status === 200);
+  } finally {
+    release();
+    draftKnobs.gate = undefined;
+  }
+});
+
+test('предложить пространства: сессии без пространства уходят модели, группа — с её работами и папкой; оценка — без модели', async () => {
+  const before = drafts.length;
+  const est = await call<{ items: number; low: number; ceiling: number }>('POST', '/api/space-groups', { estimate: true });
+  assert.equal(est.status, 200);
+  assert.ok(est.body.items >= 1);
+  assert.equal(drafts.length, before);
+  const r = await call<{ groups: { slug: string; sessions: string[]; cwd?: string }[]; items: { id: string; kind: string }[]; costUsd: number }>('POST', '/api/space-groups', {});
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  if (r.body.items.length >= 2) {
+    assert.equal(drafts.at(-1)!.tools?.length, 0);
+    assert.equal(r.body.groups[0].slug, 'cart-flow');
+    assert.equal(r.body.groups[0].sessions.length, 1);
+  }
+  assert.ok(r.body.items.every((x) => x.kind === 'session' || x.kind === 'run'));
+  assert.equal((await call('POST', '/api/space-groups', { model: 'gpt' })).status, 400);
+});
+
+test('новое пространство с картой и состоянием из черновика: проверки до создания, карта длиннее лимита — 400 и пространства нет', async () => {
+  const ok = await call<{ map: string; state: string; title: string }>('POST', '/api/spaces', { slug: 'from-draft', title: 'Из черновика', map: '# Из черновика\nкарта', state: 'Суть: ок' });
+  assert.equal(ok.status, 201, JSON.stringify(ok.body));
+  assert.deepEqual([ok.body.map, ok.body.state, ok.body.title], ['# Из черновика\nкарта\n', 'Суть: ок\n', 'Из черновика']);
+  const long = await call('POST', '/api/spaces', { slug: 'too-long-map', map: 'x'.repeat(20_001) });
+  assert.equal(long.status, 400);
+  assert.equal(readSpace('too-long-map'), undefined);
+  assert.equal((await call('POST', '/api/spaces', { slug: 'bad-map', map: 42 })).status, 400);
 });
 
 test(`лимит: живых сессий не больше ${LIVE_SESSIONS_MAX} — дальше 409`, async () => {

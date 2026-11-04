@@ -33,6 +33,7 @@ import {
   type Delivered, type HookState, type SessionCtx,
 } from './sessions.js';
 import { mcpReply, parseSessionNewArgs, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
+import type { DraftSession } from './space-draft.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
@@ -274,6 +275,23 @@ export class SessionManager {
         return { id: s.rec.id, name: s.rec.name, status: live ? s.status : 'ended', live, cwd: s.rec.cwd, lastActivityAt: s.rec.lastActivityAt, turns: s.rec.turns };
       })
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }
+
+  /** Сессия как источник черновика пространства (space-draft.ts): имя, папка, даты и ходы из журнала. */
+  draftSource(id: string): DraftSession | undefined {
+    this.load();
+    const s = ID_RE.test(id) ? this.sessions.get(id) : undefined;
+    if (!s) return undefined;
+    const r = s.rec;
+    return { id: r.id, name: r.name, cwd: r.cwd, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, turns: readTurns(this.turnsFile(r.id)) };
+  }
+
+  /** Сессии без пространства (и не старые с тегами задач) для «Предложить пространства»: с первым сообщением. */
+  spacelessSessions(): { id: string; name: string; cwd: string; lastActivityAt: string; first: string }[] {
+    this.load();
+    return [...this.sessions.values()]
+      .filter((s) => !s.rec.space && !s.rec.legacyTaskTags?.length)
+      .map((s) => ({ id: s.rec.id, name: s.rec.name, cwd: s.rec.cwd, lastActivityAt: s.rec.lastActivityAt, first: readTurns(this.turnsFile(s.rec.id))[0]?.prompt ?? '' }));
   }
 
   /** Сессии пространства для его страницы: живые сверху, потом свежие; legacy — сессия до пространств с этим тегом задачи. */
@@ -1502,6 +1520,16 @@ export const looseSpaceSessions = (folders: string[]) => sessionManager().looseS
 /** DELETE /api/spaces/:slug: проверка до удаления (SessionError 409) и отцепление после него. */
 export const assertSpaceFree = (slug: string) => sessionManager().assertSpaceFree(slug);
 export const releaseSpaceSessions = (slug: string) => sessionManager().releaseSpace(slug);
+/** Сессия как источник черновика пространства; без node-pty сессий нет. */
+export async function sessionDraftSource(id: string): Promise<DraftSession | undefined> {
+  const mgr = sessionManager();
+  return (await mgr.available()) ? mgr.draftSource(id) : undefined;
+}
+/** Сессии без пространства для «Предложить пространства». */
+export async function spacelessSessions(): Promise<ReturnType<SessionManager['spacelessSessions']>> {
+  const mgr = sessionManager();
+  return (await mgr.available()) ? mgr.spacelessSessions() : [];
+}
 /** Сессии пространства (его страница): сначала сессии с диска, если сервер их ещё не читал. */
 export async function spaceSessions(slug: string): Promise<SpaceSession[]> {
   const mgr = sessionManager();

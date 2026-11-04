@@ -407,6 +407,76 @@ export type LegacySummary = { path: string; text: string; mtimeMs: number };
  */
 export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary; looseSessions?: SpaceSession[] };
 
+// ---------- черновики пространств от модели (src/space-draft.ts): ничего не записано, сохраняет человек
+
+/** Модели черновика: алиасы claude (у оценки цены — своя таблица по каждому). */
+export type SpaceDraftModel = 'haiku' | 'sonnet' | 'opus';
+
+/**
+ * POST /api/space-drafts: space — существующее пространство (его карта, состояние, папки), без него — новое (slug —
+ * слаг пользователя). about — описание работы, sessions и runs — id источников. estimate — только оценка цены, без модели.
+ */
+export type SpaceDraftBody = {
+  space?: string;
+  slug?: string;
+  about?: string;
+  cwd?: string;
+  dirs?: string[];
+  sessions?: string[];
+  runs?: string[];
+  model?: SpaceDraftModel;
+  estimate?: true;
+};
+
+/** Документ-навык черновика: replaces — mtimeMs документа с этим именем, который уже есть (base для замены). */
+export type SpaceDraftDoc = { name: string; text: string; replaces?: number };
+
+/** Черновик: slug — только у нового; state — если в источниках был ход работы; doubts — что модель не выяснила (не сохраняется). */
+export type SpaceDraft = { slug?: string; title: string; map: string; state?: string; cwd?: string; dirs: string[]; docs: SpaceDraftDoc[]; doubts: string[] };
+
+/**
+ * Ответ черновика. base — mtimeMs карты и состояния на момент начала (0 — файла не было): сохранять с ними, правку за это
+ * время поймает 409. costUsd — фактическая цена из SDK.
+ */
+export type SpaceDraftReply = {
+  draft: SpaceDraft;
+  base: { mapMtimeMs?: number; stateMtimeMs?: number };
+  warnings: string[];
+  costUsd: number;
+  model?: string;
+  durationMs: number;
+};
+
+/** Сбой модели (502 или error в done потока): что случилось и сколько успели потратить. */
+export type SpaceDraftFailure = { error: string; code: 'timeout' | 'aborted' | 'budget' | 'model'; costUsd: number };
+
+/**
+ * Оценка до запуска: low–high — приблизительно (сколько модель прочитает, заранее неизвестно), ceiling — потолок
+ * (maxBudgetUsd), его сессия не превысит. reads — папки, которые модель сможет читать.
+ */
+export type SpaceDraftEstimate = { model: SpaceDraftModel; promptChars: number; low: number; high: number; ceiling: number; reads: string[] };
+
+/** Работа без пространства в «Предложить пространства»: сессия или запуск. */
+export type SpaceWorkItem = { kind: 'session' | 'run'; id: string; name: string; cwd?: string; at: string };
+
+/** Предложенное пространство: слаг свободен на момент ответа; cwd — самая частая папка его работ (считает код). */
+export type SpaceGroup = { slug: string; title: string; gist: string; cwd?: string; sessions: string[]; runs: string[] };
+
+/** POST /api/space-groups: группы, все работы (имена для показа), не попавшие в группы, сколько свежих не влезло в 60. */
+export type SpaceGroupsReply = {
+  groups: SpaceGroup[];
+  items: SpaceWorkItem[];
+  rest: { sessions: string[]; runs: string[] };
+  skipped: number;
+  warnings: string[];
+  costUsd: number;
+  model?: string;
+  durationMs: number;
+};
+
+/** Оценка «Предложить пространства»: items — сколько работ уйдёт модели. */
+export type SpaceGroupsEstimate = { model: SpaceDraftModel; items: number; skipped: number; low: number; high: number; ceiling: number };
+
 /**
  * GET /api/spaces/:slug/context: что пространство даёт модели. session — текст хука SessionStart новой сессии
  * (без тегов знаний), phase — раздел в конце промпта этапа; readDirs — папки только для чтения (--add-dir сессии,

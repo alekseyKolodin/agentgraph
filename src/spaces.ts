@@ -1147,14 +1147,19 @@ export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 
   }
 }
 
-/** Новое пространство из формы: { slug, title?, gist?, dirs?, cwd? }. Слаг занят — 409: суть и папки молча не потеряются. */
+/**
+ * Новое пространство из формы: { slug, title?, gist?, dirs?, cwd?, map?, state? }. Слаг занят — 409: суть и папки молча не
+ * потеряются. map и state — из черновика модели, который человек просмотрел (space-draft.ts): всё проверяется до создания,
+ * потом createSpace и updateSpace — те же пути записи и лимиты, что у формы и страницы пространства.
+ */
 export function createSpaceReply(raw: unknown): ApiReply {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { status: 400, body: { error: 'Нужен объект { slug, title?, gist?, dirs?, cwd? }' } };
-  const body = raw as { slug?: unknown; title?: unknown; gist?: unknown; dirs?: unknown; cwd?: unknown };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { status: 400, body: { error: 'Нужен объект { slug, title?, gist?, dirs?, cwd?, map?, state? }' } };
+  const body = raw as { slug?: unknown; title?: unknown; gist?: unknown; dirs?: unknown; cwd?: unknown; map?: unknown; state?: unknown };
   if (typeof body.slug !== 'string') return { status: 400, body: { error: 'slug — строка' } };
-  for (const k of ['title', 'gist'] as const) {
+  for (const k of ['title', 'gist', 'map', 'state'] as const) {
     if (body[k] !== undefined && typeof body[k] !== 'string') return { status: 400, body: { error: `${k} — строка` } };
   }
+  if (typeof body.map === 'string' && body.map.length > SPACE_MAP_MAX) return { status: 400, body: { error: `Карта длиннее ${SPACE_MAP_MAX} знаков: справочное вынеси в документы` } };
   try {
     const slug = body.slug.trim();
     spaceDir(slug);
@@ -1164,7 +1169,8 @@ export function createSpaceReply(raw: unknown): ApiReply {
     migrateTaskTags();
     if (readSpaceMeta(slug)) return { status: 409, body: { error: `Пространство ${slug} уже есть: открой его в списке` } };
     const s = createSpace(slug, { title: body.title as string | undefined, gist: body.gist as string | undefined, dirs, ...(cwd ? { cwd } : {}) });
-    return { status: 201, body: s };
+    const text = { ...(body.map !== undefined ? { map: body.map } : {}), ...(body.state !== undefined ? { state: body.state } : {}) };
+    return { status: 201, body: Object.keys(text).length ? updateSpace(slug, text)! : s };
   } catch (err) {
     return bad(err);
   }
