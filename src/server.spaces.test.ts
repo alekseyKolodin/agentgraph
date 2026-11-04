@@ -134,9 +134,11 @@ test('страница пространства: старые запуски т�
   const list = (await call<{ spaces: SpaceListItem[] }>('GET', '/api/spaces')).body.spaces;
   const kai = list.find((s) => s.slug === 'kai')!;
   assert.deepEqual([kai.workdir, kai.runs, kai.sessions, kai.live], [{ path: proj, from: 'run' }, 3, 0, 0]);
-  // запуск с двумя тегами задач — и у второго пространства
-  assert.deepEqual((await call<SpaceDetail>('GET', '/api/spaces/two')).body.runs.map((x) => [x.id, x.legacy]), [[MULTI, true]]);
-  assert.equal(list.find((s) => s.slug === 'two')?.runs, 1);
+  // запуск с двумя тегами задач — и у второго пространства, но его папка — только первого: страница и список согласны
+  const two = (await call<SpaceDetail>('GET', '/api/spaces/two')).body;
+  assert.deepEqual(two.runs.map((x) => [x.id, x.legacy, x.cwd]), [[MULTI, true, undefined]]);
+  assert.equal(two.workdir, undefined);
+  assert.deepEqual([list.find((s) => s.slug === 'two')?.runs, list.find((s) => s.slug === 'two')?.workdir], [1, undefined]);
 });
 
 test('продолжение старого запуска с тегом задачи: пространство — перенесённый тег, saveTag — галочка состояния, из задачи снят блок только этого тега', async () => {

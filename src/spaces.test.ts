@@ -319,6 +319,13 @@ test(
     const many = spaceContext(readSpace('press-alert')!, { where: 'phase', mapLoaded: true });
     assert.match(many, /…и ещё 15\./);
     assert.ok(many.length <= PHASE_SPACE_MAX);
+    // папки длинные и пять не влезают — числом, без пустого списка с запятой
+    const long = Array.from({ length: 6 }, (_, i) => path.join(root, ...Array.from({ length: 4 }, () => `${i}`.padEnd(200, 'p'))));
+    for (const d of long) fs.mkdirSync(d, { recursive: true });
+    updateSpace('press-alert', { dirs: long, state: 'Суть: пуш\n' + 'x'.repeat(2000) });
+    const dirsCut = spaceContext(readSpace('press-alert')!, { where: 'phase', mapLoaded: true });
+    assert.match(dirsCut, /Папок пространства \(только чтение\): 6\./);
+    assert.ok(!dirsCut.includes('(только чтение): ,'), dirsCut);
     // без карты, без состояния; автозаголовок не выводится
     const bare = createFreshSpace('bare', 'Придумала модель');
     const text = spaceContext(bare, { where: 'phase', mapLoaded: true });

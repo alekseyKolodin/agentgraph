@@ -386,7 +386,10 @@ export type SpaceListItem = {
 
 export type SpaceWorkdir = { path: string; from: 'space' | 'session' | 'run' };
 
-/** Запуск на странице пространства; legacy — старый запуск с тегом задачи (до переноса тега в пространство); cwd — не у запуска в worktree. */
+/**
+ * Запуск на странице пространства; legacy — старый запуск с тегом задачи (до переноса тега в пространство); cwd — не у
+ * запуска в worktree и не у второго тега старого запуска с несколькими тегами (его папка — первого).
+ */
 export type SpaceRun = { id: string; flow: string; title?: string; status: string; startedAt: string; finishedAt?: string; input: string; cwd?: string; legacy?: true };
 /** Сессия терминала на странице пространства. */
 export type SpaceSession = { id: string; name: string; status: SessionStatus; live: boolean; cwd: string; lastActivityAt: string; turns: number; legacy?: true };

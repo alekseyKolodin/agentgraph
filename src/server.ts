@@ -2008,7 +2008,8 @@ function spaceRuns(slug: string, migratedAt?: string): SpaceRun[] {
       startedAt: r.startedAt,
       ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
       input: r.input,
-      ...(r.cwd && !r.worktree ? { cwd: r.cwd } : {}),
+      // папка — как в списке (allSpaceWork): у старого запуска с несколькими тегами задач — только первого
+      ...(r.cwd && !r.worktree && r.space === slug ? { cwd: r.cwd } : {}),
       ...(migratedAt && r.startedAt < migratedAt ? { legacy: true as const } : {}),
     }) satisfies SpaceRun);
 }

@@ -752,7 +752,8 @@ export function spaceContext(space: Space, o: SpaceContextOpts): string {
     else if (o.mapLoaded) lines.push(`Её ${MAP_FILE} — карта пространства (суть, где что, договорённости): она уже в контексте как память.`);
     else lines.push(`Карта пространства — ${path.join(space.dir, MAP_FILE)} (суть, где что, договорённости): прочитай её инструментом Read, прежде чем браться за работу.`);
     if (space.docs.length) lines.push(docsLine(space, docs));
-    if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.slice(0, dirsMax).join(', ')}${paths.length > dirsMax ? `, …и ещё ${paths.length - dirsMax}` : ''}`);
+    if (paths.length && dirsMax <= 0) lines.push(`Папок пространства (только чтение): ${paths.length}.`);
+    else if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.slice(0, dirsMax).join(', ')}${paths.length > dirsMax ? `, …и ещё ${paths.length - dirsMax}` : ''}`);
     lines.push(
       o.where === 'session'
         ? `Папка пространства только для чтения: карту и состояние правит пользователь на странице пространства, документ в ${DOCS_DIR}/ записывай инструментом ${SPACE_WRITE_TOOL} (спросит пользователя).`
