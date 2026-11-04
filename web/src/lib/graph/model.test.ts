@@ -1,7 +1,7 @@
 // Тесты модели графа (перенесены из src/graph.test.ts вместе с ui/graph.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { flowGraphModel, type GraphModel, type GraphModelOptions, type GraphNode, type GraphSpec } from './model';
+import { flowGraphModel, NODE_H, NODE_H_IN, ROW_GAP, type GraphModel, type GraphModelOptions, type GraphNode, type GraphSpec } from './model';
 
 type Spec = Record<string, unknown>;
 const model = (spec: Spec, opts?: GraphModelOptions) => flowGraphModel(spec as GraphSpec, opts);
@@ -194,6 +194,25 @@ test('inputsOf: с колбэком на узле строка «получае�
   assert.equal(b.warn, 'ничего не получает');
   const plain = of(model(spec), 'phase');
   assert.ok(plain.every((n) => n.inputs === undefined && n.warn === undefined));
+});
+
+test('inputsOf: узлы выше на строку «получает», «Задача», ромб и рёбра — по середине новой высоты', () => {
+  const spec = { blocks: [{ name: 'main', loop: judge(), phases: [ph('a'), ph('x', { group: 'g' }), ph('y', { group: 'g' })] }] };
+  const tall = model(spec, { inputsOf: () => ['задача'] });
+  const plain = model(spec);
+  assert.ok(of(plain, 'phase').every((n) => n.h === NODE_H));
+  assert.ok(of(tall, 'phase').every((n) => n.h === NODE_H_IN));
+  const [start] = of(tall, 'start') as [GraphNode];
+  const [a, x, y] = of(tall, 'phase') as [GraphNode, GraphNode, GraphNode];
+  const [cond] = of(tall, 'cond') as [GraphNode];
+  assert.equal(start.h, NODE_H_IN);
+  assert.equal(start.y + start.h / 2, a.y + a.h / 2);
+  assert.equal(cond.y + cond.h / 2, a.y + a.h / 2);
+  // участники группы — друг под другом, рамка группы их вмещает
+  assert.equal(y.y - x.y, NODE_H_IN + ROW_GAP);
+  const g = tall.frames.find((f) => f.kind === 'group')!;
+  assert.ok(g.y + g.h >= y.y + y.h);
+  assert.ok(tall.height > plain.height);
 });
 
 test('блок-вызов: один узел вызова с ключом этапа p:<блок>:<блок>, подпись — состав вызываемого flow', () => {
