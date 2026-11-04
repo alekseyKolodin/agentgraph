@@ -103,6 +103,8 @@ type Live = {
   watch?: ReturnType<typeof setInterval>;
   /** Пишется состояние пространства. */
   updatingState: boolean;
+  /** Пока оно писалось, его попросили ещё раз (claude вышел посреди «Обновить состояние»): после — ещё раз. */
+  stateAgain?: boolean;
   /** Процесс гасит остановка сервера: состояние не пишем, ставим пометку. */
   appClosed?: boolean;
   /** «Перезапустить»: выход старого процесса — не конец сессии, состояние не нужно. */
@@ -676,7 +678,11 @@ export class SessionManager {
    * учтёнными, у сессии — пометка «приложение закрыли».
    */
   private async runState(s: Live, abort: AbortController): Promise<void> {
-    if (s.updatingState) return;
+    // уже пишется (claude вышел посреди «Обновить состояние»): ходы, сделанные после его начала, — следующим заходом
+    if (s.updatingState) {
+      s.stateAgain = true;
+      return;
+    }
     const all = readTurns(this.turnsFile(s.rec.id));
     // ходы уходят в состояние пространства, где сделаны: сменили пространство на ходу — сначала прежнее, потом новое;
     // ходы удалённого пространства — никуда
@@ -717,11 +723,16 @@ export class SessionManager {
       s.rec.turnSpaces = pruneTurnSpaces(s.rec);
     } finally {
       s.updatingState = false;
+      const again = s.stateAgain && !failed && this.wantsState(s);
+      delete s.stateAgain;
+      // сервер останавливается — как при выходе в это время: пометка вместо сессии без спроса
+      if (again && (this.stopping || abort.signal.aborted)) s.rec.statePending = 'app-closed';
       try {
         this.save(s);
       } finally {
         this.changed(s);
       }
+      if (again && !this.stopping && !abort.signal.aborted) void this.summarize(s).catch((err: unknown) => console.error('сессия: состояние —', errMsg(err)));
     }
   }
 

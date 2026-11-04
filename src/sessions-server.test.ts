@@ -56,8 +56,12 @@ class FakePty implements PtyProcess {
 const spawned: FakePty[] = [];
 /** Сессии состояния пространства: настоящий Agent SDK не вызывается, ответ — готовое состояние. */
 const summaries: SessionRequest[] = [];
+/** Ручки поддельной сессии состояния: fail — пространство, у которого она падает; gate — держит ответ до release. */
+const knobs: { fail?: string; gate?: Promise<void> } = {};
 const fakeSummary = async (req: SessionRequest): Promise<SessionResult> => {
   summaries.push(req);
+  if (knobs.gate) await knobs.gate;
+  if (knobs.fail && req.prompt.includes(`Пространство: ${knobs.fail}\n`)) return { ok: false, subtype: 'error_during_execution', text: '', costUsd: 0.01, turns: 1, durationMs: 1, errors: ['сбой сессии состояния'] };
   return { ok: true, subtype: 'success', text: '', structured: { state: `состояние №${summaries.length}` }, costUsd: 0.01, turns: 1, durationMs: 1, errors: [] };
 };
 const kit: PtyKit = {
@@ -227,6 +231,65 @@ test('смена пространства на ходу: ходы до смен�
   await call('PUT', `/api/sessions/${n.id}/space`, { space: 'sw-a' });
   assert.deepEqual((await view(n.id)).stateSpaces, ['sw-a']);
   await call('POST', `/api/sessions/${n.id}/end`);
+});
+
+test('состояние по двум пространствам: первое записалось, второе упало — учтены ходы первого, повтор пишет только второе', async () => {
+  createSpace('rs-a');
+  createSpace('rs-b');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'rs-a' });
+  const token = tokenOf(spawned.at(-1)!);
+  const say = (prompt: string) => hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt });
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await say('ход-ра');
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: 'rs-b' });
+  await say('ход-рб');
+  knobs.fail = 'rs-b';
+  const before = summaries.length;
+  try {
+    await call('POST', `/api/sessions/${s.id}/end`);
+    await until(async () => !(await view(s.id)).live && !(await view(s.id)).updatingState && summaries.length - before === 2);
+  } finally {
+    delete knobs.fail;
+  }
+  let v = await view(s.id);
+  assert.deepEqual([v.stateUpdate?.space, v.stateUpdate?.ok, v.newTurns, v.stateSpaces], ['rs-b', false, 1, ['rs-b']]);
+  assert.match(v.stateUpdate?.error ?? '', /сбой сессии состояния/);
+  assert.match(readSpace('rs-a')!.state, /^состояние №/);
+  assert.equal(readSpace('rs-b')!.state, '');
+  // повтор — только ходы второго
+  assert.equal((await call('POST', `/api/sessions/${s.id}/state`)).status, 202);
+  await until(async () => !(await view(s.id)).updatingState && summaries.length - before === 3);
+  const retry = summaries.at(-1)!.prompt;
+  assert.ok(retry.includes('Пространство: rs-b') && retry.includes('ход-рб') && !retry.includes('ход-ра'), retry);
+  v = await view(s.id);
+  assert.deepEqual([v.stateUpdate?.ok, v.newTurns], [true, 0]);
+});
+
+test('claude вышел посреди «Обновить состояние»: ходы, сделанные за это время, пишутся следующим заходом', async () => {
+  createSpace('rs-again');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'rs-again' });
+  const token = tokenOf(spawned.at(-1)!);
+  const say = (prompt: string) => hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt });
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await say('ход-до');
+  let release = () => {};
+  knobs.gate = new Promise<void>((r) => { release = r; });
+  const before = summaries.length;
+  try {
+    assert.equal((await call('POST', `/api/sessions/${s.id}/state`)).status, 202);
+    await until(() => summaries.length - before === 1);
+    await say('ход-во-время');
+    await call('POST', `/api/sessions/${s.id}/end`);
+    await until(async () => !(await view(s.id)).live);
+  } finally {
+    delete knobs.gate;
+    release();
+  }
+  await until(async () => summaries.length - before === 2 && !(await view(s.id)).updatingState);
+  const [first, second] = summaries.slice(before).map((r) => r.prompt);
+  assert.ok(first.includes('ход-до') && !first.includes('ход-во-время'), first);
+  assert.ok(second.includes('ход-во-время') && !second.includes('ход-до'), second);
+  assert.equal((await view(s.id)).newTurns, 0);
 });
 
 test('удаление пространства: идущая сессия с ним — 409; завершённую отцепляет, и заведённое заново с тем же слагом её ходов не получит', async () => {
