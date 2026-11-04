@@ -504,7 +504,7 @@ export function docName(raw: unknown): string {
   // имя уходит списком в контекст модели: без угловых скобок, переводов строки и невидимых символов форматирования
   if (/[\p{Zl}\p{Zp}\p{Cf}<>]/u.test(raw)) throw new SpaceError(400, `Неверное имя документа «${cleanLine(raw, 80)}»: без угловых скобок и невидимых символов`);
   const name = safeAttachmentName(raw);
-  if (name !== raw.trim()) throw new SpaceError(400, `Неверное имя документа «${cleanLine(raw, 80)}»: только имя файла, без папок; CLAUDE.md здесь нельзя`);
+  if (name !== raw.trim()) throw new SpaceError(400, `Неверное имя документа «${cleanLine(raw, 80)}»: только имя файла, без папок; CLAUDE.md и AGENTS.md здесь нельзя`);
   return name;
 }
 

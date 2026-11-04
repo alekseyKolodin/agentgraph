@@ -567,7 +567,12 @@ export type PathProbe = {
   realpath: (p: string) => string | undefined;
   /** lstat без следования ссылке; undefined — пути нет. */
   lstat: (p: string) => { file: boolean; symlink: boolean; nlink: number } | undefined;
+  /** Цель ссылки (readlink); не ссылка или пути нет — undefined. Нужна для висячей ссылки: realpath у неё нет. */
+  readlink?: (p: string) => string | undefined;
 };
+
+/** Сколько ссылок подряд разворачивает canonical (как ELOOP у ядра): дальше путь берётся как есть. */
+const LINK_DEPTH = 32;
 
 /** ~ раскрывается, относительный путь — от cwd, затем лексическая нормализация. */
 export function expandPath(p: string, cwd: string): string {
@@ -577,19 +582,54 @@ export function expandPath(p: string, cwd: string): string {
 
 /**
  * Канонический путь для сравнения: expandPath, затем realpath ближайшего существующего предка плюс остаток.
- * На APFS realpath.native даёт настоящий регистр имён, поэтому дальше сравнение точное.
+ * На APFS realpath.native даёт настоящий регистр имён, поэтому дальше сравнение точное. Висячая ссылка (realpath её
+ * нет, а запись по ней создаст файл в цели) сверяется по цели. Путь с «..» разбирается по частям, как его разберёт
+ * ядро: «..» после ссылки — от её цели, а не лексически (link/../x — это родитель цели link, а не папка link).
  */
-export function canonical(p: string, cwd: string, probe: Pick<PathProbe, 'realpath'>): string {
-  const abs = expandPath(p, cwd);
+export function canonical(p: string, cwd: string, probe: Pick<PathProbe, 'realpath'> & Partial<Pick<PathProbe, 'readlink'>>, depth = 0): string {
+  const home = p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p;
+  const raw = path.isAbsolute(home) ? home : `${cwd}${path.sep}${home}`;
+  if (depth < LINK_DEPTH && raw.split(/[\\/]+/).includes('..')) return physicalPath(raw, probe, depth);
+  const abs = path.resolve(raw);
   const rest: string[] = [];
   for (let cur = abs; ; ) {
     const real = probe.realpath(cur);
     if (real !== undefined) return rest.length ? path.join(real, ...rest.reverse()) : real;
+    const target = depth < LINK_DEPTH ? probe.readlink?.(cur) : undefined;
+    if (target !== undefined) return canonical(path.join(path.resolve(path.dirname(cur), target), ...rest.reverse()), '/', probe, depth + 1);
     const parent = path.dirname(cur);
     if (parent === cur) return abs;
     rest.push(path.basename(cur));
     cur = parent;
   }
+}
+
+/** Путь с «..» по частям: существующее — realpath (ссылки развёрнуты), «..» — от настоящего родителя, нет пути — остаток лексически. */
+function physicalPath(raw: string, probe: Pick<PathProbe, 'realpath'> & Partial<Pick<PathProbe, 'readlink'>>, depth: number): string {
+  const parts = raw.split(/[\\/]+/);
+  let cur = path.parse(path.resolve(raw)).root;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      cur = path.dirname(cur);
+      continue;
+    }
+    const next = path.join(cur, part);
+    const real = probe.realpath(next);
+    if (real !== undefined) {
+      cur = real;
+      continue;
+    }
+    const target = probe.readlink?.(next);
+    if (target !== undefined) {
+      cur = canonical(path.resolve(cur, target), '/', probe, depth + 1);
+      continue;
+    }
+    // такого пути нет: ядро на нём и споткнётся, остаток — лексически
+    return path.resolve(next, ...parts.slice(i + 1).filter(Boolean));
+  }
+  return cur;
 }
 
 export function isInside(p: string, root: string): boolean {

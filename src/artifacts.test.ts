@@ -616,6 +616,24 @@ test('agent.ts: исключение внутри guard — отказ, cwd пр
   assert.equal(spec.permissionDecision, 'deny');
   assert.match(spec.permissionDecisionReason, /сломалось.*отклонён/);
 });
+test('canonical: висячая ссылка сверяется по цели, «..» после ссылки — от её цели, как у ядра', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-canon-')));
+  try {
+    fs.mkdirSync(path.join(dir, 'guarded', 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'proj'));
+    // висячая: цели ещё нет, а запись по ссылке создала бы guarded/CLAUDE.md
+    fs.symlinkSync(path.join(dir, 'guarded', 'CLAUDE.md'), path.join(dir, 'proj', 'notes.md'));
+    assert.equal(canonical('notes.md', path.join(dir, 'proj'), nodeProbe), path.join(dir, 'guarded', 'CLAUDE.md'));
+    // ссылка на папку и «..» после неё: ядро уходит в родителя цели (guarded), а не обратно в proj
+    fs.symlinkSync(path.join(dir, 'guarded', 'docs'), path.join(dir, 'proj', 'docslink'));
+    assert.equal(canonical('docslink/../CLAUDE.md', path.join(dir, 'proj'), nodeProbe), path.join(dir, 'guarded', 'CLAUDE.md'));
+    // без ссылок «..» — как раньше
+    assert.equal(canonical('sub/../x.md', path.join(dir, 'proj'), nodeProbe), path.join(dir, 'proj', 'x.md'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 
 test('отказы считаются по инструменту и причине', () => {
   const list: Parameters<typeof countDenial>[0] = [];

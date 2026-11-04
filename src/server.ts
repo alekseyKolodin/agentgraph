@@ -503,7 +503,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       return sendJson(res, 400, { error: 'Неверное имя документа' });
     }
     if (method === 'GET') return reply(res, spaceDocReply(m[1], name));
-    if (method === 'PUT') return reply(res, writeSpaceDocReply(m[1], name, (await readJson(req, RUN_BODY_MAX)) as { text?: unknown; base?: unknown }));
+    // документ текстом — до 200 КБ: тело больше 1 МБ (с запасом на экранирование JSON) не читаем вовсе
+    if (method === 'PUT') return reply(res, writeSpaceDocReply(m[1], name, (await readJson(req, SPACE_DOC_BODY_MAX)) as { text?: unknown; base?: unknown }));
     if (method === 'DELETE') return reply(res, deleteSpaceDocReply(m[1], name));
   }
 
@@ -2123,6 +2124,8 @@ function numOrUndefined(v: unknown): number | undefined {
 
 const JSON_BODY_MAX = 5 * 1024 * 1024;
 const RUN_BODY_MAX = 40 * 1024 * 1024;
+/** PUT документа пространства: текст до 200 КБ (SPACE_DOC_TEXT_MAX), JSON-экранирование раздувает его до ×6. */
+const SPACE_DOC_BODY_MAX = 1024 * 1024;
 
 function readJson(req: http.IncomingMessage, maxBytes = JSON_BODY_MAX): Promise<unknown> {
   return new Promise((resolve, reject) => {
