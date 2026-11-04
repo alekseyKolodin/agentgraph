@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RunSummary } from '@server/api-types';
-import { deleteRunText, nestRuns, projKey, runDepths, runListView, runManageable, runRowSub, runRowTitle, statusChips } from './runs';
+import { clock } from './format';
+import { deleteRunText, nestRuns, projKey, runDepths, runListView, runManageable, runRowMeta, runRowTitle, statusChips, statusTone } from './runs';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
   id, flow: 'f', status: 'done', iterations: 1, totalCostUsd: 0.5, startedAt: '2026-10-24T10:00:00Z', input: '', hidden: false, ...over,
@@ -47,15 +48,25 @@ test('группы по проектам: по свежести, подписи,
   assert.equal(runListView(runs, opts({ activeId: 'a10' }), true, new Set()).groups[2]!.runs.length, 11);
 });
 
-test('строка запуска: подсказка, подстрока с flow и проектом, управление только законченным', () => {
-  const r = run('a', { title: 'Имя', cwd: '/p/app', iterations: 2, totalCostUsd: 1.234 });
-  assert.equal(runRowTitle(r), 'Имя\nflow f');
-  assert.equal(runRowTitle(run('b')), 'f');
-  const sub = runRowSub(r, true);
-  assert.equal(sub.flow, 'f');
-  assert.match(sub.rest, /^app · .+ · 2 итерации · ≈\$1\.23$/);
-  assert.equal(runRowSub(r, false).rest.startsWith('app'), false);
-  assert.equal(runRowSub(run('b'), true).flow, '');
+test('строка запуска: мета одной строкой — статус словом, когда, пространство, хвост по важности; подсказка — всё остальное', () => {
+  const now = new Date('2026-10-24T18:00:00Z');
+  const r = run('a', { title: 'Имя', cwd: '/p/app', iterations: 2, totalCostUsd: 1.234, space: 'shop', knowledge: ['qa'], status: 'failed' });
+  const meta = runRowMeta(r, true, now);
+  assert.equal(meta.status, 'ошибка');
+  assert.equal(meta.tone, 'fail');
+  assert.equal(meta.space, 'shop');
+  // сегодня — только время, иначе дата без года (как в ленте); полная дата — в подсказке
+  assert.equal(meta.when, clock(r.startedAt, now));
+  assert.equal(meta.tail, 'f · app · ≈$1.23 · #qa');
+  // в группе проект не повторяется, без имени flow уже в заголовке, разовый — в конце
+  assert.equal(runRowMeta(r, false, now).tail, 'f · ≈$1.23 · #qa');
+  assert.equal(runRowMeta(run('b', { adhoc: true }), true, now).tail, '≈$0.50 · разовый');
+  assert.equal(runRowMeta(run('b'), true, now).space, '');
+  assert.deepEqual(['running', 'done', 'waiting', 'paused', 'max_iterations', 'aborted', 'interrupted', 'budget_exceeded', 'pending'].map(statusTone), ['live', 'ok', 'wait', 'wait', 'wait', 'fail', 'fail', 'fail', '']);
+  const title = runRowTitle(r).split('\n');
+  assert.deepEqual([title[0], title[1], title[3], title[4], title[5]], ['Имя', 'flow f', '◇ shop', '#qa', '/p/app']);
+  assert.match(title[2]!, /^ошибка · .+ · 2 итерации · ≈\$1\.23$/);
+  assert.equal(runRowTitle(run('b')).split('\n')[0], 'f');
   assert.equal(runManageable(run('a'), true), true);
   assert.equal(runManageable(run('a', { status: 'running' }), true), false);
   assert.equal(runManageable({ ...run('a'), live: true }, true), false);

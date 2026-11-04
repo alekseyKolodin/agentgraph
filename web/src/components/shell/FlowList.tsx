@@ -1,7 +1,9 @@
 // Секция «Flow» сайдбара (ui/app.js renderFlowList, wireFlowDrag, foldAll, wireSideSearch): папки, поиск, сворачивание,
-// перетаскивание flow на папку, «Новый flow». Поиск живёт в памяти вкладки; свёрнутость папок — fold.ts.
+// перетаскивание flow на папку, «Новый flow». Строка flow — ссылка: Cmd+клик и средняя кнопка открывают его в новом окне,
+// обычный клик идёт через useOpenFlow (несохранённая правка и черновик спросят). Поиск живёт в памяти вкладки; свёрнутость
+// папок — fold.ts.
 import { useState, type DragEvent } from 'react';
-import { useMatch } from 'react-router';
+import { Link, useMatch } from 'react-router';
 import type { FlowListItem } from '@server/api-types';
 import { useFlows } from '../../api';
 import { useMemoryState } from '../useMemoryState';
@@ -76,7 +78,12 @@ export function FlowSectionActions() {
   return (
     <div className={styles.sideActions}>
       {keysOf.length > 0 && (
-        <button className={cx('btn small ghost icon-btn', styles.fold)} title={anyOpen ? t('Свернуть все папки') : t('Развернуть все папки')} onClick={foldAll}>
+        <button
+          className={cx('btn small ghost icon-btn', styles.fold)}
+          title={anyOpen ? t('Свернуть все папки') : t('Развернуть все папки')}
+          aria-label={anyOpen ? t('Свернуть все папки') : t('Развернуть все папки')}
+          onClick={foldAll}
+        >
           {anyOpen ? ICON.foldAll : ICON.unfoldAll}
         </button>
       )}
@@ -125,21 +132,38 @@ export function FlowList() {
     void moveTo(name, folder);
   };
 
+  // ссылка растянута на всю строку: тащат за неё, а призрак при перетаскивании — вся строка, а не адрес ссылки
   const item = (f: FlowListItem) => (
     <li
       key={f.name}
-      draggable
       className={cx(!f.valid && styles.invalid, activeName === f.name && styles.active)}
       title={f.valid ? f.description || t('{n} этапов · {condition}', { n: f.phases?.length ?? 0, condition: conditionText(String(f.condition)) }) : f.error}
-      onClick={() => void openFlow(f.name)}
-      onDragStart={(e) => {
-        setDragged(f.name);
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', f.name);
-      }}
-      onDragEnd={stop}
     >
-      <span className={styles.name}>{f.name}</span>
+      <Link
+        className={cx(styles.name, styles.rowLink)}
+        to={`/flow/${f.name}`}
+        aria-current={activeName === f.name ? 'page' : undefined}
+        draggable
+        onClick={(e) => {
+          // Cmd/Ctrl/Shift-клик — как у ссылки (новое окно или вкладка); обычный — с вопросами о несохранённом
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          void openFlow(f.name);
+        }}
+        onDragStart={(e) => {
+          setDragged(f.name);
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', f.name);
+          const row = e.currentTarget.closest('li');
+          if (row) {
+            const box = row.getBoundingClientRect();
+            e.dataTransfer.setDragImage(row, e.clientX - box.left, e.clientY - box.top);
+          }
+        }}
+        onDragEnd={stop}
+      >
+        {f.name}
+      </Link>
       {!f.valid && <span className={styles.sub}>{t('ошибка')}</span>}
     </li>
   );
@@ -150,6 +174,7 @@ export function FlowList() {
       <input
         className={styles.sideSearch}
         type="search"
+        aria-label={t('Найти flow')}
         placeholder={t('Найти flow…')}
         autoComplete="off"
         spellCheck={false}

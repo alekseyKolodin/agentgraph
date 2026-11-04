@@ -1,17 +1,20 @@
-// Сайдбар (ui/index.html aside.sidebar): бренд, разделы со счётчиком вопросов, «Сейчас», Flow, Запуски.
-// Список flow — FlowList.tsx, список запусков — RunList.tsx. Свёрнутость секций, папок и проектов — fold.ts, ключи как в старом UI.
-import { useEffect, useState, type ReactNode } from 'react';
-import { Link, NavLink, useMatch, useNavigate } from 'react-router';
+// Сайдбар (ui/index.html aside.sidebar): бренд, разделы со счётчиком вопросов, «Сейчас», Flow, Запуски, Завершённые сессии.
+// Список flow — FlowList.tsx, список запусков — RunList.tsx, история сессий — SessionList.tsx. Свёрнутость секций, папок,
+// проектов и пространств — fold.ts, ключи как в старом UI. Строки всех списков — ссылки: Cmd+клик, Tab и Enter.
+// На узком экране (≤ 800 px) сайдбар выдвижной: открывает его кнопка «Меню» в Shell.tsx, закрывает × здесь.
+import { type ReactNode, type Ref } from 'react';
+import { Link, NavLink, useMatch } from 'react-router';
 import type { SessionView } from '@server/api-types';
 import { useFeature, useHome, useRuns } from '../../api';
-import { useSessions } from '../../api/sessions';
 import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
+import { useNow } from '../useNow';
 import { getLang, saveLang, t } from '../../lib/i18n';
 import { sessionSub } from '../../lib/sessions';
 import { RENAME_HOST, SessionName } from '../../screens/sessions/SessionName';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
+import { SessionList, SessionSectionActions, useAllSessions } from './SessionList';
 import { UpdateBadge } from './UpdateBadge';
 import styles from './Sidebar.module.css';
 
@@ -45,18 +48,16 @@ function Section({ title, secKey, className, extra, children }: { title: string;
 }
 
 /** «Сейчас»: идущие запуски, ждущие тебя — первыми. Данные — /api/home (как строки главной), без неё — статусы из списка запусков. */
-function LiveSection() {
+function LiveSection({ all }: { all: SessionView[] }) {
   const home = useHome();
   const runs = useRuns();
-  const navigate = useNavigate();
   const activeId = useMatch('/run/:id')?.params.id;
   const homeRuns = home.data?.runs ?? [];
   const src = !home.isError && homeRuns.length ? homeRuns : (runs.data ?? []).filter((r) => LIVE_STATUSES.includes(r.status));
   const rows = liveRows(src);
-  const sessions = useLiveSessions();
+  const sessions = all.filter((s) => s.live);
   if (!rows.length && !sessions.length) return null;
   const count = liveCount(rows);
-  const open = (id: string) => void navigate(`/run/${id}`);
   return (
     <Section
       title={t('Сейчас')}
@@ -69,19 +70,17 @@ function LiveSection() {
           <li
             key={row.r.id}
             className={[styles.lrun, styles[row.tone], row.r.id === activeId ? styles.active : ''].filter(Boolean).join(' ')}
-            tabIndex={0}
-            title={liveRowTitle(row)}
-            onClick={() => open(row.r.id)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && e.target === e.currentTarget) open(row.r.id);
-            }}
+            title={`${liveRowTitle(row)}${row.it ? `\n${t('Итерация идущего блока / лимит')}: ${row.it}` : ''}`}
           >
             <span className={styles.lrunDot} aria-hidden="true" />
             <span className={styles.lrunMain}>
-              <span className={styles.lrunTitle}>{row.r.title || row.r.flow}</span>
+              <Link className={`${styles.lrunTitle} ${styles.rowLink}`} to={`/run/${row.r.id}`} aria-current={row.r.id === activeId ? 'page' : undefined}>
+                {row.r.title || row.r.flow}
+              </Link>
               <span className={styles.lrunSub}>{row.sub}</span>
             </span>
-            {row.it && <span className={styles.lrunIt} title={t('Итерация идущего блока / лимит')}>{row.it}</span>}
+            {/* подсказка «2/5» — в подсказке строки: ссылка строки лежит поверх */}
+            {row.it && <span className={styles.lrunIt}>{row.it}</span>}
           </li>
         ))}
       </ul>
@@ -90,55 +89,33 @@ function LiveSection() {
   );
 }
 
-/** Живые сессии терминала (фича sessions). */
-function useLiveSessions(): SessionView[] {
-  const on = useFeature('sessions');
-  return (useSessions(on).data?.sessions ?? []).filter((s) => s.live);
-}
-
 /**
  * Живые сессии терминала в «Сейчас» — под запусками и не в счётчике «ждут»: сессия в простое ждёт человека всегда,
  * и счётчик горел бы без конца. Точка: работает — синяя с ореолом, ждёт тебя — янтарная, запускается — серая.
  */
 function LiveSessions({ sessions }: { sessions: SessionView[] }) {
-  const navigate = useNavigate();
   const activeId = useMatch('/sessions/:id')?.params.id;
   // «5 мин назад» во второй строке: у ждущей сессии данные не меняются — перерисовка раз в 30 секунд
-  useTick(30_000);
+  const now = new Date(useNow(30_000));
   if (!sessions.length) return null;
-  const open = (id: string) => void navigate(`/sessions/${id}`);
   return (
     <ul className={`${styles.sideBody} ${styles.liveList}`} aria-label={t('Сессии терминала')}>
       {sessions.map((s) => (
         <li
           key={s.id}
           className={[styles.lrun, s.status === 'waiting' ? styles.wait : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : '', RENAME_HOST].filter(Boolean).join(' ')}
-          tabIndex={0}
-          title={`${s.name}\n${sessionSub(s)}`}
-          onClick={() => open(s.id)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && e.target === e.currentTarget) open(s.id);
-          }}
         >
           <span className={styles.lrunDot} aria-hidden="true" />
           <span className={styles.lrunMain}>
-            <SessionName s={s} textClassName={styles.lrunTitle} onOpen={() => open(s.id)} />
-            <span className={styles.lrunSub}>{sessionSub(s)}</span>
+            {/* имя — ссылка на всю строку; одиночный клик открывает после паузы на двойной (двойной — переименовать) */}
+            <SessionName s={s} to={`/sessions/${s.id}`} textClassName={`${styles.lrunTitle} ${styles.rowLink}`} title={`${s.name}\n${sessionSub(s, now)}\n${t('Сессия Claude Code в терминале')}`} />
+            <span className={styles.lrunSub}>{sessionSub(s, now)}</span>
           </span>
-          <span className={styles.lrunIt} title={t('Сессия Claude Code в терминале')}>›_</span>
+          <span className={styles.lrunIt} aria-hidden="true">›_</span>
         </li>
       ))}
     </ul>
   );
-}
-
-/** Перерисовка компонента раз в ms: относительное время («5 мин назад») идёт, даже когда данные не меняются. */
-function useTick(ms: number): void {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), ms);
-    return () => clearInterval(id);
-  }, [ms]);
 }
 
 /** Переключатель языка: запоминает выбор и перезагружает страницу — тексты берутся при загрузке. */
@@ -159,23 +136,42 @@ function LangSwitch() {
   );
 }
 
-export function Sidebar() {
+type SidebarProps = {
+  id?: string;
+  /** Класс выдвижного сайдбара на узком экране (Shell.module.css). */
+  className?: string;
+  /** Выдвижной сайдбар открыт: сам берёт фокус (tabindex только на это время — иначе клик по пустому месту уводил бы фокус с body). */
+  drawerOpen?: boolean;
+  /** Закрыть выдвижной сайдбар: кнопка × видна только на узком экране. */
+  onClose?: () => void;
+  ref?: Ref<HTMLElement>;
+};
+
+export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: SidebarProps) {
   const spaces = useFeature('spaces');
   const tags = useFeature('tags');
   const context = useFeature('context');
   const sessions = useFeature('sessions');
   const questions = inboxCount(useHome().data?.runs ?? []);
+  const allSessions = useAllSessions();
+  const ended = allSessions.filter((s) => !s.live);
   return (
-    <aside className={styles.sidebar}>
+    <aside id={id} ref={ref} tabIndex={drawerOpen ? -1 : undefined} className={[styles.sidebar, className].filter(Boolean).join(' ')} aria-label={t('Боковая панель')}>
       <div className={styles.brandRow}>
         <Link to="/" className={styles.brand} title={t('Главная: вопросы агентов и идущие запуски')}>AgentGraph</Link>
         <span className={styles.brandTools}>
           <UpdateBadge />
           <LangSwitch />
+          {onClose && (
+            <button type="button" className={`btn small ghost ${styles.sideClose}`} aria-label={t('Закрыть меню')} title={t('Закрыть меню (Esc)')} onClick={onClose}>
+              ×
+            </button>
+          )}
         </span>
       </div>
       {/* разделы — компактной сеткой в две колонки (работа: главная, пространства, сессии; справка: знания, контекст), по
           колонкам: счётчик вопросов не переносит пункты, а главное в сайдбаре — запуски и flow */}
+      <nav className={styles.sideNavWrap} aria-label={t('Разделы')}>
       <ul className={styles.sideNav}>
         <li className={styles.navWork}>
           <NavLink to="/" end title={t('Вопросы агентов и идущие запуски')}>
@@ -196,13 +192,20 @@ export function Sidebar() {
           <li className={styles.navRef}><NavLink to="/context" title={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')}>{t('Контекст')}</NavLink></li>
         )}
       </ul>
-      <LiveSection />
+      </nav>
+      <LiveSection all={allSessions} />
       <Section title="Flow" secKey="sec:flows" className={styles.secFlows} extra={<FlowSectionActions />}>
         <FlowList />
       </Section>
       <Section title={t('Запуски')} secKey="sec:runs" className={styles.secRuns} extra={<RunSectionActions />}>
         <RunList />
       </Section>
+      {/* живые сессии — в «Сейчас», здесь — завершённые, группами по пространству */}
+      {sessions && ended.length > 0 && (
+        <Section title={t('Завершённые сессии')} secKey="sec:sessions" className={styles.secSessions} extra={<SessionSectionActions sessions={ended} />}>
+          <SessionList sessions={ended} />
+        </Section>
+      )}
     </aside>
   );
 }
