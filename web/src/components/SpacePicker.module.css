@@ -1,0 +1,16 @@
+/* Выбор пространства (SpacePicker.tsx, system.md → Space picker): поле как остальные поля формы, список — поп-ап под ним. */
+.picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.label { flex: none; }
+.box { position: relative; }
+.input { width: 100%; box-sizing: border-box; }
+.input.with-slug { padding-right: 140px; }
+.slug { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); pointer-events: none; }
+.list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; margin: 0; padding: 4px; list-style: none; max-height: calc(8 * 44px); overflow-y: auto; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
+.opt { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer; }
+.opt.active { background: var(--select); }
+.title { font-size: var(--fs-small); font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta:empty { display: none; }
+.extra .title { font-weight: 400; color: var(--ink-2); }
+.compact { min-width: 220px; }
+.compact .input { font-size: var(--fs-meta); padding: 2px 8px; }

@@ -158,7 +158,6 @@ export type MoreSumInput = {
 /** Заголовок свёрнутого «Дополнительно»: что там задано не по умолчанию, чтобы скрытое не забылось. */
 export function runMoreSum(f: MoreSumInput): { text: string; set: boolean } {
   const parts: string[] = [];
-  if (f.space.trim()) parts.push(`◇ ${f.space.trim()}`);
   if (f.tags.length) parts.push(f.tags.map((tag) => `#${tag}`).join(' '));
   if (f.attach) parts.push(`${f.attach} ${plural(f.attach, 'файл', 'файла', 'файлов')}`);
   const dirs = f.addDirs.split('\n').filter((x) => x.trim()).length;
@@ -167,7 +166,7 @@ export function runMoreSum(f: MoreSumInput): { text: string; set: boolean } {
   if (f.maxIterations && f.maxIterations !== String(f.flowMaxIterations ?? '')) parts.push(t('до {n}', { n: iterTo(Number(f.maxIterations)) }));
   if (f.budget) parts.push(t('до {n}', { n: `$${f.budget}` }));
   if (f.modelLabel) parts.push(f.modelLabel);
-  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('пространство, знания, вложения, директории, worktree, лимиты, модель'), set: false };
+  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('знания, вложения, директории, worktree, лимиты, модель'), set: false };
 }
 
 export type RunBodyInput = {

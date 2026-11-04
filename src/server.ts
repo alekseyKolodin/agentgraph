@@ -1942,7 +1942,7 @@ function spaceRuns(slug: string, migratedAt?: string): SpaceRun[] {
       startedAt: r.startedAt,
       ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
       input: r.input,
-      ...(r.cwd ? { cwd: r.cwd } : {}),
+      ...(r.cwd && !r.worktree ? { cwd: r.cwd } : {}),
       ...(migratedAt && r.startedAt < migratedAt ? { legacy: true as const } : {}),
     }) satisfies SpaceRun);
 }

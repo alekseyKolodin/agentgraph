@@ -10,9 +10,9 @@ const enc = encodeURIComponent;
 
 export const fetchSpaces = () => api<{ spaces: SpaceListItem[] }>('GET', '/api/spaces');
 export const fetchSpace = (slug: string) => api<SpaceDetail>('GET', `/api/spaces/${enc(slug)}`);
-export const createSpace = (body: { slug: string; title?: string; gist?: string; dirs?: string[] }) => api<Space>('POST', '/api/spaces', body);
+export const createSpace = (body: { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string }) => api<Space>('POST', '/api/spaces', body);
 /** mapBase и stateBase — mtimeMs файла, с которого начали правку (0 — файла не было): изменили снаружи — 409. */
-export const saveSpace = (slug: string, patch: { title?: string; map?: string; state?: string; dirs?: string[]; mapBase?: number; stateBase?: number }) =>
+export const saveSpace = (slug: string, patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number }) =>
   api<Space>('PUT', `/api/spaces/${enc(slug)}`, patch);
 export const deleteSpace = (slug: string) => api<{ ok: true }>('DELETE', `/api/spaces/${enc(slug)}`);
 export const fetchSpaceContext = (slug: string) => api<SpaceContextView>('GET', `/api/spaces/${enc(slug)}/context`);

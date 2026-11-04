@@ -1,19 +1,21 @@
 // Форма запуска на вкладке «Запуск» (ui/app.js renderFlow, startRun, wireAttachments, wireRecentDirs, wireRunTag,
-// renderRunMoreSum, renderConnWarn; ui/dash.js renderRunLink, prepareWorktree, toFlow): задача, директория проекта и недавние
-// папки, «Дополнительно» (теги, вложения, доп. директории, worktree, лимиты, модель), «Запустить» в липкой панели.
+// renderRunMoreSum, renderConnWarn; ui/dash.js renderRunLink, prepareWorktree, toFlow): пространство (первым: его рабочая
+// папка подставляется в директорию проекта с подписью «из пространства»), директория проекта и недавние папки, задача,
+// «Дополнительно» (теги знаний, вложения, доп. директории, worktree, лимиты, модель), «Запустить» в липкой панели.
 // Вход из «Запустить…» с главной приходит в location.state.intake; черновик разового запуска уходит со spec из конструктора.
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Intake } from '@server/api-types';
 import {
-  ApiError, errorText, fetchSpaceContext, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useSpaces,
-  useTags,
+  ApiError, errorText, fetchSpaceContext, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useRuns,
+  useSpaces, useTags,
 } from '../../api';
+import { useSessions } from '../../api/sessions';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
-import { SpaceField } from '../../components/SpaceField';
+import { SpacePicker } from '../../components/SpacePicker';
 import { TagInput } from '../../components/TagInput';
 import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
@@ -25,6 +27,7 @@ import {
   recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
   worktreeRequest, type RunLink,
 } from '../../lib/run-form';
+import { lastWork, spaceWorkdir, workdirNote } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
 import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm } from './formStore';
@@ -62,6 +65,10 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const recent = recentChips(useRecentDirs(can.recent).data ?? []);
   const tagList = useTags(can.tags).data?.tags ?? [];
   const spaceList = useSpaces(can.spaces).data?.spaces ?? [];
+  const sessionList = useSessions(useFeature('sessions')).data?.sessions;
+  const runList = useRuns().data;
+  // где пространства работали последними: их папку подставит выбор пространства, если у него нет своей рабочей
+  const work = useMemo(() => lastWork(sessionList ?? [], runList ?? []), [sessionList, runList]);
   // что пространство даст этапам — тот же текст, что сервер допишет в конец промптов
   const spaceSlug = f.space.trim();
   const spaceKnown = spaceList.some((s) => s.slug === spaceSlug);
@@ -137,9 +144,19 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     if (l?.worktree) showLink({ ...l, worktree: undefined });
   };
   const pickCwd = (path: string) => {
-    setForm({ cwd: path });
+    setForm({ cwd: path, cwdFrom: '' });
     cwdChanged();
   };
+  /** Выбор пространства подставляет его рабочую папку (или папку последней работы в нём); нет такой — директория как была. */
+  const pickSpace = (slug: string) => {
+    setForm({ space: slug });
+    const wd = spaceWorkdir(slug, spaceList, work);
+    if (!wd || wd.path === runForm.cwd) return setForm(wd ? { cwdFrom: slug } : {});
+    setForm({ cwd: wd.path, cwdFrom: slug });
+    cwdChanged();
+  };
+  const workdir = spaceWorkdir(f.space, spaceList, work);
+  const cwdNote = f.cwdFrom && f.cwdFrom === f.space.trim() && workdir && workdir.path === f.cwd.trim() ? workdirNote(spaceList.find((x) => x.slug === f.cwdFrom), f.cwdFrom, workdir) : '';
 
   // ---------- вложения
   const readAttachments = async (files: File[]) => {
@@ -356,6 +373,61 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         addAttachments([...e.dataTransfer.files]);
       }}
     >
+      {can.spaces && (
+        <div className={styles.runTag}>
+          <SpacePicker id="run-space" value={f.space} onChange={pickSpace} options={spaceList} work={work} />
+          {spaceKnown && spaceCtx.data && (
+            <div className={styles.runTagContext} title={t('Что сервер допишет в конец промпта каждого этапа; карта пространства придёт памятью. Поле «Задача» остаётся только задачей')}>
+              <details>
+                <summary><SpaceBadge slug={spaceSlug} />{' '}<span className="muted small">{t('в конец промптов этапов · карта — памятью')}</span></summary>
+                <pre className={styles.tagContextText}>{spaceCtx.data.phase}</pre>
+              </details>
+            </div>
+          )}
+          {spaceSlug ? (
+            <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
+              <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
+              <span>{t('Обновить состояние пространства после запуска')}</span>
+            </label>
+          ) : can.autoSpace && (
+            <label className={styles.inlineCheck} title={t('ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…), после «готово» запишет его состояние. Существующие не переиспользуются: чтобы продолжить фичу, выбери её пространство в поле выше')}>
+              <input
+                type="checkbox"
+                name="autoSpace"
+                checked={f.autoSpace}
+                onChange={(e) => {
+                  LS.setRaw('agentgraph.autoSpace', e.target.checked ? '1' : '0');
+                  setForm({ autoSpace: e.target.checked });
+                }}
+              />
+              <span>{t('Завести пространство автоматически')}</span>
+            </label>
+          )}
+        </div>
+      )}
+      <label>
+        <span>{t('Директория проекта')}</span>
+        <div className="path-field">
+          <input
+            name="cwd"
+            placeholder="/path/to/repo"
+            value={f.cwd}
+            onChange={(e) => setForm({ cwd: e.target.value, cwdFrom: '' })}
+            onFocus={(e) => (cwdAtFocus.current = e.target.value)}
+            onBlur={(e) => {
+              if (e.target.value !== cwdAtFocus.current) cwdChanged();
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' || e.currentTarget.value === cwdAtFocus.current) return;
+              cwdAtFocus.current = e.currentTarget.value;
+              cwdChanged();
+            }}
+          />
+          <PickDirButton prompt={t('Выбери директорию проекта')} start={() => runForm.cwd} onPick={pickCwd} />
+        </div>
+      </label>
+      {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
+      {recentRow(pickCwd)}
       <label>
         <span title={t('Подставится в {{input}}')}>{t('Задача')}</span>
         <textarea
@@ -387,28 +459,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           <button type="button" className="btn small ghost" title={t('Запуск не будет привязан к источнику (текст задачи останется)')} onClick={unlink}>{t('Отвязать')}</button>
         </div>
       )}
-      <label>
-        <span>{t('Директория проекта')}</span>
-        <div className="path-field">
-          <input
-            name="cwd"
-            placeholder="/path/to/repo"
-            value={f.cwd}
-            onChange={(e) => setForm({ cwd: e.target.value })}
-            onFocus={(e) => (cwdAtFocus.current = e.target.value)}
-            onBlur={(e) => {
-              if (e.target.value !== cwdAtFocus.current) cwdChanged();
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' || e.currentTarget.value === cwdAtFocus.current) return;
-              cwdAtFocus.current = e.currentTarget.value;
-              cwdChanged();
-            }}
-          />
-          <PickDirButton prompt={t('Выбери директорию проекта')} start={() => runForm.cwd} onPick={pickCwd} />
-        </div>
-      </label>
-      {recentRow(pickCwd)}
       <details className={styles.runMore} open={f.more} onToggle={(e) => e.currentTarget.open !== runForm.more && setMore(e.currentTarget.open)}>
         <summary>
           <span className="caret">{ICON.caret}</span>
@@ -416,38 +466,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           <span className={cx(styles.runMoreSum, sum.set && styles.set)}>{sum.text}</span>
         </summary>
         <div className={styles.runMoreBody}>
-          {can.spaces && (
-            <div className={styles.runTag}>
-              <SpaceField listId="run-space-list" value={f.space} onChange={(space) => setForm({ space })} options={spaceList} />
-              {spaceKnown && spaceCtx.data && (
-                <div className={styles.runTagContext} title={t('Что сервер допишет в конец промпта каждого этапа; карта пространства придёт памятью. Поле «Задача» остаётся только задачей')}>
-                  <details>
-                    <summary><SpaceBadge slug={spaceSlug} />{' '}<span className="muted small">{t('в конец промптов этапов · карта — памятью')}</span></summary>
-                    <pre className={styles.tagContextText}>{spaceCtx.data.phase}</pre>
-                  </details>
-                </div>
-              )}
-              {spaceSlug ? (
-                <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
-                  <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
-                  <span>{t('Обновить состояние пространства после запуска')}</span>
-                </label>
-              ) : can.autoSpace && (
-                <label className={styles.inlineCheck} title={t('ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…), после «готово» запишет его состояние. Существующие не переиспользуются: чтобы продолжить фичу, выбери её пространство в поле выше')}>
-                  <input
-                    type="checkbox"
-                    name="autoSpace"
-                    checked={f.autoSpace}
-                    onChange={(e) => {
-                      LS.setRaw('agentgraph.autoSpace', e.target.checked ? '1' : '0');
-                      setForm({ autoSpace: e.target.checked });
-                    }}
-                  />
-                  <span>{t('Завести пространство автоматически')}</span>
-                </label>
-              )}
-            </div>
-          )}
           {can.tags && (
             <div className={styles.runTag}>
               <TagInput

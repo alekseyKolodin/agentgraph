@@ -1,6 +1,6 @@
 // Страница «Пространства» и выбор пространства в формах без React и DOM: поиск, подписи, снимок формы и патч,
 // документы, история обновлений состояния, сессии и запуски пространства.
-import type { Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate } from '@server/api-types';
+import type { RunSummary, SessionView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate } from '@server/api-types';
 import { plural, when } from './format';
 import { t } from './i18n';
 import { searchWords, textMatches } from './search';
@@ -43,6 +43,69 @@ export function spaceFieldNote(value: string, options: SpaceListItem[]): { text:
   if (!s) return { text: t('{slug}: новое пространство — заведётся пустым, карту заполнишь на его странице', { slug }), tone: '' };
   const what = [s.hasMap ? t('карта — памятью') : t('карты нет'), s.docs ? t('документов: {n}', { n: s.docs }) : '', s.hasState ? t('состояние — в контексте') : t('состояния ещё нет')];
   return { text: `${spaceLabel(s)}: ${what.filter(Boolean).join(' · ')}`, tone: '' };
+}
+
+// ---------- выбор пространства в формах: рабочая папка и порядок «свежие сверху»
+
+/** Последняя работа в пространстве: папка и время сессии или запуска. */
+export type SpaceWork = { path: string; at: string; from: 'session' | 'run' };
+
+/**
+ * Последняя работа в каждом пространстве — по сессиям (время последней активности) и запускам (время старта). Запуски в
+ * worktree пропускаются (папка временная), дочерние запуски блоков-вызовов — тоже (их папку задал родитель).
+ */
+export function lastWork(
+  sessions: Pick<SessionView, 'space' | 'cwd' | 'lastActivityAt'>[],
+  runs: Pick<RunSummary, 'space' | 'cwd' | 'startedAt' | 'worktree' | 'parent'>[],
+): Map<string, SpaceWork> {
+  const out = new Map<string, SpaceWork>();
+  const add = (slug: string | undefined, path: string | undefined, at: string, from: SpaceWork['from']) => {
+    if (!slug || !path || !at) return;
+    const prev = out.get(slug);
+    if (!prev || prev.at < at) out.set(slug, { path, at, from });
+  };
+  for (const s of sessions) add(s.space, s.cwd, s.lastActivityAt, 'session');
+  for (const r of runs) if (!r.worktree && !r.parent) add(r.space, r.cwd, r.startedAt, 'run');
+  return out;
+}
+
+/** Откуда рабочая папка: задана у пространства, папка последней сессии или последнего запуска в нём. */
+export type SpaceWorkdir = { path: string; from: 'space' | 'session' | 'run' };
+
+/** Рабочая папка пространства для формы: заданная у пространства, иначе папка последней работы в нём; нет — undefined. */
+export function spaceWorkdir(slug: string, options: Pick<SpaceListItem, 'slug' | 'cwd'>[], work: Map<string, SpaceWork>): SpaceWorkdir | undefined {
+  const s = slug.trim();
+  if (!s) return undefined;
+  const own = options.find((o) => o.slug === s)?.cwd;
+  if (own) return { path: own, from: 'space' };
+  const w = work.get(s);
+  return w ? { path: w.path, from: w.from } : undefined;
+}
+
+/** Подпись под полем папки, когда её подставило пространство. */
+export function workdirNote(space: Pick<SpaceListItem, 'slug' | 'title'> | undefined, slug: string, wd: SpaceWorkdir): string {
+  const name = space ? spaceLabel(space) : slug;
+  if (wd.from === 'space') return t('из пространства «{name}»: его рабочая папка', { name });
+  return wd.from === 'session' ? t('из пространства «{name}»: папка его последней сессии', { name }) : t('из пространства «{name}»: папка его последнего запуска', { name });
+}
+
+/** Строка списка выбора пространства. */
+export type PickerRow = { kind: 'space'; s: SpaceListItem; at: string } | { kind: 'none' } | { kind: 'new'; slug: string };
+
+/**
+ * Строки выбора пространства: по запросу (слаг, заголовок, начало состояния), свежие сверху — по последней работе в
+ * пространстве или его обновлению; внизу «без пространства» и, если вписан новый верный слаг, «+ новое пространство».
+ */
+export function pickerRows(query: string, options: SpaceListItem[], work: Map<string, SpaceWork>): PickerRow[] {
+  const at = (s: SpaceListItem) => {
+    const w = work.get(s.slug)?.at ?? '';
+    return w > s.updatedAt ? w : s.updatedAt;
+  };
+  const shown = filterSpaces(options, query).shown.map((s) => ({ kind: 'space' as const, s, at: at(s) }));
+  shown.sort((a, b) => b.at.localeCompare(a.at));
+  const q = query.trim();
+  const fresh = SPACE_SLUG_RE.test(q) && !options.some((o) => o.slug === q);
+  return [...shown, { kind: 'none' }, ...(fresh ? [{ kind: 'new' as const, slug: q }] : [])];
 }
 
 export const spacesNoneText = (total: number): string => (total ? t('Ничего не нашлось') : t('Пространств пока нет — заведи первое выше'));
@@ -90,18 +153,19 @@ export function itemsCount(sessions: number, runs: number): string {
 
 // ---------- форма пространства: карта, состояние, заголовок, папки
 
-export type SpaceForm = { title: string; map: string; state: string; dirs: string };
+/** cwd — рабочая папка пространства (её подставят формы сессии и запуска); пусто — папка последней работы. */
+export type SpaceForm = { title: string; map: string; state: string; dirs: string; cwd: string };
 export type SpaceField = 'map' | 'state' | 'dirs';
 
-export const spaceFormOf = (s: Space): SpaceForm => ({ title: s.title || '', map: s.map, state: s.state, dirs: (s.dirs || []).join('\n') });
+export const spaceFormOf = (s: Space): SpaceForm => ({ title: s.title || '', map: s.map, state: s.state, dirs: (s.dirs || []).join('\n'), cwd: s.cwd || '' });
 
 /** Снимок полей формы: по нему — «есть несохранённое». Перевод строки в конце карты и состояния не считается правкой. */
-export const spaceSnapshot = (f: SpaceForm): string => JSON.stringify([f.title.trim(), f.map.trimEnd(), f.state.trim(), dirLines(f.dirs).join('\n')]);
+export const spaceSnapshot = (f: SpaceForm): string => JSON.stringify([f.title.trim(), f.map.trimEnd(), f.state.trim(), dirLines(f.dirs).join('\n'), f.cwd.trim()]);
 
 /** Строки поля «Папки»: без пробелов по краям и пустых. */
 export const dirLines = (text: string): string[] => text.split('\n').map((x) => x.trim()).filter(Boolean);
 
-export type SpacePatch = { title?: string; map?: string; state?: string; dirs?: string[]; mapBase?: number; stateBase?: number };
+export type SpacePatch = { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number };
 
 /**
  * Только изменённые поля, с базой: пока страница открыта, сессия состояния могла переписать STATE.md — сервер ответит
@@ -114,15 +178,22 @@ export function spacePatch(f: SpaceForm, s: Space): SpacePatch {
     ...(f.map.trimEnd() !== s.map.trimEnd() ? { map: f.map, mapBase: s.mapMtimeMs ?? 0 } : {}),
     ...(f.state.trim() !== s.state.trim() ? { state: f.state, stateBase: s.stateMtimeMs ?? 0 } : {}),
     ...(dirs.join('\n') !== (s.dirs || []).join('\n') ? { dirs } : {}),
+    ...(f.cwd.trim() !== (s.cwd || '') ? { cwd: f.cwd.trim() } : {}),
   };
 }
 
 /** Тело POST /api/spaces; пустой слаг — null (форма не уходит). */
-export function newSpaceBody(slug: string, title: string, gist: string, dirs: string): { slug: string; title?: string; gist?: string; dirs?: string[] } | null {
+export function newSpaceBody(
+  slug: string,
+  title: string,
+  gist: string,
+  dirs: string,
+  cwd = '',
+): { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string } | null {
   const s = slug.trim();
   if (!s) return null;
   const list = dirLines(dirs);
-  return { slug: s, ...(title.trim() ? { title: title.trim() } : {}), ...(gist.trim() ? { gist: gist.trim() } : {}), ...(list.length ? { dirs: list } : {}) };
+  return { slug: s, ...(title.trim() ? { title: title.trim() } : {}), ...(gist.trim() ? { gist: gist.trim() } : {}), ...(list.length ? { dirs: list } : {}), ...(cwd.trim() ? { cwd: cwd.trim() } : {}) };
 }
 
 /** Счётчик под редактором: строк и знаков. */

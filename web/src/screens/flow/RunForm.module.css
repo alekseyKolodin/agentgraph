@@ -44,3 +44,5 @@
 .run-link select, .run-link .wt-branch { padding: 5px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
 .run-link .wt-branch { flex: 1; min-width: 180px; width: auto; }
 .run-source a { color: var(--live); text-decoration: none; }
+/* «из пространства …» под директорией проекта: её подставило выбранное пространство */
+.cwd-from { margin-top: -6px; }

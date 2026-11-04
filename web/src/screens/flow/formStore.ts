@@ -20,6 +20,8 @@ export type RunFormState = {
   more: boolean;
   /** Пространство (слаг): выбранное или вписанное новое; пусто — без пространства. */
   space: string;
+  /** Слаг пространства, которое подставило директорию проекта; правка директории руками — ''. */
+  cwdFrom: string;
   saveState: boolean;
   /** «Завести пространство автоматически»: запоминается (agentgraph.autoSpace). */
   autoSpace: boolean;
@@ -50,7 +52,7 @@ export type RunFormState = {
 };
 
 export const runForm: RunFormState = {
-  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', saveState: true, autoSpace: false,
+  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', cwdFrom: '', saveState: true, autoSpace: false,
   tagText: '', tags: [], tagInfo: new Map(), tagMsg: NO_MSG, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
   msg: NO_MSG, busy: false, formSeq: -1, extrasSeq: -1, tagSeq: 0, intakeKey: '', focusSeq: 0,
 };
@@ -99,6 +101,7 @@ export function resetForm(summary: FlowSummary | undefined, defaultCwd: string, 
     model: LS.raw('agentgraph.model') || '',
     modelBase: LS.raw('agentgraph.model') || '',
     space: '',
+    cwdFrom: '',
     saveState: true,
     // автопространство запоминается, как бюджет и модель; по умолчанию выключено: иначе пространство заводилось бы молча
     autoSpace: autoSpaceSaved(),

@@ -2,6 +2,22 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
+  'без пространства — выбери или впиши новый слаг': 'no space — pick one or type a new slug',
+  'Без пространства': 'No space',
+  '+ Новое пространство «{slug}»': '+ New space “{slug}”',
+  'знания, вложения, директории, worktree, лимиты, модель': 'knowledge, attachments, directories, worktree, limits, model',
+  'из пространства «{name}»: его рабочая папка': 'from space “{name}”: its working folder',
+  'из пространства «{name}»: папка его последней сессии': 'from space “{name}”: the folder of its latest session',
+  'из пространства «{name}»: папка его последнего запуска': 'from space “{name}”: the folder of its latest run',
+  'Пространство {slug} уже есть: открой его в списке': 'Space {slug} already exists: open it in the list',
+  'Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Можно не задавать — тогда подставится папка последней сессии или запуска в нём': 'Where the work happens: the session and run forms fill it in when the space is picked. Optional — without it they use the folder of the latest session or run in the space',
+  'Рабочая папка': 'Working folder',
+  'Рабочая папка пространства': 'Working folder of the space',
+  'Папка: {path}': 'Folder: {path}',
+  'Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Пусто — папка последней сессии или запуска в нём': 'Where the work happens: the session and run forms fill it in when the space is picked. Empty — the folder of the latest session or run in the space',
+  'Формы сессии и запуска подставят её при выборе пространства': 'The session and run forms fill it in when the space is picked',
+  'Не задана: формы подставят папку последней работы — {path}': 'Not set: the forms use the folder of the latest work — {path}',
+  'Не задана, работы в пространстве ещё не было: формы оставят свою папку': 'Not set, and there was no work in the space yet: the forms keep their own folder',
   'запись в папку пространства': 'a write to a space folder',
   'запись в папку тегов знаний': 'a write to the knowledge tags folder',
   // сайдбар и бейджи

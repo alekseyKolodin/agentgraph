@@ -21,7 +21,7 @@ import { feedTime } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import {
-  dirLines, docLine, fieldCount, filterSpaces, itemsCount, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText,
+  dirLines, docLine, fieldCount, filterSpaces, itemsCount, lastWork, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText, spaceWorkdir,
   spaceFormOf, spaceItems, spaceLabel, spaceMetaLine, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, stateByText, type SpaceForm,
 } from '../../lib/spaces';
 import styles from './Spaces.module.css';
@@ -30,9 +30,9 @@ const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boole
 
 type Msg = { cls: string; text: string };
 const NO_MSG: Msg = { cls: 'msg', text: '' };
-const EMPTY_FORM: SpaceForm = { title: '', map: '', state: '', dirs: '' };
-type NewSpace = { open: boolean; slug: string; title: string; gist: string; dirs: string };
-const NEW_CLOSED: NewSpace = { open: false, slug: '', title: '', gist: '', dirs: '' };
+const EMPTY_FORM: SpaceForm = { title: '', map: '', state: '', dirs: '', cwd: '' };
+type NewSpace = { open: boolean; slug: string; title: string; gist: string; dirs: string; cwd?: string };
+const NEW_CLOSED: NewSpace = { open: false, slug: '', title: '', gist: '', dirs: '', cwd: '' };
 type Tab = 'map' | 'state' | 'docs' | 'context' | 'settings';
 const TABS: [Tab, string][] = [['map', t('Карта')], ['state', t('Состояние')], ['docs', t('Документы')], ['context', t('Контекст')], ['settings', t('Настройки')]];
 
@@ -158,9 +158,11 @@ export function SpacesScreen() {
   const create = async (ev: FormEvent) => {
     ev.preventDefault();
     setNewMsg(NO_MSG);
-    const body = newSpaceBody(ns.slug, ns.title, ns.gist, ns.dirs);
+    const body = newSpaceBody(ns.slug, ns.title, ns.gist, ns.dirs, ns.cwd ?? '');
     if (!body) return;
     if (!SPACE_SLUG_RE.test(body.slug)) return setNewMsg({ cls: 'msg err', text: t('Слаг пространства: строчные латинские буквы, цифры и дефис') });
+    // занятый слаг: суть и папки молча не пропадут — сервер ответит 409, а здесь скажем сразу
+    if (list.some((x) => x.slug === body.slug)) return setNewMsg({ cls: 'msg err', text: t('Пространство {slug} уже есть: открой его в списке', { slug: body.slug }) });
     try {
       await createSpace(body);
       setNewOpen(false);
@@ -261,6 +263,13 @@ export function SpacesScreen() {
               <span title={t('Одна строка в начале карты: что за фича и зачем. Карту дополнишь после создания')}>{t('Суть')}</span>
               <input name="gist" placeholder={t('Пуш о тревоге на Android и iOS, бэкенд отправки')} autoComplete="off" value={ns.gist} onChange={(e) => setNs((v) => ({ ...v, gist: e.target.value }))} />
             </label>
+            <label>
+              <span title={t('Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Можно не задавать — тогда подставится папка последней сессии или запуска в нём')}>{t('Рабочая папка')}</span>
+              <div className="path-field">
+                <input name="cwd" placeholder="/Users/me/code/android" autoComplete="off" spellCheck={false} value={ns.cwd ?? ''} onChange={(e) => setNs((v) => ({ ...v, cwd: e.target.value }))} />
+                <PickDirButton prompt={t('Рабочая папка пространства')} start={() => ns.cwd ?? ''} onPick={(p) => setNs((v) => ({ ...v, cwd: p }))} />
+              </div>
+            </label>
             <div className={styles.dirs}>
               <label htmlFor="space-new-dirs" className="field-label" title={t('Репозитории и папки фичи, по одному на строку: сессии и этапы получат их на чтение, а карта — список «Где что»')}>{t('Папки')}</label>
               <PickDirButton
@@ -351,6 +360,12 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
   const toast = useToast();
   const items = spaceItems(s.sessions, s.runs);
   const mapLong = form.map.length > SPACE_MAP_WARN;
+  // папка «Новой сессии»: рабочая папка пространства, иначе папка его последней сессии или запуска
+  const workdir = spaceWorkdir(
+    s.slug,
+    [{ slug: s.slug, cwd: s.cwd }],
+    lastWork(s.sessions.map((x) => ({ space: s.slug, cwd: x.cwd, lastActivityAt: x.lastActivityAt })), s.runs.map((r) => ({ space: s.slug, cwd: r.cwd, startedAt: r.startedAt }))),
+  );
   return (
     <div className={styles.editorGrid}>
       <section className={cx('panel', styles.editor)}>
@@ -380,7 +395,11 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
             <span className="row push">
               {sessionsOn && (
                 <>
-                  <Link className="btn small" to={`/sessions?space=${encodeURIComponent(s.slug)}`} title={t('Новая сессия Claude Code в терминале в этом пространстве: карта — памятью, состояние и документы — в контексте')}>{t('Новая сессия')}</Link>
+                  <Link
+                    className="btn small"
+                    to={`/sessions?space=${encodeURIComponent(s.slug)}${workdir ? `&cwd=${encodeURIComponent(workdir.path)}` : ''}`}
+                    title={t('Новая сессия Claude Code в терминале в этом пространстве: карта — памятью, состояние и документы — в контексте') + (workdir ? `\n${t('Папка: {path}', { path: workdir.path })}` : '')}
+                  >{t('Новая сессия')}</Link>
                   <Link className="btn small ghost" to={`/sessions?space=${encodeURIComponent(s.slug)}&cwd=${encodeURIComponent(s.dir)}`} title={t('Сессия в самой папке пространства: Claude правит карту и документы как обычный проект, ты подтверждаешь правки')}>{t('Сессия в папке')}</Link>
                 </>
               )}
@@ -431,6 +450,14 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
           {tab === 'settings' && (
             <div className={styles.tabBody}>
               <label><span>{t('Заголовок')}</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
+              <label>
+                <span title={t('Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Пусто — папка последней сессии или запуска в нём')}>{t('Рабочая папка')}</span>
+                <div className="path-field">
+                  <input name="cwd" autoComplete="off" spellCheck={false} placeholder={workdir && workdir.from !== 'space' ? workdir.path : '/Users/me/code/android'} value={form.cwd} onChange={(e) => edit('cwd', e.target.value)} />
+                  <PickDirButton prompt={t('Рабочая папка пространства')} start={() => form.cwd} onPick={(p) => edit('cwd', p)} />
+                </div>
+                <span className="muted small">{form.cwd.trim() ? t('Формы сессии и запуска подставят её при выборе пространства') : workdir ? t('Не задана: формы подставят папку последней работы — {path}', { path: tildePath(workdir.path, home) }) : t('Не задана, работы в пространстве ещё не было: формы оставят свою папку')}</span>
+              </label>
               <div className={styles.dirs}>
                 <label htmlFor="space-dirs" className="field-label" title={t('Абсолютные пути к папкам или файлам, по одному на строку: сессии и этапы пространства получат их на чтение (--add-dir с запретом записи; в запуске — доп. директориями). Несуществующие пропускаются')}>{t('Папки (только чтение)')}</label>
                 <PickDirButton

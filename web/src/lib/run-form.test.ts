@@ -76,9 +76,10 @@ test('источник и worktree: MR и PR по ключу, проект, те
 
 test('сводка «Дополнительно» и тело POST /api/runs', () => {
   const base = { space: '', tags: [], attach: 0, addDirs: '', worktree: false, maxIterations: '3', flowMaxIterations: 3, budget: '', modelLabel: '' };
-  assert.deepEqual(runMoreSum(base), { text: 'пространство, знания, вложения, директории, worktree, лимиты, модель', set: false });
+  assert.deepEqual(runMoreSum(base), { text: 'знания, вложения, директории, worktree, лимиты, модель', set: false });
   assert.deepEqual(runMoreSum({ ...base, space: ' press-alert ', tags: ['a', 'b'], attach: 2, addDirs: '/x\n\n/y', worktree: true, maxIterations: '5', budget: '0.5', modelLabel: 'Haiku 4.5' }), {
-    text: '◇ press-alert · #a #b · 2 файла · доп. директорий: 2 · worktree · до 5 итераций · до $0.5 · Haiku 4.5', set: true,
+    // пространство — наверху формы, в сводке «Дополнительно» его нет
+    text: '#a #b · 2 файла · доп. директорий: 2 · worktree · до 5 итераций · до $0.5 · Haiku 4.5', set: true,
   });
   const can = { integrations: true, attachments: true, addDirs: true, tags: true, spaces: true };
   const body = runBody({ flow: 'f', input: 'x', cwd: '/r', maxIterations: '', maxBudgetUsd: '0.2', model: '', link: null, attach: [], addDirs: '', space: '', saveState: true, autoSpace: false, tags: [], can });
