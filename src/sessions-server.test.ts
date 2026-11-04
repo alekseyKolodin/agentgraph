@@ -7,7 +7,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import type { SessionView, SessionWsServer } from './api-types.js';
+import type { HomeEvent, SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
 import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager, spaceWriteGuard } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
@@ -486,7 +486,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
   await call('POST', `/api/sessions/${s.id}/end`);
   assert.deepEqual(p.killed, ['SIGHUP']);
   v = await view(s.id);
-  assert.deepEqual([v.status, v.live, v.exitCode, v.outcome], ['ended', false, 129, undefined]);
+  assert.deepEqual([v.status, v.live, v.exitCode, v.outcome, v.endedBy], ['ended', false, 129, undefined, 'button']);
 });
 
 test('session_new: новая сессия из терминала — папка, пространство, теги и модель как у этой; режим этой — только в том же месте, другая папка — manual; папки данных agentgraph — нельзя; экран этой получает ссылку', async () => {
@@ -552,6 +552,70 @@ test('session_new: новая сессия из терминала — папк�
   assert.match((pw.body.hookSpecificOutput as { permissionDecisionReason: string }).permissionDecisionReason, /docs\/plan\.md: новый документ, 1 Б/);
   ws.close();
   for (const v of (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live)) await call('POST', `/api/sessions/${v.id}/end`);
+});
+
+test('сессия закончила ход: в общем потоке — событие session с именем и пространством, у сессии — с какого момента ждёт; запуск ходом не считается', async () => {
+  const events: HomeEvent[] = [];
+  const stream = new AbortController();
+  const res = await fetch(`${base}/api/events`, { signal: stream.signal });
+  // поток читается в фоне: строки data: — события
+  void (async () => {
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) if (part.startsWith('data: ')) events.push(JSON.parse(part.slice(6)) as HomeEvent);
+      }
+    } catch {
+      // поток закрыли в конце теста
+    }
+  })();
+  const sessionEvents = () => events.filter((e) => e.type === 'session');
+  let id = '';
+  try {
+    const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'wait-space', tags: [], name: 'Корзина' });
+    id = s.id;
+    const token = tokenOf(spawned.at(-1)!);
+    await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id });
+    let v = await view(s.id);
+    assert.equal(v.status, 'waiting');
+    assert.ok(v.waitingSince && !Number.isNaN(Date.parse(v.waitingSince)));
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'почини', session_id: s.id });
+    v = await view(s.id);
+    assert.deepEqual([v.status, v.waitingSince], ['working', undefined]);
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    await until(() => sessionEvents().length > 0);
+    assert.deepEqual(sessionEvents().map((e) => [e.runId, e.flow, e.session]), [['', '', { id: s.id, name: 'Корзина', space: 'wait-space' }]]);
+    assert.ok((await view(s.id)).waitingSince);
+    // напоминание claude в простое (idle_prompt) — тот же «ждёт тебя», второго события нет
+    await hook(s.id, token, { hook_event_name: 'Notification', notification_type: 'idle_prompt', session_id: s.id });
+    // сжатие контекста посреди хода: SessionStart (compact) — не конец хода; конец — следующий Stop
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'дальше', session_id: s.id });
+    await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'compact', session_id: s.id });
+    await hook(s.id, token, { hook_event_name: 'PostToolBatch', session_id: s.id });
+    assert.equal(sessionEvents().length, 1);
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    await until(() => sessionEvents().length === 2);
+    // «Перезапустить» посреди хода: новый процесс начинает с SessionStart — события нет
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'ещё', session_id: s.id });
+    assert.equal((await call('POST', `/api/sessions/${s.id}/restart`)).status, 200);
+    await hook(s.id, tokenOf(spawned.at(-1)!), { hook_event_name: 'SessionStart', source: 'resume', session_id: s.id });
+    assert.equal((await view(s.id)).status, 'waiting');
+    await call('POST', `/api/sessions/${s.id}/end`);
+    await until(async () => !(await view(s.id)).live);
+    assert.equal(sessionEvents().length, 2);
+    assert.equal((await view(s.id)).waitingSince, undefined);
+  } finally {
+    stream.abort();
+    // упавшая проверка не оставляет живой claude: иначе процесс теста не завершится
+    if (id) await call('POST', `/api/sessions/${id}/end`);
+  }
 });
 
 test('выход без SessionStart с диалогом доверия на экране — «папка не доверена», а не просто «код 0»', async () => {
@@ -682,7 +746,7 @@ test('«Продолжить»: транскрипта нет — новый р�
   await hook(s.id, tokenOf(p), { hook_event_name: 'SessionStart', session_id: s.id, transcript_path: path.join(root, `${s.id}.jsonl`) });
   p.exit(0);
   await until(async () => !(await view(s.id)).live);
-  assert.equal((await view(s.id)).resumable, false);
+  assert.deepEqual([(await view(s.id)).resumable, (await view(s.id)).endedBy], [false, undefined]);
   assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, {})).status, 200);
   p = spawned.at(-1)!;
   assert.match(p.args[0], /^--session-id=/);
@@ -711,6 +775,13 @@ test('«Продолжить»: транскрипта нет — новый р�
   await until(() => p.written.includes('дальше'));
   ws.close();
   await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => (await view(s.id)).endedBy === 'button');
+  // «Продолжить» после «Завершить», потом claude вышел сам: прошлое «Завершить» не прилипает
+  await call('POST', `/api/sessions/${s.id}/continue`, {});
+  p = spawned.at(-1)!;
+  p.exit(0);
+  await until(async () => !(await view(s.id)).live);
+  assert.deepEqual([(await view(s.id)).exitCode, (await view(s.id)).endedBy], [0, undefined]);
 });
 
 test('«Перезапустить»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками (пространство на ходу — в --add-dir), состояние не пишется', async () => {
@@ -886,7 +957,7 @@ test('выход приложения: состояние не пишется, �
   const before = summaries.length;
   await mgr.stopAll(1000);
   assert.equal(summaries.length, before);
-  assert.equal(mgr.view(live).statePending, 'app-closed');
+  assert.deepEqual([mgr.view(live).statePending, mgr.view(live).endedBy], ['app-closed', 'app']);
   // сервер упал, пока шла другая сессия — запись до пространств: тег задачи (перенесётся в пространство), тег знаний,
   // saveTag и итог саммари; в session.json нет endedAt
   fs.mkdirSync(tagDir('app-legacy'), { recursive: true });
@@ -908,7 +979,8 @@ test('выход приложения: состояние не пишется, �
   const list = next.list().sessions;
   assert.deepEqual(list.map((x) => [x.id, x.live, x.status, x.statePending]).sort(), [[crashed, false, 'ended', 'app-closed'], [v.id, false, 'ended', 'app-closed']].sort());
   const old = list.find((x) => x.id === crashed)!;
-  assert.equal(old.endedAt, '2026-10-27T11:00:00.000Z');
+  // сервер упал, пока она шла: claude погас вместе с ним
+  assert.deepEqual([old.endedAt, old.endedBy], ['2026-10-27T11:00:00.000Z', 'app']);
   assert.deepEqual([old.space, old.tags, old.saveState, old.newTurns, old.stateUpdate?.ok], ['app-legacy', ['app-know'], true, 1, true]);
   assert.deepEqual(next.spaceSessions('app-legacy').map((x) => [x.id, x.legacy]), [[crashed, true]]);
   const saved = JSON.parse(fs.readFileSync(path.join(dir, crashed, 'session.json'), 'utf8'));

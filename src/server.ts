@@ -43,7 +43,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -95,7 +95,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -172,7 +172,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type']>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -211,6 +211,8 @@ const contextHttp = (err: unknown) => (err instanceof ContextError ? new HttpErr
 const servers = new Set<http.Server>();
 /** Автообновление checkout agentgraph: одно на процесс, создаёт первый startServer с update. */
 let updater: Updater | null = null;
+/** Подписка на «сессия ждёт тебя»: одна на поднятые серверы, адрес в уведомлении — первого startServer; снимает stopServer. */
+let sessionWaits: (() => void) | null = null;
 
 export function startServer(opts: ServerOptions): Promise<string> {
   // перенос тегов задач ищет их запуски в этой папке запусков: их артефакты откроются перенесённому пространству
@@ -232,6 +234,11 @@ export function startServer(opts: ServerOptions): Promise<string> {
   }
   // WebSocket экрана сессии терминала: upgrade обходит handle(), проверки Host и Origin — в sessions-server.ts
   server.on('upgrade', sessionsUpgrade);
+  sessionWaits ??= onSessionWaiting((v) => {
+    const session = { id: v.id, name: v.name, ...(v.space ? { space: v.space } : {}) };
+    homeBroadcast({ type: 'session', runId: '', flow: '', session });
+    notifySession(opts, session);
+  });
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -253,6 +260,8 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while ((live.size || chats.size || generations.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await sessionsStopped;
+  sessionWaits?.();
+  sessionWaits = null;
   await Promise.all(
     [...servers].map(
       (server) =>
@@ -1873,6 +1882,16 @@ function notifyPause(srv: ServerOptions, id: string, flow: string, r: PauseReaso
   if (srv.notify === false || [...homeClients.values()].some(Boolean)) return;
   const body = r.text.replace(/\s+/g, ' ').slice(0, 300);
   osNotify({ title: `${flow}: «${r.phase}» ждёт решения`, body, url: `http://${srv.host}:${srv.port}/run/${id}`, group: id, sound: true });
+}
+
+/**
+ * Сессия терминала закончила ход и ждёт тебя. Строже, чем у вопроса: только когда UI не открыт вовсе. Открытая вкладка
+ * сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода, пока
+ * человек сидит в этом терминале.
+ */
+function notifySession(srv: ServerOptions, s: HomeSessionWait): void {
+  if (srv.notify === false || homeClients.size > 0) return;
+  osNotify({ title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', url: `http://${srv.host}:${srv.port}/sessions/${s.id}`, group: s.id });
 }
 
 /** Общий поток без переигрывания: при (пере)подключении UI сам забирает состояние из /api/home и /api/runs. */
