@@ -69,6 +69,8 @@ export type SessionRecord = {
   endedAt?: string;
   exitCode?: number;
   outcome?: 'untrusted' | 'failed';
+  /** Кто погасил claude: button — «Завершить», app — остановка сервера (выход из приложения). Нет — claude вышел сам. */
+  endedBy?: 'button' | 'app';
   turns: number;
   claudeVersion?: string;
   /** Ходов (из turns), уже ушедших в состояние пространства (раньше — в саммари тегов задач). */
@@ -122,6 +124,12 @@ type Live = {
   appClosed?: boolean;
   /** «Перезапустить»: выход старого процесса — не конец сессии, состояние не нужно. */
   restarting?: boolean;
+  /** Нажали «Завершить»: выход процесса запишется как endedBy: button. */
+  ending?: boolean;
+  /** Статус, о котором уже сообщили (changed): по нему ловится переход «работает → ждёт тебя». */
+  seenStatus?: SessionStatus;
+  /** С какого момента сессия ждёт тебя (статус waiting). */
+  waitingSince?: string;
 };
 
 export type SessionDeps = {
@@ -229,7 +237,9 @@ export class SessionManager {
       const { rec, legacy } = read;
       const s = newLive(rec, 'ended');
       if (!rec.endedAt) {
+        // сервер упал или его убили, пока сессия шла: claude погас вместе с ним
         rec.endedAt = rec.lastActivityAt;
+        rec.endedBy = 'app';
         if (this.wantsState(s)) rec.statePending = 'app-closed';
       }
       // запись до пространств сохраняется в новом виде сразу: пространство, выведенное из тегов задач, не меняется от
@@ -340,6 +350,7 @@ export class SessionManager {
       ...(r.exitCode !== undefined ? { exitCode: r.exitCode } : {}),
       turns: r.turns,
       ...(r.outcome ? { outcome: r.outcome } : {}),
+      ...(r.endedBy && !live ? { endedBy: r.endedBy } : {}),
       ...(delivery ? { delivery } : {}),
       ...(r.claudeVersion ? { claudeVersion: r.claudeVersion } : {}),
       ...(r.transcriptPath ? { transcriptPath: r.transcriptPath } : {}),
@@ -349,6 +360,7 @@ export class SessionManager {
       ...(s.updatingState ? { updatingState: true as const } : {}),
       ...(r.statePending ? { statePending: r.statePending } : {}),
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
+      ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
     };
   }
 
@@ -453,10 +465,11 @@ export class SessionManager {
     // карта в памяти, только если папка пространства и правда ушла в --add-dir (не внутри cwd, без спецсимволов) или
     // сессия в самой папке пространства; то же правило показывает превью «Модель получит» (mapLoadedAt)
     const launchSpace = ctx.space && (dirs.addDirs.includes(ctx.space.dir) || isInside(r.cwd, ctx.space.dir)) ? ctx.space.slug : undefined;
-    Object.assign(s, { pty, status: 'starting', injected: null, launchSpace, started: false, mode: undefined, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
+    Object.assign(s, { pty, status: 'starting', injected: null, launchSpace, started: false, mode: undefined, trustNow: false, sawTrust: false, ending: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
     delete r.endedAt;
     delete r.exitCode;
     delete r.outcome;
+    delete r.endedBy;
     this.save(s);
     // «Продолжить» и перезапуск: открытые экраны переходят к новому процессу сами
     for (const conn of s.sockets.values()) {
@@ -509,6 +522,8 @@ export class SessionManager {
     s.rec.endedAt = new Date().toISOString();
     s.rec.lastActivityAt = s.rec.endedAt;
     s.rec.exitCode = code;
+    if (s.ending) s.rec.endedBy = 'button';
+    else if (s.appClosed) s.rec.endedBy = 'app';
     if (!s.started && s.injected === null) {
       const outcome = s.sawTrust ? 'untrusted' : code !== 0 ? 'failed' : undefined;
       if (outcome) s.rec.outcome = outcome;
@@ -628,6 +643,7 @@ export class SessionManager {
   /** «Завершить»: SIGHUP, claude отправляет SessionEnd и выходит. */
   async end(id: string): Promise<SessionView> {
     const s = this.get(id);
+    if (s.pty?.alive) s.ending = true;
     await s.pty?.stop();
     return this.view(s);
   }
@@ -865,7 +881,8 @@ export class SessionManager {
     if (r.turn) this.appendTurn(s, r.turn);
     if (r.turn && 'prompt' in r.turn) this.nameFrom(s, r.turn.prompt);
     if (reinstanced || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
-    this.changed(s);
+    // SessionStart ставит «ждёт тебя» и посреди хода (сжатие контекста, source: compact): это не конец хода
+    this.changed(s, input.hook_event_name !== 'SessionStart');
     return r.reply;
   }
 
@@ -1054,9 +1071,32 @@ export class SessionManager {
   }
 
   /** Состояние сессии — подключённым экранам. */
-  private changed(s: Live): void {
+  private changed(s: Live, announce = true): void {
+    this.noteStatus(s, announce);
     const msg = JSON.stringify({ t: 's', session: this.view(s) } satisfies SessionWsServer);
     for (const ws of s.sockets.keys()) if (ws.readyState === ws.OPEN) ws.send(msg);
+  }
+
+  /**
+   * Статус сменился с прошлого changed: время начала «ждёт тебя»; переход «работает → ждёт тебя» — подписчикам
+   * onSessionWaiting. Не в счёт: запуск («запускается → ждёт тебя»), SessionStart (announce: false) и хуки, пришедшие,
+   * пока claude гасят («Завершить», «Перезапустить», остановка сервера): окно, может быть, уже закрыто, а ждать некого.
+   */
+  private noteStatus(s: Live, announce: boolean): void {
+    const prev = s.seenStatus;
+    if (prev === s.status) return;
+    s.seenStatus = s.status;
+    s.waitingSince = s.status === 'waiting' ? new Date().toISOString() : undefined;
+    if (!announce || prev !== 'working' || s.status !== 'waiting' || !waitSubs.size) return;
+    if (s.ending || s.restarting || s.appClosed || this.stopping) return;
+    const v = this.view(s);
+    for (const fn of waitSubs) {
+      try {
+        fn(v);
+      } catch (err) {
+        console.error('сессия: подписчик «ждёт тебя» —', errMsg(err));
+      }
+    }
   }
 
   // --- запасной статус
@@ -1434,6 +1474,11 @@ const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(er
 // --- маршруты
 
 let manager: SessionManager | null = null;
+/**
+ * Подписчики «сессия закончила ход и ждёт тебя» (server.ts: общий поток главной и системное уведомление). На уровне
+ * модуля, а не менеджера: подмена менеджера (тесты) их не теряет, а подписка сама менеджер не создаёт.
+ */
+const waitSubs = new Set<(v: SessionView) => void>();
 
 /** Реестр сессий процесса; тесты подставляют свои зависимости (поддельный pty). */
 export function sessionManager(deps?: Partial<SessionDeps>): SessionManager {
@@ -1538,5 +1583,10 @@ export async function spaceSessions(slug: string): Promise<SpaceSession[]> {
 }
 /** Остановка сервера: WebSocket и claude. */
 export const stopSessions = (timeoutMs?: number) => (manager ? manager.stopAll(timeoutMs) : Promise.resolve());
+/** Работавшая сессия закончила ход (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
+export function onSessionWaiting(fn: (v: SessionView) => void): () => void {
+  waitSubs.add(fn);
+  return () => void waitSubs.delete(fn);
+}
 /** Названия живых сессий: подтверждение выхода в десктопе. */
 export const liveSessionNames = () => (manager ? manager.liveNames() : []);

@@ -191,7 +191,12 @@ export type HomeEvent<T extends string = string> = {
   title?: string;
   /** Только у end дочернего запуска блока-вызова: о его конце не уведомляют — скажет конец родителя. */
   parent?: RunParent;
+  /** Только у session: сессия терминала закончила ход и ждёт тебя; runId и flow у него пустые. */
+  session?: HomeSessionWait;
 };
+
+/** Сессия терминала в событии session общего потока: её экран, имя и пространство для уведомления. */
+export type HomeSessionWait = { id: string; name: string; space?: string };
 
 /** Событие ленты главной (GET /api/feed): вопрос агента, пауза по его просьбе, конец запуска. */
 export type FeedItem = {
@@ -561,6 +566,8 @@ export type SessionView = {
   turns: number;
   /** Вышел без единого SessionStart: untrusted — код 0 (доверие к папке не принято), failed — claude не запустился. */
   outcome?: 'untrusted' | 'failed';
+  /** Завершённая: кто погасил claude — button («Завершить»), app (выход из приложения); нет — claude вышел сам. */
+  endedBy?: 'button' | 'app';
   /** Живая сессия без SessionStart дольше нескольких секунд: trust — на экране диалог доверия, missing — контекст не доставлен. */
   delivery?: 'trust' | 'missing';
   /** Версия claude, на которой идёт сессия: «2.1.311». */
@@ -578,6 +585,8 @@ export type SessionView = {
   statePending?: 'app-closed';
   /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
   resumable?: boolean;
+  /** Живая, статус waiting: с какого момента ждёт тебя (главная — «ждёт N мин»). */
+  waitingSince?: string;
 };
 
 /** GET /api/sessions. */

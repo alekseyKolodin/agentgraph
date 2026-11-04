@@ -1,17 +1,62 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  canUpdateState, chipHint, fileUris, osc52Text, pendingNote, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl, shellPath, spaceChipHint, stateNote,
+  canUpdateState, chipHint, fileUris, homeSessionMeta, homeSessions, noTranscriptWhy, osc52Text, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl,
+  shellPath, spaceChipHint, stateNote,
 } from './sessions';
 
 test('статус сессии: подписи и тон точки; выход без SessionStart — отдельный исход', () => {
   assert.deepEqual([sessionStatusLabel({ status: 'working' }), sessionTone({ status: 'working' })], ['Работает', 'live']);
   assert.deepEqual([sessionStatusLabel({ status: 'waiting' }), sessionTone({ status: 'waiting' })], ['Ждёт тебя', 'wait']);
   assert.deepEqual([sessionStatusLabel({ status: 'starting' }), sessionTone({ status: 'starting' })], ['Запускается', 'off']);
-  assert.equal(sessionStatusLabel({ status: 'ended', exitCode: 0 }), 'Завершена · код 0');
   assert.equal(sessionStatusLabel({ status: 'ended' }), 'Завершена');
-  assert.deepEqual([sessionStatusLabel({ status: 'ended', exitCode: 0, outcome: 'untrusted' }), sessionTone({ status: 'ended', outcome: 'untrusted' })], ['Папка не доверена', 'fail']);
-  assert.equal(sessionStatusLabel({ status: 'ended', exitCode: 1, outcome: 'failed' }), 'Не запустилась · код 1');
+  assert.deepEqual([sessionStatusLabel({ status: 'ended', outcome: 'untrusted' }), sessionTone({ status: 'ended', outcome: 'untrusted' })], ['Папка не доверена', 'fail']);
+  assert.equal(sessionStatusLabel({ status: 'ended', outcome: 'failed' }), 'Не запустилась');
+});
+
+test('код выхода claude — только в подсказке завершённой сессии, неизвестный — нигде', () => {
+  assert.equal(sessionExitTitle({ live: false, exitCode: 129 }), 'Код выхода claude: 129');
+  assert.equal(sessionExitTitle({ live: false }), '');
+  assert.equal(sessionExitTitle({ live: true, exitCode: 0 }), '');
+});
+
+test('карточка завершённой: кто погасил claude словами, а не «код ?» и «код 129»', () => {
+  assert.equal(sessionEndText({ endedBy: 'button', exitCode: 129 }), 'Сессию завершили кнопкой «Завершить».');
+  assert.equal(sessionEndText({ endedBy: 'app', exitCode: 129 }), 'Claude остановлен вместе с приложением.');
+  // запись до endedBy: SIGHUP — значит, погасил agentgraph
+  assert.equal(sessionEndText({ exitCode: 129 }), 'Claude остановлен кнопкой «Завершить» или вместе с приложением.');
+  assert.equal(sessionEndText({}), 'Claude вышел.');
+  assert.equal(sessionEndText({ exitCode: 0 }), 'Claude вышел.');
+  assert.equal(sessionEndText({ exitCode: 2 }), 'Claude вышел с кодом 2.');
+  assert.match(sessionEndText({ outcome: 'failed' }), /^claude завершился, не начав сессию/);
+  assert.match(sessionEndText({ outcome: 'failed', exitCode: 1 }), /^claude завершился с кодом 1, не начав сессию/);
+  assert.match(sessionEndText({ outcome: 'untrusted', exitCode: 0 }), /доверие к папке не принято/);
+});
+
+test('сессии на главной: ждущие — в «Ждёт тебя», дольше ждущие сверху; работающие и запускающиеся — в «Идут»; завершённых нет', () => {
+  const at = '2026-11-04T11:00:00Z';
+  const s = (id: string, status: 'starting' | 'working' | 'waiting' | 'ended', waitingSince?: string) => ({ id, status, live: status !== 'ended', lastActivityAt: at, ...(waitingSince ? { waitingSince } : {}) });
+  const { waiting, live } = homeSessions([s('a', 'waiting', '2026-11-04T11:50:00Z'), s('b', 'working'), s('c', 'ended'), s('d', 'waiting', '2026-11-04T11:10:00Z'), s('e', 'starting')]);
+  assert.deepEqual([waiting.map((x) => x.id), live.map((x) => x.id)], [['d', 'a'], ['b', 'e']]);
+  // без waitingSince (старый сервер) — по последней активности
+  assert.deepEqual(homeSessions([s('x', 'waiting', '2026-11-04T11:30:00Z'), s('y', 'waiting')]).waiting.map((x) => x.id), ['y', 'x']);
+  // диалог доверия к папке на экране: запускается, но ждёт тебя
+  const trust = homeSessions([{ ...s('t', 'starting'), delivery: 'trust' as const }]);
+  assert.deepEqual([trust.waiting.map((x) => x.id), trust.live], [['t'], []]);
+});
+
+test('строка сессии на главной: пространство (без него — папка), сколько ждёт, ходы', () => {
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  const base = { cwd: '/p/shop', lastActivityAt: '2026-11-04T11:00:00Z', turns: 3 };
+  assert.equal(homeSessionMeta({ ...base, space: 'press-alert', status: 'waiting', waitingSince: '2026-11-04T11:55:00Z' }, now), '◇ press-alert · ждёт 5 мин · 3 хода');
+  assert.equal(homeSessionMeta({ ...base, status: 'working', turns: 1 }, now), 'shop · работает · 1 ход');
+  assert.equal(homeSessionMeta({ ...base, status: 'starting', turns: 0 }, now), 'shop · запускается');
+  assert.equal(homeSessionMeta({ ...base, status: 'starting', delivery: 'trust', turns: 0 }, now), 'shop · ждёт: доверие к папке');
+});
+
+test('нет транскрипта у завершённой: не было сообщений — или файл удалили', () => {
+  assert.equal(noTranscriptWhy({ turns: 0 }), 'в прошлом не было ни одного сообщения');
+  assert.equal(noTranscriptWhy({ turns: 4 }), 'транскрипт прошлого разговора удалён');
 });
 
 test('строка «Сейчас»: пространство (без него — папка) · статус · когда была активность', () => {

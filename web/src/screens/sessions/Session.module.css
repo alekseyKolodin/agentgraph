@@ -88,3 +88,6 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .actions :global(.menu-wrap) { position: relative; }
 /* «Модель получит» под строкой контекста: свёрнуто, по клику — разбор и точный текст */
 .model-preview { margin: 0 0 8px; }
+.loading { margin: 0; }
+/* «Сессия не найдена» / «не открылась»: действия по центру, как и текст .empty */
+.fail-acts { justify-content: center; }

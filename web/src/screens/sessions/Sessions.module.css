@@ -18,21 +18,33 @@
 .check > span { display: flex; flex-direction: column; gap: 2px; color: var(--ink) !important; font-size: var(--fs-body) !important; }
 .prompt { font-family: var(--font-mono); font-weight: 600; margin-right: 6px; }
 
+.all { container-type: inline-size; }
 .all h2 { margin: 0 0 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.all :global(.row) .msg { margin: 0; }
 .count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; margin-left: 4px; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
-.table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
+/* ширины — по строке заголовка: действие и папка не раздвигают таблицу, «Продолжить» не обрезается; уже 560px —
+   прокрутка обёртки, а не «Название» в ноль */
+.table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: var(--fs-small); table-layout: fixed; }
+.col-status { width: 152px; }
+.col-tags { width: 24%; }
+.col-dir { width: 140px; }
+.col-num { width: 64px; }
+.col-when { width: 108px; }
+.col-act { width: 132px; }
 .table th { text-align: left; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .table td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr:hover { background: var(--hover); }
 .ended .name a { color: var(--ink-2); }
-.name { max-width: 320px; }
+.name { min-width: 0; }
 .name a { color: var(--ink); font-weight: 500; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* папка под именем — только в узкой таблице, где своей колонки у неё нет */
+.name-dir { display: none; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name a:hover { text-decoration: underline; }
 .tag-list { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .tag-list :global(.badge) { margin-left: 0; max-width: 220px; }
-.dir { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
+.dir { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
 .when { color: var(--ink-2); white-space: nowrap; font-size: var(--fs-meta); }
 .act { text-align: right; white-space: nowrap; }
@@ -41,7 +53,8 @@
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* статус в таблице — та же пилюля, что в шапке сессии */
-.status { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 500; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.status { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; box-sizing: border-box; padding: 1px 9px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 500; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dot { width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--ink-2); flex: none; }
 .status.live { background: color-mix(in srgb, var(--live) 14%, transparent); color: var(--ink); }
 .status.live .dot { background: var(--live); border-color: var(--live); }
@@ -49,5 +62,14 @@
 .status.wait .dot { background: var(--st-wait); border-color: var(--st-wait); }
 .status.fail { color: var(--st-fail); }
 .status.fail .dot { border-color: var(--st-fail); }
-.pending { display: block; font-size: var(--fs-meta); color: var(--st-wait); white-space: nowrap; }
-.acts { display: inline-flex; gap: 6px; justify-content: flex-end; }
+.pending { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 2px; font-size: var(--fs-meta); color: var(--st-wait); }
+
+/* узкая таблица (окно уже ~1400 px): папка — строкой под именем, «Ходов» прячется; совсем узкая — и «Активность» */
+@container (max-width: 1040px) {
+  .col-dir, .col-num { display: none; }
+  .name-dir { display: block; }
+  .col-status { width: 144px; }
+}
+@container (max-width: 620px) {
+  .col-when { display: none; }
+}
