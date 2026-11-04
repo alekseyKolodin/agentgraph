@@ -1,16 +1,16 @@
 // Секция «Запуски» сайдбара (ui/app.js renderRunList, runFilterHtml, foldAll, wireSideSearch, setRunHidden, deleteRun): поиск,
-// фильтр по статусу, группы по проектам с «ещё N» и живыми счётчиками, скрытые, скрыть и удалить запуск. Логика — lib/runs.ts;
+// фильтр по статусу одной строкой, группы по проектам с «ещё N» и живыми счётчиками, скрытые, скрыть и удалить запуск. Строка
+// запуска — ссылка (Cmd+клик — в новом окне, Tab и Enter), «Скрыть» и «Удалить» — кнопки поверх неё. Логика — lib/runs.ts;
 // свёрнутость проектов — fold.ts (proj:<cwd>), группировка, скрытые и фильтр — те же ключи localStorage, что у старого UI.
-import { useEffect, useSyncExternalStore } from 'react';
-import { useMatch, useNavigate } from 'react-router';
+import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { Link, useMatch, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { RunSummary } from '@server/api-types';
 import { deleteRun, errorText, keys, setRunHidden, useFeature, useRuns } from '../../api';
-import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../Badge';
 import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
 import { t } from '../../lib/i18n';
-import { deleteRunText, projKey, runDepths, runListView, runManageable, runRowSub, runRowTitle } from '../../lib/runs';
+import { deleteRunText, projKey, runDepths, runListView, runManageable, runRowMeta, runRowTitle } from '../../lib/runs';
 import { LS } from '../../lib/storage';
 import { isOpen, reveal, setOpen, useFold } from './fold';
 import { ICON } from './FlowList';
@@ -78,6 +78,7 @@ export function RunSectionActions() {
         <button
           className={cx('btn small ghost icon-btn', styles.fold)}
           title={anyOpen ? t('Свернуть все проекты') : t('Развернуть все проекты')}
+          aria-label={anyOpen ? t('Свернуть все проекты') : t('Развернуть все проекты')}
           onClick={() => {
             for (const k of keysOf) setOpen(k, !anyOpen);
           }}
@@ -85,7 +86,7 @@ export function RunSectionActions() {
           {anyOpen ? ICON.foldAll : ICON.unfoldAll}
         </button>
       )}
-      <button className="btn small ghost" title={t('Обновить')} onClick={() => void qc.invalidateQueries({ queryKey: keys.runs })}>↻</button>
+      <button className="btn small ghost" title={t('Обновить')} aria-label={t('Обновить список запусков')} onClick={() => void qc.invalidateQueries({ queryKey: keys.runs })}>↻</button>
     </div>
   );
 }
@@ -131,32 +132,37 @@ export function RunList() {
     await refresh();
   };
 
-  // имя запуска — заголовком, flow — первым в подстроке (чтобы многоточие его не съело); без имени заголовок — flow
+  // имя запуска (без имени — flow) — одной строкой с многоточием, под ним одна строка меты: статус словом, когда,
+  // пространство ссылкой, хвост. Имя — ссылка, растянутая на всю строку; кнопки и ссылка пространства — поверх неё
   const item = (r: RunSummary, withProject: boolean, depth = 0) => {
-    const sub = runRowSub(r, withProject);
+    const meta = runRowMeta(r, withProject);
+    const name = r.title || r.flow;
     return (
       <li
         key={r.id}
         className={cx(activeId === r.id && styles.active, r.hidden && styles.hiddenRun, depth > 0 && styles.childRun)}
         style={depth > 0 ? { ['--depth' as string]: depth } : undefined}
         title={runRowTitle(r)}
-        onClick={() => void navigate(`/run/${r.id}`)}
       >
-        <span className={styles.name}>
-          {r.title || r.flow}
-          {r.adhoc && <AdhocBadge />}
-          {r.space && <SpaceBadge slug={r.space} link />}
-          {(r.knowledge || []).map((tag) => <TagBadge key={`k:${tag}`} slug={tag} kind="knowledge" />)} <Badge status={r.status} />
-        </span>
+        <Link className={cx(styles.name, styles.rowLink)} to={`/run/${r.id}`} aria-current={activeId === r.id ? 'page' : undefined}>{name}</Link>
         <span className={styles.sub}>
-          {sub.flow && <span className={styles.subFlow}>{sub.flow}</span>}
-          {`${sub.flow ? ' · ' : ''}${sub.rest}`}
+          <span className={cx(styles.stWord, meta.tone && styles[meta.tone])}>{meta.status}</span>
+          {` · ${meta.when}`}
+          {meta.space && (
+            <>
+              {' · '}
+              <Link className={styles.metaSpace} to={`/spaces/${encodeURIComponent(meta.space)}`} title={`${meta.space}\n${t('Пространство: карта, документы, состояние «где мы сейчас»')}`}>{`◇ ${meta.space}`}</Link>
+            </>
+          )}
+          {` · ${meta.tail}`}
         </span>
         {runManageable(r, manage) && (
           <span className={styles.liActs}>
             <button
+              type="button"
               className="icon-btn"
               title={r.hidden ? t('Вернуть в список') : t('Скрыть из списка (файлы останутся)')}
+              aria-label={r.hidden ? t('Вернуть запуск «{name}» в список', { name }) : t('Скрыть запуск «{name}» из списка', { name })}
               onClick={(e) => {
                 e.stopPropagation();
                 void hide(r.id, !r.hidden);
@@ -165,8 +171,10 @@ export function RunList() {
               {r.hidden ? ICON.show : ICON.hide}
             </button>
             <button
+              type="button"
               className="icon-btn danger"
               title={t('Удалить запуск')}
+              aria-label={t('Удалить запуск «{name}»', { name })}
               onClick={(e) => {
                 e.stopPropagation();
                 void remove(r.id);
@@ -197,6 +205,7 @@ export function RunList() {
       <input
         className={styles.sideSearch}
         type="search"
+        aria-label={t('Найти запуск')}
         placeholder={t('Найти запуск…')}
         autoComplete="off"
         spellCheck={false}
@@ -216,7 +225,7 @@ export function RunList() {
       <div className={styles.sideBody}>
         {/* фильтр по статусу: несколько выбранных — объединение; «все» сбрасывает */}
         {view.chips.length > 0 && (
-          <div className={styles.runFilter}>
+          <StatusFilter>
             <button className={cx('chip', !s.statuses.size && 'on')} title={t('Все статусы')} onClick={() => setStatus('')}>{t('все')}</button>
             {view.chips.map((c) => (
               <button
@@ -228,7 +237,7 @@ export function RunList() {
                 {`${statusLabel(c.status)} `}<span className={styles.n}>{c.count}</span>
               </button>
             ))}
-          </div>
+          </StatusFilter>
         )}
         {loaded && view.empty && <p className={`${styles.sideEmpty} muted`}>{view.empty}</p>}
         {!view.empty && !s.grouped && <ul className={styles.list}>{view.runs.map((r) => item(r, true, depths.get(r.id)))}</ul>}
@@ -249,14 +258,17 @@ export function RunList() {
               <ul className={styles.list}>
                 {g.runs.map((r) => item(r, false, depths.get(r.id)))}
                 {g.more > 0 && (
-                  <li
-                    className={styles.more}
-                    onClick={() => {
-                      side.showAll.add(g.key);
-                      changed();
-                    }}
-                  >
-                    {t('ещё {n}', { n: g.more })}
+                  <li className={styles.more}>
+                    <button
+                      type="button"
+                      className={styles.moreBtn}
+                      onClick={() => {
+                        side.showAll.add(g.key);
+                        changed();
+                      }}
+                    >
+                      {t('ещё {n}', { n: g.more })}
+                    </button>
                   </li>
                 )}
               </ul>
@@ -278,5 +290,51 @@ export function RunList() {
         )}
       </div>
     </>
+  );
+}
+
+/** Пометить, с какой стороны у ряда есть ещё чипы (data-more): тот край гаснет. */
+function markMore(el: HTMLElement): void {
+  const left = el.scrollLeft > 1;
+  const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+  const more = left && right ? 'both' : left ? 'left' : right ? 'right' : '';
+  if (more) el.dataset.more = more;
+  else delete el.dataset.more;
+}
+
+/** Ряд чипов фильтра одной строкой: лишнее прокручивается вбок, колесо мыши над рядом тоже листает вбок (пока есть куда). */
+function StatusFilter({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // чипы меняются с данными (числа, набор статусов): пометка краёв — после каждой перерисовки
+  useEffect(() => {
+    if (ref.current) markMore(ref.current);
+  });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const mark = () => markMore(el);
+    // вертикальное колесо — вбок, пока ряд может сдвинуться; на краю колесо листает список как обычно
+    const wheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 0 || (e.deltaY < 0 && el.scrollLeft <= 0) || (e.deltaY > 0 && el.scrollLeft >= max - 1)) return;
+      e.preventDefault();
+      // колесо мыши в Firefox считает строками (deltaMode 1), страницами — 2
+      el.scrollLeft += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1);
+    };
+    const ro = new ResizeObserver(mark);
+    ro.observe(el);
+    el.addEventListener('scroll', mark, { passive: true });
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('scroll', mark);
+      el.removeEventListener('wheel', wheel);
+    };
+  }, []);
+  return (
+    <div ref={ref} className={styles.runFilter} role="group" aria-label={t('Фильтр по статусу')}>
+      {children}
+    </div>
   );
 }
