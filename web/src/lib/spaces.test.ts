@@ -24,6 +24,7 @@ test('пространства: поиск по слагу, заголовку �
   assert.equal(spacePreview({ preview: 'раз\nдва' }), 'раз');
   assert.equal(spacePreview({ preview: '' }), 'состояния ещё нет');
   assert.match(spaceMetaLine({ hasMap: true, docs: 3, updatedAt: '2026-10-24T10:00:00Z' }), /^карта · документов: 3 · .+/);
+  assert.match(spaceMetaLine({ hasMap: false, docs: 0, updatedAt: '2026-10-24T10:00:00Z', sessions: 2, runs: 1, live: 1 }), /^без карты · документов: 0 · 2 сессии · 1 запуск · идёт 1 · /);
   assert.equal(spacesNoneText(0), 'Пространств пока нет — заведи первое выше');
   assert.equal(spacesNoneText(1), 'Ничего не нашлось');
 });
@@ -37,6 +38,7 @@ test('пространства: документы и история — раз�
   assert.equal(updateLine({ id: 'r1', at: '', kind: 'run', flow: 'feature' }), 'запуск feature');
   assert.equal(updateLine({ id: 'abcdef123', at: '', kind: 'session' }), 'сессия «abcdef12»');
   assert.match(stateByText(space({ history: [{ id: 's', at: '', kind: 'session', title: 'Kai' }] })), /^Обновил: сессия «Kai»/);
+  assert.match(stateByText(space({ history: [{ id: 's', at: '', kind: 'session', title: 'Kai' }, { id: 'r', at: '', kind: 'run', flow: 'f' }] })), / · всего обновлений: 2$/);
   assert.equal(stateByText(space()), 'Состояние правили только руками');
   assert.match(stateByText(space({ state: '' })), /запишет короткая сессия/);
 });

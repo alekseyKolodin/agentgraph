@@ -32,7 +32,10 @@ test('пространство и теги на ходу: подсказка у 
   );
   assert.equal(pendingNote([{ slug: 'b', state: 'pending' }]), 'b дойдёт до модели со следующим её шагом или твоим сообщением');
   assert.match(spaceChipHint({ slug: 'p', state: 'pending' }, true), /«Перезапустить»/);
-  assert.ok(!spaceChipHint({ slug: 'p', state: 'on' }, true).includes('Перезапустить'));
+  assert.ok(!spaceChipHint({ slug: 'p', state: 'on', memory: true }, true).includes('Перезапустить'));
+  // выбрано на ходу и уже дошло: карта — строкой «прочитай», памятью — после перезапуска
+  assert.match(spaceChipHint({ slug: 'p', state: 'on' }, true), /выбрано на ходу: карта \(CLAUDE\.md\) — строкой «прочитай»/);
+  assert.ok(!spaceChipHint({ slug: 'p', state: 'on' }, false).includes('на ходу'));
   assert.match(spaceChipHint({ slug: 'p', state: 'on', missing: true }, true), /Пространства p больше нет/);
 });
 

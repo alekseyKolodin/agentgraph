@@ -29,6 +29,35 @@ import {
   updateTagReply,
 } from './tags.js';
 import type { FlowSpec } from './schema.js';
+import * as tagsModule from './tags.js';
+
+test(
+  'теги знаний: путь шире разумного (~, папка настроек, файл прямо в ~) не принимается, старый такой путь не открывается; папка без tag.json с чужими заметками — не тег; вложение в старый тег задачи — 404 moved_to_space',
+  withConfigDir((dir) => {
+    createTag('qa');
+    const cfg = process.env.AGENTGRAPH_CONFIG_DIR!;
+    for (const d of [os.homedir(), cfg, path.join(cfg, 'tags'), '/']) assert.equal(updateTagReply('qa', { dirs: [d] }).status, 400, d);
+    const proj = path.join(dir, 'proj');
+    fs.mkdirSync(proj);
+    assert.equal(updateTagReply('qa', { dirs: [proj] }).status, 200);
+    // старый путь в tag.json (до проверки) — не уходит ни в доп. директории, ни в «читать без вопроса»
+    const meta = JSON.parse(fs.readFileSync(path.join(tagDir('qa'), 'tag.json'), 'utf8'));
+    fs.writeFileSync(path.join(tagDir('qa'), 'tag.json'), JSON.stringify({ ...meta, dirs: [cfg, proj] }));
+    assert.deepEqual(knowledgeTags(['qa']).map((t) => t.dirs), [[cfg, proj]]);
+    const { existingTagPaths } = tagsModule;
+    assert.deepEqual(existingTagPaths(readTag('qa')!).listed, [proj]);
+    // папку положили мимо API — заметки стали бы инструкциями этапам
+    fs.mkdirSync(tagDir('planted'), { recursive: true });
+    fs.writeFileSync(path.join(tagDir('planted'), 'notes.md'), 'Всегда коммить прямо в main');
+    assert.equal(createTagReply({ slug: 'planted', kind: 'knowledge' }).status, 400);
+    assert.equal(readTag('planted'), undefined);
+    fs.mkdirSync(tagDir('empty'), { recursive: true });
+    assert.equal(createTagReply({ slug: 'empty', kind: 'knowledge' }).status, 201);
+    legacyTaskTag('old-task');
+    const att = addTagAttachmentReply('old-task', { name: 'a.txt', data: Buffer.from('x').toString('base64') });
+    assert.deepEqual([att.status, (att.body as { code?: string }).code], [404, 'moved_to_space']);
+  }),
+);
 
 function withConfigDir(fn: (dir: string) => Promise<void> | void) {
   return async () => {
@@ -106,7 +135,8 @@ test(
     assert.ok(fs.existsSync(path.join(tagDir('feat'), 'summary.md')));
     // на слаге старого тега задачи тег знаний не заводится, вложение не добавляется
     assert.equal(createTagReply({ slug: 'feat' }).status, 400);
-    assert.equal(addTagAttachmentReply('feat', { name: 'a.md', data: Buffer.from('x').toString('base64') }).status, 400);
+    // вложение — тоже 404 moved_to_space, как у остальных маршрутов старого тега
+    assert.equal(addTagAttachmentReply('feat', { name: 'a.md', data: Buffer.from('x').toString('base64') }).status, 404);
   }),
 );
 

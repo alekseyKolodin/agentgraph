@@ -18,8 +18,8 @@ import { wrapData } from './intake.js';
 import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
 import { canonical, isInside, toolPath, WRITE_TOOLS, type PathProbe } from './artifacts.js';
 import { ATTACHMENT_EXTS, ATTACHMENTS_TOTAL_MAX, dedupeNames, safeAttachmentName, validateAttachments } from './attachments.js';
-import { defuseMarkers, readTag, stripTagBlock, summaryPreview, tagsDir, TAG_SLUG_RE } from './tags.js';
-import { readHead, readRegular, writeAtomic } from './safe-fs.js';
+import { defuseMarkers, foreignFolder, readTag, stripTagBlock, summaryPreview, tagsDir, TAG_SLUG_RE } from './tags.js';
+import { readHead, readRegular, tooBroadPath, writeAtomic } from './safe-fs.js';
 import type { ApiReply } from './artifact-api.js';
 
 export type { Space, SpaceDoc, SpaceListItem, SpaceMeta, SpaceUpdate } from './api-types.js';
@@ -141,7 +141,8 @@ export function readSpaceMeta(slug: string): SpaceMeta | undefined {
   const title = typeof raw.title === 'string' ? cleanLine(raw.title, SPACE_TITLE_MAX) : '';
   const dirs = strList(raw.dirs).filter((d) => path.isAbsolute(d));
   const cwd = typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined;
-  const from = raw.migratedFrom as { tag?: unknown; at?: unknown; summaryMtimeMs?: unknown } | undefined;
+  const from = raw.migratedFrom as { tag?: unknown; at?: unknown; summaryMtimeMs?: unknown; runs?: unknown } | undefined;
+  const fromRuns = strList(from?.runs).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
   return {
     slug,
     ...(title ? { title } : {}),
@@ -152,7 +153,7 @@ export function readSpaceMeta(slug: string): SpaceMeta | undefined {
     ...(cwd ? { cwd } : {}),
     history: readUpdates(raw.history),
     ...(from && typeof from.tag === 'string' && typeof from.at === 'string'
-      ? { migratedFrom: { tag: from.tag, at: from.at, ...(Number.isFinite(from.summaryMtimeMs) ? { summaryMtimeMs: Number(from.summaryMtimeMs) } : {}) } }
+      ? { migratedFrom: { tag: from.tag, at: from.at, ...(Number.isFinite(from.summaryMtimeMs) ? { summaryMtimeMs: Number(from.summaryMtimeMs) } : {}), ...(fromRuns.length ? { runs: fromRuns } : {}) } }
       : {}),
   };
 }
@@ -259,26 +260,7 @@ export function listSpaces(): SpaceListItem[] {
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/**
- * Путь, который открыл бы слишком много: корень диска, домашняя папка и её предки, папка настроек agentgraph (там токен
- * Jira, теги, пространства), её предки и всё внутри неё. Путь сравнивается и как есть, и по realpath (ссылка на ~).
- */
-export function tooBroadPath(p: string): string | undefined {
-  const home = path.resolve(os.homedir());
-  const cfg = path.resolve(configDir());
-  let real: string | undefined;
-  try {
-    real = fs.realpathSync.native(p);
-  } catch {
-    real = undefined;
-  }
-  for (const x of [path.resolve(p), ...(real ? [real] : [])]) {
-    if (x === path.parse(x).root) return 'корень диска';
-    if (isInside(home, x)) return 'домашняя папка целиком';
-    if (isInside(cfg, x) || isInside(x, cfg)) return 'папка настроек agentgraph';
-  }
-  return undefined;
-}
+export { tooBroadPath };
 
 /**
  * Пути пространства: абсолютные, без повторов, не больше SPACE_DIRS_MAX, не шире разумного (tooBroadPath; у файла — и
@@ -334,7 +316,10 @@ export function initialMap(title: string | undefined, gist: string | undefined, 
 
 export type NewSpace = { title?: string; gist?: string; dirs?: string[]; cwd?: string; autoTitle?: boolean };
 
-/** Заводит пространство; существующее не трогает (заголовок дописывается, если его не было). */
+/**
+ * Заводит пространство; существующее не трогает (заголовок дописывается, если его не было). Папка без space.json, но с
+ * файлами — 409: её содержимое положили мимо API (этап с Bash, сессия), и чужой CLAUDE.md стал бы памятью пространства.
+ */
 export function createSpace(slug: string, o: NewSpace = {}): Space {
   migrateTaskTags();
   const title = o.title ? cleanLine(o.title, SPACE_TITLE_MAX) : '';
@@ -343,14 +328,14 @@ export function createSpace(slug: string, o: NewSpace = {}): Space {
     if (title && !existing.title) writeMeta({ ...existing, title, ...(o.autoTitle ? { autoTitle: true as const } : {}) });
     return readSpace(slug)!;
   }
+  if (foreignFolder(spaceDir(slug))) throw new SpaceError(409, `Папка ${spaceDir(slug)} уже есть, но это не пространство (нет space.json): удали её или выбери другой слаг`);
   const gist = o.gist?.trim().replace(/\s*\n\s*/g, ' ').slice(0, SPACE_GIST_MAX) ?? '';
   const dirs = o.dirs ?? [];
   const now = new Date().toISOString();
   writeMeta({ slug, ...(title ? { title, ...(o.autoTitle ? { autoTitle: true as const } : {}) } : {}), createdAt: now, updatedAt: now, ...(dirs.length ? { dirs } : {}), ...(o.cwd ? { cwd: o.cwd } : {}), history: [] });
-  // заголовок модели в карту не идёт: он придуман по недоверенному тексту. В папке без space.json мог остаться свой
-  // CLAUDE.md — его не трогаем
+  // заголовок модели в карту не идёт: он придуман по недоверенному тексту
   const map = initialMap(o.autoTitle ? undefined : title || undefined, gist || undefined, dirs);
-  if (map && !fs.lstatSync(mapFile(slug), { throwIfNoEntry: false })) writeAtomic(mapFile(slug), map);
+  if (map) writeAtomic(mapFile(slug), map);
   return readSpace(slug)!;
 }
 
@@ -664,14 +649,19 @@ export function existingSpacePaths(space: Pick<SpaceMeta, 'dirs'>): { listed: st
   return { listed, dirs: [...new Set(dirs)], files };
 }
 
-/** Папки артефактов последних запусков пространства (свежие первыми), только существующие: на них ссылается STATE.md. */
-export function spaceArtifactDirs(space: Pick<SpaceMeta, 'history'>, runsDir: string, limit = 3): string[] {
+/**
+ * Папки артефактов последних запусков пространства (свежие первыми), только существующие: на них ссылается STATE.md.
+ * Запуски — записавшие состояние (history), у перенесённого из тега задачи — ещё и запуски с этим тегом (migratedFrom.runs):
+ * саммари тега писали не они, но ссылается оно на их артефакты.
+ */
+export function spaceArtifactDirs(space: Pick<SpaceMeta, 'history' | 'migratedFrom'>, runsDir: string, limit = 3): string[] {
   const out: string[] = [];
-  for (const u of space.history) {
+  const ids = [...space.history.filter((u) => u.kind === 'run').map((u) => u.id), ...(space.migratedFrom?.runs ?? [])];
+  for (const id of ids) {
     if (out.length >= limit) break;
-    if (u.kind !== 'run' || !/^[A-Za-z0-9_-]+$/.test(u.id)) continue;
-    const dir = path.join(runsDir, u.id, ARTIFACTS_DIR);
-    if (fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) out.push(dir);
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) continue;
+    const dir = path.join(runsDir, id, ARTIFACTS_DIR);
+    if (!out.includes(dir) && fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory()) out.push(dir);
   }
   return out;
 }
@@ -715,12 +705,17 @@ function docsLine(space: Space, max: number): string {
 
 /**
  * Текст модели или недоверенный текст перед обёрткой source-data. wrapData (intake.ts) обезвреживает только ASCII-вариант
- * тега, поэтому сначала NFKC (полноширинные «＜/source-data＞» → ASCII), без невидимых символов форматирования (\p{Cf}:
- * zero-width, bidi) и без HTML-сущностей угловой скобки перед source-data — иначе такой «закрывающий тег» вывел бы текст
- * из обёртки.
+ * тега, а закрывающий тег пишут и сущностями (&lt;&#47;…), и с невидимыми символами внутри. Поэтому обезвреживается само
+ * имя: после NFKC (полноширинные буквы → ASCII) и без невидимых символов (Default_Ignorable: zero-width, bidi, вариации)
+ * каждое «source-data» (через любой дефис, пробел или подчёркивание, без учёта регистра) становится «source‑data» с
+ * неразрывным дефисом — такой тег уже не закроет обёртку. Угловая скобка-сущность перед ним — тоже «‹».
  */
 export function wrapModelData(text: string): string {
-  const plain = text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/&(?:lt|#0*60|#x0*3c);(\s*\/?\s*source-data)/gi, '‹$1');
+  const plain = text
+    .normalize('NFKC')
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
+    .replace(/&(?:lt|#0*60|#x0*3c);?(\s*(?:\/|&#0*47;?|&sol;)?\s*source)/gi, '‹$1')
+    .replace(/source[\s\p{Pd}_]*data/giu, 'source\u2011data');
   return wrapData(plain);
 }
 
@@ -889,8 +884,41 @@ function backupTag(slug: string): void {
   }
 }
 
+/**
+ * Папка запусков для переноса: где искать запуски тега задачи (их артефакты открываются перенесённому пространству).
+ * Ставит сервер и CLI; не задана (тесты, чужой процесс) — запуски тега не ищутся.
+ */
+let migrationRunsDir: string | undefined;
+export function setMigrationRunsDir(dir: string | undefined): void {
+  migrationRunsDir = dir;
+}
+
+/** Запуски с тегами задач по папке запусков: тег → id свежих сверху (только с папкой артефактов, до трёх). */
+function taggedRuns(): Map<string, string[]> {
+  const out = new Map<string, { id: string; at: string }[]>();
+  if (!migrationRunsDir) return new Map();
+  let ids: string[];
+  try {
+    ids = fs.readdirSync(migrationRunsDir);
+  } catch {
+    return new Map();
+  }
+  for (const id of ids) {
+    if (!/^[A-Za-z0-9_-]+$/.test(id) || !fs.statSync(path.join(migrationRunsDir, id, ARTIFACTS_DIR), { throwIfNoEntry: false })?.isDirectory()) continue;
+    let r: { space?: unknown; tags?: unknown; startedAt?: unknown };
+    try {
+      r = JSON.parse(readRegular(path.join(migrationRunsDir, id, 'run.json'), { max: META_READ_MAX }) ?? '{}') as typeof r;
+    } catch {
+      continue;
+    }
+    if (r.space !== undefined) continue;
+    for (const t of strList(r.tags)) out.set(t, [...(out.get(t) ?? []), { id, at: typeof r.startedAt === 'string' ? r.startedAt : '' }]);
+  }
+  return new Map([...out].map(([t, list]) => [t, list.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 3).map((x) => x.id)]));
+}
+
 /** Одно пространство из тега: собирается во временной папке и встаёт на место одним rename — наполовину перенесённых нет. */
-function migrateTag(tag: Tag, at: string): void {
+function migrateTag(tag: Tag, at: string, runs: string[] = []): void {
   const root = spacesDir();
   const tmp = path.join(root, `.migrating-${tag.slug}-${process.pid}`);
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -903,7 +931,7 @@ function migrateTag(tag: Tag, at: string): void {
       updatedAt: tag.updatedAt,
       ...(tag.dirs?.length ? { dirs: tag.dirs } : {}),
       history: tag.runs.map(fromTagRun),
-      migratedFrom: { tag: tag.slug, at, summaryMtimeMs: fs.statSync(path.join(tagsDir(), tag.slug, 'summary.md'), { throwIfNoEntry: false })?.mtimeMs ?? 0 },
+      migratedFrom: { tag: tag.slug, at, summaryMtimeMs: fs.statSync(path.join(tagsDir(), tag.slug, 'summary.md'), { throwIfNoEntry: false })?.mtimeMs ?? 0, ...(runs.length ? { runs } : {}) },
     };
     fs.writeFileSync(path.join(tmp, META_FILE), JSON.stringify(meta, null, 2) + '\n');
     const map = mapFromTag(tag);
@@ -927,6 +955,31 @@ function migrateTag(tag: Tag, at: string): void {
 
 let migratedRoot: string | undefined;
 
+/** Жив ли процесс: kill с сигналом 0 только проверяет (EPERM — жив, но чужой). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Временные папки переноса процессов, которых уже нет (убит посреди migrateTag): папка тега цела, а мусор копился бы. */
+function dropStaleMigrations(root: string): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const m = /^\.migrating-[a-z0-9-]+-(\d+)$/.exec(name);
+    if (!m || Number(m[1]) === process.pid || alive(Number(m[1]))) continue;
+    fs.rmSync(path.join(root, name), { recursive: true, force: true });
+  }
+}
+
 /**
  * Перенос тегов задач (kind task или старый тег без вида) в пространства — один раз на процесс и папку настроек,
  * при первом обращении к пространствам. Тег, у которого уже есть пространство с тем же слагом или который переносили
@@ -937,6 +990,7 @@ export function migrateTaskTags(o: { force?: boolean } = {}): string[] {
   const root = spacesDir();
   if (migratedRoot === root && !o.force) return [];
   migratedRoot = root;
+  dropStaleMigrations(root);
   let names: string[];
   try {
     names = fs.readdirSync(tagsDir());
@@ -947,6 +1001,7 @@ export function migrateTaskTags(o: { force?: boolean } = {}): string[] {
   const before = done.length;
   const moved: string[] = [];
   const at = new Date().toISOString();
+  let runs: Map<string, string[]> | undefined;
   for (const name of names.sort()) {
     if (!SPACE_SLUG_RE.test(name) || done.includes(name)) continue;
     let tag: Tag | undefined;
@@ -960,7 +1015,8 @@ export function migrateTaskTags(o: { force?: boolean } = {}): string[] {
     try {
       if (!fs.existsSync(path.join(root, name))) {
         backupTag(name);
-        migrateTag(tag, at);
+        runs ??= taggedRuns();
+        migrateTag(tag, at, runs.get(name));
         moved.push(name);
       }
       done.push(name);
@@ -1014,22 +1070,29 @@ const bad = (err: unknown): ApiReply =>
   err instanceof SpaceError ? { status: err.status, body: { error: err.message } } : { status: 400, body: { error: err instanceof Error ? err.message : String(err) } };
 const notFound = (slug: string): ApiReply => ({ status: 404, body: { error: `Пространства ${slug} нет` } });
 
-/** Работа в пространстве: сессия или запуск — где (папка) и когда. */
-export type SpaceWork = { space: string; cwd?: string; at: string; from: 'session' | 'run' };
+/** Работа в пространстве: сессия или запуск — где (папка), когда и идёт ли сейчас. */
+export type SpaceWork = { space: string; cwd?: string; at: string; from: 'session' | 'run'; live?: boolean };
+
+/** Последняя работа пространства, папка из неё и счётчики. */
+export type SpaceWorkSum = { at: string; path?: string; from?: 'session' | 'run'; sessions: number; runs: number; live: number };
 
 /**
  * Последняя работа в каждом пространстве и папка, которую из неё подставят формы. Время — любой работы (порядок «свежие
  * сверху»); папка — только не внутри папки настроек agentgraph и не внутри папки запусков: «Сессия в папке» пространства
  * правит его карту, и её папка рабочей папкой проекта не становится (этапы не правили бы проект, а Bash писал бы в карту).
  */
-export function spaceWorkOf(work: SpaceWork[], runsDir: string): Map<string, { at: string; path?: string; from?: 'session' | 'run' }> {
+export function spaceWorkOf(work: SpaceWork[], runsDir: string): Map<string, SpaceWorkSum> {
   const cfg = path.resolve(configDir());
   const runs = path.resolve(runsDir);
   const usable = (p: string | undefined) => Boolean(p) && !isInside(path.resolve(p!), cfg) && !isInside(path.resolve(p!), runs);
-  const out = new Map<string, { at: string; path?: string; from?: 'session' | 'run'; pathAt?: string }>();
+  const out = new Map<string, SpaceWorkSum & { pathAt?: string }>();
   for (const w of work) {
+    const cur = out.get(w.space) ?? { at: '', sessions: 0, runs: 0, live: 0 };
+    if (w.from === 'session') cur.sessions++;
+    else cur.runs++;
+    if (w.live) cur.live++;
+    out.set(w.space, cur);
     if (!w.at) continue;
-    const cur = out.get(w.space) ?? { at: '' };
     if (w.at > cur.at) cur.at = w.at;
     if (usable(w.cwd) && (!cur.pathAt || w.at > cur.pathAt)) Object.assign(cur, { path: path.resolve(w.cwd!), from: w.from, pathAt: w.at });
     out.set(w.space, cur);
@@ -1043,18 +1106,23 @@ export function spaceWorkdirOf(cwd: string | undefined, work?: { path?: string; 
   return work?.path && work.from ? { path: work.path, from: work.from } : undefined;
 }
 
-/** Список пространств; work — их последняя работа (server.ts собирает её из запусков и сессий). */
-export function spacesListReply(work: Map<string, { at: string; path?: string; from?: 'session' | 'run' }> = new Map()): ApiReply {
+/** Список пространств; work — их последняя работа и счётчики (server.ts собирает их из запусков и сессий). */
+export function spacesListReply(work: Map<string, SpaceWorkSum> = new Map()): ApiReply {
   const spaces = listSpaces().map((s) => {
     const w = work.get(s.slug);
     const workdir = spaceWorkdirOf(s.cwd, w);
-    return { ...s, ...(workdir ? { workdir } : {}), ...(w?.at ? { lastWorkAt: w.at } : {}) } satisfies SpaceListItem;
+    return {
+      ...s,
+      ...(workdir ? { workdir } : {}),
+      ...(w?.at ? { lastWorkAt: w.at } : {}),
+      ...(w ? { sessions: w.sessions, runs: w.runs, live: w.live } : {}),
+    } satisfies SpaceListItem;
   });
   return { status: 200, body: { spaces } };
 }
 
 /** Пространство целиком; runs и sessions добавляет server.ts — у него запуски и реестр сессий. */
-export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions' | 'workdir'> = () => ({ runs: [], sessions: [] })): ApiReply {
+export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions' | 'workdir' | 'looseSessions'> = () => ({ runs: [], sessions: [] })): ApiReply {
   try {
     const s = readSpace(slug);
     const legacySummary = s ? legacySummaryOf(s) : undefined;

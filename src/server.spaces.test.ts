@@ -36,6 +36,8 @@ const fakeRunFlow = async (spec: FlowSpec, opts: RunOptions): Promise<never> => 
 const OLD = '2026-10-30_18-50-33-kai';
 const CHILD = '2026-10-30_19-00-00-kai-child';
 const WT = '2026-10-31_10-00-00-kai-wt';
+const MULTI = '2026-10-29_10-00-00-two-tags';
+const LOOSE = '0000000a-0000-4000-8000-000000000000';
 function seed() {
   const tag = path.join(home, 'cfg', 'tags', 'kai');
   fs.mkdirSync(tag, { recursive: true });
@@ -50,6 +52,14 @@ function seed() {
     }));
   };
   report(OLD, { input: 'Сделай пуш\n\n<!-- tag:kai -->\nСаммари тега на момент старта\n<!-- /tag -->\n\n<!-- tag:other -->\nчужой блок\n<!-- /tag -->', tags: ['kai'], saveTag: true });
+  // старый запуск с двумя тегами задач: виден на странице обоих пространств
+  const other = path.join(home, 'cfg', 'tags', 'two');
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, 'tag.json'), JSON.stringify({ slug: 'two', kind: 'task', createdAt: '2026-10-29T20:00:00.000Z', updatedAt: '2026-10-30T16:00:00.000Z', runs: [] }));
+  report(MULTI, { input: 'два тега', tags: ['kai', 'two'], startedAt: '2026-10-29T10:00:00.000Z' });
+  // сессия без пространства в той же папке, что запуски kai
+  fs.mkdirSync(path.join(home, 'sessions', LOOSE), { recursive: true });
+  fs.writeFileSync(path.join(home, 'sessions', LOOSE, 'session.json'), JSON.stringify({ id: LOOSE, name: 'без пространства', cwd: proj, tags: [], saveState: true, claudeSessionIds: [], createdAt: '2026-10-30T10:00:00.000Z', lastActivityAt: '2026-10-30T11:00:00.000Z', endedAt: '2026-10-30T11:00:00.000Z', turns: 1 }));
   report(CHILD, { input: 'дочерний', tags: ['kai'], parent: { runId: OLD, block: MAIN_BLOCK }, startedAt: '2026-10-30T19:00:00.000Z' });
   report(WT, { input: 'в worktree', tags: ['kai'], worktree: { path: path.join(home, 'wt'), branch: 'x' }, startedAt: '2026-10-31T10:00:00.000Z' });
 }
@@ -87,7 +97,7 @@ const slugs = async () => (await call<{ spaces: SpaceListItem[] }>('GET', '/api/
 
 test('POST /api/runs: старые поля и тег задачи — 400, неверный слаг и flow — 400; после 400 пустого пространства на диске нет', async () => {
   // перенос тега задачи — при первом обращении к пространствам
-  assert.deepEqual(await slugs(), ['kai']);
+  assert.deepEqual(await slugs(), ['kai', 'two']);
   const bad = async (body: Record<string, unknown>, re: RegExp) => {
     const r = await call<{ error: string }>('POST', '/api/runs', { flow: 'demo', input: 'x', cwd: proj, ...body });
     assert.equal(r.status, 400, JSON.stringify(body));
@@ -99,18 +109,31 @@ test('POST /api/runs: старые поля и тег задачи — 400, не
   await bad({ space: '../x' }, /Неверное пространство/);
   await bad({ flow: 'nope', space: 'fresh-d' }, /./);
   await bad({ autoSpace: 'yes', space: 'fresh-e' }, /autoSpace/);
-  assert.deepEqual(await slugs(), ['kai']);
+  assert.deepEqual(await slugs(), ['kai', 'two']);
+  // папка без space.json с чужими файлами — 409, пространство не заводится поверх
+  fs.mkdirSync(path.join(home, 'cfg', 'spaces', 'planted'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'cfg', 'spaces', 'planted', 'CLAUDE.md'), 'чужая карта');
+  const planted = await call<{ error: string }>('POST', '/api/runs', { flow: 'demo', input: 'x', cwd: proj, space: 'planted' });
+  assert.equal(planted.status, 409);
+  assert.equal((await call('POST', '/api/spaces', { slug: 'planted' })).status, 409);
+  assert.deepEqual(await slugs(), ['kai', 'two']);
   assert.equal(started.length, 0);
 });
 
 test('страница пространства: старые запуски тега задачи — с пометкой legacy, без дочерних; папка — только у запуска не в worktree', async () => {
   const r = await call<SpaceDetail>('GET', '/api/spaces/kai');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.runs.map((x) => [x.id, x.legacy, x.cwd]), [[WT, true, undefined], [OLD, true, proj]]);
+  assert.deepEqual(r.body.runs.map((x) => [x.id, x.legacy, x.cwd]), [[WT, true, undefined], [OLD, true, proj], [MULTI, true, proj]]);
   // рабочая папка для форм — папка последнего запуска не в worktree
   assert.deepEqual(r.body.workdir, { path: proj, from: 'run' });
+  // сессия без пространства в той же папке — её предложат добавить
+  assert.deepEqual(r.body.looseSessions?.map((x) => x.id), [LOOSE]);
   const list = (await call<{ spaces: SpaceListItem[] }>('GET', '/api/spaces')).body.spaces;
-  assert.deepEqual(list.find((s) => s.slug === 'kai')?.workdir, { path: proj, from: 'run' });
+  const kai = list.find((s) => s.slug === 'kai')!;
+  assert.deepEqual([kai.workdir, kai.runs, kai.sessions, kai.live], [{ path: proj, from: 'run' }, 3, 0, 0]);
+  // запуск с двумя тегами задач — и у второго пространства
+  assert.deepEqual((await call<SpaceDetail>('GET', '/api/spaces/two')).body.runs.map((x) => [x.id, x.legacy]), [[MULTI, true]]);
+  assert.equal(list.find((s) => s.slug === 'two')?.runs, 1);
 });
 
 test('продолжение старого запуска с тегом задачи: пространство — перенесённый тег, saveTag — галочка состояния, из задачи снят блок только этого тега', async () => {
@@ -137,5 +160,5 @@ test('продолжение старого запуска, чьё простр�
   assert.match(spec.input ?? '', /<!-- tag:kai -->/);
   assert.equal(opts.space, undefined);
   // удалённое пространство не воскресает: тег перенесён раньше
-  assert.deepEqual(await slugs(), []);
+  assert.deepEqual(await slugs(), ['two']);
 });

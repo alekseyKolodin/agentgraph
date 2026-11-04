@@ -11,7 +11,7 @@ import type { Tag, TagDetail, TagListItem, TagMeta } from './api-types.js';
 import { ATTACHMENTS_COUNT_MAX, ATTACHMENTS_DIR, ATTACHMENTS_TOTAL_MAX, dedupeNames, safeAttachmentName, validateAttachments } from './attachments.js';
 import { flowBlocks, type FlowSpec } from './schema.js';
 import type { ApiReply } from './artifact-api.js';
-import { readRegular, writeAtomic } from './safe-fs.js';
+import { readRegular, tooBroadPath, writeAtomic } from './safe-fs.js';
 
 /** Слаг тега: строчные латинские буквы, цифры и дефис; он же имя папки. Тот же регэксп — TAG_SLUG_RE в schema.ts. */
 export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -162,6 +162,15 @@ export function listTags(): TagListItem[] {
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** Папка есть и в ней что-то лежит (кроме .DS_Store Finder'а): её содержимое положили мимо API. */
+export function foreignFolder(dir: string): boolean {
+  try {
+    return fs.readdirSync(dir).some((n) => n !== '.DS_Store');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Заводит тег знаний; существующий не трогает (заголовок дописывается, если его не было). Слаг старого тега задачи
  * занят: его папка осталась, а сам он перенесён в пространство.
@@ -174,6 +183,9 @@ export function createTag(slug: string, title?: string): Tag {
     if (t && !existing.title) writeMeta({ ...existing, title: t });
     return readTag(slug)!;
   }
+  // папка без tag.json, но с файлами (их положили мимо API — этап с Bash, сессия): заметки из неё стали бы инструкциями
+  // этапам, поэтому такую папку не принимаем
+  if (foreignFolder(tagDir(slug))) throw new Error(`Папка ${tagDir(slug)} уже есть, но это не тег: удали её или выбери другой слаг`);
   const now = new Date().toISOString();
   writeMeta({ slug, kind: 'knowledge', ...(t ? { title: t } : {}), createdAt: now, updatedAt: now, runs: [] });
   return readTag(slug)!;
@@ -183,12 +195,20 @@ export function createTag(slug: string, title?: string): Tag {
 /** kind в патче игнорируется. description — «когда нужен» тег, inline — «заметки всегда в промпте целиком». */
 export type TagPatch = { title?: unknown; notes?: unknown; dirs?: unknown; kind?: unknown; description?: unknown; inline?: unknown };
 
-/** Пути тега: абсолютные, без повторов, не больше TAG_DIRS_MAX. Существование не проверяется: проверит запуск. */
+/**
+ * Пути тега: абсолютные, без повторов, не больше TAG_DIRS_MAX, не шире разумного (tooBroadPath, у файла — и его папка:
+ * в доп. директории уходит она): путь ~ или ~/.agentgraph открыл бы сессии без вопроса токен Jira. Существование не
+ * проверяется: проверит запуск.
+ */
 function checkDirs(raw: unknown): string[] {
   if (!Array.isArray(raw) || raw.some((d) => typeof d !== 'string')) throw new Error('dirs — список путей');
   const dirs = [...new Set((raw as string[]).map((d) => d.trim()).filter(Boolean))];
   if (dirs.length > TAG_DIRS_MAX) throw new Error(`Путей у тега больше ${TAG_DIRS_MAX}`);
-  for (const d of dirs) if (!path.isAbsolute(d)) throw new Error(`Путь тега — абсолютный: ${d}`);
+  for (const d of dirs) {
+    if (!path.isAbsolute(d)) throw new Error(`Путь тега — абсолютный: ${d}`);
+    const broad = tooBroadPath(d) ?? (fs.statSync(d, { throwIfNoEntry: false })?.isFile() ? tooBroadPath(path.dirname(d)) : undefined);
+    if (broad) throw new Error(`${d}: ${broad} — так тег откроет слишком много; укажи папку проекта или документов`);
+  }
   return dirs.map((d) => path.resolve(d));
 }
 
@@ -294,7 +314,8 @@ export function existingTagPaths(tag: Pick<Tag, 'slug'> & Partial<Pick<Tag, 'dir
   const dirs: string[] = [];
   for (const p of tag.dirs ?? []) {
     const st = fs.statSync(p, { throwIfNoEntry: false });
-    if (!st) continue;
+    // старые пути не проверялись: корень, ~ и папку настроек не открываем и теперь
+    if (!st || tooBroadPath(p) || (!st.isDirectory() && tooBroadPath(path.dirname(p)))) continue;
     listed.push(p);
     dirs.push(st.isDirectory() ? p : path.dirname(p));
   }
@@ -485,6 +506,7 @@ export function deleteTagReply(slug: string): ApiReply {
 
 export function addTagAttachmentReply(slug: string, body: unknown): ApiReply {
   try {
+    if (readMeta(slug)?.kind === 'task') return movedToSpace(slug);
     const name = addTagAttachment(slug, body);
     return { status: 201, body: { name, attachments: attachmentNames(slug) } };
   } catch (err) {

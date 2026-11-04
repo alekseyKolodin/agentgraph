@@ -132,6 +132,8 @@ export type RunSummary = {
   adhoc?: true;
   /** Пространство запуска: чип в списке; у старого запуска — его первый тег задачи (перенесён в пространство). */
   space?: string;
+  /** Старый запуск с несколькими тегами задач: все они (он виден на странице каждого их пространства, как сессия). */
+  legacyTags?: string[];
   /** Теги знаний запуска: чипы рядом с пространством. */
   knowledge?: string[];
   /** Дочерний запуск блока-вызова: список показывает его под родителем. */
@@ -350,7 +352,7 @@ export type SpaceMeta = {
    * Пространство перенесено из тега задачи. summaryMtimeMs — mtime саммари тега, которое учтено (при переносе или взято
    * в состояние позже): саммари новее — его дописала старая версия agentgraph на той же папке настроек.
    */
-  migratedFrom?: { tag: string; at: string; summaryMtimeMs?: number };
+  migratedFrom?: { tag: string; at: string; summaryMtimeMs?: number; runs?: string[] };
 };
 
 /** Пространство целиком: карта (CLAUDE.md), состояние (STATE.md), документы, абсолютный путь папки. */
@@ -375,6 +377,10 @@ export type SpaceListItem = {
   workdir?: SpaceWorkdir;
   /** Последняя сессия или запуск в пространстве: порядок «свежие сверху» в выборе пространства. */
   lastWorkAt?: string;
+  /** Сессий и запусков в пространстве (без дочерних запусков) и сколько из них идёт сейчас. */
+  sessions?: number;
+  runs?: number;
+  live?: number;
   migratedFrom?: { tag: string; at: string };
 };
 
@@ -392,7 +398,11 @@ export type SpaceSession = { id: string; name: string; status: SessionStatus; li
  */
 export type LegacySummary = { path: string; text: string; mtimeMs: number };
 
-export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary };
+/**
+ * looseSessions — сессии без пространства, открытые в тех же папках, что сессии и запуски пространства (или в его рабочей
+ * папке): их можно добавить в пространство одной кнопкой (у перенесённого — сессии той же работы без тега задачи).
+ */
+export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary; looseSessions?: SpaceSession[] };
 
 /**
  * GET /api/spaces/:slug/context: что пространство даёт модели. session — текст хука SessionStart новой сессии
@@ -446,7 +456,8 @@ export type SessionPermissionMode = 'acceptEdits' | 'auto' | 'manual' | 'plan';
 export type SessionTagChip = { slug: string; state: 'on' | 'pending' | 'removed' };
 
 /** Пространство сессии: on — модель его видела, pending — выбрано на ходу и придёт со следующим шагом, removed — снято, снятие ещё не дошло. */
-export type SessionSpaceChip = { slug: string; state: 'on' | 'pending' | 'removed'; missing?: true };
+/** memory — карта этого пространства в памяти идущего claude (запущен с ним); выбранное на ходу — строкой «прочитай» до «Перезапустить». */
+export type SessionSpaceChip = { slug: string; state: 'on' | 'pending' | 'removed'; missing?: true; memory?: true };
 
 /** Последнее обновление состояния пространства по сессии: когда, куда, ошибка, стоимость. */
 export type SessionStateUpdate = { at: string; space: string; ok: boolean; error?: string; costUsd: number };

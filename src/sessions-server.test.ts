@@ -9,7 +9,7 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager } from './sessions-server.js';
+import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager, spaceWriteGuard } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, tagDir, updateTag } from './tags.js';
@@ -155,7 +155,8 @@ test('создание: claude без shell в папке проекта, окр
   assert.ok(deny.includes(`Edit(/${path.dirname(spaceDir('checkout'))}/**)`), deny.join('\n'));
   assert.deepEqual([r.body.status, r.body.live, r.body.name, r.body.space, r.body.saveState], ['starting', true, 'checkout · rules', 'checkout', true]);
   assert.deepEqual(r.body.chips, [{ slug: 'rules', state: 'pending' }]);
-  assert.deepEqual(r.body.spaceChip, { slug: 'checkout', state: 'pending' });
+  // запущен с этим пространством: карта — в памяти claude (memory), раздел ждёт SessionStart
+  assert.deepEqual(r.body.spaceChip, { slug: 'checkout', state: 'pending', memory: true });
   assert.ok(fs.existsSync(path.join(root, 'sessions', r.body.id, 'session.json')));
   assert.equal((await call('GET', '/api/spaces/checkout')).status, 200);
   await until(async () => (await view(r.body.id)).claudeVersion === '2.1.311');
@@ -195,12 +196,16 @@ test('смена пространства на ходу: ходы до смен�
   const token = tokenOf(spawned.at(-1)!);
   const say = (prompt: string) => hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt });
   await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  assert.equal((await view(s.id)).spaceChip?.memory, true);
   await say('ход-а-1');
   await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'ответ-а-1' });
   await say('ход-а-2');
   await call('PUT', `/api/sessions/${s.id}/space`, { space: 'sw-b' });
   await say('ход-б-1');
-  assert.deepEqual((await view(s.id)).stateSpaces, ['sw-a', 'sw-b']);
+  const sv = await view(s.id);
+  assert.deepEqual(sv.stateSpaces, ['sw-a', 'sw-b']);
+  // карта sw-b выбрана на ходу: в памяти идущего claude её нет — до «Перезапустить» она строкой «прочитай»
+  assert.deepEqual([sv.spaceChip?.slug, sv.spaceChip?.memory], ['sw-b', undefined]);
   const before = summaries.length;
   await call('POST', `/api/sessions/${s.id}/end`);
   await until(async () => (await view(s.id)).newTurns === 0 && !(await view(s.id)).updatingState);
@@ -246,6 +251,22 @@ test('удаление пространства: идущая сессия с н
   assert.equal((await call<{ sessions: unknown[] }>('GET', '/api/spaces/del-x')).body.sessions.length, 0);
 });
 
+test('сессия в папке пространства: запись в пространство, заведённое после её старта, в новую папку и в другом регистре — отказ хука; своё — решают правила', () => {
+  createSpace('wg-alpha');
+  const cwd = spaceDir('wg-alpha');
+  createSpace('wg-gamma');
+  const spaces = path.dirname(cwd);
+  const w = (p: string) => spaceWriteGuard(cwd, 'Write', { file_path: p });
+  assert.equal(w(path.join(cwd, 'CLAUDE.md')), undefined);
+  assert.equal(w('docs/spec.md'), undefined);
+  for (const p of [path.join(spaceDir('wg-gamma'), 'CLAUDE.md'), path.join(spaces, 'brand-new', 'CLAUDE.md'), path.join(spaces, 'x.md'), path.join(path.dirname(spaces), 'SPACES', 'wg-gamma', 'CLAUDE.md'), '../wg-gamma/STATE.md']) {
+    assert.match(w(p) ?? '', /правит только его/, p);
+  }
+  assert.equal(spaceWriteGuard(cwd, 'Read', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
+  // сессия не в папке пространства — хук не мешает
+  assert.equal(spaceWriteGuard(path.join(root, 'proj'), 'Write', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
+});
+
 test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
   const before = spawned.length;
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'нет') })).status, 400);
@@ -279,7 +300,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
   const first = (start.body.hookSpecificOutput as { additionalContext: string }).additionalContext;
   assert.ok(first.includes('Пространство agentgraph «Корзина» (hk-space)') && first.includes('уже в контексте как память') && first.includes('Суть: корзина'));
   let v = await view(s.id);
-  assert.deepEqual([v.status, v.chips, v.spaceChip], ['waiting', [{ slug: 'checkout', state: 'on' }], { slug: 'hk-space', state: 'on' }]);
+  assert.deepEqual([v.status, v.chips, v.spaceChip], ['waiting', [{ slug: 'checkout', state: 'on' }], { slug: 'hk-space', state: 'on', memory: true }]);
 
   createTag('billing');
   v = (await call<SessionView>('PUT', `/api/sessions/${s.id}/tags`, { tags: ['billing'] })).body;

@@ -20,11 +20,11 @@
 .search:focus { outline: none; border-color: var(--live); background: var(--panel); }
 .search[hidden] { display: none; }
 .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.list li { cursor: pointer; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; border-radius: var(--r-sm); }
-.list li:hover { background: var(--hover); }
-.list li.active { background: var(--select); }
-.list li.none { cursor: default; padding: 6px; }
-.list li.none:hover { background: transparent; }
+.row { padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; border-radius: var(--r-sm); color: inherit; text-decoration: none; }
+.row:hover { background: var(--hover); }
+.row.active { background: var(--select); }
+.row:focus-visible { outline: none; box-shadow: var(--focus); }
+.list li.none { padding: 6px; }
 .name { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-weight: 600; }
 .slug-mark { color: var(--ink-3); font-weight: 400; flex: none; }
 .slug-sub { font-family: var(--font-mono); font-size: var(--fs-cap); font-weight: 400; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -51,6 +51,9 @@
 .tab-count { margin-left: 6px; font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .tab-body { display: flex; flex-direction: column; gap: 10px; }
 .hint { margin: 0; max-width: 760px; }
+/* сессии без пространства в тех же папках: предложение, а не сигнал — нейтральная рамка */
+.loose { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; margin-bottom: 8px; }
+.loose p { margin: 0; }
 /* саммари тега от старой версии: ждёт решения — жёлтая кромка «ждёт тебя», без заливки */
 .legacy { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-left: 3px solid var(--st-wait); border-radius: var(--r-sm); padding: 8px 10px; background: var(--panel); }
 .legacy p { margin: 0; }

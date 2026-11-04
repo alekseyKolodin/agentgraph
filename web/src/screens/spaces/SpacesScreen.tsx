@@ -3,7 +3,7 @@
 // папке пространства, удалить), вкладки «Карта» (CLAUDE.md), «Состояние» (STATE.md), «Документы», «Контекст» (что
 // уходит модели) и «Настройки» (заголовок, папки); сессии и запуски пространства — колонкой справа или ниже.
 // Каждое открытие страницы (переход, в том числе на тот же адрес) перечитывает список и пространство с сервера.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Link, matchPath, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SpaceDetail, SpaceDoc } from '@server/api-types';
@@ -11,6 +11,7 @@ import {
   addSpaceDoc, api, ApiError, createSpace, deleteSpace, deleteSpaceDoc, errorText, fetchSpace, fetchSpaceContext, fetchSpaceDoc, keys, saveSpace, saveSpaceDoc, useConfig,
   useFeature, useSpaces,
 } from '../../api';
+import { setSessionSpace } from '../../api/sessions';
 import { Badge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -326,10 +327,12 @@ export function SpacesScreen() {
           <ul className={styles.list}>
             {loaded && (shown.length
               ? shown.map((s) => (
-                <li key={s.slug} className={cx(s.slug === space?.slug && styles.active)} onClick={() => go(s.slug)}>
-                  <span className={styles.name}><span className={styles.slugMark}>◇</span>{spaceLabel(s)}{s.title && <span className={styles.slugSub}>{s.slug}</span>}</span>
-                  <span className={cx(styles.sub, styles.preview)}>{spacePreview(s)}</span>
-                  <span className={cx(styles.sub, styles.meta)}>{spaceMetaLine(s)}{s.migratedFrom ? ` · ${t('из тега задачи')}` : ''}</span>
+                <li key={s.slug}>
+                  <Link to={spacePath(s.slug)} replace={s.slug === space?.slug} aria-current={s.slug === space?.slug ? 'page' : undefined} className={cx(styles.row, s.slug === space?.slug && styles.active)}>
+                    <span className={styles.name}><span className={styles.slugMark}>◇</span>{spaceLabel(s)}{s.title && <span className={styles.slugSub}>{s.slug}</span>}</span>
+                    <span className={cx(styles.sub, styles.preview)}>{spacePreview(s)}</span>
+                    <span className={cx(styles.sub, styles.meta)}>{spaceMetaLine(s)}{s.migratedFrom ? ` · ${t('из тега задачи')}` : ''}</span>
+                  </Link>
                 </li>
               ))
               : <li className={cx(styles.none, 'muted small')}>{spacesNoneText(list.length)}</li>)}
@@ -351,6 +354,7 @@ export function SpacesScreen() {
               onReload={() => void reload()}
               onRemove={() => void remove()}
               onQuick={(patch, done) => void quick(patch, done)}
+              onLooseAdded={(ids) => setSpace((prev) => (prev ? { ...prev, sessions: [...prev.sessions, ...(prev.looseSessions ?? []).filter((x) => ids.includes(x.id))], looseSessions: prev.looseSessions?.filter((x) => !ids.includes(x.id)) } : prev))}
               onDocs={(docs) => setSpace((s) => (s ? { ...s, docs } : s))}
               onDocDirty={(d) => (docDirty.current = d)}
             />
@@ -378,15 +382,43 @@ type EditorProps = {
   onRemove: () => void;
   /** Запись без правки формы (саммари тега, «оставить заголовок»): done — что сказать после. */
   onQuick: (patch: Parameters<typeof saveSpace>[1], done: string) => void;
+  /** Сессии без пространства добавлены в это: перенести их в список сессий, форму не трогать. */
+  onLooseAdded: (ids: string[]) => void;
   onDocs: (docs: SpaceDoc[]) => void;
   onDocDirty: (dirty: boolean) => void;
 };
 
-function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onQuick, onDocs, onDocDirty }: EditorProps) {
+function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onQuick, onLooseAdded, onDocs, onDocDirty }: EditorProps) {
+  const toast = useToast();
+  const [adding, setAdding] = useState(false);
+  /** Сессии без пространства из тех же папок — в это пространство (их ходы потом уйдут в его состояние). */
+  const addLoose = async () => {
+    setAdding(true);
+    const done: string[] = [];
+    try {
+      for (const x of s.looseSessions ?? []) {
+        await setSessionSpace(x.id, s.slug);
+        done.push(x.id);
+      }
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setAdding(false);
+      if (done.length) onLooseAdded(done);
+    }
+  };
+  // вкладки — как у страницы запуска: ← → по кругу, фокус на выбранную
+  const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const i = TABS.findIndex(([id]) => id === tab);
+    const next = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length]![0];
+    setTab(next);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-space-tab="${next}"]`)?.focus());
+  };
   const home = useConfig().data?.home;
   const reveal = useFeature('reveal');
-  const toast = useToast();
   const items = spaceItems(s.sessions, s.runs);
+  const liveCount = s.sessions.filter((x) => x.live).length + s.runs.filter((r) => r.status === 'running' || r.status === 'waiting' || r.status === 'paused').length;
   const mapLong = form.map.length > SPACE_MAP_WARN;
   // папка «Новой сессии»: рабочая папка пространства, иначе папка его последней сессии или запуска (считает сервер;
   // «Сессия в папке» пространства не в счёт)
@@ -438,16 +470,19 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               {conflict && <button type="button" className="btn small" onClick={onReload}>{t('Перечитать с диска')}</button>}
             </div>
           )}
-          <div className="tabs" role="tablist">
+          <div className="tabs" role="tablist" aria-label={t('Разделы пространства')} onKeyDown={onTabKey}>
             {TABS.map(([id, label]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} className={cx('tab', tab === id && 'active')} onClick={() => setTab(id)}>
+              <button key={id} type="button" role="tab" data-space-tab={id} aria-selected={tab === id} aria-controls={`space-pane-${id}`} tabIndex={tab === id ? 0 : -1} className={cx('tab', tab === id && 'active')} onClick={() => setTab(id)}>
                 {label}
                 {id === 'docs' && s.docs.length > 0 && <span className={styles.tabCount}>{s.docs.length}</span>}
               </button>
             ))}
           </div>
           {tab === 'map' && (
-            <div className={styles.tabBody}>
+            <div id="space-pane-map" role="tabpanel" className={styles.tabBody}>
+              {s.migratedFrom && !s.map.trim() && (
+                <p className={cx('small', styles.hint)}>{t('Карты нет: у тега задачи {tag} не было заметок. Опиши фичу здесь — суть, где код, куда за чем ходить — или открой «Сессию в папке»: Claude поможет, правки подтвердишь ты.', { tag: s.migratedFrom.tag })}</p>
+              )}
               <p className={cx('muted small', styles.hint)}>{t('CLAUDE.md пространства — карта: суть, где что, куда за чем ходить, договорённости. Claude Code загружает её памятью в каждую сессию и этап пространства, как CLAUDE.md репозитория. Держи её короткой: подробности — в документы, их агент откроет сам')}</p>
               <textarea name="map" className={styles.mono} rows={18} spellCheck={false} placeholder={MAP_PLACEHOLDER} value={form.map} onChange={(e) => edit('map', e.target.value)} />
               <div className={styles.fieldFoot}>
@@ -457,7 +492,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
             </div>
           )}
           {tab === 'state' && (
-            <div className={styles.tabBody}>
+            <div id="space-pane-state" role="tabpanel" className={styles.tabBody}>
               {s.legacySummary && s.migratedFrom && (
                 <div className={styles.legacy} role="status">
                   <p className="small">
@@ -486,9 +521,9 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
             </div>
           )}
           <DocsTab key={s.slug} space={s} onDocs={onDocs} onDirty={onDocDirty} hidden={tab !== 'docs'} />
-          {tab === 'context' && <ContextTab slug={s.slug} version={`${s.updatedAt}|${s.mapMtimeMs ?? 0}|${s.stateMtimeMs ?? 0}`} />}
+          {tab === 'context' && <div id="space-pane-context" role="tabpanel"><ContextTab slug={s.slug} version={`${s.updatedAt}|${s.mapMtimeMs ?? 0}|${s.stateMtimeMs ?? 0}`} /></div>}
           {tab === 'settings' && (
-            <div className={styles.tabBody}>
+            <div id="space-pane-settings" role="tabpanel" className={styles.tabBody}>
               <label><span>{t('Заголовок')}</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
               {s.autoTitle && (
                 <p className="muted small">
@@ -524,7 +559,13 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
         </div>
       </section>
       <aside className={styles.activity} aria-label={t('Сессии и запуски пространства')}>
-        <h3>{t('Сессии и запуски')} <span className="muted small">{itemsCount(s.sessions.length, s.runs.length)}</span></h3>
+        <h3>{t('Сессии и запуски')} <span className="muted small">{[itemsCount(s.sessions.length, s.runs.length), liveCount ? t('идёт {n}', { n: liveCount }) : ''].filter(Boolean).join(' · ')}</span></h3>
+        {sessionsOn && (s.looseSessions?.length ?? 0) > 0 && (
+          <div className={styles.loose}>
+            <p className="small">{t('В тех же папках — сессии без пространства: {names}', { names: s.looseSessions!.map((x) => `«${x.name}»`).join(', ') })}</p>
+            <button type="button" className="btn small" disabled={adding} title={t('Сессии станут сессиями этого пространства: их ходы уйдут в его состояние, «Продолжить» получит его карту и состояние')} onClick={() => void addLoose()}>{t('Добавить в пространство')}</button>
+          </div>
+        )}
         {items.length ? (
           <ul className={styles.items}>
             {items.map((i) =>
@@ -643,7 +684,7 @@ function DocsTab({ space: s, onDocs, onDirty, hidden }: { space: SpaceDetail; on
   };
 
   return (
-    <div className={styles.tabBody} hidden={hidden}>
+    <div id="space-pane-docs" role="tabpanel" className={styles.tabBody} hidden={hidden}>
       <p className={cx('muted small', styles.hint)}>{t('Спеки, решения, заметки, макеты. В контекст идёт только список с заголовками «# …» — файл агент открывает сам, когда нужен. Сессия может записать .md или .txt инструментом space_write, спросив тебя')}</p>
       <div className={styles.docsBar}>
         <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 МБ каждый, до 25 МБ вместе, до 30 файлов')} onClick={() => fileInput.current?.click()}>{t('+ Загрузить файлы…')}</button>

@@ -2,6 +2,14 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
+  'идёт {n}': '{n} running',
+  'всего обновлений: {n}': '{n} updates in all',
+  'Пространство выбрано на ходу: карта (CLAUDE.md) — строкой «прочитай» (памятью — после «Перезапустить» в меню ⋯), документы — по запросу, состояние — в контексте': 'Space picked mid-session: the map (CLAUDE.md) comes as a “read it” line (as memory after “Restart” in the ⋯ menu), documents on request, the state in the context',
+  'Разделы пространства': 'Space sections',
+  'Карты нет: у тега задачи {tag} не было заметок. Опиши фичу здесь — суть, где код, куда за чем ходить — или открой «Сессию в папке»: Claude поможет, правки подтвердишь ты.': 'No map yet: task tag {tag} had no notes. Describe the feature here — the gist, where the code is, where to look for what — or open “Session in the folder”: Claude will help and you confirm the edits.',
+  'В тех же папках — сессии без пространства: {names}': 'Sessions without a space in the same folders: {names}',
+  'Сессии станут сессиями этого пространства: их ходы уйдут в его состояние, «Продолжить» получит его карту и состояние': 'The sessions join this space: their turns go into its state, and “Continue” gets its map and state',
+  'Добавить в пространство': 'Add to the space',
   'Несохранённые правки пространства пропадут: форма перечитается с диска. Продолжить?': 'Unsaved changes to the space will be lost: the form reloads from disk. Continue?',
   'Продолжить': 'Continue',
   'Старая версия agentgraph дописала саммари тега {tag} после переноса ({time}). В контекст оно не идёт.': 'An older agentgraph version updated the summary of tag {tag} after the move ({time}). It isn’t sent to the model.',

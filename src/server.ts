@@ -79,6 +79,9 @@ import {
   readSpace,
   readSpaceMeta,
   reportSpace,
+  SpaceError,
+  setMigrationRunsDir,
+  type Space,
   spaceWorkdirOf,
   spaceWorkOf,
   type SpaceWork,
@@ -92,7 +95,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { liveSessionNames, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
+import { liveSessionNames, looseSpaceSessions, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -194,6 +197,8 @@ const servers = new Set<http.Server>();
 let updater: Updater | null = null;
 
 export function startServer(opts: ServerOptions): Promise<string> {
+  // перенос тегов задач ищет их запуски в этой папке запусков: их артефакты откроются перенесённому пространству
+  setMigrationRunsDir(RUNS_DIR);
   const server = http.createServer((req, res) => {
     handle(req, res, opts).catch((err) => {
       if (!res.headersSent) sendJson(res, err instanceof HttpError ? err.status : 500, { error: errMsg(err) });
@@ -497,7 +502,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
         const runs = spaceRuns(slug, s.migratedFrom?.at);
         const work = spaceWorkOf([...sessions.map((x) => ({ space: slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session' as const })), ...runs.map((r) => ({ space: slug, cwd: r.cwd, at: r.startedAt, from: 'run' as const }))], RUNS_DIR);
         const workdir = spaceWorkdirOf(s.cwd, work.get(slug));
-        return { runs, sessions, ...(workdir ? { workdir } : {}) };
+        // сессии без пространства в тех же папках: у перенесённого — сессии той же работы, у которых не было тега задачи
+        const folders = [...new Set([...sessions.map((x) => x.cwd), ...runs.flatMap((r) => (r.cwd ? [r.cwd] : [])), ...(workdir ? [workdir.path] : [])])];
+        const loose = looseSpaceSessions(folders);
+        return { runs, sessions, ...(workdir ? { workdir } : {}), ...(loose.length ? { looseSessions: loose } : {}) };
       }));
     }
     if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
@@ -638,7 +646,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const links = runLinks(body, cwd);
     let saveState = body.saveState !== false;
     // пространство заводится последним: ошибка 400 выше не оставит пустое пространство на диске
-    let space = slug ? readSpace(slug) ?? createSpace(slug) : undefined;
+    let space: Space | undefined;
+    try {
+      space = slug ? readSpace(slug) ?? createSpace(slug) : undefined;
+    } catch (err) {
+      // папка без space.json с чужими файлами — 409, как у POST /api/spaces
+      throw new HttpError(err instanceof SpaceError ? err.status : 400, errMsg(err));
+    }
     // автопространство — после всех проверок: запрос, который получил бы 400, не тратит денег. Выбрано пространство —
     // галочка не действует. Сбой подбора — не ошибка запуска: он идёт без пространства, причина — в ответе и run.json
     let autoSpace: AutoSpaceReport | undefined;
@@ -1913,6 +1927,7 @@ function listRuns(): RunSummary[] {
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
       ...(reportSpace(r) ? { space: reportSpace(r) } : {}),
+      ...(!r.space && (r.tags?.length ?? 0) > 1 ? { legacyTags: r.tags } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
       ...(r.parent ? { parent: r.parent } : {}),
     });
@@ -1959,9 +1974,14 @@ function finishedRun(id: string): { dir: string; file: string } | { code: number
  */
 async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
   const work: SpaceWork[] = [];
-  for (const r of listRuns()) if (r.space && !r.parent) work.push({ space: r.space, ...(r.cwd && !r.worktree ? { cwd: r.cwd } : {}), at: r.startedAt, from: 'run' });
+  for (const r of listRuns()) {
+    if (!r.space || r.parent) continue;
+    const running = live.has(r.id) || r.status === 'running';
+    // старый запуск с несколькими тегами задач — у каждого их пространства (папка — только у первого)
+    for (const space of r.legacyTags ?? [r.space]) work.push({ space, ...(r.cwd && !r.worktree && space === r.space ? { cwd: r.cwd } : {}), at: r.startedAt, from: 'run', live: running });
+  }
   for (const s of listSpaces()) {
-    for (const x of await spaceSessions(s.slug).catch(() => [])) work.push({ space: s.slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session' });
+    for (const x of await spaceSessions(s.slug).catch(() => [])) work.push({ space: s.slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session', live: x.live });
   }
   return spaceWorkOf(work, RUNS_DIR);
 }
@@ -1972,7 +1992,7 @@ async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
  */
 function spaceRuns(slug: string, migratedAt?: string): SpaceRun[] {
   return listRuns()
-    .filter((r) => r.space === slug && !r.parent)
+    .filter((r) => (r.space === slug || r.legacyTags?.includes(slug)) && !r.parent)
     .map((r) => ({
       id: r.id,
       flow: r.flow,

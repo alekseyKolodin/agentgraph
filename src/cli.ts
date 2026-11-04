@@ -19,10 +19,13 @@ import { execveRestart } from './update.js';
 import { RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import { c, fmtUsd } from './ui.js';
 import { knowledgeTags, listTags, runTagSlugs } from './tags.js';
-import { createSpace, listSpaces, readSpace, spaceReadDirs, spaceSlug, type Space } from './spaces.js';
+import { createSpace, listSpaces, readSpace, setMigrationRunsDir, spaceReadDirs, spaceSlug, type Space } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { pickRunTitle } from './run-title.js';
 import { evalDir, formatEvalTable, loadTasks, runEval } from './eval.js';
+
+// перенос тегов задач (первое обращение к пространствам) ищет их запуски в этой папке запусков
+setMigrationRunsDir(RUNS_DIR);
 
 const HELP = `agentgraph — задача -> flow.yaml -> цепочка сессий Claude в цикле
 

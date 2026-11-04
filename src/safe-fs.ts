@@ -4,8 +4,10 @@
 // (не попадёт в списки документов), созданный с O_EXCL (подложенная ссылка на месте временного файла — отказ, а не
 // запись по ней), затем rename поверх целевого: ссылка на месте самого файла заменяется, а не открывается.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { configDir } from './settings.js';
 
 const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
@@ -73,4 +75,28 @@ export function writeAtomic(file: string, data: string | Buffer): void {
     fs.rmSync(tmp, { force: true });
     throw err;
   }
+}
+
+const within = (p: string, root: string) => p === root || p.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+
+/**
+ * Путь, который открыл бы слишком много: корень диска, домашняя папка и её предки, папка настроек agentgraph (там токен
+ * Jira, теги, пространства), её предки и всё внутри неё. Путь сравнивается и как есть, и по realpath (ссылка на ~).
+ * Так проверяются пути пространств и тегов знаний: они уходят в --add-dir и в «читать без вопроса» хука сессии.
+ */
+export function tooBroadPath(p: string): string | undefined {
+  const home = path.resolve(os.homedir());
+  const cfg = path.resolve(configDir());
+  let real: string | undefined;
+  try {
+    real = fs.realpathSync.native(p);
+  } catch {
+    real = undefined;
+  }
+  for (const x of [path.resolve(p), ...(real ? [real] : [])]) {
+    if (x === path.parse(x).root) return 'корень диска';
+    if (within(home, x)) return 'домашняя папка целиком';
+    if (within(cfg, x) || within(x, cfg)) return 'папка настроек agentgraph';
+  }
+  return undefined;
 }

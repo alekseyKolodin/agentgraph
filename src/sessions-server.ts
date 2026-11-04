@@ -19,9 +19,10 @@ import { runSession, type SessionRequest, type SessionResult } from './agent.js'
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs } from './tags.js';
-import { cleanLine, createSpace, existingSpacePaths, queueSpaceState, readSpace, readSpaceMeta, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS } from './spaces.js';
+import { cleanLine, createSpace, existingSpacePaths, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS, SpaceError } from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
-import { isInside } from './artifacts.js';
+import { canonical, isInside, toolPath, WRITE_TOOLS } from './artifacts.js';
+import { nodeProbe } from './artifact-store.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import { configDir } from './settings.js';
 import {
@@ -241,6 +242,19 @@ export class SessionManager {
     return { sessions: views, max: LIVE_SESSIONS_MAX };
   }
 
+  /** Сессии без пространства (и не старые с тегами задач) в одной из папок: их предлагают добавить в пространство. */
+  looseSessions(folders: string[]): SpaceSession[] {
+    this.load();
+    const set = new Set(folders.map((f) => path.resolve(f)));
+    return [...this.sessions.values()]
+      .filter((s) => !s.rec.space && !s.rec.legacyTaskTags?.length && set.has(path.resolve(s.rec.cwd)))
+      .map((s): SpaceSession => {
+        const live = Boolean(s.pty?.alive);
+        return { id: s.rec.id, name: s.rec.name, status: live ? s.status : 'ended', live, cwd: s.rec.cwd, lastActivityAt: s.rec.lastActivityAt, turns: s.rec.turns };
+      })
+      .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }
+
   /** Сессии пространства для его страницы: живые сверху, потом свежие; legacy — сессия до пространств с этим тегом задачи. */
   spaceSessions(slug: string): SpaceSession[] {
     return [...this.sessions.values()]
@@ -312,7 +326,7 @@ export class SessionManager {
     } catch {
       missing = true;
     }
-    const extra = missing ? { missing: true as const } : {};
+    const extra = { ...(missing ? { missing: true as const } : {}), ...(live && cur && s.launchSpace === cur ? { memory: true as const } : {}) };
     if (cur) return { slug: cur, state: live && got !== cur && !missing ? 'pending' : 'on', ...extra };
     return live && got ? { slug: got, state: 'removed' } : undefined;
   }
@@ -353,7 +367,7 @@ export class SessionManager {
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
     await this.knownVersion(bin);
     // пространство — последним: ошибка выше не оставит пустое пространство на диске. Новый слаг — пустое пространство
-    if (space && !readSpaceMeta(space)) createSpace(space);
+    if (space && !readSpaceMeta(space)) newSpace(space);
     const at = space ? spaceInstance(space) : undefined;
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -506,7 +520,7 @@ export class SessionManager {
     } catch (err) {
       throw new SessionError(400, errMsg(err));
     }
-    if (space && !readSpaceMeta(space)) createSpace(space);
+    if (space && !readSpaceMeta(space)) newSpace(space);
     if (space !== s.rec.space) s.rec.turnSpaces = withTurnSpace(s.rec, space);
     if (space) s.rec.space = space;
     else delete s.rec.space;
@@ -767,6 +781,7 @@ export class SessionManager {
       readTargets: (ctx) => sessionReadTargets(ctx, this.deps.runsDir),
       realpath: safeRealpath,
       askDetail: (tool, args) => this.askDetail(s, tool, args),
+      writeGuard: (tool, args) => spaceWriteGuard(s.rec.cwd, tool, args),
     });
     const p = r.patch;
     if (p.claudeSessionIds) s.rec.claudeSessionIds = p.claudeSessionIds;
@@ -1086,6 +1101,32 @@ function newLive(rec: SessionRecord, status: SessionStatus): Live {
 /** Ходов после прошлого обновления состояния. */
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
+/**
+ * Запись сессии, открытой в папке пространства («Сессия в папке»): в папке пространств — только своё пространство.
+ * Запреты в --settings — снимок на старте; пространство, заведённое потом, и новая папка в spaces/ ловятся здесь, в момент
+ * вызова. Путь — по realpath, регистр не важен (APFS). Сессия не в папке пространства — undefined: решают правила.
+ */
+export function spaceWriteGuard(cwd: string, tool: string, input: Record<string, unknown>): string | undefined {
+  const root = path.resolve(spacesDir());
+  if (!WRITE_TOOLS.includes(tool) || !isInside(cwd, root) || cwd === root) return undefined;
+  const own = path.join(root, path.relative(root, cwd).split(path.sep)[0]);
+  const raw = toolPath(tool, input);
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const fold = (p: string) => canonical(p, cwd, nodeProbe).normalize('NFC').toLowerCase();
+  const p = fold(raw);
+  if (!isInside(p, fold(root)) || isInside(p, fold(own))) return undefined;
+  return `Сессия в папке пространства ${path.basename(own)} правит только его: ${raw} — в другом пространстве или в папке пространств. Другие пространства правят на их страницах в agentgraph.`;
+}
+
+/** Новое пространство по слагу из формы; папка без space.json с чужими файлами — 409, как у POST /api/spaces. */
+function newSpace(slug: string): void {
+  try {
+    createSpace(slug);
+  } catch (err) {
+    throw new SessionError(err instanceof SpaceError ? err.status : 400, errMsg(err));
+  }
+}
+
 /** Экземпляр пространства — его createdAt: заведённое заново с тем же слагом — другое. */
 function spaceInstance(slug: string): string | undefined {
   try {
@@ -1341,6 +1382,8 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
 export const sessionsAvailable = () => sessionManager().available();
 /** upgrade сервера: WebSocket экрана сессии; остальное — 404. */
 export const sessionsUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => sessionManager().upgrade(req, socket, head);
+/** Сессии без пространства в папках пространства (его страница предлагает их добавить). */
+export const looseSpaceSessions = (folders: string[]) => sessionManager().looseSessions(folders);
 /** Пространство удаляют: идущие сессии с ним — SessionError 409, завершённые отцепляются (SessionManager.releaseSpace). */
 export const releaseSpaceSessions = (slug: string) => sessionManager().releaseSpace(slug);
 /** Сессии пространства (его страница): сначала сессии с диска, если сервер их ещё не читал. */

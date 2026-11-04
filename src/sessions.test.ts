@@ -230,10 +230,19 @@ test(
     assert.deepEqual(r.denyDirs.sort(), [tagsDir(), other, path.join(own, '.claude')].sort());
     assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '*', 'space.json'), path.join(spacesDir(), '.migrated.json')]);
     assert.deepEqual(r.askDirs, [own]);
-    const settings = sessionSettings(launch({ ...r })) as { permissions: { ask: string[] } };
+    const settings = sessionSettings(launch({ ...r, claudeVersion: '2.1.317' })) as { permissions: { ask: string[] }; hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> } };
     assert.ok(settings.permissions.ask.includes(`Edit(/${own}/**)`));
-    // вне папки пространств вопроса на папку нет
-    assert.deepEqual(launchDirs([own], '/p', '/s/files').askDirs, []);
+    // и хук записи: пространства, заведённые после старта, ловятся в момент вызова; сбой хука блокирует запись
+    assert.deepEqual(settings.hooks.PreToolUse.filter((h) => h.matcher.includes('Edit')).map((h) => [h.matcher, h.hooks[0].onFailure]), [['Edit|Write|MultiEdit|NotebookEdit', 'block']]);
+    // вне папки пространств вопроса на папку нет, хука записи — тоже
+    const plain = launchDirs([own], '/p', '/s/files');
+    assert.deepEqual(plain.askDirs, []);
+    assert.ok(!(sessionSettings(launch({ ...plain })) as { hooks: { PreToolUse: Array<{ matcher: string }> } }).hooks.PreToolUse.some((h) => h.matcher.includes('Edit')));
+    // хук записи: отказ — deny с причиной, нет отказа — пустой ответ (решают правила и режим), упал — тоже отказ
+    const write = (guard: HookDeps['writeGuard']) => handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/x' } }, { ...deps(), writeGuard: guard }).reply;
+    assert.deepEqual(write(() => 'нельзя'), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'нельзя' } });
+    assert.deepEqual(write(() => undefined), {});
+    assert.match(JSON.stringify(write(() => { throw new Error('boom'); })), /Проверка записи не удалась \(boom\)/);
   }),
 );
 

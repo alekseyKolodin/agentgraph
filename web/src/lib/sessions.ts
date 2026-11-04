@@ -50,6 +50,8 @@ export function spaceChipHint(chip: SessionSpaceChip, live: boolean): string {
   if (chip.missing) return t('Пространства {slug} больше нет: сессия идёт без него', { slug: chip.slug });
   const base = t('Пространство: карта (CLAUDE.md) — памятью, документы — по запросу, состояние — в контексте');
   if (live && chip.state === 'pending') return `${base}\n${t('Раздел придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯')}`;
+  // выбрано на ходу: идущий claude запущен без него — карта пришла строкой «прочитай», памятью — после перезапуска
+  if (live && chip.state === 'on' && !chip.memory) return t('Пространство выбрано на ходу: карта (CLAUDE.md) — строкой «прочитай» (памятью — после «Перезапустить» в меню ⋯), документы — по запросу, состояние — в контексте');
   return [base, chipHint(chip)].filter(Boolean).join('\n');
 }
 

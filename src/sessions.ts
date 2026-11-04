@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
-import { isInside } from './artifacts.js';
+import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
 import { existingSpacePaths, META_FILE, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 
@@ -29,6 +29,8 @@ const ASK_TOOLS: Record<string, string> = {
 };
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';
+/** Инструменты записи файлов: у сессии в папке пространства хук PreToolUse сверяет путь в момент вызова. */
+const WRITE_MATCHER = WRITE_TOOLS.join('|');
 
 /** Версия claude не ниже нужной («2.1.317 (Claude Code)» и подобные); неизвестная — нет. */
 export function versionAtLeast(version: string | undefined, min: string): boolean {
@@ -295,11 +297,14 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
   // дальше — с onFailure: block (claude 2.1.295+; старый ключа не знает, и ему его не шлём) вызов блокируется
   const askHook = { ...http[0].hooks[0], ...(versionAtLeast(l.claudeVersion, HOOK_ON_FAILURE_SINCE) ? { onFailure: 'block' } : {}) };
   const dirRules = (d: string) => [`Edit(/${d})`, `Edit(/${d}/**)`];
+  // сессия в папке пространства: запреты на другие пространства — снимок на старте, а заведённые потом и новые папки в
+  // spaces/ ловит хук записи в момент вызова (handleHook → writeGuard)
+  const writeHook = l.askDirs?.length ? [{ matcher: WRITE_MATCHER, hooks: [askHook] }] : [];
   return {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: curl, timeout: 10 }] }],
       ...Object.fromEntries(HTTP_HOOKS.map((e) => [e, http])),
-      PreToolUse: Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })),
+      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), ...writeHook],
     },
     // //путь — абсолютный путь в правилах разрешений; Edit закрывает все инструменты записи файлов, правило Write(путь)
     // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит.
@@ -523,6 +528,8 @@ export type HookDeps = {
   realpath: (p: string) => string;
   /** Подробности к вопросу PreToolUse: что сделает этот вызов (папка, пространство, режим новой сессии; какой документ). */
   askDetail?: (tool: string, input: Record<string, unknown>) => string | undefined;
+  /** Запись файла (сессия в папке пространства): строка — отказ с этим объяснением; undefined — решают правила и режим. */
+  writeGuard?: (tool: string, input: Record<string, unknown>) => string | undefined;
 };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
@@ -577,6 +584,16 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
     case 'PermissionRequest':
       return { reply: permissionReply(input, deps.readTargets(ctx()), deps.realpath), patch };
     case 'PreToolUse': {
+      if (WRITE_TOOLS.includes(input.tool_name ?? '') && deps.writeGuard) {
+        let deny: string | undefined;
+        try {
+          deny = deps.writeGuard(input.tool_name!, input.tool_input ?? {});
+        } catch (err) {
+          // упавшая проверка не пропускает запись
+          deny = `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.`;
+        }
+        return { reply: deny ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: deny } } : {}, patch };
+      }
       // session_new запускает claude с текстом модели, space_write пишет документ для всех следующих сессий:
       // спрашиваем человека в любом режиме, auto тоже
       const why = ASK_TOOLS[input.tool_name ?? ''];

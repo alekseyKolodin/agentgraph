@@ -27,9 +27,9 @@ export function filterSpaces<T extends Pick<SpaceListItem, 'slug' | 'title' | 'p
 /** Первая строка превью (состояние, без него — карта); пусто — подсказка, что там будет. */
 export const spacePreview = (s: Pick<SpaceListItem, 'preview'>): string => s.preview.split('\n')[0] || t('состояния ещё нет');
 
-/** Строка под превью: есть ли карта, документов, когда обновлено. */
-export const spaceMetaLine = (s: Pick<SpaceListItem, 'hasMap' | 'docs' | 'updatedAt'>): string =>
-  [s.hasMap ? t('карта') : t('без карты'), t('документов: {n}', { n: s.docs }), when(s.updatedAt)].filter(Boolean).join(' · ');
+/** Строка под превью: есть ли карта, документов, сессий и запусков (сколько идёт), когда обновлено. */
+export const spaceMetaLine = (s: Pick<SpaceListItem, 'hasMap' | 'docs' | 'updatedAt' | 'sessions' | 'runs' | 'live'>): string =>
+  [s.hasMap ? t('карта') : t('без карты'), t('документов: {n}', { n: s.docs }), itemsCount(s.sessions ?? 0, s.runs ?? 0), s.live ? t('идёт {n}', { n: s.live }) : '', when(s.updatedAt)].filter(Boolean).join(' · ');
 
 /** Что даст выбранное пространство — строкой под полем; пустое — подсказка, неверный слаг — ошибка. */
 export function spaceFieldNote(value: string, options: SpaceListItem[]): { text: string; tone: '' | 'err' } {
@@ -153,7 +153,9 @@ export function updateLine(u: SpaceUpdate): string {
 
 /** Строка над редактором состояния: кто обновил его последним; нет истории — откуда оно возьмётся. */
 export const stateByText = (s: Pick<Space, 'history' | 'state'>): string =>
-  s.history[0] ? t('Обновил: {who}', { who: updateLine(s.history[0]) }) : s.state.trim() ? t('Состояние правили только руками') : t('Состояние запишет короткая сессия после первой сессии или запуска «готово» в этом пространстве');
+  s.history[0]
+    ? [t('Обновил: {who}', { who: updateLine(s.history[0]) }), s.history.length > 1 ? t('всего обновлений: {n}', { n: s.history.length }) : ''].filter(Boolean).join(' · ')
+    : s.state.trim() ? t('Состояние правили только руками') : t('Состояние запишет короткая сессия после первой сессии или запуска «готово» в этом пространстве');
 
 /** Сессии и запуски пространства одним списком, свежие сверху; живые сессии — первыми. */
 export type SpaceItem = { kind: 'session'; at: string; s: SpaceSession } | { kind: 'run'; at: string; r: SpaceRun };

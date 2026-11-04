@@ -2,6 +2,8 @@
 // Space picker): поле показывает выбранное (заголовок и слаг), фокус или клик открывают список под ним — свежие сверху,
 // поиск по слагу, заголовку и началу состояния, «+ новое пространство» для вписанного слага и «без пространства».
 // Клавиатура: ↑ ↓, Enter, Esc (закрыть и вернуть выбор), Tab. ARIA — combobox со listbox и aria-activedescendant.
+// Без выбранного пространства открытый список ничего не подсвечивает до первой стрелки: Enter «для подтверждения» не
+// выберет чужое пространство. Enter в закрытом поле формы не отправляет её — это выбор, а не ввод.
 // Под полем (кроме compact) — строка: что даст выбранное пространство или ошибка слага.
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { SpaceListItem } from '@server/api-types';
@@ -55,7 +57,7 @@ export function SpacePicker({ id, value, onChange, options, loading, label = t('
     if (open) return;
     const all = pickerRows('', options);
     setQuery('');
-    setActive(Math.max(0, value ? all.findIndex((r) => r.kind === 'space' && r.s.slug === value) : 0));
+    setActive(value ? Math.max(0, all.findIndex((r) => r.kind === 'space' && r.s.slug === value)) : -1);
     setOpen(true);
   };
   const close = () => {
@@ -73,10 +75,14 @@ export function SpacePicker({ id, value, onChange, options, loading, label = t('
       e.preventDefault();
       if (!open) return show();
       const step = e.key === 'ArrowDown' ? 1 : -1;
-      setActive((i) => (i + step + rows.length) % rows.length);
+      setActive((i) => (i < 0 ? (step > 0 ? 0 : rows.length - 1) : (i + step + rows.length) % rows.length));
     } else if (e.key === 'Enter') {
-      if (!open) return;
+      if (!open) {
+        if (!compact) e.preventDefault();
+        return;
+      }
       e.preventDefault();
+      if (active < 0) return close();
       pick(rows[active]);
     } else if (e.key === 'Escape') {
       if (!open && !compact) return;
@@ -105,7 +111,7 @@ export function SpacePicker({ id, value, onChange, options, loading, label = t('
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
-          aria-activedescendant={open && rows[active] ? optId(active) : undefined}
+          aria-activedescendant={open && active >= 0 && rows[active] ? optId(active) : undefined}
           aria-label={compact ? label : undefined}
           className={cx(styles.input, chosen && !open && styles.withSlug, inputClassName)}
           placeholder={hint}

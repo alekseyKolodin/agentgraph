@@ -250,8 +250,17 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
     }
   };
   const put = (tags: string[]) => void save(() => setSessionTags(s.id, tags));
+  // выбор с клавиатуры размонтирует поле (появится чип), снятие — чип (появится поле): фокус переходит на новое
+  const refocus = useRef<'chip' | 'picker' | null>(null);
+  useEffect(() => {
+    const want = refocus.current;
+    if (!want) return;
+    refocus.current = null;
+    (want === 'chip' ? document.querySelector<HTMLElement>('[data-space-chip] a') : document.getElementById('session-space-input'))?.focus();
+  }, [s.space, s.spaceChip?.state]);
   const putSpace = (space: string | null) =>
     void save(async () => {
+      refocus.current = space ? 'chip' : 'picker';
       const v = await setSessionSpace(s.id, space);
       // новый слаг сервер завёл пустым пространством: подсказки и страница «Пространства» — заново
       void qc.invalidateQueries({ queryKey: keys.spaces });
@@ -343,7 +352,7 @@ function Chip({ c, onRemove }: { c: SessionTagChip; onRemove?: () => void }) {
 /** Чип пространства: слаг — ссылка на его страницу; ещё не дошло — пунктир с часами; удалено — приглушён. */
 function SpaceChip({ c, live, onRemove }: { c: SessionSpaceChip; live: boolean; onRemove?: () => void }) {
   return (
-    <span className={cx(styles.chip, styles.space, c.state !== 'on' && styles[c.state], c.missing && styles.removed)} title={spaceChipHint(c, live)}>
+    <span data-space-chip className={cx(styles.chip, styles.space, c.state !== 'on' && styles[c.state], c.missing && styles.removed)} title={spaceChipHint(c, live)}>
       {c.state !== 'on' && ICON.clock}
       <Link to={`/spaces/${encodeURIComponent(c.slug)}`} className={styles.chipLink}>◇ {c.slug}</Link>
       {onRemove && <button type="button" className={styles.chipX} aria-label={t('Снять пространство {slug}', { slug: c.slug })} onClick={onRemove}>{ICON.x}</button>}

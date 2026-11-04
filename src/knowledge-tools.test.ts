@@ -9,14 +9,17 @@ import { createTag, deleteTag, tagDir, updateTag } from './tags.js';
 function withConfigDir(fn: (root: string) => void) {
   return () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-knowtools-')));
+    // папка настроек — рядом, а не внутри root: пути тега в root, а предок папки настроек путём тега не годится
+    const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-knowtools-cfg-')));
     const prev = process.env.AGENTGRAPH_CONFIG_DIR;
-    process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, 'cfg');
+    process.env.AGENTGRAPH_CONFIG_DIR = cfg;
     try {
       fn(root);
     } finally {
       if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
       else process.env.AGENTGRAPH_CONFIG_DIR = prev;
       fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cfg, { recursive: true, force: true });
     }
   };
 }
