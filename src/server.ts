@@ -2086,7 +2086,7 @@ async function groupSources(): Promise<GroupSource[]> {
   for (const r of listRuns()) {
     if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running') continue;
     const cwd = r.worktree?.path ?? r.cwd;
-    out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
+    out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, flow: r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
   }
   return out;
 }

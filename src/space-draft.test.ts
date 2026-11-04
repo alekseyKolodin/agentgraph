@@ -6,8 +6,9 @@ import path from 'node:path';
 import type { LogFn, SessionRequest, SessionResult } from './agent.js';
 import type { FlowAiHooks } from './flow-ai.js';
 import {
-  DRAFT_CEILING, DRAFT_DOCS_MAX, defuseImports, docRefs, draftEstimate, draftPrompt, draftReply, draftRequest, estimateCost, groupItems, groupsPrompt, groupsReply,
-  missingPaths, parseDraft, parseGroups, resolveDraftInput, visibleText, type DraftInput, type DraftRun, type DraftSession, type GroupSource,
+  DRAFT_CEILING, DRAFT_DOCS_MAX, defuseImports, docRefs, draftEstimate, draftPrompt, draftReply, draftRequest, estimateCost, groupItems, groupsEstimate, groupsPrompt,
+  groupsReply, missingPaths, parseDraft, parseGroups, projectFiles, repoDocPaths, resolveDraftInput, visibleText, type DraftInput, type DraftRun, type DraftSession,
+  type GroupSource,
 } from './space-draft.js';
 import { createSpace, listSpaces, readSpace, SpaceError, updateSpace, writeSpaceDoc } from './spaces.js';
 
@@ -109,6 +110,8 @@ test('промпт черновика: описание, карта, состо�
   assert.ok(p.includes(`- Работа: ${path.join(runDir, 'out.md')}`));
   assert.ok(p.includes(`Артефакты (${path.join(runDir, 'artifacts')}): plan.md`));
   assert.ok(p.includes(`В ней есть CLAUDE.md репозитория (${path.join(proj, 'CLAUDE.md')})`));
+  assert.ok(p.includes('В корне рабочей папки есть (проверено): CLAUDE.md, README.md, package.json — начни с них.'));
+  assert.ok(p.includes('шаблон с фигурными скобками'), 'правила Glob guard — в промпте, а не только в отказе');
   assert.ok(p.includes(`Читать можно только эти папки и папку пространства: ${proj}, ${runDir}.`));
   assert.ok(p.includes('## Команды') && p.includes('## Подводные камни') && p.includes('документов-навыков'));
   assert.ok(!p.includes('- slug —'), 'у существующего слаг не спрашиваем');
@@ -134,6 +137,19 @@ test('запрос черновика: только Read/Grep/Glob под guard 
   assert.equal(rh.cwd, os.tmpdir());
   assert.equal(rh.additionalDirectories, undefined);
   assert.ok(draftPrompt(home).includes('слишком широкая'));
+}));
+
+test('обычные файлы корня: файлы и папки по-разному, файл вместо папки и папка вместо файла не считаются; пустая папка — так и сказано в промпте', withRoot((root) => {
+  const dir = path.join(root, 'p');
+  fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'README.md'));
+  fs.writeFileSync(path.join(dir, 'docs'), 'файл, а не папка');
+  fs.writeFileSync(path.join(dir, 'Makefile'), 'test:');
+  assert.deepEqual(projectFiles(dir), ['Makefile', '.github/workflows/']);
+  const empty = path.join(root, 'empty');
+  fs.mkdirSync(empty);
+  const p = draftPrompt(inputOf(root, { cwd: empty }), [empty]);
+  assert.ok(p.includes('В корне рабочей папки нет README, манифеста сборки и CI'));
 }));
 
 test('видимый текст: невидимые и управляющие символы убираются, переводы строк и табуляция остаются', () => {
@@ -186,6 +202,28 @@ test('разбор черновика: карта без невидимых си
   assert.match(w, /docs\/missing\.md/);
   assert.ok(!/docs\/tests\.md \(/.test(w));
   assert.ok(w.includes(`${proj}/ghost.ts`) && !w.includes(`${proj}/src,`));
+}));
+
+test('разбор черновика: docs/<имя>.md, которого нет среди документов, но есть в рабочей папке, — абсолютным путём; документ пространства и чужой путь не трогаются', withRoot((root) => {
+  const { proj } = seed(root);
+  fs.mkdirSync(path.join(proj, 'docs'));
+  fs.writeFileSync(path.join(proj, 'docs', 'GUIDE.md'), '# guide');
+  fs.writeFileSync(path.join(proj, 'docs', 'tests.md'), '# repo tests');
+  const map = `# Магазин\n- \`docs/GUIDE.md\` — устройство\n- /srv/docs/GUIDE.md — чужой\n- docs/tests.md — тесты\n- docs/missing.md — нет`;
+  const res = result({ structured: { title: 'Магазин', slug: 'shop', map, docs: [{ name: 'tests.md', text: '# Как прогнать тесты' }] } });
+  const { draft, warnings } = parseDraft(res, inputOf(root, { cwd: proj }));
+  const guide = path.join(proj, 'docs', 'GUIDE.md');
+  assert.ok(draft.map.includes(`\`${guide}\` — устройство`));
+  assert.ok(draft.map.includes('- /srv/docs/GUIDE.md — чужой'), 'путь внутри другого пути — не ссылка');
+  assert.ok(draft.map.includes('- docs/tests.md — тесты'), 'есть документ пространства — ссылка на него');
+  const w = warnings.join('\n');
+  assert.match(w, /Ссылки на файлы рабочей папки \(docs\/GUIDE\.md\) заменены абсолютными путями/);
+  assert.match(w, /документы пространства, которых нет: docs\/missing\.md/);
+  assert.ok(!w.includes('docs/GUIDE.md (') && !/которых нет: [^\n]*GUIDE/.test(w));
+  // без рабочей папки — только предупреждение
+  const bare = parseDraft(res, inputOf(root));
+  assert.ok(bare.draft.map.includes('`docs/GUIDE.md`') && /которых нет: docs\/GUIDE\.md/.test(bare.warnings.join('\n')));
+  assert.equal(repoDocPaths('docs/a.md и docs/b.md', ['a.md'], '/r'), '/r/docs/a.md и docs/b.md');
 }));
 
 test('разбор черновика: документы — не больше пяти, имя по правилам документов и только .md, повторы — -2, длинный — предупреждение, существующий — replaces', withRoot((root) => {
@@ -292,9 +330,13 @@ test('оценка: диапазон растёт с чтением и исто�
   const bare = draftEstimate(resolveDraftInput({ about: 'магазин' }, deps));
   const rich = draftEstimate(resolveDraftInput({ about: 'магазин', cwd: proj, sessions: [session.id], runs: ['r1'] }, deps));
   const cheap = draftEstimate(resolveDraftInput({ about: 'магазин', cwd: proj, model: 'haiku' }, deps));
+  const same = draftEstimate(resolveDraftInput({ about: 'магазин', cwd: proj }, deps));
   assert.ok(bare.low < bare.high && rich.low > bare.low && rich.high > bare.high);
   assert.ok(rich.high < rich.ceiling, `${rich.high} < ${rich.ceiling}`);
-  assert.ok(cheap.high < rich.low);
+  // псевдоним haiku — Haiku 4.5 ($1/$5): вдвое дешевле sonnet, а не в двадцать раз
+  const ratio = same.high / cheap.high;
+  assert.ok(ratio > 1.8 && ratio < 2.2, String(ratio));
+  assert.ok(cheap.high < cheap.ceiling, `${cheap.high} < ${cheap.ceiling}`);
   assert.deepEqual(rich.reads, [proj, path.join(root, 'runs', 'r1')]);
   // sonnet: 20 тыс. стартового контекста, 10 запросов, 30 тыс. прочитанного, 8 тыс. выхода ≈ $0,26
   const c = estimateCost('sonnet', { start: 20_000, requests: 10, read: 30_000, output: 8_000 });
@@ -315,11 +357,21 @@ test('предложение пространств: имена и тексты 
   const list = items(root);
   const p = groupsPrompt(list);
   assert.ok(p.includes('[s1] сессия, 2026-11-03') && p.includes('[r1] запуск, 2026-11-02') && p.includes('[r2] запуск'));
+  assert.ok(groupsPrompt([{ ...list[1], flow: 'fix-bug' }, list[0]]).includes('[r1] запуск flow fix-bug, 2026-11-02'));
   assert.match(p, /<source-data>\ncart\nпочини корзину\n<\/source-data>/);
   const many = Array.from({ length: 70 }, (_, i) => ({ ...list[1], id: `r${i}`, at: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z` }));
   const g = groupItems(many);
   assert.deepEqual([g.items.length, g.skipped], [60, 10]);
   assert.ok(g.items[0].at >= g.items[59].at);
+}));
+
+test('оценка группировки на haiku: 27 работ, как в калибровке, — диапазон накрывает её $0,045 и ниже потолка', withRoot((root) => {
+  const at = (i: number) => `2026-10-${String(30 - i).padStart(2, '0')}T10:00:00Z`;
+  const text = 'Придумай слоган для утренней кофейни у метро: открывается в 6 утра, свежая обжарка, бариста знают постоянных гостей по имени. '.repeat(3);
+  const list: GroupSource[] = Array.from({ length: 27 }, (_, i) => ({ kind: 'run', id: `r${i}`, name: 'Слоган для утренней кофейни у метро', flow: 'example-blocks', cwd: root, at: at(i), text }));
+  const e = groupsEstimate(list, 0, 'haiku');
+  assert.ok(e.low < 0.045 && e.high > 0.045, `${e.low}–${e.high}`);
+  assert.ok(e.high < e.ceiling);
 }));
 
 test('разбор групп: только переданные работы, каждая в одной группе, слаг свободный и без повторов, папка — самая частая (считает код)', withRoot((root) => {
@@ -358,5 +410,7 @@ test('группировка: меньше двух работ — без мод
   const body = r.body as { groups: unknown[]; items: { id: string; text?: string }[]; rest: { runs: string[] }; skipped: number; costUsd: number };
   assert.deepEqual([r.status, body.groups.length, body.items.length, body.rest.runs, body.skipped, body.costUsd], [200, 1, 3, ['r2'], 3, 0.004]);
   assert.equal(body.items[0].text, undefined, 'тексты работ наружу не уходят');
+  const withFlow = await groupsReply(list.map((x) => ({ ...x, flow: 'fix' })), 0, 'haiku', hooks(), { session: async () => result({ structured: { groups: [] } }) });
+  assert.ok((withFlow.body as { items: object[] }).items.every((x) => !('flow' in x)), 'flow — только для промпта');
   assert.deepEqual([reqs[0].tools, reqs[0].implicitTools, reqs[0].cwd, reqs[0].persist, reqs[0].model], [[], [], os.tmpdir(), false, 'haiku']);
 }));
