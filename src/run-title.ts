@@ -3,7 +3,7 @@
 // Сама сессия подбора (таймаут, остановка, разбор ответа) — pickTitle: ею же называется сессия терминала (session-title.ts).
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult, type SessionTokens } from './agent.js';
-import { cleanTitle } from './auto-tag.js';
+import { cleanTitle } from './auto-space.js';
 import { wrapData, type RunSource } from './intake.js';
 import { replyIn, taskLang } from './lang.js';
 import { stripTagBlocks } from './tags.js';

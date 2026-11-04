@@ -1,7 +1,8 @@
-// Логика экранов «Сессии» без React и DOM: подписи статуса, строка сессии в «Сейчас», чипы тегов на ходу, адрес
-// WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52.
-import type { SessionTagChip, SessionView } from '@server/api-types';
-import { baseName, clock } from './format';
+// Логика экранов «Сессии» без React и DOM: подписи статуса, строка сессии в «Сейчас», чипы пространства и тегов знаний
+// на ходу, адрес WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52, состояние
+// пространства.
+import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
+import { baseName, clock, feedTime } from './format';
 import { t } from './i18n';
 
 /** Тон точки и подписи: live — работает, wait — ход за тобой, off — завершена или запускается, fail — не запустилась. */
@@ -29,21 +30,33 @@ export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | '
   }
 }
 
-/** Вторая строка в «Сейчас»: «сессия · shop · работает». */
-export function sessionSub(s: Pick<SessionView, 'cwd' | 'status'>): string {
+/** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — пространство (без него — папка), статус, активность. */
+export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt'>>, now: Date = new Date()): string {
   const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? t('ждёт тебя') : t('запускается');
-  return t('сессия · {dir} · {state}', { dir: baseName(s.cwd), state });
+  // чем сессии различаются: пространство (без него — папка), статус и когда была активность — а не повтор папки
+  const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
+  return [where, state, ...(s.lastActivityAt ? [feedTime(s.lastActivityAt, now)] : [])].join(' · ');
 }
 
-/** Подсказка у чипа тега, который ещё не дошёл до модели. */
-export function chipHint(chip: SessionTagChip): string {
-  if (chip.state === 'pending') return t('Модель увидит тег со следующим своим шагом или твоим сообщением');
+/** Подсказка у чипа тега или пространства, которые ещё не дошли до модели. */
+export function chipHint(chip: Pick<SessionTagChip, 'state'>): string {
+  if (chip.state === 'pending') return t('Модель увидит это со следующим своим шагом или твоим сообщением');
   if (chip.state === 'removed') return t('Снятие дойдёт до модели со следующим её шагом или твоим сообщением');
   return '';
 }
 
-/** Строка под чипами: что из изменений тегов ещё не дошло до модели; изменений нет — пусто. */
-export function pendingNote(chips: SessionTagChip[]): string {
+/** Подсказка у чипа пространства: что оно даёт и что из этого ещё не дошло. */
+export function spaceChipHint(chip: SessionSpaceChip, live: boolean): string {
+  if (chip.missing) return t('Пространства {slug} больше нет: сессия идёт без него', { slug: chip.slug });
+  const base = t('Пространство: карта (CLAUDE.md) — памятью, документы — по запросу, состояние — в контексте');
+  if (live && chip.state === 'pending') return `${base}\n${t('Раздел придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯')}`;
+  // выбрано на ходу: идущий claude запущен без него — карта пришла строкой «прочитай», памятью — после перезапуска
+  if (live && chip.state === 'on' && !chip.memory) return t('Пространство выбрано на ходу: карта (CLAUDE.md) — строкой «прочитай» (памятью — после «Перезапустить» в меню ⋯), документы — по запросу, состояние — в контексте');
+  return [base, chipHint(chip)].filter(Boolean).join('\n');
+}
+
+/** Строка под чипами: что из изменений пространства и тегов ещё не дошло до модели; изменений нет — пусто. */
+export function pendingNote(chips: Pick<SessionTagChip, 'slug' | 'state'>[]): string {
   const added = chips.filter((c) => c.state === 'pending').map((c) => c.slug);
   const removed = chips.filter((c) => c.state === 'removed').map((c) => c.slug);
   if (!added.length && !removed.length) return '';
@@ -98,34 +111,27 @@ export function osc52Text(data: string): string | null {
   }
 }
 
-const hasTaskTag = (s: Pick<SessionView, 'chips'>) => s.chips.some((c) => c.kind === 'task' && c.state !== 'removed');
-
-/** Кнопка «Обновить саммари»: есть ли она (нужен тег задачи), можно ли нажать и почему нет. */
-export function canSummarize(s: Pick<SessionView, 'chips' | 'summarizing' | 'newTurns'>): { show: boolean; ok: boolean; why: string } {
-  if (!hasTaskTag(s)) return { show: false, ok: false, why: '' };
-  if (s.summarizing) return { show: true, ok: false, why: t('Саммари уже пишется') };
-  if (!s.newTurns) return { show: true, ok: false, why: t('Новых ходов с прошлого саммари нет') };
-  return { show: true, ok: true, why: t('Сессия haiku на каждый тег задачи: перепишет саммари по ходам после прошлого') };
+/** Кнопка «Обновить состояние»: есть ли она (нужно пространство), можно ли нажать и почему нет. */
+export function canUpdateState(s: Pick<SessionView, 'space' | 'spaceChip' | 'updatingState' | 'newTurns' | 'stateSpaces'>): { show: boolean; ok: boolean; why: string } {
+  // куда уйдут ходы, считает сервер (по пространству, где сделан ход); старый сервер — в текущее пространство
+  const spaces = s.stateSpaces ?? (s.space && !s.spaceChip?.missing ? [s.space] : []);
+  if (!spaces.length && (!s.space || s.spaceChip?.missing)) return { show: false, ok: false, why: '' };
+  if (s.updatingState) return { show: true, ok: false, why: t('Состояние уже пишется') };
+  if (!s.newTurns) return { show: true, ok: false, why: t('Новых ходов с прошлого обновления нет') };
+  if (!spaces.length) return { show: true, ok: false, why: t('Новые ходы сделаны без пространства или в удалённом: записать их некуда') };
+  if (spaces.length > 1 || spaces[0] !== s.space) return { show: true, ok: true, why: t('Сессия haiku перепишет состояние пространств {list}: каждому — ходы, сделанные в нём', { list: spaces.join(', ') }) };
+  return { show: true, ok: true, why: t('Сессия haiku перепишет состояние пространства по ходам после прошлого обновления') };
 }
 
-/** «a и b», «a, b и c». */
-const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(', ')}${t(' и ')}${items.at(-1)}` : items[0] ?? '');
-
-/** Состояние саммари тегов задач для строки тегов и карточки завершённой сессии; без тегов задач — null. */
-export function summaryNote(
-  s: Pick<SessionView, 'chips' | 'summarizing' | 'summary' | 'summaryPending'>,
+/** Состояние пространства для строки сессии и карточки завершённой; без пространства — null. */
+export function stateNote(
+  s: Pick<SessionView, 'space' | 'updatingState' | 'stateUpdate' | 'statePending'>,
   now: Date = new Date(),
 ): { text: string; tone: '' | 'ok' | 'warn' | 'err'; title?: string } | null {
-  if (s.summarizing) return { text: t('Саммари тегов задач: пишу…'), tone: '' };
-  if (s.summaryPending === 'app-closed') return { text: t('Саммари не обновлено: приложение закрыли'), tone: 'warn', title: t('При выходе из приложения саммари не пишется: обнови его кнопкой') };
-  const sum = s.summary;
-  const errors = Object.keys(sum?.errors ?? {});
-  if (sum && errors.length) {
-    const title = Object.entries(sum.errors ?? {}).map(([tag, e]) => `${tag}: ${e}`).join('\n');
-    return sum.tags.length
-      ? { text: t('Саммари записано в {ok}, ошибка в {bad}', { ok: list(sum.tags), bad: list(errors) }), tone: 'err', title }
-      : { text: t('Саммари не записано: ошибка в {bad}', { bad: list(errors) }), tone: 'err', title };
-  }
-  if (sum?.tags.length) return { text: t('Саммари записано в {tags} · {time}', { tags: list(sum.tags), time: clock(sum.at, now) }), tone: 'ok', title: `$${sum.costUsd.toFixed(3)}` };
-  return hasTaskTag(s) ? { text: t('Саммари тегов задач: не обновлялось'), tone: '' } : null;
+  if (s.updatingState) return { text: t('Состояние пространства: пишу…'), tone: '' };
+  if (s.statePending === 'app-closed') return { text: t('Состояние не обновлено: приложение закрыли'), tone: 'warn', title: t('При выходе из приложения состояние не пишется: обнови его кнопкой') };
+  const u = s.stateUpdate;
+  if (u && !u.ok) return { text: t('Состояние не записано: ошибка'), tone: 'err', title: u.error };
+  if (u?.ok) return { text: t('Состояние записано в {space} · {time}', { space: u.space, time: clock(u.at, now) }), tone: 'ok', title: `$${u.costUsd.toFixed(3)}` };
+  return s.space ? { text: t('Состояние пространства: не обновлялось'), tone: '' } : null;
 }

@@ -1,0 +1,107 @@
+/* Страница «Пространства» (system.md → «Пространства»): список слева, как у «Знаний»; справа — пространство: панель
+   с шапкой, вкладками и редактором и колонка «Сессии и запуски» (на узком контейнере — под панелью). */
+.view-spaces { container-type: inline-size; }
+.layout { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
+@container (max-width: 760px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+/* --- список */
+.side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; padding: 0 2px; }
+.side-head h3 { margin: 0; display: flex; align-items: center; gap: 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.count { font-size: var(--fs-cap); font-weight: 600; padding: 0 7px; border-radius: var(--r-pill); background: var(--well); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.count:empty { display: none; }
+.on { background: var(--select); }
+.new-form { gap: 10px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 10px 12px; }
+.new-form[hidden] { display: none; }
+.new-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.new-form :global(.row) { gap: 8px; }
+.new-form :global(.msg):empty, .list-msg:empty { display: none; }
+.search { width: 100%; padding: 7px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--deck); color: var(--ink); font: inherit; font-size: var(--fs-small); margin-bottom: 4px; }
+.search:focus { outline: none; border-color: var(--live); background: var(--panel); }
+.search[hidden] { display: none; }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.row { padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; border-radius: var(--r-sm); color: inherit; text-decoration: none; }
+.row:hover { background: var(--hover); }
+.row.active { background: var(--select); }
+.row:focus-visible { outline: none; box-shadow: var(--focus); }
+.list li.none { padding: 6px; }
+.name { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-weight: 600; }
+.slug-mark { color: var(--ink-3); font-weight: 400; flex: none; }
+.slug-sub { font-family: var(--font-mono); font-size: var(--fs-cap); font-weight: 400; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub.preview { color: var(--ink); opacity: .8; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--fs-small); }
+.sub.meta { font-size: var(--fs-meta); }
+.main { min-width: 0; }
+.empty { margin: 0; padding: 4px 2px; max-width: 560px; font-size: var(--fs-small); }
+
+/* --- пространство: панель редактора и колонка сессий и запусков */
+.editor-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+@container (min-width: 1180px) { .editor-grid { grid-template-columns: minmax(0, 1fr) 300px; } }
+.editor { margin-bottom: 0; }
+.editor :global(.form) { gap: 14px; }
+.editor-form textarea { line-height: 1.5; }
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.titles { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.titles h2 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
+.head-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: var(--fs-meta); color: var(--ink-3); }
+.dir-btn { border: 0; background: transparent; padding: 0; color: var(--ink-2); font: inherit; font-family: var(--font-mono); cursor: pointer; }
+.dir-btn:hover { color: var(--ink); text-decoration: underline; }
+.head :global(.row) { gap: 8px; margin-left: auto; }
+.msg-row { display: flex; align-items: center; gap: 10px; }
+.tab-count { margin-left: 6px; font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tab-body { display: flex; flex-direction: column; gap: 10px; }
+.hint { margin: 0; max-width: 760px; }
+/* сессии без пространства в тех же папках: предложение, а не сигнал — нейтральная рамка */
+.loose { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; margin-bottom: 8px; }
+.loose p { margin: 0; }
+/* саммари тега от старой версии: ждёт решения — жёлтая кромка «ждёт тебя», без заливки */
+.legacy { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-left: 3px solid var(--st-wait); border-radius: var(--r-sm); padding: 8px 10px; background: var(--panel); }
+.legacy p { margin: 0; }
+.legacy pre { margin: 6px 0 0; padding: 8px 10px; background: var(--well); border-radius: var(--r-sm); white-space: pre-wrap; max-height: 240px; overflow: auto; }
+.mono { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.5; }
+.field-foot { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.field-foot > :first-child { max-width: 680px; }
+.dirs { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.dirs textarea { grid-column: 1 / -1; font-family: var(--font-mono); font-size: var(--fs-small); }
+
+/* документы: строки с разделителями, не карточки */
+.docs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.new-doc { display: flex; gap: 6px; align-items: center; }
+.new-doc input { width: 220px; padding: 4px 8px; font-size: var(--fs-small); }
+.docs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--r-md); }
+.docs li { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'name acts' 'sub acts'; gap: 1px 12px; padding: 7px 10px; border-bottom: 1px solid var(--line); align-items: center; }
+.docs li:last-child { border-bottom: 0; }
+.docs li:hover { background: var(--hover); }
+.docs li.active { background: var(--select); }
+.doc-name { grid-area: name; font-family: var(--font-mono); font-size: var(--fs-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-sub { grid-area: sub; font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-acts { grid-area: acts; display: inline-flex; gap: 4px; }
+.doc-editor { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.doc-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.doc-editor-head :global(.row) { gap: 6px; margin-left: auto; }
+
+/* что уходит модели */
+.ctx-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; }
+.ctx-dirs { white-space: pre-wrap; color: var(--ink-2); }
+.ctx-block { border: 1px solid var(--line); border-radius: var(--r-md); }
+.ctx-block > summary { cursor: pointer; padding: 8px 12px; font-size: var(--fs-small); font-weight: 500; color: var(--ink-2); display: flex; justify-content: space-between; gap: 10px; }
+.ctx-block > summary:hover { color: var(--ink); }
+.ctx-block pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--well); font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; border-radius: 0 0 var(--r-md) var(--r-md); }
+
+/* сессии и запуски пространства */
+.activity { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.activity h3 { margin: 0; display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--r-sm); text-decoration: none; color: inherit; }
+.item:hover { background: var(--hover); }
+.item.live .item-title { color: var(--ink); }
+.item :global(.badge) { margin-left: auto; flex: none; }
+.item-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.item-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-sub { font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-icon { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); flex: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink-3); flex: none; box-sizing: border-box; }
+.dot.on { background: var(--live); border-color: var(--live); }
+.dot.wait { background: var(--st-wait); border-color: var(--st-wait); }
+/* вкладка «Документы» живёт и скрытой (открытый документ переживает переключение вкладок): display из .tab-body не должен её показать */
+.tab-body[hidden] { display: none; }

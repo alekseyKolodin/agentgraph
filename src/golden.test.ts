@@ -219,7 +219,8 @@ test('золотой: многоблочный прогон — промпты, 
       'JUDGE итерация 1\n### b\nout-b\n\n### c\nout-c\n\n### d\nout-d',
       'JUDGE итерация 2\n### b\nout-b\n\n### c\nout-c\n\n### d\nout-d',
     ]);
-    const phaseKeys = ['abort', 'additionalDirectories', 'cwd', 'effort', 'foreground', 'maxBudgetUsd', 'maxTurns', 'model', 'onContext', 'onModel', 'onQuestion', 'outputSchema', 'permissionMode', 'persist', 'prompt', 'system', 'tools'];
+    // guard — у каждого этапа: папки данных agentgraph (пространства, теги знаний, запуски) только для чтения
+    const phaseKeys = ['abort', 'additionalDirectories', 'cwd', 'effort', 'foreground', 'guard', 'maxBudgetUsd', 'maxTurns', 'model', 'onContext', 'onModel', 'onQuestion', 'outputSchema', 'permissionMode', 'persist', 'prompt', 'system', 'tools'];
     for (const c of calls) {
       if (c.name === 'judge') assert.deepStrictEqual(c.keys, ['abort', 'additionalDirectories', 'cwd', 'foreground', 'maxTurns', 'model', 'outputSchema', 'persist', 'prompt', 'system', 'tools']);
       else assert.deepStrictEqual(c.keys, phaseKeys, c.name);

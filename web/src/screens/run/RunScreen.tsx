@@ -9,7 +9,7 @@ import {
   abortRun, continueRun, deleteRun, errorText, keys, pauseRun, resumeRun, runFileUrl, setRunHidden, setRunStreamOpen, useConfig, useEventStream, useFeature,
   useRuns,
 } from '../../api';
-import { AdhocBadge, Badge, TagBadge } from '../../components/Badge';
+import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { MdText } from '../../components/MdText';
 import { PathLink } from '../../components/PathLink';
@@ -318,7 +318,7 @@ function RunPage({ id }: { id: string }) {
           <h1>
             {r.title || r.flow}
             {r.adhoc && <AdhocBadge />}
-            {(r.tags || []).map((t) => <TagBadge key={`t${t}`} slug={t} />)}
+            {(r.space ? [r.space] : r.tags || []).map((s) => <SpaceBadge key={`s${s}`} slug={s} link />)}
             {(r.knowledge || []).map((t) => <TagBadge key={`k${t}`} slug={t} kind="knowledge" />)}
             {' '}<Badge status={headerStatus(r)} />
           </h1>
@@ -327,7 +327,7 @@ function RunPage({ id }: { id: string }) {
               {r.adhoc ? <>{`flow ${r.flow} `}<span className="muted">{t('(разовый)')}</span></> : <>flow <Link to={`/flow/${r.flow}`} title={t('Открыть flow')}>{r.flow}</Link></>}
             </p>
           )}
-          <p title={`${t('Стоимость: оценка по прайсу API; с подписки не списывается')}\n${t('«идёт» — токены идущих этапов, включая сабагентов: их стоимость станет известна, когда этапы закончатся')}`}>{runMeta(r, st.tagPending, st.pending.values())}</p>
+          <p title={`${t('Стоимость: оценка по прайсу API; с подписки не списывается')}\n${t('«идёт» — токены идущих этапов, включая сабагентов: их стоимость станет известна, когда этапы закончатся')}`}>{runMeta(r, st.statePending, st.pending.values())}</p>
           <p className={cx('muted small', styles.runSub)}>{sub.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}</p>
           {extras.length > 0 && <p className={cx('muted small', styles.runExtras)}>{extras.flatMap((x, i) => (i ? [<span key={`e${i}`}>·</span>, x] : [x]))}</p>}
           {edits && <p className="muted small" title={edits.title}>{edits.text}</p>}

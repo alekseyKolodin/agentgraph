@@ -1,4 +1,4 @@
-// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /tags/<slug>, /context; сервер отдаёт на них index.html. Старые
+// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context; сервер отдаёт на них index.html. Старые
 // хеши /#run/<id> и т. п. переводятся на пути ниже (lib/legacy-url.ts), старые /next/… — сервер (308).
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
@@ -20,7 +20,8 @@ if (import.meta.env.DEV) Object.assign(window, { __agentgraphQuery: queryClient 
 const FlowScreen = lazy(() => import('./screens/flow/FlowScreen').then((m) => ({ default: m.FlowScreen })));
 // страница запуска тоже тянет граф: отдельный файл
 const RunScreen = lazy(() => import('./screens/run/RunScreen').then((m) => ({ default: m.RunScreen })));
-// «Теги» и «Контекст» открывают реже главной: тоже своими файлами
+// «Пространства», «Знания» и «Контекст» открывают реже главной: тоже своими файлами
+const SpacesScreen = lazy(() => import('./screens/spaces/SpacesScreen').then((m) => ({ default: m.SpacesScreen })));
 const TagsScreen = lazy(() => import('./screens/tags/TagsScreen').then((m) => ({ default: m.TagsScreen })));
 const ContextScreen = lazy(() => import('./screens/context/ContextScreen').then((m) => ({ default: m.ContextScreen })));
 // «Сессии»: список с формой и экран терминала; терминал (xterm) — отдельным файлом, только экрану сессии
@@ -38,6 +39,7 @@ const router = createBrowserRouter(
       element: <Shell />,
       children: [
         { index: true, element: <HomeScreen /> },
+        { path: 'spaces/:slug?', element: <Suspense><SpacesScreen /></Suspense> },
         { path: 'tags/:slug?', element: <Suspense><TagsScreen /></Suspense> },
         { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
         { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },

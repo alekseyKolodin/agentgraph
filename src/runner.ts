@@ -8,7 +8,7 @@ import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
 import type {
   BlockNext, BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
-  RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, TagSummaryReport,
+  RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, SpaceStateReport,
 } from './api-types.js';
 import { flowBlocks, isCallBlock, NEXT_END, phaseSteps, type Block, type FlowSpec, type NextRule, type Phase, type PhaseStep, type Until } from './schema.js';
 import { emptyContext, render, type TemplateContext } from './template.js';
@@ -30,9 +30,10 @@ import {
   type StepDelta,
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
-import { knowledgeBlock, knowledgeDirs, queueTagSummary, readTag, resolveKnowledge, writeTagSummary, type KnowledgeTag } from './tags.js';
-import { dropRunPaths, parseTagSummary, tagSummaryPromptFile, tagSummaryRequest } from './tag-summary.js';
-import type { AutoTagReport } from './auto-tag.js';
+import { knowledgeBlock, knowledgeDirs, resolveKnowledge, type KnowledgeTag } from './tags.js';
+import { dataDirsGuard, phaseProtectedRoots, queueSpaceState, readSpace, spaceContext, writeSpaceState, type Space } from './spaces.js';
+import { dropRunPaths, parseSpaceState, SPACE_STATE_PROMPT_FILE, spaceStateRequest } from './space-state.js';
+import type { AutoSpaceReport } from './auto-space.js';
 import type { RunTitleReport } from './run-title.js';
 import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
 import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
@@ -78,21 +79,25 @@ export type RunOptions = {
    * правит артефакты идущего запуска. Единственный путь создания хранилища у живого запуска.
    */
   onArtifactStore?: (store: ArtifactStore) => void;
-  /** Теги задачи (слаги): саммари фичи между запусками, см. tags.ts. Теги уже заведены, их блоки уже во вводе. */
-  tags?: string[];
-  /** Обновить саммари тегов после запуска со статусом done; по умолчанию — да. */
-  saveTag?: boolean;
   /**
-   * Папки только для чтения из тегов: пути тегов и артефакты их прошлых запусков (на них ссылается саммари). Идут в
-   * additionalDirectories этапов и судьи, но не в addDirs запуска: при продолжении сервер пересчитывает их заново.
+   * Пространство запуска (слаг), см. spaces.ts: заведено до старта. Его раздел (шапка, документы, состояние) — в конце
+   * промпта каждого этапа, собирается из текущего STATE.md на старте этапа.
    */
-  tagDirs?: string[];
-  /** Модель сессии саммари тега; по умолчанию haiku. */
-  tagSummaryModel?: string;
+  space?: string;
+  /** Обновить состояние пространства после запуска со статусом done; по умолчанию — да. */
+  saveState?: boolean;
+  /**
+   * Папки пространства: его собственная (Claude Code загрузит её CLAUDE.md памятью), пути только для чтения и артефакты
+   * прошлых запусков. Идут в additionalDirectories этапов и судьи, но не в addDirs запуска: при продолжении сервер
+   * пересчитывает их заново.
+   */
+  spaceDirs?: string[];
+  /** Модель сессии состояния; по умолчанию haiku. */
+  stateModel?: string;
   /** Теги области знаний (слаги) на весь запуск: их раздел получает каждый блок вместе со своим knowledge из flow. */
   knowledge?: string[];
-  /** Итог автотега (auto-tag.ts): тег уже заведён и стоит в tags или ошибка подбора; стоимость входит в totalCostUsd. */
-  autoTag?: AutoTagReport;
+  /** Итог автопространства (auto-space.ts): оно уже заведено и стоит в space или ошибка подбора; стоимость — в totalCostUsd. */
+  autoSpace?: AutoSpaceReport;
   /**
    * Подбор имени запуска (run-title.ts): стартует после start и идёт параллельно этапам, раннер ждёт его только перед
    * концом. Не бросает; signal прерывается остановкой запуска. Без опции имени нет и ключей title/titleSession тоже.
@@ -186,7 +191,7 @@ export type RunFix = {
 
 export type { QuestionRecord } from './api-types.js';
 export type {
-  BlockReport, BlockStatus, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, RunEvent, RunReport, TagSummaryReport,
+  BlockReport, BlockStatus, ConditionReport, DigestSession, FinalPhase, PauseReason, PhaseFiles, PhaseReport, RunEvent, RunReport, SpaceStateReport,
 } from './api-types.js';
 
 // interrupted раннер не пишет: так сервер показывает running-запуск, чей процесс умер, не дописав run.json
@@ -421,8 +426,8 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     status: 'running',
     iterations: 0,
     maxIterations: blockReports.reduce((n, b) => n + b.maxIterations, 0),
-    // подбор автотега прошёл до старта, но это тоже сессия запуска: его стоимость — в итоге и под --max-budget
-    totalCostUsd: opts.autoTag?.costUsd ?? 0,
+    // подбор автопространства прошёл до старта, но это тоже сессия запуска: его стоимость — в итоге и под --max-budget
+    totalCostUsd: opts.autoSpace?.costUsd ?? 0,
     blocks: blockReports,
     phases: [],
     conditions: [],
@@ -436,9 +441,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     ...(opts.worktree ? { worktree: opts.worktree } : {}),
     ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
     ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
-    ...(opts.tags?.length ? { tags: opts.tags, saveTag: opts.saveTag !== false } : {}),
+    ...(opts.space ? { space: opts.space, saveState: opts.saveState !== false } : {}),
     ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
-    ...(opts.autoTag ? { autoTag: opts.autoTag } : {}),
+    ...(opts.autoSpace ? { autoSpace: opts.autoSpace } : {}),
     ...(opts.title ? { title: opts.title } : {}),
     ...(opts.parent ? { parent: opts.parent } : {}),
   };
@@ -641,7 +646,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     const title = phase.title ?? phase.name;
     const group = phase.group ? { group: phase.group } : {};
     const known = knowledge.get(block.name);
-    const prompt = renderPhasePrompt(phase, snap, opts.cwd, runOpts, art, known, notes);
+    const prompt = renderPhasePrompt(phase, snap, opts.cwd, runOpts, art, known, notes, spaceSection(opts));
     const baseRel = `${iterRel}/${pad(i + 1)}-${phase.name}`;
     const files: PhaseFiles = { prompt: `${baseRel}.prompt.md`, transcript: `${baseRel}.transcript.md`, output: `${baseRel}.output.md` };
     fs.writeFileSync(path.join(runDir, files.prompt), prompt);
@@ -682,9 +687,13 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         }
       : undefined;
     const startedAt = Date.now();
-    // у flow с артефактами каждый этап под guard: свои артефакты, папка запусков; отказы считаются в отчёт этапа
+    // каждый этап под guard папок данных agentgraph: пространства, теги знаний, у flow без артефактов — папка запусков,
+    // папки чтения пространства вне проекта (их CLAUDE.md грузится памятью следующих сессий и этапов); у flow с
+    // артефактами — ещё guard артефактов: свои артефакты и папка запусков. Отказы считаются в отчёт этапа
     const denials: Denial[] = [];
-    const guard = store && art ? { guard: store.guard(phase.tools, art.access, (tool, reason) => countDenial(denials, tool, reason)) } : {};
+    const artGuard = store && art ? store.guard(phase.tools, art.access, (tool, reason) => countDenial(denials, tool, reason)) : undefined;
+    const roots = phaseProtectedRoots({ runsDir: opts.runsDir, artifacts: Boolean(artGuard), spaceDirs: opts.spaceDirs, cwd: runOpts.cwd });
+    const guard = phaseGuard(artGuard, dataDirsGuard(roots, (tool, reason) => countDenial(denials, tool, reason)));
     let res: SessionResult;
     let thrown: { err: unknown } | undefined;
     try {
@@ -725,7 +734,8 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       sessionId: res.sessionId,
       errors: res.errors,
       files,
-      ...(store ? { denials } : {}),
+      // у flow с артефактами отказы есть всегда (хоть пустые), без артефактов — только отказы guard пространства
+      ...(store || denials.length ? { denials } : {}),
       ...((res.model ?? asked.model) ? { model: res.model ?? asked.model } : {}),
       ...(asked.effort ? { effort: asked.effort } : {}),
       ...(res.tokens ? { tokens: res.tokens } : {}),
@@ -805,7 +815,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         ...(attachments.length ? { attachments } : {}),
         ...(before ? { artifactsFrom: before } : {}),
         ...(resume ? { continueFrom: resume.cont } : {}),
-        ...(opts.tagDirs?.length ? { tagDirs: opts.tagDirs } : {}),
+        // дочерний запуск работает в том же пространстве: раздел и папки — его, состояние запишет родитель
+        ...(opts.space ? { space: opts.space, saveState: false } : {}),
+        ...(opts.spaceDirs?.length ? { spaceDirs: opts.spaceDirs } : {}),
         ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
         ...(report.title ? { title: `${report.title} · ${block.title ?? block.name}` } : {}),
         ...(opts.digest ? { digest: opts.digest } : {}),
@@ -1236,10 +1248,10 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   if (report.status === 'running') report.status = 'done';
   // пауза, запрошенная на последнем шаге, так и не наступила
   delete report.pause;
-  // итог считаем до саммари тегов (им нужны пути выводов), а report.final присваиваем после finishedAt, как раньше:
-  // порядок ключей run.json у запусков без тегов не меняется
+  // итог считаем до состояния пространства (ему нужны пути выводов), а report.final присваиваем после finishedAt, как
+  // раньше: порядок ключей run.json у запусков без пространства не меняется. Дочерний запуск состояние не пишет — родитель
   const final = finalPhases(report);
-  if (opts.tags?.length) report.tagSummaries = await updateTagSummaries(report, final, runOpts, emit);
+  if (opts.space && !opts.parent) report.stateUpdate = await updateSpaceState(report, final, opts.space, runOpts, emit);
   // имя и последние итоги должны попасть в end и итоговый run.json: после конца в run.json никто не пишет
   await Promise.all([namer.settle(), digester.settle()]);
   report.finishedAt = new Date().toISOString();
@@ -1250,51 +1262,89 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
 }
 
 /**
- * Сессии саммари тегов после запуска, по одной на тег и по очереди: только при статусе done и галочке. Ошибка сессии
- * не меняет статус запуска — она в error этого тега, его старое саммари остаётся. Стоимость идёт в итог запуска.
+ * Сессия состояния пространства после запуска: только при статусе done и галочке. Ошибка сессии не меняет статус
+ * запуска — она в stateUpdate.error, старое состояние остаётся. Стоимость идёт в итог запуска. Зовётся через
+ * queueSpaceState: состояние запуска и сессии терминала по одному пространству пишется по очереди — иначе вторая
+ * перезаписала бы первое, считав прошлое состояние до его записи.
  */
-async function updateTagSummaries(report: RunReport, final: FinalPhase[], opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport[]> {
-  const out: TagSummaryReport[] = [];
-  for (const tag of opts.tags ?? []) {
-    let r: TagSummaryReport;
-    if (opts.saveTag === false) r = { tag, ok: false, costUsd: 0, skipped: 'галочка «Обновить саммари тегов» снята' };
-    else if (report.status !== 'done') r = { tag, ok: false, costUsd: 0, skipped: `запуск не завершён (${report.status})` };
-    // «Остановить» во время саммари прерывает оставшиеся сессии, запуск остаётся done
-    else if (opts.abort?.signal.aborted) r = { tag, ok: false, costUsd: 0, skipped: 'остановлено' };
-    // «Стоп» мог прийти, пока саммари ждало в очереди тега (её держала сессия терминала): тогда ни промпта, ни сессии
-    else r = await queueTagSummary(tag, async () => (opts.abort?.signal.aborted ? { tag, ok: false, costUsd: 0, skipped: 'остановлено' } : updateTagSummary(report, final, tag, opts, emit)));
-    out.push(r);
-  }
-  return out;
+async function updateSpaceState(report: RunReport, final: FinalPhase[], slug: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<SpaceStateReport> {
+  const skip = (skipped: string): SpaceStateReport => ({ space: slug, ok: false, costUsd: 0, skipped });
+  if (opts.saveState === false) return skip('галочка «Обновить состояние пространства» снята');
+  if (report.status !== 'done') return skip(`запуск не завершён (${report.status})`);
+  // «Остановить» во время состояния прерывает сессию, запуск остаётся done
+  if (opts.abort?.signal.aborted) return skip('остановлено');
+  // «Стоп» мог прийти, пока состояние ждало в очереди (её держала сессия терминала): тогда ни промпта, ни сессии
+  return queueSpaceState(slug, async () => (opts.abort?.signal.aborted ? skip('остановлено') : writeRunState(report, final, slug, opts, emit)));
 }
 
-// Зовётся через queueTagSummary (tags.ts): саммари запуска и сессии терминала по одному тегу пишутся по очереди —
-// иначе вторая перезаписала бы первое, считав прошлое саммари до его записи.
-async function updateTagSummary(report: RunReport, final: FinalPhase[], tag: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<TagSummaryReport> {
-  let out: TagSummaryReport;
+async function writeRunState(report: RunReport, final: FinalPhase[], slug: string, opts: RunOptions, emit: (e: RunEvent) => void): Promise<SpaceStateReport> {
+  let out: SpaceStateReport;
   try {
-    const prev = readTag(tag)?.summary ?? '';
-    const req = tagSummaryRequest({ ...report, final }, tag, prev, { model: opts.tagSummaryModel ?? 'haiku', abort: opts.abort });
-    const file = tagSummaryPromptFile(tag);
-    fs.writeFileSync(path.join(report.runDir, file), req.prompt);
-    emit({ type: 'tag_summary_start', tag, file });
+    let space = readSpace(slug);
+    if (!space) throw new Error(`пространства ${slug} нет: его удалили`);
     let res: SessionResult | undefined;
+    let cost = 0;
     try {
-      res = await (opts.session ?? runSession)(req, () => {});
-      report.totalCostUsd += res.costUsd;
-      // ссылки на выводы этапов и прочие файлы папки запуска следующему запуску недоступны — вычищаем
-      const text = dropRunPaths(parseTagSummary(res), path.dirname(report.runDir));
-      writeTagSummary(tag, text, { id: report.id, flow: report.flow, finishedAt: new Date().toISOString(), status: report.status });
-      out = { tag, ok: true, costUsd: res.costUsd };
+      // состояние правят и руками на странице пространства, мимо очереди: если его переписали, пока шла сессия, —
+      // пересчитываем один раз от нового, чтобы правка не пропала молча
+      for (let attempt = 0; ; attempt++) {
+        const req = spaceStateRequest({ ...report, final }, space, space.state, { model: opts.stateModel ?? 'haiku', abort: opts.abort });
+        if (attempt === 0) {
+          fs.writeFileSync(path.join(report.runDir, SPACE_STATE_PROMPT_FILE), req.prompt);
+          emit({ type: 'space_state_start', space: slug, file: SPACE_STATE_PROMPT_FILE });
+        }
+        res = await (opts.session ?? runSession)(req, () => {});
+        report.totalCostUsd += res.costUsd;
+        cost += res.costUsd;
+        // ссылки на выводы этапов и прочие файлы папки запуска следующим недоступны — вычищаем
+        const text = dropRunPaths(parseSpaceState(res), path.dirname(report.runDir));
+        const now = readSpace(slug);
+        if (!now) throw new Error(`пространства ${slug} нет: его удалили`);
+        if (attempt === 0 && now.state !== space.state && !opts.abort?.signal.aborted) {
+          space = now;
+          continue;
+        }
+        writeSpaceState(slug, text, { id: report.id, at: new Date().toISOString(), kind: 'run', flow: report.flow, ...(report.title ? { title: report.title } : {}), status: report.status });
+        break;
+      }
+      out = { space: slug, ok: true, costUsd: cost };
     } catch (err) {
-      out = { tag, ok: false, costUsd: res?.costUsd ?? 0, error: err instanceof Error ? err.message : String(err) };
+      out = { space: slug, ok: false, costUsd: cost, error: err instanceof Error ? err.message : String(err) };
     }
     if (res?.tokens) out.tokens = res.tokens;
   } catch (err) {
-    out = { tag, ok: false, costUsd: 0, error: err instanceof Error ? err.message : String(err) };
+    out = { space: slug, ok: false, costUsd: 0, error: err instanceof Error ? err.message : String(err) };
   }
-  emit({ type: 'tag_summary', tag, report: out });
+  emit({ type: 'space_state', space: slug, report: out });
   return out;
+}
+
+/**
+ * Раздел пространства для конца промпта этапа: читается на старте этапа (состояние могла переписать сессия терминала),
+ * карта уже загружена памятью — папка пространства среди доп. директорий этапа. Пространство удалили — раздела нет.
+ */
+export function spaceSection(opts: Pick<RunOptions, 'space' | 'spaceDirs'>): string | undefined {
+  if (!opts.space) return undefined;
+  try {
+    const space = readSpace(opts.space);
+    return space ? phaseSpaceSection(space, opts.spaceDirs ?? []) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Раздел пространства этапа по прочитанному пространству; без spaceDirs — как у запуска: его папка среди доп. директорий. */
+export function phaseSpaceSection(space: Space, spaceDirs: string[] = [space.dir]): string {
+  return spaceContext(space, { where: 'phase', mapLoaded: spaceDirs.includes(space.dir) });
+}
+
+/** Guard этапа: сначала артефакты (свои артефакты, папка запусков), затем папки данных agentgraph; первый отказ решает. */
+export function phaseGuard(
+  art: SessionRequest['guard'] | undefined,
+  data: SessionRequest['guard'] | undefined,
+): { guard?: NonNullable<SessionRequest['guard']> } {
+  if (!art && !data) return {};
+  return { guard: (tool, input, ctx) => art?.(tool, input, ctx) ?? data?.(tool, input, ctx) };
 }
 
 /**
@@ -1327,20 +1377,31 @@ export function blockMaxIterations(block: Block, opts: { maxIterations?: number 
 export type RunExtras = Pick<RunOptions, 'addDirs' | 'attachments' | 'runDir'>;
 
 /**
- * Промпт фазы + инструкция «что передать дальше» (handoff) + доп. директории этапа и запуска + раздел тегов знаний
- * блока (knowledge: список по строке на тег, inline-теги целиком) + раздел «Артефакты запуска» + вложения к задаче.
+ * Промпт фазы + инструкция «что передать дальше» (handoff) + доп. директории этапа и запуска + раздел пространства
+ * (space: шапка, документы, состояние — spaceSection) + раздел тегов знаний блока (knowledge: список по строке на тег,
+ * inline-теги целиком) + раздел «Артефакты запуска» + вложения к задаче + указания пользователя.
  * art — артефакты этапа на старте шага (подстановки и раздел); без них промпт как до артефактов, без knowledge — как до тегов знаний.
  */
-export function renderPhasePrompt(phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[], notes?: string[]): string {
+export function renderPhasePrompt(
+  phase: Phase, ctx: TemplateContext, cwd?: string, run?: RunExtras, art?: PhaseArtifacts, knowledge?: KnowledgeTag[], notes?: string[], space?: string,
+): string {
   const vars = art ? { ...ctx, artifacts: art.snapshot } : ctx;
   let body = render(phase.prompt, vars);
   if (phase.handoff?.trim()) body = `${body.trimEnd()}\n\n${handoffTail(render(phase.handoff, vars))}`;
   const dirs = cwd ? [...new Set([...resolveAddDirs(phase, cwd), ...resolveDirList(run?.addDirs, cwd)])] : [];
   if (dirs.length) body = `${body.trimEnd()}\n\n${dirsTail(dirs)}`;
-  const known = knowledgeBlock(knowledge ?? []);
-  if (known) body = `${body.trimEnd()}\n\n${known}`;
+  const tail = phaseContextTail(space, knowledge ?? []);
+  if (tail) body = `${body.trimEnd()}\n\n${tail}`;
   if (art?.section) body = `${body.trimEnd()}\n\n${art.section}`;
   return withNotes(withAttachments(body, run), notes);
+}
+
+/**
+ * Что этап получает от пространства и тегов знаний — в конце промпта, после доп. директорий: раздел пространства и
+ * строки тегов (тег «всегда в промпт» — целиком). Тот же текст показывает превью «Модель получит» (model-context.ts).
+ */
+export function phaseContextTail(space: string | undefined, knowledge: KnowledgeTag[]): string {
+  return [space?.trim(), knowledgeBlock(knowledge)].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -1447,7 +1508,7 @@ export function buildRequest(spec: FlowSpec, phase: Phase, prompt: string, opts:
   return {
     prompt,
     cwd: opts.cwd,
-    additionalDirectories: [...new Set([...resolveAddDirs(phase, opts.cwd), ...resolveDirList(opts.addDirs, opts.cwd), ...attachmentsDir(opts), ...artDir, ...(opts.tagDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
+    additionalDirectories: [...new Set([...resolveAddDirs(phase, opts.cwd), ...resolveDirList(opts.addDirs, opts.cwd), ...attachmentsDir(opts), ...artDir, ...(opts.spaceDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
     system: phase.system,
     tools: implicit.length ? [...phase.tools, ...implicit] : phase.tools,
     ...phaseModel(spec, phase, opts),
@@ -1510,13 +1571,14 @@ const judgeSystem = (task: string) => `${JUDGE_SYSTEM} Пиши reason и feedba
 /**
  * Сессия судьи. Вложения — часть задачи: судья получает их список и папку attachments/.
  * Доп. директории (этапа и запуска) ему не даются; артефакты (art) — даются: раздел в промпте и их папка.
- * Теги знаний блока (knowledge) — только папками: рубрика судьи своя, текст знаний ему не даётся.
+ * Теги знаний блока (knowledge) и пространство — только папками (карта пространства придёт памятью): рубрика судьи
+ * своя, текст знаний и состояние ему не даются.
  */
 export function judgeRequest(spec: FlowSpec, until: Extract<Until, { type: 'judge' }>, prompt: string, opts: RunOptions, art?: PhaseArtifacts, knowledge?: KnowledgeTag[], task = '') {
   return {
     prompt: withAttachments(art?.section ? `${prompt.trimEnd()}\n\n${art.section}` : prompt, opts),
     cwd: opts.cwd,
-    additionalDirectories: [...new Set([...attachmentsDir(opts), ...(art ? [art.dir] : []), ...(opts.tagDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
+    additionalDirectories: [...new Set([...attachmentsDir(opts), ...(art ? [art.dir] : []), ...(opts.spaceDirs ?? []), ...knowledgeDirs(knowledge ?? [])])],
     system: judgeSystem(task),
     // Только чтение + сабагенты (Agent добавляет runSession): судья может сам проверить файлы.
     tools: ['Read', 'Grep', 'Glob'],

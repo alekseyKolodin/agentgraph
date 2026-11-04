@@ -67,7 +67,7 @@ export function LaunchButton({ target, onLaunch }: { target: IntakeTarget; onLau
   );
 }
 
-/** Чипы запусков, связанных со строкой: flow, теги, статус; клик — открыть запуск. */
+/** Чипы запусков, связанных со строкой: flow, пространство, статус; клик — открыть запуск. */
 export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
   const navigate = useNavigate();
   if (!runs.length) return null;
@@ -76,12 +76,12 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
       {runs.map((r) => (
         <button key={r.id} className="chip" title={when(r.startedAt)} onClick={() => void navigate(`/run/${r.id}`)}>
           {r.flow}
-          {(r.tags || []).map((tag) => (
-            <span key={tag}>
+          {r.space && (
+            <span>
               {' '}
-              <span className="muted">#{tag}</span>
+              <span className="muted">◇ {r.space}</span>
             </span>
-          ))}
+          )}
           <Badge status={r.status} />
         </button>
       ))}

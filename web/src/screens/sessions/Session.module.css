@@ -39,16 +39,19 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .actions :global(.btn) { display: inline-flex; align-items: center; gap: 6px; }
 
-/* строка тегов: залитый чип — тег задачи, контурный с книгой — тег знаний; пунктир с часами — ещё не дошло до модели */
+/* строка контекста: чип с ромбом — пространство (нейтральный, как .badge.space: цвет — только смысл, а синий — «идёт»),
+   контурный с книгой — тег знаний; пунктир с часами — ещё не дошло до модели */
 .tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 8px 20px; border-bottom: 1px solid var(--line); min-height: 28px; }
 .tags-label { font-size: var(--fs-meta); color: var(--ink-2); margin-right: 2px; }
 .none { font-size: var(--fs-meta); color: var(--ink-3); }
 .chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 10px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); color: var(--ink); font-size: var(--fs-meta); white-space: nowrap; }
 .chip:has(.chip-x) { padding-right: 2px; }
-.chip.task { background: color-mix(in srgb, var(--live) 16%, transparent); border-color: var(--live); font-weight: 600; }
+.chip.space { font-weight: 500; }
+.chip-link { color: inherit; text-decoration: none; }
+.chip-link:hover { text-decoration: underline; }
+.sep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; }
 .chip.knowledge svg { color: var(--ink-2); }
 .chip.pending { border-style: dashed; }
-.chip.task.pending { background: color-mix(in srgb, var(--live) 8%, transparent); }
 .chip.removed { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--ink-2); font-weight: 400; text-decoration: line-through; }
 .chip.pending > svg:first-child, .chip.removed > svg:first-child { color: var(--st-wait); }
 .chip svg { width: 12px; height: 12px; flex: none; }
@@ -83,3 +86,5 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .ok-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-ok); flex: none; }
 .hint { font-size: var(--fs-meta); color: var(--ink-3); }
 .actions :global(.menu-wrap) { position: relative; }
+/* «Модель получит» под строкой контекста: свёрнуто, по клику — разбор и точный текст */
+.model-preview { margin: 0 0 8px; }

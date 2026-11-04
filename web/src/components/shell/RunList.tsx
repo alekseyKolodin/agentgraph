@@ -6,7 +6,7 @@ import { useMatch, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { RunSummary } from '@server/api-types';
 import { deleteRun, errorText, keys, setRunHidden, useFeature, useRuns } from '../../api';
-import { AdhocBadge, Badge, TagBadge } from '../Badge';
+import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../Badge';
 import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
 import { t } from '../../lib/i18n';
@@ -145,7 +145,7 @@ export function RunList() {
         <span className={styles.name}>
           {r.title || r.flow}
           {r.adhoc && <AdhocBadge />}
-          {(r.tags || []).map((tag) => <TagBadge key={tag} slug={tag} />)}
+          {r.space && <SpaceBadge slug={r.space} link />}
           {(r.knowledge || []).map((tag) => <TagBadge key={`k:${tag}`} slug={tag} kind="knowledge" />)} <Badge status={r.status} />
         </span>
         <span className={styles.sub}>

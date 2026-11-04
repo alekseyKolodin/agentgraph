@@ -1,8 +1,8 @@
-// Ввод тегов: поле с подсказками (datalist) и чипы выбранных с ×. Общий для формы запуска (RunForm) и сессий терминала.
-// Тег добавляется по Enter, выбором из списка и уходом с поля; что делать со слагом (проверить, завести, подтянуть
-// вид), решает владелец в onAdd — ему приходит текст поля.
+// Ввод тегов знаний: поле с подсказками (datalist) и чипы выбранных с ×. Общий для формы запуска (RunForm) и сессий
+// терминала. Тег добавляется по Enter, выбором из списка и уходом с поля; что делать со слагом (проверить, подтянуть
+// раздел), решает владелец в onAdd — ему приходит текст поля.
 import type { TagKind, TagListItem } from '@server/api-types';
-import { KIND_LABEL, tagOptionLabel } from '../lib/run-form';
+import { tagOptionLabel } from '../lib/run-form';
 import { TagBadge } from './Badge';
 
 type FieldProps = {
@@ -59,7 +59,7 @@ type Props = FieldProps & {
   removeTitle: string;
 };
 
-/** Подпись, поле и чипы выбранных тегов (тег задачи — залитый, тег знаний — пунктирный) с видом и ×. */
+/** Подпись, поле и чипы выбранных тегов знаний (пунктирные) с ×. */
 export function TagInput({ label, labelTitle, tags, kindOf, onRemove, removeTitle, ...field }: Props) {
   return (
     <>
@@ -71,7 +71,6 @@ export function TagInput({ label, labelTitle, tags, kindOf, onRemove, removeTitl
         {tags.map((tag) => (
           <span key={tag} className="chip attach-chip">
             <TagBadge slug={tag} kind={kindOf(tag)} />
-            <span className="muted small">{KIND_LABEL[kindOf(tag)]}</span>
             <button type="button" className="attach-x" title={removeTitle} onClick={() => onRemove(tag)}>×</button>
           </span>
         ))}

@@ -130,9 +130,11 @@ export type RunSummary = {
   addDirs?: string[];
   /** Разовый запуск: пометка в списке, вместо «Открыть flow» — «Сохранить как flow». */
   adhoc?: true;
-  /** Теги задачи: чипы в списке запусков. */
-  tags?: string[];
-  /** Теги знаний запуска: чипы рядом с тегами задачи. */
+  /** Пространство запуска: чип в списке; у старого запуска — его первый тег задачи (перенесён в пространство). */
+  space?: string;
+  /** Старый запуск с несколькими тегами задач: все они (он виден на странице каждого их пространства, как сессия). */
+  legacyTags?: string[];
+  /** Теги знаний запуска: чипы рядом с пространством. */
   knowledge?: string[];
   /** Дочерний запуск блока-вызова: список показывает его под родителем. */
   parent?: RunParent;
@@ -275,16 +277,20 @@ export type ConnectorToolView = { name: string; tool: string; description?: stri
 export type ConnectorView = { server: string; name: string; status: string; tools: ConnectorToolView[] };
 export type ConnectorsView = { connectors: ConnectorView[]; at: string };
 
+/**
+ * Вид тега. Остались теги знаний; task — тег задачи старых версий: его папка на диске не удаляется, на старте он
+ * переносится в пространство (src/spaces.ts), в списке тегов и в запусках его больше нет.
+ */
 export type TagKind = 'task' | 'knowledge';
-/** Элемент GET /api/tags. */
+/** Элемент GET /api/tags: только теги знаний. */
 export type TagListItem = { slug: string; kind: TagKind; title?: string; updatedAt: string; runs: number; preview: string };
 
 /** interrupted раннер не пишет: так сервер показывает running-запуск, чей процесс умер, не дописав run.json. */
 export type RunStatus = 'running' | 'done' | 'max_iterations' | 'failed' | 'budget_exceeded' | 'aborted' | 'interrupted';
 
 /**
- * Запуск или сессия терминала, обновившие саммари тега. У сессии (kind: 'session') id — id сессии agentgraph
- * (/sessions/<id>), flow — 'session', title — её название; папки артефактов у неё нет.
+ * Запуск или сессия терминала, обновившие саммари тега задачи (старый tag.json). У сессии (kind: 'session') id — id
+ * сессии agentgraph, flow — 'session', title — её название. Перенос в пространство делает из них SpaceUpdate.
  */
 export type TagRun = { id: string; flow: string; finishedAt: string; status: RunStatus; kind?: 'session'; title?: string };
 
@@ -292,10 +298,7 @@ export type TagMeta = {
   slug: string;
   kind: TagKind;
   title?: string;
-  /**
-   * Заголовок придумала модель автотега по недоверенному тексту задачи: в блок тега для промптов он не попадает, пока
-   * его не перепишут на странице «Теги».
-   */
+  /** Заголовок придумала модель по недоверенному тексту задачи (старый автотег): в промпты не попадает. */
   autoTitle?: true;
   /**
    * Тег знаний: короткое «когда нужен этот тег», до TAG_DESCRIPTION_MAX знаков. Идёт одной строкой в промпт каждого
@@ -311,27 +314,156 @@ export type TagMeta = {
   updatedAt: string;
   /** Абсолютные пути (папки или файлы), которые тег открывает этапам на чтение. */
   dirs?: string[];
-  /** Последние запуски, свежие сверху, не больше TAG_RUNS_MAX. */
+  /** Старый тег задачи: последние запуски, обновившие саммари. У тега знаний пусто. */
   runs: TagRun[];
 };
 
+/** summary — саммари старого тега задачи (переносится в STATE.md пространства); у тега знаний пусто. */
 export type Tag = TagMeta & { summary: string; notes: string; attachments: string[] };
 
-/** GET /api/tags/:slug: тег и блок, который сервер вставит в запуск (input). */
+/** GET /api/tags/:slug: тег знаний и раздел, который получат этапы (input). */
 export type TagDetail = Tag & { input: string };
 
-// ---------- сессии: интерактивный claude в терминале с тегами (src/sessions*.ts)
+// ---------- пространства: фича или проект, над которыми идут сессии и запуски (src/spaces.ts)
+
+/**
+ * Кто записал состояние пространства: запуск (id — id запуска, flow — его flow) или сессия терминала (kind: 'session',
+ * id — id сессии agentgraph, title — её название). Свежие сверху в SpaceMeta.history.
+ */
+export type SpaceUpdate = { id: string; at: string; kind: 'run' | 'session'; flow?: string; title?: string; status?: RunStatus };
+
+/** Документ пространства (docs/): имя файла, размер, время правки; title — первый заголовок «# …» текстового файла. */
+export type SpaceDoc = { name: string; size: number; mtimeMs: number; text: boolean; title?: string };
+
+export type SpaceMeta = {
+  slug: string;
+  title?: string;
+  /** Заголовок придумала модель (автопространство, перенос автотега): в карту и промпты не идёт, пока его не перепишут. */
+  autoTitle?: true;
+  createdAt: string;
+  updatedAt: string;
+  /** Абсолютные пути (папки или файлы), которые пространство открывает сессиям и этапам на чтение. */
+  dirs?: string[];
+  /** Рабочая папка (проект): её подставляют формы сессии и запуска при выборе пространства. Нет — папка последней работы. */
+  cwd?: string;
+  /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
+  history: SpaceUpdate[];
+  /**
+   * Пространство перенесено из тега задачи. summaryMtimeMs — mtime саммари тега, которое учтено (при переносе или взято
+   * в состояние позже): саммари новее — его дописала старая версия agentgraph на той же папке настроек.
+   */
+  migratedFrom?: { tag: string; at: string; summaryMtimeMs?: number; runs?: string[] };
+};
+
+/** Пространство целиком: карта (CLAUDE.md), состояние (STATE.md), документы, абсолютный путь папки. */
+export type Space = SpaceMeta & { dir: string; map: string; mapMtimeMs?: number; state: string; stateMtimeMs?: number; docs: SpaceDoc[] };
+
+/** Элемент GET /api/spaces. */
+export type SpaceListItem = {
+  slug: string;
+  title?: string;
+  updatedAt: string;
+  /** Начало состояния, без заголовков разделов; нет состояния — начало карты. */
+  preview: string;
+  docs: number;
+  hasMap: boolean;
+  hasState: boolean;
+  /** Рабочая папка, заданная у пространства. */
+  cwd?: string;
+  /**
+   * Что подставят формы сессии и запуска: заданная рабочая папка (space) или папка последней сессии или запуска в нём —
+   * не в worktree, не дочернего и не внутри папки настроек agentgraph или папки запусков («Сессия в папке» не в счёт).
+   */
+  workdir?: SpaceWorkdir;
+  /** Последняя сессия или запуск в пространстве: порядок «свежие сверху» в выборе пространства. */
+  lastWorkAt?: string;
+  /** Сессий и запусков в пространстве (без дочерних запусков) и сколько из них идёт сейчас. */
+  sessions?: number;
+  runs?: number;
+  live?: number;
+  migratedFrom?: { tag: string; at: string };
+};
+
+export type SpaceWorkdir = { path: string; from: 'space' | 'session' | 'run' };
+
+/**
+ * Запуск на странице пространства; legacy — старый запуск с тегом задачи (до переноса тега в пространство); cwd — не у
+ * запуска в worktree и не у второго тега старого запуска с несколькими тегами (его папка — первого).
+ */
+export type SpaceRun = { id: string; flow: string; title?: string; status: string; startedAt: string; finishedAt?: string; input: string; cwd?: string; legacy?: true };
+/** Сессия терминала на странице пространства. */
+export type SpaceSession = { id: string; name: string; status: SessionStatus; live: boolean; cwd: string; lastActivityAt: string; turns: number; legacy?: true };
+
+/** GET /api/spaces/:slug: пространство, его запуски и сессии (свежие сверху; legacy — пришли из тега задачи). */
+/**
+ * Саммари тега задачи изменилось после переноса (его пишет старая версия agentgraph на той же ~/.agentgraph): путь, текст
+ * (как уйдёт в состояние — обрезанный) и mtime. Его можно взять в состояние или скрыть (PUT legacySummary).
+ */
+export type LegacySummary = { path: string; text: string; mtimeMs: number };
+
+/**
+ * looseSessions — сессии без пространства, открытые в тех же папках, что сессии и запуски пространства (или в его рабочей
+ * папке): их можно добавить в пространство одной кнопкой (у перенесённого — сессии той же работы без тега задачи).
+ */
+export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary; looseSessions?: SpaceSession[] };
+
+/**
+ * GET /api/spaces/:slug/context: что пространство даёт модели. session — текст хука SessionStart новой сессии
+ * (без тегов знаний), phase — раздел в конце промпта этапа; readDirs — папки только для чтения (--add-dir сессии,
+ * доп. директории этапов), map — карта, которую Claude Code загрузит памятью (chars — знаков, нет файла — exists false).
+ */
+export type SpaceContextView = {
+  session: string;
+  phase: string;
+  readDirs: string[];
+  map: { path: string; exists: boolean; chars: number };
+  warnings: string[];
+};
+
+/**
+ * GET /api/model-context?space=&tags=a,b&cwd= — «Модель получит»: точный текст и разбор для превью в формах и на экране сессии.
+ * session — текст хука SessionStart новой сессии (sessionContext, с бюджетом хука); phase — хвост промпта каждого этапа
+ * (раздел пространства и строки тегов знаний; у блоков flow бывают и свои теги). state — как уйдёт (обрезанное по лимиту).
+ */
+export type ModelContextView = {
+  session: string;
+  phase: string;
+  space?: {
+    slug: string;
+    title: string;
+    /** Заголовок придумала модель: в текст для модели он не идёт. */
+    autoTitle?: true;
+    dir: string;
+    /** loaded — сессия получит карту памятью; нет — строкой «прочитай» (папка пространства внутри рабочей папки, например ~). */
+    map: { path: string; chars: number; loaded: boolean };
+    state: string;
+    docs: SpaceDoc[];
+    /** Пути пространства, которые есть на диске (только чтение). */
+    dirs: string[];
+  };
+  /** text — строка тега, как её получит модель (тег «всегда в промпт» — раздел целиком). */
+  knowledge: { slug: string; title: string; inline: boolean; text: string }[];
+};
+
+/** GET|PUT /api/spaces/:slug/docs/:name: текст документа и его mtimeMs — база следующей записи. */
+export type SpaceDocText = { name: string; text: string; mtimeMs: number };
+
+// ---------- сессии: интерактивный claude в терминале с пространством и тегами знаний (src/sessions*.ts)
 
 /** starting — claude запущен, SessionStart ещё не было; working — модель отвечает; waiting — ход за человеком; ended — процесс вышел. */
 export type SessionStatus = 'starting' | 'working' | 'waiting' | 'ended';
 /** Режимы разрешений claude, которые предлагает форма; bypassPermissions и dontAsk не принимаются. */
 export type SessionPermissionMode = 'acceptEdits' | 'auto' | 'manual' | 'plan';
 
-/** Тег в строке тегов сессии: on — модель его видела; pending — добавлен, придёт со следующим шагом; removed — снят, снятие ещё не дошло. */
-export type SessionTagChip = { slug: string; kind: TagKind; state: 'on' | 'pending' | 'removed' };
+/** Тег знаний в строке сессии: on — модель его видела; pending — добавлен, придёт со следующим шагом; removed — снят, снятие ещё не дошло. */
+export type SessionTagChip = { slug: string; state: 'on' | 'pending' | 'removed' };
 
-/** Последнее обновление саммари тегов задач по сессии: когда, в какие теги записано, ошибки по тегам, стоимость. */
-export type SessionSummary = { at: string; tags: string[]; errors?: Record<string, string>; costUsd: number };
+/** Пространство сессии: on — модель его видела, pending — выбрано на ходу и придёт со следующим шагом, removed — снято, снятие ещё не дошло. */
+/** memory — карта этого пространства в памяти идущего claude (запущен с ним); выбранное на ходу — строкой «прочитай» до «Перезапустить». */
+export type SessionSpaceChip = { slug: string; state: 'on' | 'pending' | 'removed'; missing?: true; memory?: true };
+
+/** Последнее обновление состояния пространства по сессии: когда, куда, ошибка, стоимость. */
+export type SessionStateUpdate = { at: string; space: string; ok: boolean; error?: string; costUsd: number };
 
 /** Сессия в списке, в шапке и в потоке WebSocket. */
 export type SessionView = {
@@ -341,13 +473,16 @@ export type SessionView = {
   status: SessionStatus;
   /** Процесс claude жив в этом сервере. */
   live: boolean;
-  /** Текущие теги (слаги), порядок как выбрали. */
+  /** Пространство (слаг); нет — сессия без пространства. */
+  space?: string;
+  spaceChip?: SessionSpaceChip;
+  /** Теги знаний (слаги), порядок как выбрали. */
   tags: string[];
   chips: SessionTagChip[];
   model?: string;
   permissionMode?: SessionPermissionMode;
-  /** Обновлять саммари тегов задач при выходе. */
-  saveTag: boolean;
+  /** Обновлять состояние пространства при выходе. */
+  saveState: boolean;
   createdAt: string;
   lastActivityAt: string;
   endedAt?: string;
@@ -356,19 +491,21 @@ export type SessionView = {
   turns: number;
   /** Вышел без единого SessionStart: untrusted — код 0 (доверие к папке не принято), failed — claude не запустился. */
   outcome?: 'untrusted' | 'failed';
-  /** Живая сессия без SessionStart дольше нескольких секунд: trust — на экране диалог доверия, missing — теги не доставлены. */
+  /** Живая сессия без SessionStart дольше нескольких секунд: trust — на экране диалог доверия, missing — контекст не доставлен. */
   delivery?: 'trust' | 'missing';
   /** Версия claude, на которой идёт сессия: «2.1.311». */
   claudeVersion?: string;
   /** Транскрипт Claude Code последнего разговора (из хука). */
   transcriptPath?: string;
-  /** Ходов после прошлого саммари тегов задач: им есть что обновлять. */
+  /** Ходов после прошлого обновления состояния: им есть что записать. */
   newTurns: number;
-  summary?: SessionSummary;
-  /** Саммари тегов задач пишется прямо сейчас. */
-  summarizing?: true;
-  /** Саммари при выходе не записано: приложение закрыли (или сервер остановился), пока сессия шла. */
-  summaryPending?: 'app-closed';
+  /** В состояние каких пространств уйдут эти ходы (по пространству, в котором сделан ход; удалённые — никуда). Нет — старый сервер. */
+  stateSpaces?: string[];
+  stateUpdate?: SessionStateUpdate;
+  /** Состояние пространства пишется прямо сейчас. */
+  updatingState?: true;
+  /** Состояние при выходе не записано: приложение закрыли (или сервер остановился), пока сессия шла. */
+  statePending?: 'app-closed';
   /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
   resumable?: boolean;
 };
@@ -395,8 +532,8 @@ export type RecentDir = { path: string; label: string; lastUsed?: string; exists
 /** POST /api/worktrees: note — строка для задачи («Директория проекта — новый git worktree …»). */
 export type WorktreeResult = { path: string; branch?: string; created: boolean; copied: string[]; note: string };
 
-/** POST /api/runs: id запуска; autoTag — заведённый тег или почему не завёлся (запуск идёт и без него). */
-export type RunStarted = { id: string; autoTag?: { slug: string; title?: string } | { error?: string } };
+/** POST /api/runs: id запуска; autoSpace — заведённое пространство или почему не завелось (запуск идёт и без него). */
+export type RunStarted = { id: string; autoSpace?: { slug: string; title?: string } | { error?: string } };
 
 // ---------- интеграции: Jira, проекты GitLab и GitHub, MR/PR, которым нужно внимание
 
@@ -547,7 +684,11 @@ export type ArtifactMeta = {
   versions: ArtifactVersion[];
 };
 
-export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation';
+/**
+ * space-readonly — запись этапа в папку пространств или в папку чтения пространства вне проекта, knowledge-readonly — в папку
+ * тегов знаний, runs-dir — в папку запусков (guard папок данных, spaces.ts; у flow с артефактами — и guard артефактов).
+ */
+export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation' | 'space-readonly' | 'knowledge-readonly';
 export type Denial = { tool: string; reason: DenialReason; count: number };
 
 /** report.artifacts: артефакты запуска, откуда взяты при продолжении, предупреждения уровня запуска. */
@@ -740,10 +881,17 @@ export type BlockReport = {
 /** reused — провал с теми же замечаниями, что и прошлый: итог взят у прошлой итерации, модель не звали. */
 export type DigestSession = { calls: number; costUsd: number; failed: number; reused: number; error?: string };
 
+/** Итог сессии саммари тега задачи у старых запусков (run.json до пространств): только чтение. */
 export type TagSummaryReport = { tag: string; ok: boolean; costUsd: number; error?: string; skipped?: string; tokens?: SessionTokens };
 
-/** Автотег: заведённый тег задачи (slug, title) или ошибка подбора. */
+/** Автотег старых запусков: заведённый тег задачи (slug, title) или ошибка подбора. Только чтение. */
 export type AutoTagReport = { slug?: string; title?: string; error?: string; costUsd: number; tokens?: SessionTokens };
+
+/** Итог сессии состояния пространства после запуска: обновлено (ok), пропущено (skipped — причина) или ошибка. */
+export type SpaceStateReport = { space: string; ok: boolean; costUsd: number; error?: string; skipped?: string; tokens?: SessionTokens };
+
+/** Автопространство: заведённое пространство (slug — итоговый, с суффиксом, title) или ошибка подбора. */
+export type AutoSpaceReport = { slug?: string; title?: string; error?: string; costUsd: number; tokens?: SessionTokens };
 
 /** Этап последнего шага запуска; output — путь вывода относительно runDir. */
 export type FinalPhase = { block: string; iteration: number; phase: string; title: string; ok: boolean; output: string };
@@ -792,15 +940,23 @@ export type RunReport = {
   final?: FinalPhase[];
   /** Артефакты запуска: метаданные, последний автор, версии, предупреждения уровня запуска. Только у flow с артефактами. */
   artifacts?: ArtifactsReport;
-  /** Теги задачи (слаги). У запусков без тегов поля нет. */
+  /** Пространство запуска (слаг): карта, документы и состояние. Наследуется продолжением. */
+  space?: string;
+  /** Галочка «Обновить состояние пространства»: наследуется продолжением. Только с пространством. */
+  saveState?: boolean;
+  /** Итог сессии состояния пространства после запуска. */
+  stateUpdate?: SpaceStateReport;
+  /** Автопространство: заведённое пространство или ошибка подбора. Только у запусков с галочкой; продолжение не наследует. */
+  autoSpace?: AutoSpaceReport;
+  /** Старые запуски (до пространств): теги задачи — теперь пространства с теми же слагами. Новые запуски поле не пишут. */
   tags?: string[];
-  /** Галочка «Обновить саммари тегов»: наследуется продолжением. Только при тегах. */
+  /** Старые запуски: галочка «Обновить саммари тегов». */
   saveTag?: boolean;
-  /** Итог сессии саммари по каждому тегу, в порядке tags: обновлено (ok), пропущено (skipped — причина) или ошибка. */
+  /** Старые запуски: итог сессии саммари по каждому тегу задачи. */
   tagSummaries?: TagSummaryReport[];
   /** Теги области знаний запуска (слаги); наследуются продолжением. У запусков без них поля нет. */
   knowledge?: string[];
-  /** Автотег: заведённый тег задачи (slug, title) или ошибка подбора. Только у запусков с галочкой; продолжение не наследует. */
+  /** Старые запуски: автотег. */
   autoTag?: AutoTagReport;
   /** Имя запуска от модели или унаследованное продолжением. Нет — заголовком в UI остаётся flow. */
   title?: string;
@@ -878,9 +1034,9 @@ export type RunEvent =
    * steps — только при переигрывании живого запуска сервером: итоги всех шагов вместо ленты событий.
    */
   | { type: 'artifacts'; items: ArtifactLite[]; step?: StepDelta; steps?: StepDelta[] }
-  /** Запуск закончен done, идёт сессия саммари тега tag; file — её промпт (от runDir), уже записан. */
-  | { type: 'tag_summary_start'; tag: string; file: string }
-  | { type: 'tag_summary'; tag: string; report: TagSummaryReport }
+  /** Запуск закончен done, идёт сессия состояния пространства space; file — её промпт (от runDir), уже записан. */
+  | { type: 'space_state_start'; space: string; file: string }
+  | { type: 'space_state'; space: string; report: SpaceStateReport }
   /** Подбор имени закончен: имя или ошибка; totalCostUsd — итог запуска уже со стоимостью подбора. */
   | { type: 'title'; title?: string; error?: string; totalCostUsd: number }
   /**
@@ -1053,7 +1209,7 @@ export type MemoryFile = { path: string; type: string; tokens: number; editable:
  * Часть промпта этапа по источнику: шаблон промпта, handoff, список доп. директорий, строки тегов знаний по запросу,
  * тег знаний целиком (inline). chars — знаков в шаблоне до подстановок: {{input}}, {{prev}} и артефакты известны только в запуске.
  */
-export type ContextPromptPart = { name: string; kind: 'prompt' | 'handoff' | 'dirs' | 'knowledge-lines' | 'knowledge-inline'; chars: number };
+export type ContextPromptPart = { name: string; kind: 'prompt' | 'handoff' | 'dirs' | 'space' | 'knowledge-lines' | 'knowledge-inline'; chars: number };
 
 /** Промпт этапа по источникам: части, переменные шаблона и общий размер в знаках. */
 export type ContextPrompt = { parts: ContextPromptPart[]; vars: string[]; chars: number };
@@ -1080,6 +1236,8 @@ export type ContextView = {
   addDirs: { path: string; exists: boolean }[];
   /** Теги знаний блока этапа (из knowledge в flow.yaml). */
   knowledge: ContextKnowledge[];
+  /** Пространство запроса: его папка в доп. директориях листинга (CLAUDE.md пространства — среди memoryFiles). */
+  space?: string;
   /** Промпт этапа по источникам; только у запроса с этапом. */
   prompt?: ContextPrompt;
   warnings: string[];

@@ -1,14 +1,17 @@
 // Экран сессии терминала /sessions/:id (макеты Main и Ended): шапка — назад, название с правкой, статус, папка,
-// «Обновить саммари», «Завершить» или «Продолжить», меню (перезапуск с тегами, удаление); строка тегов — чипы со
-// снятием и «+ тег», тег на ходу помечен «придёт со следующим шагом», справа — состояние саммари тегов задач; терминал
-// на всю оставшуюся высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
+// «Обновить состояние», «Завершить» или «Продолжить», меню (перезапуск, удаление); строка контекста — чип пространства
+// (смена и снятие, в том числе у завершённой — со следующим «Продолжить») и чипы тегов знаний со снятием и «+ тег»;
+// выбранное на ходу помечено «придёт со следующим шагом», справа — состояние пространства; терминал на всю оставшуюся
+// высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { SessionTagChip, SessionView } from '@server/api-types';
-import { api, ApiError, errorText, keys, useConfig, useFeature, useTags } from '../../api';
+import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
+import { api, ApiError, errorText, keys, useConfig, useFeature, useSpaces, useTags } from '../../api';
+import { ModelPreview } from '../../components/ModelPreview';
+import { SpacePicker } from '../../components/SpacePicker';
 import {
-  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionTags, summarizeSession,
+  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState,
 } from '../../api/sessions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { setDocRunTitle } from '../../components/shell/docTitle';
@@ -18,7 +21,8 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canSummarize, chipHint, pendingNote, sessionStatusLabel, sessionTone, summaryNote } from '../../lib/sessions';
+import { canUpdateState, chipHint, pendingNote, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
+import { SPACE_SLUG_ERROR, SPACE_SLUG_RE } from '../../lib/spaces';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { SessionName } from './SessionName';
 import { ICON } from './icons';
@@ -65,7 +69,7 @@ function useActions(s: SessionView, setS: (v: SessionView) => void) {
     end: () => run(() => endSession(s.id)),
     resume: () => run(() => continueSession(s.id)),
     restart: () => run(() => restartSession(s.id)),
-    summary: () => run(() => summarizeSession(s.id)),
+    state: () => run(() => updateSessionState(s.id)),
     remove: async () => {
       if (!(await askConfirm(t('Удалить сессию «{name}» из agentgraph? Журнал ходов и перетащенные файлы удалятся; транскрипт Claude останется.', { name: s.name }), { ok: t('Удалить'), danger: true }))) return;
       try {
@@ -103,8 +107,17 @@ function Session({ s }: { s: SessionView }) {
     setDocRunTitle(s.name);
     return () => setDocRunTitle('');
   }, [s.name]);
+  // состояние пространства записано (выход, «Обновить состояние»), пока экран открыт: «Модель получит» и список
+  // пространств — заново. Прошлая запись, с которой экран открыли, — не повод (Session смонтирован по id сессии)
+  const stateAt = s.stateUpdate?.ok ? s.stateUpdate.at : '';
+  const seenStateAt = useRef(stateAt);
+  useEffect(() => {
+    if (!stateAt || stateAt === seenStateAt.current) return;
+    seenStateAt.current = stateAt;
+    void qc.invalidateQueries({ queryKey: keys.spaces });
+  }, [stateAt]);
   const tone = sessionTone(s);
-  const summarize = canSummarize(s);
+  const update = canUpdateState(s);
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
@@ -118,13 +131,13 @@ function Session({ s }: { s: SessionView }) {
         <span className={styles.spacer} />
         <div className={styles.actions}>
           {!s.live && (
-            <button type="button" className="btn primary" disabled={act.busy} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими тегами и пересчитанными папками') : t('Новый разговор в той же папке: в прошлом не было ни одного сообщения')} onClick={() => void act.resume()}>
+            <button type="button" className="btn primary" disabled={act.busy} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами и пересчитанными папками') : t('Новый разговор в той же папке: в прошлом не было ни одного сообщения')} onClick={() => void act.resume()}>
               {t('Продолжить')}
             </button>
           )}
-          {summarize.show && (
-            <button type="button" className="btn" disabled={act.busy || !summarize.ok} title={summarize.why} onClick={() => void act.summary()}>
-              {ICON.refresh}{t('Обновить саммари')}
+          {update.show && (
+            <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>
+              {ICON.refresh}{t('Обновить состояние')}
             </button>
           )}
           {s.live && (
@@ -136,6 +149,7 @@ function Session({ s }: { s: SessionView }) {
         </div>
       </header>
       <TagRow s={s} onSaved={setS} />
+      <SessionModelPreview s={s} />
       <section className={styles.termSection} aria-label={t('Терминал сессии')}>
         <SessionTerminal
           id={s.id}
@@ -175,67 +189,117 @@ function Cwd({ path }: { path: string }) {
   );
 }
 
-/** Строка тегов: чипы (снятый — зачёркнут, пока снятие не дошло), «+ тег», что ещё не дошло до модели. */
+/**
+ * «Модель получит» для пространства и тегов знаний сессии — то, что придёт хуком SessionStart нового процесса claude
+ * («Продолжить», «Перезапустить»). Удалённые теги хук пропускает — превью тоже.
+ */
+function SessionModelPreview({ s }: { s: SessionView }) {
+  const spacesQuery = useSpaces(useFeature('spaces'));
+  const tagList = useTags(true).data?.tags;
+  const tags = tagList ? s.tags.filter((x) => tagList.some((t) => t.slug === x)) : [];
+  return <ModelPreview className={styles.modelPreview} space={s.space ?? ''} missing={s.spaceChip?.missing} tags={tags} where="session" cwd={s.cwd} options={spacesQuery.data?.spaces ?? []} loaded={!spacesQuery.isPending && Boolean(tagList)} />;
+}
+
+/**
+ * Строка контекста: чип пространства (смена — выбором «+ пространство», снятие — ×) и чипы тегов знаний (снятый —
+ * зачёркнут, пока снятие не дошло), «+ тег», что ещё не дошло до модели. У завершённой сессии пространство и знания тоже
+ * правятся: их получит «Продолжить».
+ */
 function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const options = useTags(true).data?.tags ?? [];
+  const spacesOn = useFeature('spaces');
+  const spaces = useSpaces(spacesOn).data?.spaces ?? [];
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const put = async (tags: string[]) => {
+  const save = async (fn: () => Promise<SessionView>) => {
     setBusy(true);
     try {
-      onSaved(await setSessionTags(s.id, tags));
-      // новый слаг сервер завёл тегом задачи: подсказки и страница «Теги» — заново
-      void qc.invalidateQueries({ queryKey: keys.tags });
+      onSaved(await fn());
     } catch (err) {
       toast(errorText(err));
     } finally {
       setBusy(false);
     }
   };
+  const put = (tags: string[]) => void save(() => setSessionTags(s.id, tags));
+  // выбор с клавиатуры размонтирует поле (появится чип), снятие — чип (появится поле): фокус переходит на новое
+  const refocus = useRef<'chip' | 'picker' | null>(null);
+  useEffect(() => {
+    const want = refocus.current;
+    if (!want) return;
+    refocus.current = null;
+    (want === 'chip' ? document.querySelector<HTMLElement>('[data-space-chip] a') : document.getElementById('session-space-input'))?.focus();
+  }, [s.space, s.spaceChip?.state]);
+  // снятие мышью фокус не переносит: поле выбора открыло бы список по onFocus
+  const putSpace = (space: string | null, keyboard = true) =>
+    void save(async () => {
+      refocus.current = space ? 'chip' : keyboard ? 'picker' : null;
+      const v = await setSessionSpace(s.id, space);
+      // новый слаг сервер завёл пустым пространством: подсказки и страница «Пространства» — заново
+      void qc.invalidateQueries({ queryKey: keys.spaces });
+      return v;
+    });
   const add = (raw: string) => {
     const slug = raw.trim();
     if (!slug || busy) return;
     if (!TAG_SLUG_RE.test(slug)) return toast(TAG_SLUG_ERROR);
     setText('');
-    if (!s.tags.includes(slug)) void put([...s.tags, slug]);
+    if (!s.tags.includes(slug)) put([...s.tags, slug]);
   };
-  // до SessionStart теги придут все сразу: строка «дойдёт со следующим шагом» тут ни к чему
-  const note = s.live && s.status !== 'starting' ? pendingNote(s.chips) : '';
+  const addSpace = (raw: string) => {
+    const slug = raw.trim();
+    if (!slug || busy) return;
+    if (!SPACE_SLUG_RE.test(slug)) return toast(SPACE_SLUG_ERROR);
+    if (slug !== s.space) putSpace(slug);
+  };
+  // до SessionStart всё придёт сразу: строка «дойдёт со следующим шагом» тут ни к чему
+  const note = s.live && s.status !== 'starting' ? pendingNote([...(s.spaceChip && s.spaceChip.state !== 'on' ? [s.spaceChip] : []), ...s.chips]) : '';
+  const removable = s.spaceChip && s.spaceChip.state !== 'removed';
   return (
     <div className={styles.tags}>
-      <span className={styles.tagsLabel}>{t('Теги')}</span>
-      {s.chips.map((c) => <Chip key={c.slug} c={c} onRemove={s.live && c.state !== 'removed' ? () => void put(s.tags.filter((x) => x !== c.slug)) : undefined} />)}
-      {!s.chips.length && <span className={styles.none}>{t('без тегов')}</span>}
-      {s.live && (
-        <TagField
-          listId="session-tag-list"
-          options={options.filter((o) => !s.tags.includes(o.slug))}
-          text={text}
-          onText={setText}
-          onAdd={add}
-          className={styles.addTag}
-          aria-label={t('Добавить тег')}
-          placeholder={t('+ тег')}
-        />
+      {spacesOn && (
+        <>
+          <span className={styles.tagsLabel}>{t('Пространство')}</span>
+          {s.spaceChip && <SpaceChip c={s.spaceChip} live={s.live} onRemove={removable ? (keyboard) => putSpace(null, keyboard) : undefined} />}
+          {(!s.space || s.spaceChip?.state === 'removed') && (
+            <span title={s.live ? t('Раздел пространства придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯') : t('Пространство получит «Продолжить»')}>
+              <SpacePicker id="session-space" compact inputClassName={styles.addTag} label={t('Выбрать пространство')} placeholder={t('+ пространство')} value="" onChange={addSpace} options={spaces} />
+            </span>
+          )}
+          <span className={styles.sep} aria-hidden="true" />
+        </>
       )}
+      <span className={styles.tagsLabel}>{t('Знания')}</span>
+      {s.chips.map((c) => <Chip key={c.slug} c={c} onRemove={c.state !== 'removed' ? () => put(s.tags.filter((x) => x !== c.slug)) : undefined} />)}
+      {!s.chips.length && <span className={styles.none}>{t('без тегов')}</span>}
+      <TagField
+        listId="session-tag-list"
+        options={options.filter((o) => !s.tags.includes(o.slug))}
+        text={text}
+        onText={setText}
+        onAdd={add}
+        className={styles.addTag}
+        aria-label={t('Добавить тег')}
+        placeholder={t('+ тег')}
+      />
       <span className={styles.spacer} />
-      <SummaryState s={s} />
+      <StateNote s={s} />
       {note && <p className={styles.note}>{ICON.clock}{note}</p>}
-      {s.delivery === 'trust' && <p className={cx(styles.note, styles.warn)}>{t('Claude спрашивает в терминале, доверяешь ли ты этой папке: пока не ответишь, теги не придут.')}</p>}
+      {s.delivery === 'trust' && <p className={cx(styles.note, styles.warn)}>{t('Claude спрашивает в терминале, доверяешь ли ты этой папке: пока не ответишь, контекст agentgraph не придёт.')}</p>}
       {s.delivery === 'missing' && (
-        <p className={cx(styles.note, styles.warn)} title={t('agentgraph передаёт теги хуками Claude Code. Их выключают настройки disableAllHooks и allowedHttpHookUrls, а HTTP-хуки не доходят через прокси, если 127.0.0.1 не в NO_PROXY.')}>
-          {t('Теги не доставлены: хук SessionStart не сработал. Возможные причины — прокси, disableAllHooks или allowedHttpHookUrls в настройках Claude Code.')}
+        <p className={cx(styles.note, styles.warn)} title={t('agentgraph передаёт контекст хуками Claude Code. Их выключают настройки disableAllHooks и allowedHttpHookUrls, а HTTP-хуки не доходят через прокси, если 127.0.0.1 не в NO_PROXY.')}>
+          {t('Контекст не доставлен: хук SessionStart не сработал. Возможные причины — прокси, disableAllHooks или allowedHttpHookUrls в настройках Claude Code.')}
         </p>
       )}
     </div>
   );
 }
 
-/** Справа в строке тегов: когда саммари тегов задач обновлялось, идёт ли сейчас, ошибки. */
-function SummaryState({ s }: { s: SessionView }) {
-  const note = summaryNote(s);
+/** Справа в строке контекста: когда состояние пространства обновлялось, идёт ли сейчас, ошибка. */
+function StateNote({ s }: { s: SessionView }) {
+  const note = stateNote(s);
   if (!note) return null;
   return (
     <span className={cx(styles.summary, note.tone && styles[note.tone])} title={note.title}>
@@ -249,20 +313,31 @@ function Chip({ c, onRemove }: { c: SessionTagChip; onRemove?: () => void }) {
   const hint = chipHint(c);
   return (
     <span
-      className={cx(styles.chip, styles[c.kind], c.state !== 'on' && styles[c.state])}
-      title={[c.kind === 'knowledge' ? t('Тег знаний: строка в контексте, полный текст — инструментом knowledge_read') : t('Тег задачи: заметки и саммари фичи в начале сессии'), hint].filter(Boolean).join('\n')}
+      className={cx(styles.chip, styles.knowledge, c.state !== 'on' && styles[c.state])}
+      title={[t('Тег знаний: строка в контексте, полный текст — инструментом knowledge_read'), hint].filter(Boolean).join('\n')}
     >
       {c.state !== 'on' && ICON.clock}
-      {c.kind === 'knowledge' && ICON.book}
+      {ICON.book}
       {c.slug}
       {onRemove && <button type="button" className={styles.chipX} aria-label={t('Снять тег {slug}', { slug: c.slug })} onClick={onRemove}>{ICON.x}</button>}
     </span>
   );
 }
 
+/** Чип пространства: слаг — ссылка на его страницу; ещё не дошло — пунктир с часами; удалено — приглушён. */
+function SpaceChip({ c, live, onRemove }: { c: SessionSpaceChip; live: boolean; onRemove?: (keyboard: boolean) => void }) {
+  return (
+    <span data-space-chip className={cx(styles.chip, styles.space, c.state !== 'on' && styles[c.state], c.missing && styles.removed)} title={spaceChipHint(c, live)}>
+      {c.state !== 'on' && ICON.clock}
+      <Link to={`/spaces/${encodeURIComponent(c.slug)}`} className={styles.chipLink}>◇ {c.slug}</Link>
+      {onRemove && <button type="button" className={styles.chipX} aria-label={t('Снять пространство {slug}', { slug: c.slug })} onClick={(e) => onRemove(e.detail === 0)}>{ICON.x}</button>}
+    </span>
+  );
+}
+
 type Actions = ReturnType<typeof useActions>;
 
-/** «⋯»: редкие действия — перезапуск живой сессии с пересчитанными папками тегов, удаление завершённой. */
+/** «⋯»: редкие действия — перезапуск живой сессии с пересчитанными папками пространства и тегов, удаление завершённой. */
 function Menu({ s, act }: { s: SessionView; act: Actions }) {
   const [open, setOpen] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
@@ -297,8 +372,8 @@ function Menu({ s, act }: { s: SessionView; act: Actions }) {
       </button>
       <div ref={box} className="menu" role="menu" hidden={!open}>
         {s.live ? (
-          <button type="button" className="menu-item" role="menuitem" disabled={act.busy} title={t('claude перезапустится тем же разговором (--resume): папки тегов, добавленных на ходу, станут доступны без вопросов')} onClick={pick(act.restart)}>
-            {t('Перезапустить с тегами')}
+          <button type="button" className="menu-item" role="menuitem" disabled={act.busy} title={t('claude перезапустится тем же разговором (--resume): карта пространства, выбранного на ходу, придёт памятью, а папки пространства и тегов станут доступны без вопросов')} onClick={pick(act.restart)}>
+            {t('Перезапустить')}
           </button>
         ) : (
           <button type="button" className="menu-item danger" role="menuitem" title={t('Удалить запись сессии: журнал ходов и перетащенные файлы; транскрипт Claude останется')} onClick={pick(act.remove)}>
@@ -315,12 +390,12 @@ function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () =>
   const code = s.exitCode ?? '?';
   const text =
     s.outcome === 'untrusted'
-      ? t('Claude вышел, не начав сессию: доверие к папке не принято. Теги не доставлялись.')
+      ? t('Claude вышел, не начав сессию: доверие к папке не принято. Контекст agentgraph не доставлялся.')
       : s.outcome === 'failed'
         ? t('claude завершился с кодом {code}, не начав сессию: причина — в выводе терминала.', { code })
         : t('Claude вышел, код {code}.', { code });
-  const note = summaryNote(s);
-  const summarize = canSummarize(s);
+  const note = stateNote(s);
+  const update = canUpdateState(s);
   return (
     <div className={styles.overlay}>
       <div className={styles.endCard} role="status">
@@ -328,12 +403,12 @@ function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () =>
         <p className="muted">{text}{note ? ` ${note.text}` : ''}</p>
         <div className="row">
           <button type="button" className="btn primary" disabled={act.busy} onClick={() => void act.resume()}>{t('Продолжить')}</button>
-          {summarize.show && <button type="button" className="btn" disabled={act.busy || !summarize.ok} title={summarize.why} onClick={() => void act.summary()}>{t('Обновить саммари')}</button>}
+          {update.show && <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>{t('Обновить состояние')}</button>}
           <button type="button" className="btn ghost" onClick={onHide}>{t('Посмотреть экран')}</button>
         </div>
         <p className={styles.hint}>
           {s.resumable
-            ? t('«Продолжить» откроет тот же разговор (claude --resume) с текущими тегами и пересчитанными папками.')
+            ? t('«Продолжить» откроет тот же разговор (claude --resume) с текущими пространством и тегами и пересчитанными папками.')
             : t('«Продолжить» откроет новый разговор в той же папке: в этом не было ни одного сообщения.')}
         </p>
       </div>
