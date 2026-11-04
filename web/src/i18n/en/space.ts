@@ -224,8 +224,7 @@ export const space: Record<string, string> = {
   'Документы добавлены': 'Documents added',
   'В документе есть несохранённые правки. Открыть другой?': 'The document has unsaved edits. Open another one?',
   'Удалить документ {name}?': 'Delete the {name} document?',
-  'Спеки, решения, заметки, макеты. В контекст идёт только список с заголовками «# …» — файл агент открывает сам, когда нужен. Сессия может записать .md или .txt инструментом space_write, спросив тебя':
-    'Specs, decisions, notes, mockups. Only the list with the "# …" headings goes into the context — the agent opens a file itself when needed. A session can write .md or .txt with the space_write tool after asking you',
+  'Спеки, решения, заметки, макеты. В контекст идёт строка с именами файлов (без заголовков) — файл агент открывает сам, когда нужен. Подпапки docs/ не перечисляются: что в них, назови в карте. Сессия может записать .md или .txt инструментом space_write, спросив тебя': 'Specs, decisions, notes, mockups. The context gets one line of file names (no titles); the agent opens a file itself when it needs it. Subfolders of docs/ aren’t listed: name their files in the map. A session can write a .md or .txt with the space_write tool, asking you first',
   'Картинки, PDF и текстовые файлы: до 10 МБ каждый, до 25 МБ вместе, до 30 файлов': 'Images, PDFs and text files: up to 10 MB each, up to 25 MB together, up to 30 files',
   '+ Загрузить файлы…': '+ Upload files…',
   'новый документ: decisions': 'new document: decisions',
@@ -251,8 +250,7 @@ export const space: Record<string, string> = {
   'Состояние правили только руками': 'The state has only been edited by hand',
   'Состояние запишет короткая сессия после первой сессии или запуска «готово» в этом пространстве': 'A short session writes the state after the first session or "done" run in this space',
   'В пространстве есть несохранённые правки. Перейти без сохранения?': 'The space has unsaved edits. Leave without saving?',
-  'Удалить пространство {slug}: карту, состояние и документы? Сессии и запуски с ним останутся, но новые его не получат.':
-    'Delete the {slug} space: map, state and documents? Sessions and runs with it stay, but new ones won\'t get it.',
+  'Удалить пространство {slug}: карту, состояние и документы? Запуски останутся в истории, завершённые сессии останутся без пространства: их неучтённые ходы никуда не пойдут, а заведённое потом с тем же слагом их не получит. Пока его используют идущий запуск или живая сессия, удалить нельзя.': 'Delete space {slug}: its map, state and documents? Runs stay in the history, ended sessions are left without a space: their unaccounted turns go nowhere, and a space created later with the same slug won’t get them. A space used by a running run or a live session can’t be deleted.',
   '# Название фичи или проекта\n\nСуть: что делаем и зачем, в двух фразах.\n\n## Где что\n- ~/code/android — клиент, экран тревоги в feature/alert\n- ~/code/api — бэкенд, эндпоинт /alerts\n\n## Куда за чем ходить\n- спека — docs/spec.md\n\n## Договорённости\n- …':
     '# Feature or project name\n\nGist: what we\'re doing and why, in two sentences.\n\n## Where things are\n- ~/code/android — the client, the alert screen in feature/alert\n- ~/code/api — the backend, the /alerts endpoint\n\n## Where to go for what\n- the spec — docs/spec.md\n\n## Agreements\n- …',
   'сессия|сессии|сессий': 'session|sessions',

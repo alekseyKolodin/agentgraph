@@ -356,7 +356,9 @@ export function SpacesScreen() {
               onQuick={(patch, done) => void quick(patch, done)}
               onLooseAdded={(ids) => setSpace((prev) => (prev ? { ...prev, sessions: [...prev.sessions, ...(prev.looseSessions ?? []).filter((x) => ids.includes(x.id))], looseSessions: prev.looseSessions?.filter((x) => !ids.includes(x.id)) } : prev))}
               onDocs={(docs) => setSpace((s) => (s ? { ...s, docs } : s))}
-              onDocDirty={(d) => (docDirty.current = d)}
+              onDocDirty={(d) => {
+                docDirty.current = d;
+              }}
             />
           ) : (
             <p className={cx(styles.empty, 'muted')}>{t('Выбери пространство в списке — откроются его карта, состояние, документы и все его сессии и запуски. Новое — кнопкой «+ Новое пространство»; его можно вписать и прямо в форме сессии или запуска.')}</p>
@@ -618,7 +620,10 @@ function DocsTab({ space: s, onDocs, onDirty, hidden }: { space: SpaceDetail; on
   const [open, setOpen] = useState<{ name: string; text: string; saved: string | null; base: number } | null>(null);
   const [newName, setNewName] = useState('');
   const dirty = Boolean(open && (open.saved === null || open.text !== open.saved));
-  useEffect(() => onDirty(dirty), [dirty]);
+  // эффект не возвращает значение: React 19 вызвал бы его как очистку («is not a function»)
+  useEffect(() => {
+    onDirty(dirty);
+  }, [dirty]);
   useEffect(() => () => onDirty(false), []);
 
   const refresh = (docs: SpaceDoc[]) => {
@@ -685,7 +690,7 @@ function DocsTab({ space: s, onDocs, onDirty, hidden }: { space: SpaceDetail; on
 
   return (
     <div id="space-pane-docs" role="tabpanel" className={styles.tabBody} hidden={hidden}>
-      <p className={cx('muted small', styles.hint)}>{t('Спеки, решения, заметки, макеты. В контекст идёт только список с заголовками «# …» — файл агент открывает сам, когда нужен. Сессия может записать .md или .txt инструментом space_write, спросив тебя')}</p>
+      <p className={cx('muted small', styles.hint)}>{t('Спеки, решения, заметки, макеты. В контекст идёт строка с именами файлов (без заголовков) — файл агент открывает сам, когда нужен. Подпапки docs/ не перечисляются: что в них, назови в карте. Сессия может записать .md или .txt инструментом space_write, спросив тебя')}</p>
       <div className={styles.docsBar}>
         <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 МБ каждый, до 25 МБ вместе, до 30 файлов')} onClick={() => fileInput.current?.click()}>{t('+ Загрузить файлы…')}</button>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { void upload([...(e.target.files ?? [])]); e.target.value = ''; }} />
