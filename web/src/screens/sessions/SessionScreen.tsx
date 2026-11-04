@@ -100,10 +100,14 @@ function Session({ s }: { s: SessionView }) {
   useEffect(() => {
     if (s.live) setScreenOnly(false);
   }, [s.live]);
-  // состояние пространства записано (выход, «Обновить состояние»): «Модель получит» и список пространств — заново
+  // состояние пространства записано (выход, «Обновить состояние»), пока экран открыт: «Модель получит» и список
+  // пространств — заново. Прошлая запись, с которой экран открыли, — не повод (Session смонтирован по id сессии)
   const stateAt = s.stateUpdate?.ok ? s.stateUpdate.at : '';
+  const seenStateAt = useRef(stateAt);
   useEffect(() => {
-    if (stateAt) void qc.invalidateQueries({ queryKey: keys.spaces });
+    if (!stateAt || stateAt === seenStateAt.current) return;
+    seenStateAt.current = stateAt;
+    void qc.invalidateQueries({ queryKey: keys.spaces });
   }, [stateAt]);
   const tone = sessionTone(s);
   const update = canUpdateState(s);
@@ -258,9 +262,10 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
     refocus.current = null;
     (want === 'chip' ? document.querySelector<HTMLElement>('[data-space-chip] a') : document.getElementById('session-space-input'))?.focus();
   }, [s.space, s.spaceChip?.state]);
-  const putSpace = (space: string | null) =>
+  // снятие мышью фокус не переносит: поле выбора открыло бы список по onFocus
+  const putSpace = (space: string | null, keyboard = true) =>
     void save(async () => {
-      refocus.current = space ? 'chip' : 'picker';
+      refocus.current = space ? 'chip' : keyboard ? 'picker' : null;
       const v = await setSessionSpace(s.id, space);
       // новый слаг сервер завёл пустым пространством: подсказки и страница «Пространства» — заново
       void qc.invalidateQueries({ queryKey: keys.spaces });
@@ -287,7 +292,7 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
       {spacesOn && (
         <>
           <span className={styles.tagsLabel}>{t('Пространство')}</span>
-          {s.spaceChip && <SpaceChip c={s.spaceChip} live={s.live} onRemove={removable ? () => putSpace(null) : undefined} />}
+          {s.spaceChip && <SpaceChip c={s.spaceChip} live={s.live} onRemove={removable ? (keyboard) => putSpace(null, keyboard) : undefined} />}
           {(!s.space || s.spaceChip?.state === 'removed') && (
             <span title={s.live ? t('Раздел пространства придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯') : t('Пространство получит «Продолжить»')}>
               <SpacePicker id="session-space" compact inputClassName={styles.addTag} label={t('Выбрать пространство')} placeholder={t('+ пространство')} value="" onChange={addSpace} options={spaces} />
@@ -350,12 +355,12 @@ function Chip({ c, onRemove }: { c: SessionTagChip; onRemove?: () => void }) {
 }
 
 /** Чип пространства: слаг — ссылка на его страницу; ещё не дошло — пунктир с часами; удалено — приглушён. */
-function SpaceChip({ c, live, onRemove }: { c: SessionSpaceChip; live: boolean; onRemove?: () => void }) {
+function SpaceChip({ c, live, onRemove }: { c: SessionSpaceChip; live: boolean; onRemove?: (keyboard: boolean) => void }) {
   return (
     <span data-space-chip className={cx(styles.chip, styles.space, c.state !== 'on' && styles[c.state], c.missing && styles.removed)} title={spaceChipHint(c, live)}>
       {c.state !== 'on' && ICON.clock}
       <Link to={`/spaces/${encodeURIComponent(c.slug)}`} className={styles.chipLink}>◇ {c.slug}</Link>
-      {onRemove && <button type="button" className={styles.chipX} aria-label={t('Снять пространство {slug}', { slug: c.slug })} onClick={onRemove}>{ICON.x}</button>}
+      {onRemove && <button type="button" className={styles.chipX} aria-label={t('Снять пространство {slug}', { slug: c.slug })} onClick={(e) => onRemove(e.detail === 0)}>{ICON.x}</button>}
     </span>
   );
 }

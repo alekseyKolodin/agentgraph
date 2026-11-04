@@ -57,7 +57,8 @@ export function SpacePicker({ id, value, onChange, options, loading, label = t('
     if (open) return;
     const all = pickerRows('', options);
     setQuery('');
-    setActive(value ? Math.max(0, all.findIndex((r) => r.kind === 'space' && r.s.slug === value)) : -1);
+    // выбранного в списке нет (новое, ещё не заведённое) — ничего не подсвечено: Enter не заменит его первым пространством
+    setActive(value ? all.findIndex((r) => r.kind === 'space' && r.s.slug === value) : -1);
     setOpen(true);
   };
   const close = () => {

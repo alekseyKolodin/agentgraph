@@ -69,14 +69,17 @@ export type CwdState = { cwd: string; from: string; touched: boolean; locked?: b
 
 /**
  * Что станет с папкой, когда выбрали пространство slug (wd — его рабочая папка, её считает сервер). Рабочей папки нет —
- * папка как была, без подписи. Папка уже та же — подпись «из пространства». Папку подставило другое пространство или
- * её не трогали — подставить рабочую папку с подписью. Заданную самим, из «Запустить…» и worktree не трогать: под полем
- * будет предложение «подставить» (workdirHint).
+ * папка как была, без подписи. Папку подставило другое пространство или её не трогали — подставить рабочую папку с
+ * подписью. Заданную самим, из «Запустить…» и worktree не трогать: под полем будет предложение «подставить»
+ * (workdirHint). Папка уже та же — подпись «из пространства», но своя папка остаётся своей (touched): следующий выбор
+ * пространства её не заменит и worktree не отвяжет.
  */
 export function pickWorkdir(slug: string, wd: SpaceWorkdir | undefined, st: CwdState): CwdState {
   if (!wd) return { ...st, from: '' };
-  if (wd.path === st.cwd.trim()) return { ...st, from: slug.trim() };
-  if (!st.from && (st.touched || st.locked)) return st;
+  // locked с from — папку дал «подставить», а не «Запустить…»: её снова меняет выбор пространства
+  const own = st.touched || (Boolean(st.locked) && !st.from);
+  if (wd.path === st.cwd.trim()) return { ...st, from: slug.trim(), touched: own };
+  if (own) return { ...st, from: '' };
   return { ...st, cwd: wd.path, from: slug.trim(), touched: false };
 }
 

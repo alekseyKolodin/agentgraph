@@ -11,7 +11,6 @@ export const space: Record<string, string> = {
   'Сессии станут сессиями этого пространства: их ходы уйдут в его состояние, «Продолжить» получит его карту и состояние': 'The sessions join this space: their turns go into its state, and “Continue” gets its map and state',
   'Добавить в пространство': 'Add to the space',
   'Несохранённые правки пространства пропадут: форма перечитается с диска. Продолжить?': 'Unsaved changes to the space will be lost: the form reloads from disk. Continue?',
-  'Продолжить': 'Continue',
   'Старая версия agentgraph дописала саммари тега {tag} после переноса ({time}). В контекст оно не идёт.': 'An older agentgraph version updated the summary of tag {tag} after the move ({time}). It isn’t sent to the model.',
   'Показать саммари': 'Show the summary',
   'Заменить состояние этим саммари: {path}': 'Replace the state with this summary: {path}',

@@ -123,6 +123,12 @@ test('рабочая папка в формах: подставить или н�
   const same = pickWorkdir('b', wd('b'), { cwd: '/code/b', from: '', touched: true });
   assert.deepEqual(same, { cwd: '/code/b', from: 'b', touched: true });
   assert.match(workdirHint('b', opts, same).note ?? '', /папка его последней сессии/);
+  // …и остаётся своей: следующее пространство её не заменит, подпись снимается
+  assert.deepEqual(pickWorkdir('a', wd('a'), same), { cwd: '/code/b', from: '', touched: true });
+  // worktree из «Запустить…» совпал с рабочей папкой — подпись, но следующий выбор его не заменит (и не отвяжет)
+  const wt = pickWorkdir('a', wd('a'), { cwd: '/code/a', from: '', touched: false, locked: true });
+  assert.deepEqual(wt, { cwd: '/code/a', from: 'a', touched: true, locked: true });
+  assert.equal(pickWorkdir('b', wd('b'), wt).cwd, '/code/a');
   // папка та же, но подставило её не это пространство — ни подписи, ни предложения
   assert.deepEqual(workdirHint('b', opts, { cwd: '/code/b', from: '' }), { wd: { path: '/code/b', from: 'session' } });
   assert.deepEqual(workdirHint('', opts, fresh), {});
