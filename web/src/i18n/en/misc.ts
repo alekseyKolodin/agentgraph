@@ -15,7 +15,7 @@ export const misc: Record<string, string> = {
   'как текст': 'as text',
   'Закрыть': 'Close',
   'Продолжить эту сессию в терминале из директории проекта запуска': 'Continue this session in a terminal from the run’s project directory',
-  'Тег области знаний: заметки, пути и вложения для промптов этапов': 'Knowledge tag: notes, paths and attachments for phase prompts',
+  'Тег знаний: строка в промпте, полный текст — по запросу инструментом knowledge_read': 'Knowledge tag: a line in the prompt, the full text on request with the knowledge_read tool',
   'Тег задачи: саммари фичи между запусками': 'Task tag: feature summary between runs',
   'Разовый запуск: flow не сохранён в flows/, его копия — в папке запуска': 'One-off run: the flow is not saved in flows/, its copy is in the run folder',
   'разовый': 'one-off',
@@ -128,7 +128,7 @@ export const misc: Record<string, string> = {
   '{shown} из {total}': '{shown} of {total}',
   'заметок ещё нет': 'no notes yet',
   'саммари ещё нет': 'no summary yet',
-  'область знаний': 'knowledge area',
+  'знания': 'knowledge',
   'задача': 'task',
   'запусков: {n}': 'runs: {n}',
   'Тегов пока нет — заведи первый выше': 'No tags yet — create the first one above',
@@ -138,10 +138,10 @@ export const misc: Record<string, string> = {
   'Заметки (промпт тега)': 'Notes (tag prompt)',
   'Твой текст к тегу: правила, договорённости, что важно помнить. Уходит в задачу каждого запуска с тегом; сессия саммари его не трогает':
     'Your text for the tag: rules, agreements, what to keep in mind. It goes into the task of every run with the tag; the summary session does not touch it',
-  'Правила области знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими':
-    'Knowledge area rules. They are inserted in full into the prompt of every phase of the block (“always insert” is on), so keep them short',
-  'Правила области знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда область ему понадобится':
-    'Knowledge area rules. Only the description line goes into the phase prompt; the phase gets this text with the knowledge_read tool when it needs the area',
+  'Правила и справка тега знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими':
+    'Rules and reference of the knowledge tag. They go into the prompt of every phase of the block in full (“always insert” is on) — keep them short',
+  'Правила и справка тега знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда он понадобится':
+    'Rules and reference of the knowledge tag. Only a line with the description goes into the phase prompt; the phase gets this text with the knowledge_read tool when it needs it',
   'Описание — когда этот тег нужен': 'Description: when this tag is needed',
   'Одна строка в промпт каждого этапа блока; полный текст этап запросит инструментом knowledge_read, когда понадобится':
     'One line in the prompt of every phase of the block; the phase requests the full text with the knowledge_read tool when needed',

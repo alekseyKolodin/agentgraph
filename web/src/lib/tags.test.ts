@@ -25,7 +25,7 @@ test('теги: поиск — каждое слово в слаге, загол
 test('теги: строка списка — первая строка превью или «заметок ещё нет», мета — вид и время', () => {
   assert.equal(tagPreview({ preview: 'раз\nдва' }), 'раз');
   assert.equal(tagPreview({ preview: '' }), 'заметок ещё нет');
-  assert.match(tagMetaLine({ updatedAt: '2026-10-24T10:00:00Z' }), /^область знаний · .+$/);
+  assert.match(tagMetaLine({ updatedAt: '2026-10-24T10:00:00Z' }), /^знания · .+$/);
   assert.equal(tagsNoneText(0), 'Тегов знаний пока нет — заведи первый выше');
   assert.equal(tagsNoneText(2), 'Ничего не нашлось');
   assert.match(tagDeleteText('qa'), /Удалить тег знаний qa/);

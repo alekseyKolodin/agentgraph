@@ -32,6 +32,8 @@
 .run-input a { color: var(--live); overflow-wrap: anywhere; }
 /* пространство запуска — плашкой под задачей */
 .run-space { margin: 6px 0 0; gap: 8px; }
+/* отказы записи этапа у flow без артефактов */
+.denials { margin: 4px 0 0; color: var(--st-wait); }
 /* итог завершённого запуска */
 .run-final { margin: 12px 0; border-color: color-mix(in srgb, var(--live) 40%, var(--line)); gap: 10px; }
 .run-final > .head .title { font-size: var(--fs-h3); }

@@ -96,3 +96,5 @@
 .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink-3); flex: none; box-sizing: border-box; }
 .dot.on { background: var(--live); border-color: var(--live); }
 .dot.wait { background: var(--st-wait); border-color: var(--st-wait); }
+/* вкладка «Документы» живёт и скрытой (открытый документ переживает переключение вкладок): display из .tab-body не должен её показать */
+.tab-body[hidden] { display: none; }

@@ -2,7 +2,7 @@
 // итог завершённого запуска, сводка идущего, лента итераций, хвост живого лога, карточки этапов по итерациям, задача.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { ConditionReport, PhaseReport, RunNote, RunReport } from '@server/api-types';
+import type { ConditionReport, Denial, PhaseReport, RunNote, RunReport } from '@server/api-types';
 import { fetchRunFile, setMaxIterations, errorText } from '../../api';
 import { Badge, SpaceBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -22,6 +22,7 @@ import {
   runBlocks, runFinished, runPause, runSpaceOf, runSteps, runTask, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
+import { ART_DENIAL } from '../../lib/run/artifacts';
 import { art } from './artStore';
 import { ArtFinalLine, ArtIterMark, ArtStepLine } from './ArtifactsPanel';
 import { NoteBox, StepNotes } from './FixPanel';
@@ -80,6 +81,15 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
         </p>
       )}
     </>
+  );
+}
+
+/** Отказы записи этапа у flow без артефактов (там строку отказов показывает строка артефактов): guard папок данных agentgraph. */
+function DenialLine({ denials }: { denials: Denial[] }) {
+  return (
+    <p className={cx('small', styles.denials)} title={t('Этап пытался писать туда, куда этапам нельзя: папки пространств, тегов знаний, запусков. Запись отклонена, этап продолжил работу')}>
+      {t('Отказано в записи: {list}', { list: denials.map((d) => `${d.tool}: ${ART_DENIAL[d.reason] || d.reason}${d.count > 1 ? ` ×${d.count}` : ''}`).join('; ') })}
+    </p>
   );
 }
 
@@ -265,7 +275,7 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
       <StepNotes notes={notes} />
-      {art.on && <ArtStepLine rep={p} phase={p.phase} />}
+      {art.on ? <ArtStepLine rep={p} phase={p.phase} /> : p.denials?.length ? <DenialLine denials={p.denials} /> : null}
       {Object.keys(files).length > 0 && (
         <div className={styles.actions}>
           <button className="btn small" onClick={() => void openRunFile(runId, files.prompt, t('Промпт · {name}', { name: p.phase }))}>{t('промпт')}</button>

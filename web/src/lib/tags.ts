@@ -20,7 +20,7 @@ export function filterTags<T extends Pick<TagListItem, 'slug' | 'title' | 'previ
 export const tagPreview = (tag: Pick<TagListItem, 'preview'>): string => tag.preview.split('\n')[0] || t('заметок ещё нет');
 
 /** Строка под превью: вид и время правки. */
-export const tagMetaLine = (tag: Pick<TagListItem, 'updatedAt'>): string => `${t('область знаний')} · ${when(tag.updatedAt)}`;
+export const tagMetaLine = (tag: Pick<TagListItem, 'updatedAt'>): string => `${t('знания')} · ${when(tag.updatedAt)}`;
 
 /** Пустой список: тегов нет совсем или поиск ничего не нашёл. */
 export const tagsNoneText = (total: number): string => (total ? t('Ничего не нашлось') : t('Тегов знаний пока нет — заведи первый выше'));
@@ -77,8 +77,8 @@ export const TAG_NOTES_LABEL = t('Знание (текст для этапов)'
 /** Подсказка к полю заметок: как текст попадает к этапам и сессиям — по запросу или целиком. */
 export const tagNotesHint = (inline: boolean): string =>
   inline
-    ? t('Правила области знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими')
-    : t('Правила области знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда область ему понадобится');
+    ? t('Правила и справка тега знаний. Вставляются в промпт каждого этапа блока целиком («всегда вставлять» включено) — держи их короткими')
+    : t('Правила и справка тега знаний. В промпт этапа идёт только строка с описанием; этот текст этап получит инструментом knowledge_read, когда он понадобится');
 
 export const TAG_DESCRIPTION_LABEL = t('Описание — когда этот тег нужен');
 export const TAG_DESCRIPTION_HINT = t('Одна строка в промпт каждого этапа блока; полный текст этап запросит инструментом knowledge_read, когда понадобится');

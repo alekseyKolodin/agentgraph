@@ -32,9 +32,11 @@
 .update-commits code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); margin-right: 6px; }
 .update-step { color: var(--ink-2); }
 .brand-count { font-size: var(--fs-cap); font-weight: 600; padding: 0 6px; border-radius: var(--r-pill); background: var(--st-wait); color: var(--on-solid); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-/* разделы — компактная строка, а не пункты одного веса с flow и запусками */
-.side-nav { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; }
-.side-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; font-size: var(--fs-small); font-weight: 500; transition: background-color .12s; }
+/* разделы — компактная сетка в две колонки, заполняется по колонкам: работа слева (главная, пространства, сессии),
+   справка справа (знания, контекст). Пункт — ссылка на всю ячейку, счётчик вопросов — у правого края «Главной»: ничего
+   не переносится и не прыгает, когда вопрос приходит или уходит */
+.side-nav { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(3, auto); grid-auto-flow: column; gap: 2px 4px; }
+.side-nav a { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 10px; border-radius: var(--r-sm); color: var(--ink-2); text-decoration: none; font-size: var(--fs-small); font-weight: 500; white-space: nowrap; transition: background-color .12s; }
 .side-nav a:hover { background: var(--hover); color: var(--ink); }
 .side-nav a:global(.active) { background: var(--select); color: var(--ink); }
 

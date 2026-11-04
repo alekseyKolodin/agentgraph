@@ -145,7 +145,7 @@ export function RunList() {
         <span className={styles.name}>
           {r.title || r.flow}
           {r.adhoc && <AdhocBadge />}
-          {r.space && <SpaceBadge slug={r.space} />}
+          {r.space && <SpaceBadge slug={r.space} link />}
           {(r.knowledge || []).map((tag) => <TagBadge key={`k:${tag}`} slug={tag} kind="knowledge" />)} <Badge status={r.status} />
         </span>
         <span className={styles.sub}>

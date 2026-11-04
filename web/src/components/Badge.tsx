@@ -12,7 +12,7 @@ export function Badge({ status }: { status: string }) {
 export function TagBadge({ slug, kind = 'knowledge' }: { slug: string; kind?: TagKind }) {
   // слаг — и в подсказке: в узком месте пилюля обрезается многоточием
   return kind === 'knowledge'
-    ? <span className="badge tag knowledge" title={`#${slug}\n${t('Тег области знаний: заметки, пути и вложения для промптов этапов')}`}>#{slug}</span>
+    ? <span className="badge tag knowledge" title={`#${slug}\n${t('Тег знаний: строка в промпте, полный текст — по запросу инструментом knowledge_read')}`}>#{slug}</span>
     : <span className="badge tag" title={`#${slug}\n${t('Тег задачи старого запуска: теперь пространство {slug}', { slug })}`}>#{slug}</span>;
 }
 

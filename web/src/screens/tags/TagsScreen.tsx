@@ -328,7 +328,7 @@ export function TagsScreen() {
             <section className={cx('panel', styles.tagEditor)}>
               <form className={cx('form', styles.tagForm)} onSubmit={(e) => void save(e)}>
                 <div className={styles.tagEditorHead}>
-                  <h2 className="mono"><TagBadge slug={tag.slug} />{' '}<span className="muted small">{t('область знаний')}</span></h2>
+                  <h2 className="mono"><TagBadge slug={tag.slug} />{' '}<span className="muted small">{t('знания')}</span></h2>
                   <span className="row push">
                     <span className={msg.cls}>{msg.text}</span>
                     {sessions && (

@@ -3,14 +3,15 @@
 // (смена и снятие, в том числе у завершённой — со следующим «Продолжить») и чипы тегов знаний со снятием и «+ тег»;
 // выбранное на ходу помечено «придёт со следующим шагом», справа — состояние пространства; терминал на всю оставшуюся
 // высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
-import { api, ApiError, errorText, keys, useConfig, useFeature, useSpaces, useTags } from '../../api';
+import { api, ApiError, errorText, keys, useConfig, useFeature, useRuns, useSpaces, useTags } from '../../api';
 import { ModelPreview } from '../../components/ModelPreview';
+import { SpacePicker } from '../../components/SpacePicker';
 import {
-  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState,
+  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState, useSessions,
 } from '../../api/sessions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { TagField } from '../../components/TagInput';
@@ -20,7 +21,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canUpdateState, chipHint, pendingNote, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
-import { SPACE_SLUG_ERROR, SPACE_SLUG_RE, spaceOptionLabel } from '../../lib/spaces';
+import { lastWork, SPACE_SLUG_ERROR, SPACE_SLUG_RE } from '../../lib/spaces';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { ICON } from './icons';
 import styles from './Session.module.css';
@@ -209,24 +210,27 @@ function Cwd({ path }: { path: string }) {
   );
 }
 
-/**
- * Строка контекста: чип пространства (смена — полем «+ пространство», снятие — ×) и чипы тегов знаний (снятый —
- * зачёркнут, пока снятие не дошло), «+ тег», что ещё не дошло до модели.
- */
 /** «Модель получит» для пространства и тегов знаний сессии — то, что придёт хуком SessionStart (после /clear и «Продолжить»). */
 function SessionModelPreview({ s }: { s: SessionView }) {
   const spaces = useSpaces(useFeature('spaces')).data?.spaces ?? [];
   return <ModelPreview className={styles.modelPreview} space={s.space ?? ''} tags={s.tags} where="session" options={spaces} />;
 }
 
+/**
+ * Строка контекста: чип пространства (смена — выбором «+ пространство», снятие — ×) и чипы тегов знаний (снятый —
+ * зачёркнут, пока снятие не дошло), «+ тег», что ещё не дошло до модели. У завершённой сессии пространство и знания тоже
+ * правятся: их получит «Продолжить».
+ */
 function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const options = useTags(true).data?.tags ?? [];
   const spacesOn = useFeature('spaces');
   const spaces = useSpaces(spacesOn).data?.spaces ?? [];
+  const sessionList = useSessions(spacesOn).data?.sessions;
+  const runList = useRuns().data;
+  const work = useMemo(() => lastWork(sessionList ?? [], runList ?? []), [sessionList, runList]);
   const [text, setText] = useState('');
-  const [spaceText, setSpaceText] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async (fn: () => Promise<SessionView>) => {
     setBusy(true);
@@ -257,7 +261,6 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
     const slug = raw.trim();
     if (!slug || busy) return;
     if (!SPACE_SLUG_RE.test(slug)) return toast(SPACE_SLUG_ERROR);
-    setSpaceText('');
     if (slug !== s.space) putSpace(slug);
   };
   // до SessionStart всё придёт сразу: строка «дойдёт со следующим шагом» тут ни к чему
@@ -270,49 +273,26 @@ function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => v
           <span className={styles.tagsLabel}>{t('Пространство')}</span>
           {s.spaceChip && <SpaceChip c={s.spaceChip} live={s.live} onRemove={removable ? () => putSpace(null) : undefined} />}
           {(!s.space || s.spaceChip?.state === 'removed') && (
-            <>
-              <datalist id="session-space-list">
-                {spaces.map((x) => <option key={x.slug} value={x.slug}>{spaceOptionLabel(x)}</option>)}
-              </datalist>
-              <input
-                className={styles.addTag}
-                list="session-space-list"
-                aria-label={t('Выбрать пространство')}
-                title={s.live ? t('Раздел пространства придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯') : t('Пространство получит «Продолжить»')}
-                placeholder={t('+ пространство')}
-                autoComplete="off"
-                spellCheck={false}
-                value={spaceText}
-                onChange={(e) => {
-                  setSpaceText(e.target.value);
-                  if ((e.nativeEvent as InputEvent).inputType === 'insertReplacementText' || !(e.nativeEvent instanceof InputEvent)) addSpace(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return;
-                  e.preventDefault();
-                  addSpace(e.currentTarget.value);
-                }}
-              />
-            </>
+            <span title={s.live ? t('Раздел пространства придёт со следующим шагом; карту в память — «Перезапустить» в меню ⋯') : t('Пространство получит «Продолжить»')}>
+              <SpacePicker id="session-space" compact label={t('Выбрать пространство')} placeholder={t('+ пространство')} value="" onChange={addSpace} options={spaces} work={work} />
+            </span>
           )}
           <span className={styles.sep} aria-hidden="true" />
         </>
       )}
       <span className={styles.tagsLabel}>{t('Знания')}</span>
-      {s.chips.map((c) => <Chip key={c.slug} c={c} onRemove={s.live && c.state !== 'removed' ? () => put(s.tags.filter((x) => x !== c.slug)) : undefined} />)}
+      {s.chips.map((c) => <Chip key={c.slug} c={c} onRemove={c.state !== 'removed' ? () => put(s.tags.filter((x) => x !== c.slug)) : undefined} />)}
       {!s.chips.length && <span className={styles.none}>{t('без тегов')}</span>}
-      {s.live && (
-        <TagField
-          listId="session-tag-list"
-          options={options.filter((o) => !s.tags.includes(o.slug))}
-          text={text}
-          onText={setText}
-          onAdd={add}
-          className={styles.addTag}
-          aria-label={t('Добавить тег')}
-          placeholder={t('+ тег')}
-        />
-      )}
+      <TagField
+        listId="session-tag-list"
+        options={options.filter((o) => !s.tags.includes(o.slug))}
+        text={text}
+        onText={setText}
+        onAdd={add}
+        className={styles.addTag}
+        aria-label={t('Добавить тег')}
+        placeholder={t('+ тег')}
+      />
       <span className={styles.spacer} />
       <StateNote s={s} />
       {note && <p className={styles.note}>{ICON.clock}{note}</p>}

@@ -66,7 +66,9 @@ export function SpacesScreen() {
 
   const cur = useRef({ space, form, saved });
   cur.current = { space, form, saved };
-  const dirtyNow = () => Boolean(cur.current.space) && spaceSnapshot(cur.current.form) !== cur.current.saved;
+  /** Во вкладке «Документы» открыт документ с несохранённым текстом: уход со страницы и на другое пространство спросит. */
+  const docDirty = useRef(false);
+  const dirtyNow = () => Boolean(cur.current.space) && (spaceSnapshot(cur.current.form) !== cur.current.saved || docDirty.current);
   const dirty = Boolean(space) && spaceSnapshot(form) !== saved;
 
   const listErr = spacesQuery.isError ? errorText(spacesQuery.error) : '';
@@ -328,6 +330,7 @@ export function SpacesScreen() {
               onReload={() => void reload()}
               onRemove={() => void remove()}
               onDocs={(docs) => setSpace((s) => (s ? { ...s, docs } : s))}
+              onDocDirty={(d) => (docDirty.current = d)}
             />
           ) : (
             <p className={cx(styles.empty, 'muted')}>{t('Выбери пространство в списке — откроются его карта, состояние, документы и все его сессии и запуски. Новое — кнопкой «+ Новое пространство»; его можно вписать и прямо в форме сессии или запуска.')}</p>
@@ -352,9 +355,10 @@ type EditorProps = {
   onReload: () => void;
   onRemove: () => void;
   onDocs: (docs: SpaceDoc[]) => void;
+  onDocDirty: (dirty: boolean) => void;
 };
 
-function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onDocs }: EditorProps) {
+function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onDocs, onDocDirty }: EditorProps) {
   const home = useConfig().data?.home;
   const reveal = useFeature('reveal');
   const toast = useToast();
@@ -445,7 +449,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               </div>
             </div>
           )}
-          {tab === 'docs' && <DocsTab space={s} onDocs={onDocs} />}
+          <DocsTab key={s.slug} space={s} onDocs={onDocs} onDirty={onDocDirty} hidden={tab !== 'docs'} />
           {tab === 'context' && <ContextTab slug={s.slug} version={`${s.updatedAt}|${s.mapMtimeMs ?? 0}|${s.stateMtimeMs ?? 0}`} />}
           {tab === 'settings' && (
             <div className={styles.tabBody}>
@@ -515,7 +519,12 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
 }
 
 /** Документы: список, загрузка, новый текстовый, правка текстовых на месте, показать в Finder, удаление. */
-function DocsTab({ space: s, onDocs }: { space: SpaceDetail; onDocs: (docs: SpaceDoc[]) => void }) {
+/**
+ * Документы пространства. Живёт, пока открыто это пространство (hidden — другая вкладка): открытый документ переживает
+ * переключение вкладок; у другого пространства — заново (key). Несохранённый текст документа сообщается наверх (onDirty):
+ * уход со страницы спросит, как о несохранённой карте.
+ */
+function DocsTab({ space: s, onDocs, onDirty, hidden }: { space: SpaceDetail; onDocs: (docs: SpaceDoc[]) => void; onDirty: (dirty: boolean) => void; hidden: boolean }) {
   const qc = useQueryClient();
   const toast = useToast();
   const { askConfirm } = useConfirm();
@@ -526,6 +535,8 @@ function DocsTab({ space: s, onDocs }: { space: SpaceDetail; onDocs: (docs: Spac
   const [open, setOpen] = useState<{ name: string; text: string; saved: string | null; base: number } | null>(null);
   const [newName, setNewName] = useState('');
   const dirty = Boolean(open && (open.saved === null || open.text !== open.saved));
+  useEffect(() => onDirty(dirty), [dirty]);
+  useEffect(() => () => onDirty(false), []);
 
   const refresh = (docs: SpaceDoc[]) => {
     onDocs(docs);
@@ -590,7 +601,7 @@ function DocsTab({ space: s, onDocs }: { space: SpaceDetail; onDocs: (docs: Spac
   };
 
   return (
-    <div className={styles.tabBody}>
+    <div className={styles.tabBody} hidden={hidden}>
       <p className={cx('muted small', styles.hint)}>{t('Спеки, решения, заметки, макеты. В контекст идёт только список с заголовками «# …» — файл агент открывает сам, когда нужен. Сессия может записать .md или .txt инструментом space_write, спросив тебя')}</p>
       <div className={styles.docsBar}>
         <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 МБ каждый, до 25 МБ вместе, до 30 файлов')} onClick={() => fileInput.current?.click()}>{t('+ Загрузить файлы…')}</button>

@@ -2,6 +2,8 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
+  'Этап пытался писать туда, куда этапам нельзя: папки пространств, тегов знаний, запусков. Запись отклонена, этап продолжил работу': 'The phase tried to write where phases may not: the spaces, knowledge tags or runs folders. The write was refused and the phase went on',
+  'Отказано в записи: {list}': 'Writes refused: {list}',
   '◇ {slug} — новое пространство: заведётся пустым, карты и состояния у него нет': '◇ {slug} — a new space: it will be created empty, with no map and no state',
   'загружаю…': 'loading…',
   'Что пространство и теги знаний дадут модели — тот же текст, что сервер отправит': 'What the space and knowledge tags give the model — the same text the server sends',
