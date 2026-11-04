@@ -1385,11 +1385,18 @@ export function renderPhasePrompt(
   if (phase.handoff?.trim()) body = `${body.trimEnd()}\n\n${handoffTail(render(phase.handoff, vars))}`;
   const dirs = cwd ? [...new Set([...resolveAddDirs(phase, cwd), ...resolveDirList(run?.addDirs, cwd)])] : [];
   if (dirs.length) body = `${body.trimEnd()}\n\n${dirsTail(dirs)}`;
-  if (space?.trim()) body = `${body.trimEnd()}\n\n${space.trim()}`;
-  const known = knowledgeBlock(knowledge ?? []);
-  if (known) body = `${body.trimEnd()}\n\n${known}`;
+  const tail = phaseContextTail(space, knowledge ?? []);
+  if (tail) body = `${body.trimEnd()}\n\n${tail}`;
   if (art?.section) body = `${body.trimEnd()}\n\n${art.section}`;
   return withNotes(withAttachments(body, run), notes);
+}
+
+/**
+ * Что этап получает от пространства и тегов знаний — в конце промпта, после доп. директорий: раздел пространства и
+ * строки тегов (тег «всегда в промпт» — целиком). Тот же текст показывает превью «Модель получит» (model-context.ts).
+ */
+export function phaseContextTail(space: string | undefined, knowledge: KnowledgeTag[]): string {
+  return [space?.trim(), knowledgeBlock(knowledge)].filter(Boolean).join('\n\n');
 }
 
 /**

@@ -1,6 +1,7 @@
 // Страница «Пространства» и выбор пространства в формах без React и DOM: поиск, подписи, снимок формы и патч,
 // документы, история обновлений состояния, сессии и запуски пространства.
-import type { RunSummary, SessionView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate } from '@server/api-types';
+import type { ModelContextView, RunSummary, SessionView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate } from '@server/api-types';
+import { ctxTokens } from './context';
 import { plural, when } from './format';
 import { t } from './i18n';
 import { searchWords, textMatches } from './search';
@@ -106,6 +107,25 @@ export function pickerRows(query: string, options: SpaceListItem[], work: Map<st
   const q = query.trim();
   const fresh = SPACE_SLUG_RE.test(q) && !options.some((o) => o.slug === q);
   return [...shown, { kind: 'none' }, ...(fresh ? [{ kind: 'new' as const, slug: q }] : [])];
+}
+
+// ---------- «Модель получит»: строка-сводка превью
+
+/** Как CHARS_PER_TOKEN на странице «Контекст»: оценка, точно — листинг Claude Code. */
+const CHARS_PER_TOKEN = 3.2;
+const approx = (chars: number): string => `≈${ctxTokens(Math.round(chars / CHARS_PER_TOKEN))}`;
+
+/** Свёрнутая строка превью: «карта ≈1.2k ток. — памятью · состояние ≈600 ток. · документов: 3 · папок: 2 · знаний: 2». */
+export function modelSummary(v: Pick<ModelContextView, 'space' | 'knowledge'>): string {
+  const parts: string[] = [];
+  if (v.space) {
+    parts.push(v.space.map.chars ? t('карта {n} ток. — памятью', { n: approx(v.space.map.chars) }) : t('карты нет'));
+    parts.push(v.space.state ? t('состояние {n} ток.', { n: approx(v.space.state.length) }) : t('состояния ещё нет'));
+    if (v.space.docs.length) parts.push(t('документов: {n}', { n: v.space.docs.length }));
+    if (v.space.dirs.length) parts.push(t('папок: {n}', { n: v.space.dirs.length }));
+  }
+  if (v.knowledge.length) parts.push(t('знаний: {n}', { n: v.knowledge.length }));
+  return parts.join(' · ');
 }
 
 export const spacesNoneText = (total: number): string => (total ? t('Ничего не нашлось') : t('Пространств пока нет — заведи первое выше'));

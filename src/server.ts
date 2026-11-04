@@ -37,6 +37,7 @@ import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
+import { modelContextReply } from './model-context.js';
 import type { ContextFile, ContextFileSaved, ContextView } from './api-types.js';
 import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
@@ -479,6 +480,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   // --- пространства (src/spaces.ts): фича или проект — карта, документы, состояние, их сессии и запуски. Слаг берём
   // регэкспом без декодирования: кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из spaces.ts
   if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply());
+  // «Модель получит»: тексты сессии и этапа тем же кодом, что их отправляет
+  if (method === 'GET' && p === '/api/model-context') return reply(res, modelContextReply(url.searchParams));
   if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply(await readJson(req)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)$/))) {
     const slug = m[1];

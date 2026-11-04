@@ -389,6 +389,30 @@ export type SpaceContextView = {
   warnings: string[];
 };
 
+/**
+ * GET /api/model-context?space=&tags=a,b — «Модель получит»: точный текст и разбор для превью в формах и на экране сессии.
+ * session — текст хука SessionStart новой сессии (sessionContext, с бюджетом хука); phase — хвост промпта каждого этапа
+ * (раздел пространства и строки тегов знаний; у блоков flow бывают и свои теги). state — как уйдёт (обрезанное по лимиту).
+ */
+export type ModelContextView = {
+  session: string;
+  phase: string;
+  space?: {
+    slug: string;
+    title: string;
+    /** Заголовок придумала модель: в текст для модели он не идёт. */
+    autoTitle?: true;
+    dir: string;
+    map: { path: string; chars: number };
+    state: string;
+    docs: SpaceDoc[];
+    /** Пути пространства, которые есть на диске (только чтение). */
+    dirs: string[];
+  };
+  /** text — строка тега, как её получит модель (тег «всегда в промпт» — раздел целиком). */
+  knowledge: { slug: string; title: string; inline: boolean; text: string }[];
+};
+
 /** GET|PUT /api/spaces/:slug/docs/:name: текст документа и его mtimeMs — база следующей записи. */
 export type SpaceDocText = { name: string; text: string; mtimeMs: number };
 

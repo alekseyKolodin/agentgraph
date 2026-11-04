@@ -5,14 +5,14 @@
 // Вход из «Запустить…» с главной приходит в location.state.intake; черновик разового запуска уходит со spec из конструктора.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Intake } from '@server/api-types';
 import {
-  ApiError, errorText, fetchSpaceContext, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useRuns,
+  ApiError, errorText, fetchTag, hideRecentDir, keys, prepareWorktree, recentDirsKey, startRun, useConfig, useFeature, useRecentDirs, useRuns,
   useSpaces, useTags,
 } from '../../api';
 import { useSessions } from '../../api/sessions';
-import { SpaceBadge, TagBadge } from '../../components/Badge';
+import { ModelPreview } from '../../components/ModelPreview';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
 import { SpacePicker } from '../../components/SpacePicker';
@@ -69,10 +69,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   const runList = useRuns().data;
   // где пространства работали последними: их папку подставит выбор пространства, если у него нет своей рабочей
   const work = useMemo(() => lastWork(sessionList ?? [], runList ?? []), [sessionList, runList]);
-  // что пространство даст этапам — тот же текст, что сервер допишет в конец промптов
   const spaceSlug = f.space.trim();
-  const spaceKnown = spaceList.some((s) => s.slug === spaceSlug);
-  const spaceCtx = useQuery({ queryKey: ['spaces', spaceSlug, 'context'], queryFn: () => fetchSpaceContext(spaceSlug), enabled: can.spaces && spaceKnown });
   const taskRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
@@ -376,14 +373,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       {can.spaces && (
         <div className={styles.runTag}>
           <SpacePicker id="run-space" value={f.space} onChange={pickSpace} options={spaceList} work={work} />
-          {spaceKnown && spaceCtx.data && (
-            <div className={styles.runTagContext} title={t('Что сервер допишет в конец промпта каждого этапа; карта пространства придёт памятью. Поле «Задача» остаётся только задачей')}>
-              <details>
-                <summary><SpaceBadge slug={spaceSlug} />{' '}<span className="muted small">{t('в конец промптов этапов · карта — памятью')}</span></summary>
-                <pre className={styles.tagContextText}>{spaceCtx.data.phase}</pre>
-              </details>
-            </div>
-          )}
           {spaceSlug ? (
             <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
               <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
@@ -405,6 +394,8 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
           )}
         </div>
       )}
+      {/* что пространство и теги знаний дадут этапам — тот же текст, что сервер допишет в конец промптов; задача остаётся задачей */}
+      <ModelPreview space={f.space} tags={f.tags} where="phase" options={spaceList} />
       <label>
         <span>{t('Директория проекта')}</span>
         <div className="path-field">
@@ -482,21 +473,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
                 onRemove={removeTag}
                 removeTitle={t('Убрать тег из запуска')}
               />
-              {f.tags.length > 0 && (
-                <div className={styles.runTagContext} title={t('Что сервер допишет в конец промптов этапов каждого блока от выбранных тегов знаний')}>
-                  {f.tags.map((tag) => {
-                    const info = f.tagInfo.get(tag);
-                    return (
-                      <details key={tag}>
-                        <summary>
-                          <TagBadge slug={tag} />{` ${info?.title || ''} `}<span className="muted small">{t('в конец промптов этапов каждого блока')}</span>
-                        </summary>
-                        <pre className={styles.tagContextText}>{info?.input ?? t('Загружаю…')}</pre>
-                      </details>
-                    );
-                  })}
-                </div>
-              )}
               <span className={msgClass(f.tagMsg)}>{f.tagMsg.text}</span>
             </div>
           )}

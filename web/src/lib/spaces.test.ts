@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Space, SpaceRun, SpaceSession } from '@server/api-types';
 import {
   dirLines, docLine, docSize, filterSpaces, itemsCount, lastWork, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
-  spaceOptionLabel, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirNote,
+  modelSummary, spaceOptionLabel, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirNote,
 } from './spaces';
 
 const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false, hasState: false });
@@ -115,4 +115,11 @@ test('выбор пространства: свежие сверху по пос
   // существующий слаг и неверный — без «+ новое»
   assert.equal(pickerRows('a', [a, b], work).some((r) => r.kind === 'new'), false);
   assert.equal(pickerRows('Bad Slug', [a, b], work).some((r) => r.kind === 'new'), false);
+});
+
+test('модель получит: строка-сводка — карта и состояние в токенах (оценка), документы, папки, знания; без пространства — только знания', () => {
+  const space = { slug: 'p', title: 'П', dir: '/c/p', map: { path: '/c/p/CLAUDE.md', chars: 3840 }, state: 'x'.repeat(640), docs: [{ name: 'a.md', size: 1, mtimeMs: 0, text: true }], dirs: ['/a', '/b'] };
+  assert.equal(modelSummary({ space, knowledge: [{ slug: 'qa', title: '', inline: false, text: '- qa' }] }), 'карта ≈1.2k ток. — памятью · состояние ≈200 ток. · документов: 1 · папок: 2 · знаний: 1');
+  assert.equal(modelSummary({ space: { ...space, map: { ...space.map, chars: 0 }, state: '', docs: [], dirs: [] }, knowledge: [] }), 'карты нет · состояния ещё нет');
+  assert.equal(modelSummary({ knowledge: [{ slug: 'qa', title: '', inline: true, text: '' }] }), 'знаний: 1');
 });

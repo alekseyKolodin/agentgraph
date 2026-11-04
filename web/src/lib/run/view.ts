@@ -600,6 +600,17 @@ export function stateFinalLines(r: Pick<RunReport, 'space' | 'stateUpdate' | 'au
   return { ...err, lines: (r.tags || []).map((tag) => line(tag, byTag.get(tag), r.autoTag?.slug === tag)) };
 }
 
+// ---------- задача запуска без служебной разметки
+
+/** Блоки тегов задач старых запусков: <!-- tag:slug -->…<!-- /tag -->. Как TAG_BLOCKS_RE на сервере (src/tags.ts). */
+const TAG_BLOCKS_RE = /<!-- tag:[a-z0-9-]+ -->[\s\S]*?<!-- \/tag -->\n*/g;
+
+/** Задача запуска, как её писал человек: без блоков тегов задач старых запусков (тег стал пространством — оно рядом плашкой). */
+export const runTask = (input: string | undefined): string => (input ?? '').replace(TAG_BLOCKS_RE, '').trim();
+
+/** Пространство запуска: поле space, у старого запуска — его первый тег задачи (перенесён в пространство с тем же слагом). */
+export const runSpaceOf = (r: Pick<RunReport, 'space' | 'tags'>): string | undefined => r.space ?? r.tags?.[0];
+
 // ---------- граф: инспектор и переход в «Обзор»
 
 /** Выбранный узел графа; auto — выбран режимом «следовать за текущим». */
@@ -711,7 +722,7 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
     const meta = [until?.type ? COND_LABEL[until.type] || until.type : '', until?.run ? `$ ${until.run}` : '', c ? t('итер. {it}', { it: c.iteration }) : ''].filter(Boolean).join(' · ');
     return { where, kind: 'cond', status, meta, c };
   }
-  if (sel.kind === 'start') return { where, kind: 'start', input: r.input || '' };
+  if (sel.kind === 'start') return { where, kind: 'start', input: runTask(r.input) };
   return { where, kind: 'block', title: b ? b.title || b.name || t('Блок') : t('Блок'), status: b?.status, meta: b?.looped ? t('итераций {i} / {n}', { i: b.iterations || 0, n: b.maxIterations }) : t('один проход') };
 }
 

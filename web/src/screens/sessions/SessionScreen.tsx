@@ -8,6 +8,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
 import { api, ApiError, errorText, keys, useConfig, useFeature, useSpaces, useTags } from '../../api';
+import { ModelPreview } from '../../components/ModelPreview';
 import {
   continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState,
 } from '../../api/sessions';
@@ -131,6 +132,7 @@ function Session({ s }: { s: SessionView }) {
         </div>
       </header>
       <TagRow s={s} onSaved={setS} />
+      <SessionModelPreview s={s} />
       <section className={styles.termSection} aria-label={t('Терминал сессии')}>
         <SessionTerminal
           id={s.id}
@@ -211,6 +213,12 @@ function Cwd({ path }: { path: string }) {
  * Строка контекста: чип пространства (смена — полем «+ пространство», снятие — ×) и чипы тегов знаний (снятый —
  * зачёркнут, пока снятие не дошло), «+ тег», что ещё не дошло до модели.
  */
+/** «Модель получит» для пространства и тегов знаний сессии — то, что придёт хуком SessionStart (после /clear и «Продолжить»). */
+function SessionModelPreview({ s }: { s: SessionView }) {
+  const spaces = useSpaces(useFeature('spaces')).data?.spaces ?? [];
+  return <ModelPreview className={styles.modelPreview} space={s.space ?? ''} tags={s.tags} where="session" options={spaces} />;
+}
+
 function TagRow({ s, onSaved }: { s: SessionView; onSaved: (v: SessionView) => void }) {
   const qc = useQueryClient();
   const toast = useToast();

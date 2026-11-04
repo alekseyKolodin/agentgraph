@@ -12,6 +12,7 @@ import { continueSession, createSession, putSession, sessionKeys, updateSessionS
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
+import { ModelPreview } from '../../components/ModelPreview';
 import { SpacePicker } from '../../components/SpacePicker';
 import { TagInput } from '../../components/TagInput';
 import { baseName, feedTime } from '../../lib/format';
@@ -213,6 +214,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         />
         <p className="muted small">{t('Строка каждого тега — в контексте, полный текст Claude возьмёт инструментом knowledge_read. Можно и без тегов.')}</p>
       </div>
+      <ModelPreview space={space} tags={tags} where="session" options={spaceList} />
       <details className={styles.more}>
         <summary>{t('Дополнительно')}</summary>
         <div className={styles.moreBody}>

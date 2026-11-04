@@ -5,7 +5,7 @@ import { liveState, type LiveState, type PendingPhase } from './events';
 import {
   blockIters, continueVisible, ctxChipInfo, fileIsMarkdown, finalFacts, finalFeedback, fixActions, flowEditsLine, gotoTarget, headerStatus,
   blockNextNote, blockSkipNote, inspectView, spentChipInfo, iterSummary, limitEditable, nodeFromKey, pauseHint, phaseModelChip, RESTART_DETAIL, ribbonRows, runBlocks, runMeta, runSteps, stepNotes,
-  summaryView, stateFinalLines, waitingNotes, type RunFold,
+  runSpaceOf, runTask, summaryView, stateFinalLines, waitingNotes, type RunFold,
 } from './view';
 
 const block = (name: string, over: Partial<BlockReport> = {}): BlockReport => ({
@@ -290,4 +290,14 @@ test('инспектор блока-вызова: дочерние запуск�
   assert.equal(blockNextNote({ next: { to: 'b', checks: [] } }, blocks), 'дальше: блок «Б»');
   assert.equal(blockNextNote({ next: { to: 'end', checks: [] } }, blocks), 'дальше: конец запуска');
   assert.equal(blockNextNote({}, blocks), '');
+});
+
+test('задача запуска: без блоков тегов задач старых запусков; пространство — space, у старого запуска — первый тег задачи', () => {
+  const old = '<!-- tag:kai -->\nТег задачи: kai\n<source-data>саммари</source-data>\n<!-- /tag -->\n\nПочини корзину';
+  assert.equal(runTask(old), 'Почини корзину');
+  assert.equal(runTask('Почини корзину'), 'Почини корзину');
+  assert.equal(runTask(undefined), '');
+  assert.equal(runSpaceOf({ space: 'p' }), 'p');
+  assert.equal(runSpaceOf({ tags: ['kai', 'other'] }), 'kai');
+  assert.equal(runSpaceOf({}), undefined);
 });

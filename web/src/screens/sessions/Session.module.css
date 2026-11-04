@@ -87,3 +87,5 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .ok-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-ok); flex: none; }
 .hint { font-size: var(--fs-meta); color: var(--ink-3); }
 .actions :global(.menu-wrap) { position: relative; }
+/* «Модель получит» под строкой контекста: свёрнуто, по клику — разбор и точный текст */
+.model-preview { margin: 0 0 8px; }

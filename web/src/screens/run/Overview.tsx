@@ -19,7 +19,7 @@ import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
   blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, phaseSpent, spentChipInfo, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
-  runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
+  runBlocks, runFinished, runPause, runSpaceOf, runSteps, runTask, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
 import { art } from './artStore';
@@ -42,6 +42,8 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
     for (const k of keys) runState.fold.over.set(k, open);
     bump();
   };
+  const task = runTask(r.input);
+  const space = runSpaceOf(r);
   return (
     <>
       {runFinished(r) && <RunFinal r={r} />}
@@ -69,7 +71,14 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
         {items.map((it, i) => <Step key={stepId(it, i)} item={it} st={st} implicit={implicit} noteBox={it === noteAt} />)}
       </div>
       <div className={styles.runSecHead}><span className={styles.runLabel}>{t('Задача')}</span></div>
-      {r.input && <p className={styles.runInput} dangerouslySetInnerHTML={{ __html: linkifyText(r.input) }} />}
+      {task && <p className={styles.runInput} dangerouslySetInnerHTML={{ __html: linkifyText(task) }} />}
+      {/* пространство — плашкой рядом с задачей, а не служебной разметкой в ней (старые запуски несли блок тега задачи) */}
+      {space && (
+        <p className={cx('row', styles.runSpace)}>
+          <SpaceBadge slug={space} link />
+          <span className="muted small">{t('пространство запуска: карта — памятью этапов, состояние — в их промптах')}</span>
+        </p>
+      )}
     </>
   );
 }
