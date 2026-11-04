@@ -346,8 +346,11 @@ export type SpaceMeta = {
   cwd?: string;
   /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
   history: SpaceUpdate[];
-  /** Пространство перенесено из тега задачи. */
-  migratedFrom?: { tag: string; at: string };
+  /**
+   * Пространство перенесено из тега задачи. summaryMtimeMs — mtime саммари тега, которое учтено (при переносе или взято
+   * в состояние позже): саммари новее — его дописала старая версия agentgraph на той же папке настроек.
+   */
+  migratedFrom?: { tag: string; at: string; summaryMtimeMs?: number };
 };
 
 /** Пространство целиком: карта (CLAUDE.md), состояние (STATE.md), документы, абсолютный путь папки. */
@@ -383,7 +386,13 @@ export type SpaceRun = { id: string; flow: string; title?: string; status: strin
 export type SpaceSession = { id: string; name: string; status: SessionStatus; live: boolean; cwd: string; lastActivityAt: string; turns: number; legacy?: true };
 
 /** GET /api/spaces/:slug: пространство, его запуски и сессии (свежие сверху; legacy — пришли из тега задачи). */
-export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir };
+/**
+ * Саммари тега задачи изменилось после переноса (его пишет старая версия agentgraph на той же ~/.agentgraph): путь, текст
+ * (как уйдёт в состояние — обрезанный) и mtime. Его можно взять в состояние или скрыть (PUT legacySummary).
+ */
+export type LegacySummary = { path: string; text: string; mtimeMs: number };
+
+export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary };
 
 /**
  * GET /api/spaces/:slug/context: что пространство даёт модели. session — текст хука SessionStart новой сессии
@@ -476,6 +485,8 @@ export type SessionView = {
   transcriptPath?: string;
   /** Ходов после прошлого обновления состояния: им есть что записать. */
   newTurns: number;
+  /** В состояние каких пространств уйдут эти ходы (по пространству, в котором сделан ход; удалённые — никуда). Нет — старый сервер. */
+  stateSpaces?: string[];
   stateUpdate?: SessionStateUpdate;
   /** Состояние пространства пишется прямо сейчас. */
   updatingState?: true;

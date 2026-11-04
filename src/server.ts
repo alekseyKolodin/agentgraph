@@ -92,7 +92,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { liveSessionNames, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
+import { liveSessionNames, releaseSpaceSessions, SessionError, sessionsAvailable, sessionsRoute, sessionsUpgrade, spaceSessions, stopSessions } from './sessions-server.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -501,7 +501,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       }));
     }
     if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
-    if (method === 'DELETE') return reply(res, deleteSpaceReply(slug));
+    if (method === 'DELETE') {
+      // идущий запуск читает пространство на старте каждого этапа и пишет состояние в конце: удалять — после него
+      const running = listRuns().filter((r) => r.space === slug && (live.has(r.id) || r.status === 'running'));
+      if (running.length) return sendJson(res, 409, { error: `Пространство ${slug} у идущего запуска: ${running.map((r) => r.id).join(', ')} — дождись его конца или останови` });
+      // идущие сессии с ним — 409; завершённые отцепляются: заведённое потом с тем же слагом их ходов не получит
+      try {
+        releaseSpaceSessions(slug);
+      } catch (err) {
+        if (err instanceof SessionError) return sendJson(res, err.status, { error: err.message });
+        throw err;
+      }
+      return reply(res, deleteSpaceReply(slug));
+    }
   }
   if (method === 'GET' && (m = p.match(/^\/api\/spaces\/([^/]+)\/context$/))) return reply(res, spaceContextReply(m[1], RUNS_DIR));
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));

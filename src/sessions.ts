@@ -493,7 +493,17 @@ export type HookState = {
   turns: number;
   /** Текущий режим разрешений по последнему хуку основного разговора. */
   permissionMode?: string;
+  /** Сессия до пространств: её теги задач. В её транскрипте мог остаться их контекст от прошлой версии agentgraph. */
+  preSpacesTags?: string[];
 };
+
+/**
+ * Пометка для --resume сессии до пространств: в транскрипте выше лежит контекст её тегов задач от прошлой версии
+ * agentgraph (саммари на тот момент), а теперь это пространства — чтобы модель не держалась за устаревшее.
+ */
+export function preSpacesNote(tags: string[]): string {
+  return `В разговоре выше может быть контекст тегов задач (${tags.join(', ')}) от прошлой версии agentgraph: он устарел — теги задач перенесены в пространства, актуальны карта и состояние ниже.`;
+}
 
 export type HookResult = {
   /** Тело ответа хуку. */
@@ -543,7 +553,9 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       // любой source: после /clear, /resume и compact прежний контекст модели уже не виден (карта — память, её claude
       // загрузит сам)
       const c = ctx();
-      return { reply: withContext(event, sessionContext(c, s.launchSpace)), patch: { ...patch, started: true, status: 'waiting' }, delivered: delivered(c) };
+      const text = sessionContext(c, s.launchSpace);
+      const note = input.source === 'resume' && s.preSpacesTags?.length ? preSpacesNote(s.preSpacesTags) : '';
+      return { reply: withContext(event, [note, text].filter(Boolean).join('\n\n')), patch: { ...patch, started: true, status: 'waiting' }, delivered: delivered(c) };
     }
     case 'UserPromptSubmit':
     case 'PostToolBatch': {

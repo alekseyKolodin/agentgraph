@@ -1,5 +1,7 @@
 // Английский словарь: misc. Ключ — русский текст из t() как есть.
 export const misc: Record<string, string> = {
+  'Новые ходы сделаны без пространства или в удалённом: записать их некуда': 'The new turns were made without a space or in a deleted one: there is nowhere to write them',
+  'Сессия haiku перепишет состояние пространств {list}: каждому — ходы, сделанные в нём': 'A haiku session will rewrite the state of spaces {list}: each gets the turns made in it',
   // общие компоненты: подтверждение, выбор папки, окно файла, бейджи
   'Подтвердить': 'Confirm',
   'Ок': 'OK',

@@ -90,6 +90,32 @@ blocks:
 `;
 
 test(
+  'контекст: карта пространства и заметки тега в листинге — только смотреть; записать их отсюда нельзя (правят на их страницах)',
+  withTmp(async (dir) => {
+    const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+    process.env.AGENTGRAPH_CONFIG_DIR = path.join(dir, 'cfg');
+    try {
+      const map = write(path.join(dir, 'cfg', 'spaces', 'p', 'CLAUDE.md'), '# карта\n');
+      const notes = write(path.join(dir, 'cfg', 'tags', 'qa', 'CLAUDE.md'));
+      const proj = write(path.join(dir, 'proj', 'CLAUDE.md'));
+      const f = fakeQuery(async () => usage([
+        { path: map, type: 'Project', tokens: 5 },
+        { path: notes, type: 'Project', tokens: 5 },
+        { path: proj, type: 'Project', tokens: 5 },
+      ]));
+      const v = await getContext({ cwd: path.join(dir, 'proj') }, f.deps);
+      assert.deepEqual(v.memoryFiles.map((m) => m.editable), [false, false, true]);
+      assert.equal(readContextFile(map).editable, false);
+      assert.throws(() => writeContextFile(map, 'чужое', fs.statSync(map).mtimeMs), (err: Error & { status?: number }) => err.status === 403 && /на его странице/.test(err.message));
+      assert.equal(fs.readFileSync(map, 'utf8'), '# карта\n');
+    } finally {
+      if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+      else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    }
+  }),
+);
+
+test(
   'контекст: маппинг ответа SDK, editable по типу и месту, close и при ошибке',
   withTmp(async (dir) => {
     const proj = write(path.join(dir, 'proj', 'CLAUDE.md'));

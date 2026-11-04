@@ -43,6 +43,8 @@ export type SessionRecord = {
   tags: string[];
   /** Сессия до пространств: все её теги задач — по ним она видна на странице каждого перенесённого пространства. */
   legacyTaskTags?: string[];
+  /** Теги задач сессии до пространств — навсегда (legacyTaskTags снимает выбор пространства): пометка на --resume. */
+  preSpacesTags?: string[];
   model?: string;
   permissionMode?: SessionPermissionMode;
   /** Обновлять состояние пространства при выходе. */
@@ -59,10 +61,19 @@ export type SessionRecord = {
   claudeVersion?: string;
   /** Ходов (из turns), уже ушедших в состояние пространства (раньше — в саммари тегов задач). */
   summarizedTurns?: number;
+  /** С какого хода какое пространство (смена на ходу): ходы уходят в состояние того, где сделаны. Нет — все в space. */
+  turnSpaces?: TurnSpace[];
   stateUpdate?: SessionStateUpdate;
   /** Состояние при выходе не записано: приложение закрыли (Cmd+Q) или сервер остановился, пока сессия шла. */
   statePending?: 'app-closed';
 };
+
+/**
+ * Пространство ходов начиная с from (до следующего отрезка). at — createdAt пространства: заведённое заново с тем же
+ * слагом — уже другое, ходы старого в него не пойдут; gone — пространство удалили, ходы не пишутся никуда. Без space —
+ * ходы без пространства: они уйдут в следующее выбранное.
+ */
+export type TurnSpace = { from: number; space?: string; at?: string; gone?: true };
 
 /** Подключённый экран: сокет, к какому процессу он подцеплен и его размер (с ним же — к новому процессу). */
 type Conn = { client: ScreenClient; attached: PtySession | null; size?: { cols: number; rows: number }; snapSent: boolean };
@@ -256,6 +267,7 @@ export class SessionManager {
     if (live && got) for (const slug of got.tags.filter((x) => !r.tags.includes(x))) chips.push({ slug, state: 'removed' });
     const spaceChip = this.spaceChip(s, live);
     const delivery = this.delivery(s);
+    const stateSpaces = [...new Set(stateGroups(r, r.turns).filter((g) => g.ok).map((g) => g.slug))];
     return {
       id: r.id,
       name: r.name,
@@ -279,6 +291,7 @@ export class SessionManager {
       ...(r.claudeVersion ? { claudeVersion: r.claudeVersion } : {}),
       ...(r.transcriptPath ? { transcriptPath: r.transcriptPath } : {}),
       newTurns: newTurns(r),
+      stateSpaces,
       ...(r.stateUpdate ? { stateUpdate: r.stateUpdate } : {}),
       ...(s.updatingState ? { updatingState: true as const } : {}),
       ...(r.statePending ? { statePending: r.statePending } : {}),
@@ -341,6 +354,7 @@ export class SessionManager {
     await this.knownVersion(bin);
     // пространство — последним: ошибка выше не оставит пустое пространство на диске. Новый слаг — пустое пространство
     if (space && !readSpaceMeta(space)) createSpace(space);
+    const at = space ? spaceInstance(space) : undefined;
     const id = randomUUID();
     const now = new Date().toISOString();
     const rec: SessionRecord = {
@@ -355,6 +369,7 @@ export class SessionManager {
       createdAt: now,
       lastActivityAt: now,
       turns: 0,
+      ...(space ? { turnSpaces: [{ from: 0, space, ...(at ? { at } : {}) }] } : {}),
     };
     const s = newLive(rec, 'starting');
     this.sessions.set(id, s);
@@ -492,6 +507,7 @@ export class SessionManager {
       throw new SessionError(400, errMsg(err));
     }
     if (space && !readSpaceMeta(space)) createSpace(space);
+    if (space !== s.rec.space) s.rec.turnSpaces = withTurnSpace(s.rec, space);
     if (space) s.rec.space = space;
     else delete s.rec.space;
     // пространство выбрали руками: сессия до пространств больше не числится за своими тегами задач (иначе она осталась
@@ -500,6 +516,39 @@ export class SessionManager {
     this.save(s);
     this.changed(s);
     return this.view(s);
+  }
+
+  /**
+   * Пространство удаляют (DELETE /api/spaces/:slug): живая сессия с ним — 409 (его папка у неё в --add-dir, ходы ушли бы
+   * в никуда); завершённые отцепляются — пространство снимается, ходы в нём не пишутся никуда, и заведённое потом с тем
+   * же слагом их не получит. Возвращает, сколько сессий отцеплено.
+   */
+  releaseSpace(slug: string): number {
+    this.load();
+    const uses = (r: SessionRecord) => r.space === slug || Boolean(r.legacyTaskTags?.includes(slug)) || Boolean(r.turnSpaces?.some((x) => x.space === slug && !x.gone));
+    const live = [...this.sessions.values()].filter((s) => (s.pty?.alive || s.updatingState) && uses(s.rec));
+    if (live.length) throw new SessionError(409, `Пространством ${slug} пользуются идущие сессии: ${live.map((s) => `«${s.rec.name}»`).join(', ')} — заверши их или смени им пространство`);
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      const r = s.rec;
+      if (!uses(r)) continue;
+      const segs = r.space === slug ? withTurnSpace(r, undefined) : turnSpacesOf(r);
+      r.turnSpaces = segs.map((x) => (x.space === slug ? { ...x, gone: true as const } : x));
+      if (r.space === slug) delete r.space;
+      if (r.legacyTaskTags) {
+        r.legacyTaskTags = r.legacyTaskTags.filter((t) => t !== slug);
+        if (!r.legacyTaskTags.length) delete r.legacyTaskTags;
+      }
+      if (r.statePending && !this.wantsState(s)) delete r.statePending;
+      try {
+        this.save(s);
+      } catch (err) {
+        console.error(`сессия ${r.id}: не записалась —`, errMsg(err));
+      }
+      this.changed(s);
+      n++;
+    }
+    return n;
   }
 
   rename(id: string, body: Record<string, unknown>): SessionView {
@@ -571,9 +620,9 @@ export class SessionManager {
 
   // --- состояние пространства
 
-  /** Есть что записать: галочка, ходы после прошлого обновления и пространство на диске. */
+  /** Есть что записать: галочка и ходы после прошлого обновления, сделанные в пространстве, которое есть на диске. */
   private wantsState(s: Live): boolean {
-    return s.rec.saveState && newTurns(s.rec) > 0 && Boolean(this.ctx(s.rec).space);
+    return s.rec.saveState && stateGroups(s.rec, s.rec.turns).some((g) => g.ok);
   }
 
   /** «Обновить состояние»: в любой момент, только ходы после прошлого обновления. Ответ — сразу, состояние пишется в фоне. */
@@ -582,7 +631,7 @@ export class SessionManager {
     if (s.updatingState) throw new SessionError(409, 'Состояние уже пишется');
     if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
     if (!newTurns(s.rec)) throw new SessionError(409, 'Новых ходов с прошлого обновления нет');
-    if (!this.ctx(s.rec).space) throw new SessionError(409, 'У сессии нет пространства: состояние пишется только в пространство');
+    if (!stateGroups(s.rec, s.rec.turns).some((g) => g.ok)) throw new SessionError(409, 'Ходы сделаны без пространства (или его удалили): состояние пишется только в пространство');
     void this.summarize(s).catch((err: unknown) => console.error('сессия: состояние —', errMsg(err)));
     return this.view(s);
   }
@@ -605,30 +654,45 @@ export class SessionManager {
   private async runState(s: Live, abort: AbortController): Promise<void> {
     if (s.updatingState) return;
     const all = readTurns(this.turnsFile(s.rec.id));
-    const from = Math.min(s.rec.summarizedTurns ?? 0, all.length);
-    const turns = all.slice(from);
-    const slug = this.ctx(s.rec).space?.slug;
-    if (!turns.length || !slug) return;
+    // ходы уходят в состояние пространства, где сделаны: сменили пространство на ходу — сначала прежнее, потом новое;
+    // ходы удалённого пространства — никуда
+    const groups = stateGroups(s.rec, all.length);
+    if (!groups.some((g) => g.ok)) return;
     s.updatingState = true;
     this.changed(s);
-    const update: SessionStateUpdate = { at: '', space: slug, ok: false, costUsd: 0 };
+    let failed = false;
     try {
-      // в очереди пространства могли ждать долго: за это время сервер начал останавливаться
-      update.costUsd = await queueSpaceState(slug, () => (abort.signal.aborted ? Promise.reject(new Error('остановлено')) : this.writeState(s, slug, turns, abort)));
-      update.ok = true;
-    } catch (err) {
-      if (!abort.signal.aborted) update.error = errMsg(err);
-    } finally {
-      s.updatingState = false;
-      update.at = new Date().toISOString();
-      if (abort.signal.aborted && !update.ok) s.rec.statePending = 'app-closed';
-      else {
-        if (update.ok) {
-          s.rec.summarizedTurns = from + turns.length;
-          delete s.rec.statePending;
+      for (const g of groups) {
+        if (!g.ok) {
+          s.rec.summarizedTurns = g.end;
+          continue;
+        }
+        const turns = all.slice(g.start, g.end);
+        const update: SessionStateUpdate = { at: '', space: g.slug, ok: false, costUsd: 0 };
+        try {
+          // в очереди пространства могли ждать долго: за это время сервер начал останавливаться
+          update.costUsd = await queueSpaceState(g.slug, () => (abort.signal.aborted ? Promise.reject(new Error('остановлено')) : this.writeState(s, g.slug, turns, abort)));
+          update.ok = true;
+        } catch (err) {
+          if (!abort.signal.aborted) update.error = errMsg(err);
+        }
+        update.at = new Date().toISOString();
+        if (abort.signal.aborted && !update.ok) {
+          s.rec.statePending = 'app-closed';
+          failed = true;
+          break;
         }
         s.rec.stateUpdate = update;
+        if (!update.ok) {
+          failed = true;
+          break;
+        }
+        s.rec.summarizedTurns = g.end;
       }
+      if (!failed) delete s.rec.statePending;
+      s.rec.turnSpaces = pruneTurnSpaces(s.rec);
+    } finally {
+      s.updatingState = false;
       try {
         this.save(s);
       } finally {
@@ -696,6 +760,7 @@ export class SessionManager {
       started: s.started,
       turns: s.rec.turns,
       permissionMode: s.mode,
+      ...(s.rec.preSpacesTags?.length ? { preSpacesTags: s.rec.preSpacesTags } : {}),
     };
     const r = handleHook(state, input, {
       readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
@@ -1021,6 +1086,64 @@ function newLive(rec: SessionRecord, status: SessionStatus): Live {
 /** Ходов после прошлого обновления состояния. */
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
+/** Экземпляр пространства — его createdAt: заведённое заново с тем же слагом — другое. */
+function spaceInstance(slug: string): string | undefined {
+  try {
+    return readSpaceMeta(slug)?.createdAt;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Отрезки ходов записи; у записи без них (старая или без смены) все ходы — в её пространстве. */
+const turnSpacesOf = (r: SessionRecord): TurnSpace[] => (r.turnSpaces?.length ? r.turnSpaces : [{ from: 0, ...(r.space ? { space: r.space } : {}) }]);
+
+/** Отрезки после смены пространства на space с текущего хода; смена без новых ходов заменяет последний отрезок. */
+function withTurnSpace(r: SessionRecord, space: string | undefined): TurnSpace[] {
+  const segs = turnSpacesOf(r);
+  const at = space ? spaceInstance(space) : undefined;
+  const seg: TurnSpace = { from: r.turns, ...(space ? { space } : {}), ...(at ? { at } : {}) };
+  return segs.at(-1)!.from >= r.turns ? [...segs.slice(0, -1), seg] : [...segs, seg];
+}
+
+/** Без отрезков, целиком ушедших в состояние: остаётся тот, что покрывает первый неучтённый ход, и дальше. */
+function pruneTurnSpaces(r: SessionRecord): TurnSpace[] | undefined {
+  if (!r.turnSpaces?.length) return r.turnSpaces;
+  const from = r.summarizedTurns ?? 0;
+  let i = 0;
+  while (i + 1 < r.turnSpaces.length && r.turnSpaces[i + 1].from <= from) i++;
+  return r.turnSpaces.slice(i);
+}
+
+/**
+ * Неучтённые ходы [summarizedTurns, total) по пространствам, в которых они сделаны: [start, end), слаг и ok — пространство
+ * есть на диске и это тот же экземпляр (не удалённое и не заведённое заново). Ходы без пространства присоединяются к
+ * следующему отрезку с пространством; в хвосте — ждут, пока пространство выберут.
+ */
+export function stateGroups(r: SessionRecord, total: number): { start: number; end: number; slug: string; ok: boolean }[] {
+  const from = Math.min(r.summarizedTurns ?? 0, total);
+  const segs = turnSpacesOf(r);
+  const out: { start: number; end: number; slug: string; ok: boolean }[] = [];
+  let carry = -1;
+  for (let i = 0; i < segs.length; i++) {
+    const start = Math.max(segs[i].from, from);
+    const end = Math.min(i + 1 < segs.length ? segs[i + 1].from : total, total);
+    const slug = segs[i].space;
+    if (!slug) {
+      if (end > start && carry < 0) carry = start;
+      continue;
+    }
+    // ходы без пространства — к этому отрезку, даже если своих ходов у него ещё нет (выбрали и сразу вышли)
+    const first = carry >= 0 ? carry : start;
+    carry = -1;
+    if (end <= first) continue;
+    const at = spaceInstance(slug);
+    const ok = !segs[i].gone && Boolean(at !== undefined && (!segs[i].at || segs[i].at === at));
+    out.push({ start: first, end, slug, ok });
+  }
+  return out;
+}
+
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
 /** Поля session.json до пространств: теги задач, галочка и итог их саммари. */
@@ -1084,6 +1207,7 @@ export function readRecord(file: string, id: string): { rec: SessionRecord; lega
     ...(space ? { space } : {}),
     tags: legacy ? tags.filter(isKnowledge) : tags,
     ...(task.length ? { legacyTaskTags: task } : {}),
+    ...(legacy && task.length ? { preSpacesTags: task } : raw.preSpacesTags ? { preSpacesTags: strings(raw.preSpacesTags) } : {}),
     saveState: (legacy ? saveTag : raw.saveState) !== false,
     claudeSessionIds: strings(raw.claudeSessionIds),
     createdAt: raw.createdAt,
@@ -1217,6 +1341,8 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
 export const sessionsAvailable = () => sessionManager().available();
 /** upgrade сервера: WebSocket экрана сессии; остальное — 404. */
 export const sessionsUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => sessionManager().upgrade(req, socket, head);
+/** Пространство удаляют: идущие сессии с ним — SessionError 409, завершённые отцепляются (SessionManager.releaseSpace). */
+export const releaseSpaceSessions = (slug: string) => sessionManager().releaseSpace(slug);
 /** Сессии пространства (его страница): сначала сессии с диска, если сервер их ещё не читал. */
 export async function spaceSessions(slug: string): Promise<SpaceSession[]> {
   const mgr = sessionManager();

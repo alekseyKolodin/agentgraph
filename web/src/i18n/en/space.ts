@@ -2,6 +2,20 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
+  'Несохранённые правки пространства пропадут: форма перечитается с диска. Продолжить?': 'Unsaved changes to the space will be lost: the form reloads from disk. Continue?',
+  'Продолжить': 'Continue',
+  'Старая версия agentgraph дописала саммари тега {tag} после переноса ({time}). В контекст оно не идёт.': 'An older agentgraph version updated the summary of tag {tag} after the move ({time}). It isn’t sent to the model.',
+  'Показать саммари': 'Show the summary',
+  'Заменить состояние этим саммари: {path}': 'Replace the state with this summary: {path}',
+  'Саммари тега взято в состояние': 'The tag summary is now the state',
+  'Взять в состояние': 'Use as the state',
+  'Оставить состояние как есть; это саммари больше не показывать': 'Keep the state as it is and stop showing this summary',
+  'Скрыто': 'Hidden',
+  'Скрыть': 'Hide',
+  'Заголовок придумал ИИ: модель его не получает и видит пространство по слагу {slug}. Перепиши его или': 'AI made up this title: the model doesn’t get it and sees the space by its slug {slug}. Rewrite it or',
+  'Заголовок станет твоим и пойдёт в текст для модели': 'The title becomes yours and goes into the model’s text',
+  'Заголовок оставлен': 'Title kept',
+  'оставь как есть': 'keep it as is',
   'карта {n} ток. — по запросу': 'map {n} tok. — on request',
   '◇ {slug} — пространства больше нет: сессия получит контекст без него': '◇ {slug} — the space is gone: the session gets its context without it',
   'Модель видит пространство по слагу {slug}: заголовок «{title}» придумал ИИ, в её текст он не идёт': 'The model sees the space by its slug {slug}: the title “{title}” was made up by AI and isn’t sent to it',

@@ -53,6 +53,10 @@ test('«Обновить состояние»: только с простран�
   assert.deepEqual(canUpdateState({ space: 'p', newTurns: 0 }), { show: true, ok: false, why: 'Новых ходов с прошлого обновления нет' });
   assert.equal(canUpdateState({ space: 'p', newTurns: 2, updatingState: true }).ok, false);
   assert.equal(canUpdateState({ space: 'p', newTurns: 2 }).ok, true);
+  // ходы сделаны в прежнем пространстве — кнопка есть и без текущего; в удалённом или без пространства — некуда
+  assert.deepEqual(canUpdateState({ newTurns: 2, stateSpaces: ['a'] }), { show: true, ok: true, why: 'Сессия haiku перепишет состояние пространств a: каждому — ходы, сделанные в нём' });
+  assert.match(canUpdateState({ space: 'b', newTurns: 3, stateSpaces: ['a', 'b'] }).why, /пространств a, b/);
+  assert.equal(canUpdateState({ space: 'b', newTurns: 3, stateSpaces: [] }).ok, false);
 });
 
 test('состояние пространства: пишется, приложение закрыли, записано, ошибка; без пространства — ничего', () => {

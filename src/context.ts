@@ -9,11 +9,11 @@ import { CLAUDEAI_TOOL_PREFIX, NO_CLAUDEAI_CONNECTORS_ENV, sessionOptions } from
 import { connectorName, connectorToolName, isConnector, waitForConnectors } from './connectors.js';
 import { loadFlow, resolveFlowFile } from './flows.js';
 import { buildRequest, dirsTail, handoffTail, resolveAddDirs, resolvePlugins } from './runner.js';
-import { readSpace, spaceContext, spaceReadDirs, type Space } from './spaces.js';
+import { readSpace, spaceContext, spaceReadDirs, spacesDir, type Space } from './spaces.js';
 import { flowBlocks, flowPhases, isCallBlock, type Phase } from './schema.js';
 import { ARTIFACTS_DIR, artifactAccess, hasArtifacts } from './artifacts.js';
 import { RUNS_DIR } from './paths.js';
-import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, type Tag } from './tags.js';
+import { existingTagPaths, knowledgeBlock, knowledgeSection, readTag, tagsDir, type Tag } from './tags.js';
 import type { ContextFile, ContextFileSaved, ContextKnowledge, ContextPrompt, ContextPromptPart, ContextView, MemoryFile } from './api-types.js';
 
 export type ContextRequest = {
@@ -352,7 +352,13 @@ function realpath(p: string): string | undefined {
 
 const under = (file: string, dir: string) => file.startsWith(dir + path.sep);
 
-/** Запоминает файл листинга. Редактируемый: .md, не managed-политика, не из плагинов и кэша Claude Code. */
+/**
+ * Папки данных agentgraph: карта пространства и заметки тегов правятся только на их страницах (лимит, атомарная запись,
+ * проверка чужой правки, updatedAt в space.json), а не записью файла со страницы «Контекст».
+ */
+const dataDirs = () => [spacesDir(), tagsDir()].flatMap((d) => [d, realpath(d) ?? d]);
+
+/** Запоминает файл листинга. Редактируемый: .md, не managed-политика, не из плагинов и кэша Claude Code, не из папок данных agentgraph. */
 function remember(file: string, type: string): boolean {
   seen.add(path.resolve(file));
   const real = realpath(file);
@@ -360,7 +366,7 @@ function remember(file: string, type: string): boolean {
   listed.add(real);
   const base = claudeDir();
   const ro = [path.join(base, 'plugins'), path.join(base, 'cache')].flatMap((d) => [d, realpath(d) ?? d]);
-  const ok = real.endsWith('.md') && type !== 'Managed' && !ro.some((d) => under(real, d));
+  const ok = real.endsWith('.md') && type !== 'Managed' && !ro.some((d) => under(real, d)) && !dataDirs().some((d) => under(real, d));
   if (ok) editable.add(real);
   return ok;
 }
@@ -370,6 +376,9 @@ function allowed(file: string, set: Set<string>): string {
   if (real && set.has(real)) return real;
   // 404 — только файлу из листинга, иначе по ответу можно было бы проверить, есть ли на диске произвольный путь
   if (!real && file && seen.has(path.resolve(file))) throw new ContextError(404, `Файла уже нет: ${file}. Нажми «Обновить»`);
+  if (set === editable && real && listed.has(real) && dataDirs().some((d) => under(real, d))) {
+    throw new ContextError(403, 'Карту и документы пространства правят на его странице, заметки тега — на странице «Знания»: там лимит и проверка чужой правки');
+  }
   throw new ContextError(403, set === editable && real && listed.has(real)
     ? 'Этот файл не редактируется со страницы «Контекст»'
     : 'Файла нет в листинге контекста: нажми «Обновить» на странице «Контекст»');

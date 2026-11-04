@@ -187,6 +187,65 @@ test('превью совпадает с отправленным: текст Se
   assert.equal(v.space?.map.loaded, false);
 });
 
+test('смена пространства на ходу: ходы до смены уходят в состояние прежнего пространства, после — нового; ходы без пространства — в следующее выбранное', async () => {
+  createSpace('sw-a');
+  createSpace('sw-b');
+  const proj = path.join(root, 'proj');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: proj, space: 'sw-a' });
+  const token = tokenOf(spawned.at(-1)!);
+  const say = (prompt: string) => hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt });
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await say('ход-а-1');
+  await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'ответ-а-1' });
+  await say('ход-а-2');
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: 'sw-b' });
+  await say('ход-б-1');
+  assert.deepEqual((await view(s.id)).stateSpaces, ['sw-a', 'sw-b']);
+  const before = summaries.length;
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => (await view(s.id)).newTurns === 0 && !(await view(s.id)).updatingState);
+  const [a, b] = summaries.slice(before);
+  assert.equal(summaries.length - before, 2);
+  assert.ok(a.prompt.includes('Пространство: sw-a') && a.prompt.includes('ход-а-1') && a.prompt.includes('ход-а-2') && !a.prompt.includes('ход-б-1'), a.prompt);
+  assert.ok(b.prompt.includes('Пространство: sw-b') && b.prompt.includes('ход-б-1') && !b.prompt.includes('ход-а-'), b.prompt);
+  assert.match(readSpace('sw-a')!.state, /^состояние №/);
+  assert.match(readSpace('sw-b')!.state, /^состояние №/);
+  const v = await view(s.id);
+  assert.deepEqual([v.stateUpdate?.space, v.stateUpdate?.ok, v.stateSpaces], ['sw-b', true, []]);
+
+  // без пространства, потом выбрали — ходы уходят в выбранное (старое правило)
+  const { body: n } = await call<SessionView>('POST', '/api/sessions', { cwd: proj });
+  const t2 = tokenOf(spawned.at(-1)!);
+  await hook(n.id, t2, { hook_event_name: 'SessionStart', session_id: n.id });
+  await hook(n.id, t2, { hook_event_name: 'UserPromptSubmit', session_id: n.id, prompt: 'ход-без' });
+  assert.deepEqual((await view(n.id)).stateSpaces, []);
+  await call('PUT', `/api/sessions/${n.id}/space`, { space: 'sw-a' });
+  assert.deepEqual((await view(n.id)).stateSpaces, ['sw-a']);
+  await call('POST', `/api/sessions/${n.id}/end`);
+});
+
+test('удаление пространства: идущая сессия с ним — 409; завершённую отцепляет, и заведённое заново с тем же слагом её ходов не получит', async () => {
+  createSpace('del-x');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'del-x', saveState: false });
+  const token = tokenOf(spawned.at(-1)!);
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt: 'ход в x' });
+  const busy = await call<{ error: string }>('DELETE', '/api/spaces/del-x');
+  assert.equal(busy.status, 409);
+  assert.match(busy.body.error, /идущие сессии/);
+  assert.ok(readSpace('del-x'));
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => !(await view(s.id)).live);
+  assert.equal((await call('DELETE', '/api/spaces/del-x')).status, 200);
+  let v = await view(s.id);
+  assert.deepEqual([v.space, v.stateSpaces, v.newTurns], [undefined, [], 1]);
+  createSpace('del-x');
+  v = await view(s.id);
+  assert.deepEqual(v.stateSpaces, []);
+  assert.equal((await call('POST', `/api/sessions/${s.id}/state`)).status, 409);
+  assert.equal((await call<{ sessions: unknown[] }>('GET', '/api/spaces/del-x')).body.sessions.length, 0);
+});
+
 test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
   const before = spawned.length;
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'нет') })).status, 400);
@@ -631,7 +690,9 @@ test('старая завершённая сессия с тегами зада�
   assert.deepEqual(second.spaceSessions('lg-b').map((x) => [x.id, x.legacy]), [[id, undefined]]);
   second.setSpace(id, { space: null });
   assert.deepEqual([second.spaceSessions('lg-a'), second.spaceSessions('lg-b')], [[], []]);
-  assert.equal('legacyTaskTags' in JSON.parse(fs.readFileSync(path.join(dir, id, 'session.json'), 'utf8')), false);
+  const rec = JSON.parse(fs.readFileSync(path.join(dir, id, 'session.json'), 'utf8'));
+  // теги задач для пометки на --resume остаются: контекст тега мог остаться в транскрипте
+  assert.deepEqual(['legacyTaskTags' in rec, rec.preSpacesTags], [false, ['lg-a', 'lg-b']]);
 });
 
 test('остановка сервера прерывает идущее обновление состояния: сессия haiku гасится, ходы не учтены, пометка «приложение закрыли»', async () => {

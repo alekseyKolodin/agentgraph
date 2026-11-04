@@ -297,7 +297,7 @@ test(
     assert.match(text, /^Контекст agentgraph для этой сессии: пространство и теги знаний\./);
     assert.ok(text.includes('Пространство agentgraph «Корзина» (checkout)'));
     assert.match(text, /уже в контексте как память/);
-    assert.ok(text.includes(path.join(spaceDir('checkout'), 'docs', 'spec.md')));
+    assert.ok(text.includes(`Документы пространства в ${path.join(spaceDir('checkout'), 'docs')} (открывай инструментом Read, когда нужны): spec.md (`), text);
     assert.ok(text.includes('<source-data>\n**Суть** валидация\n</source-data>'));
     assert.match(text, /space_write/);
     assert.ok(text.includes('knowledge_read') && text.includes('- api: Когда трогаешь API'));
@@ -319,7 +319,7 @@ test(
     const ctx = ctxOf('s', ['big']);
     const text = sessionContext(ctx, 's');
     assert.ok(text.length <= CONTEXT_BUDGET, String(text.length));
-    assert.ok(text.includes('…и ещё 25:'), 'документы — пять и «ещё»');
+    assert.ok(text.includes('…и ещё 25.'), 'документы — пять и «ещё»');
     assert.ok(text.includes('yyyy'), 'тег целиком ещё влезает');
     const tight = sessionContext(ctx, 's', 2500);
     assert.ok(tight.includes('Документов пространства: 30'));
@@ -378,6 +378,12 @@ test(
     assert.ok(out.additionalContext.includes('- a: описания нет'));
     assert.deepEqual(r.patch, { claudeSessionIds: [OLD, NEW], transcriptPath: `/t/${NEW}.jsonl`, started: true, status: 'waiting' });
     assert.deepEqual(r.delivered, { space: 'feat', tags: ['a'] });
+    // --resume сессии до пространств: в транскрипте выше — контекст её тега задачи от прошлой версии, он устарел
+    const text = (o: Partial<HookState>, source: string) =>
+      (handleHook(state({ space: 'feat', launchSpace: 'feat', ...o }), { hook_event_name: 'SessionStart', source }, deps()).reply.hookSpecificOutput as { additionalContext: string }).additionalContext;
+    assert.ok(text({ preSpacesTags: ['feat'] }, 'resume').startsWith('В разговоре выше может быть контекст тегов задач (feat) от прошлой версии agentgraph: он устарел'));
+    assert.ok(!text({ preSpacesTags: ['feat'] }, 'startup').includes('прошлой версии'));
+    assert.ok(!text({}, 'resume').includes('прошлой версии'));
   }),
 );
 

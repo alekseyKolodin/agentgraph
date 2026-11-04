@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configDir } from './settings.js';
 import type {
-  DenialReason, Space, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
+  DenialReason, LegacySummary, Space, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
 } from './api-types.js';
 import { wrapData } from './intake.js';
 import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
@@ -49,6 +49,10 @@ export const SPACE_HISTORY_RUNS = 20;
 export const SPACE_HISTORY_SESSIONS = 10;
 /** Сколько документов перечислить в контексте; остальные — строкой «ещё N». */
 export const DOCS_LIST_MAX = 30;
+/** Этапу — меньше: раздел идёт в каждый этап каждой итерации, справочное — по запросу. */
+export const PHASE_DOCS_MAX = 10;
+/** Раздел пространства в промпте этапа не длиннее (у сессии — бюджет хука): дальше короче папки, потом документы. */
+export const PHASE_SPACE_MAX = 6000;
 /** Типы документов, которые правятся текстом (в UI); space_write пишет только .md и .txt. */
 export const TEXT_DOC_EXTS = ['md', 'txt', 'csv', 'json', 'log', 'yaml', 'yml', 'xml'];
 export const WRITE_DOC_EXTS = ['md', 'txt'];
@@ -137,7 +141,7 @@ export function readSpaceMeta(slug: string): SpaceMeta | undefined {
   const title = typeof raw.title === 'string' ? cleanLine(raw.title, SPACE_TITLE_MAX) : '';
   const dirs = strList(raw.dirs).filter((d) => path.isAbsolute(d));
   const cwd = typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined;
-  const from = raw.migratedFrom as { tag?: unknown; at?: unknown } | undefined;
+  const from = raw.migratedFrom as { tag?: unknown; at?: unknown; summaryMtimeMs?: unknown } | undefined;
   return {
     slug,
     ...(title ? { title } : {}),
@@ -147,7 +151,9 @@ export function readSpaceMeta(slug: string): SpaceMeta | undefined {
     ...(dirs.length ? { dirs } : {}),
     ...(cwd ? { cwd } : {}),
     history: readUpdates(raw.history),
-    ...(from && typeof from.tag === 'string' && typeof from.at === 'string' ? { migratedFrom: { tag: from.tag, at: from.at } } : {}),
+    ...(from && typeof from.tag === 'string' && typeof from.at === 'string'
+      ? { migratedFrom: { tag: from.tag, at: from.at, ...(Number.isFinite(from.summaryMtimeMs) ? { summaryMtimeMs: Number(from.summaryMtimeMs) } : {}) } }
+      : {}),
   };
 }
 
@@ -181,15 +187,17 @@ function docTitle(file: string): string | undefined {
 }
 
 /**
- * Документы пространства: обычные файлы прямо в docs/, по имени. Ссылки, папки и скрытые файлы пропускаются: список идёт
- * в контекст, и ссылка из docs/ наружу не должна стать «документом». Папка docs/ — ссылка — документов нет.
+ * Документы пространства: обычные файлы прямо в docs/, по имени (подпапки не перечисляются: что в них — пусть скажет
+ * карта). Ссылки, папки, скрытые файлы и имена с управляющими и невидимыми символами пропускаются: список идёт в
+ * контекст, и ни ссылка из docs/ наружу, ни имя с переводом строки (файл положили мимо API) не должны стать «документом».
+ * Папка docs/ — ссылка — документов нет.
  */
 export function listDocs(slug: string): SpaceDoc[] {
   const dir = docsDir(slug);
   if (!fs.lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return [];
   const out: SpaceDoc[] = [];
   for (const name of fs.readdirSync(dir).sort()) {
-    if (name.startsWith('.')) continue;
+    if (name.startsWith('.') || !plainDocName(name)) continue;
     const file = path.join(dir, name);
     const st = fs.lstatSync(file, { throwIfNoEntry: false });
     if (!st?.isFile()) continue;
@@ -431,7 +439,7 @@ export class SpaceError extends Error {
  * mtimeMs файла, с которого начали правку (0 — файла не было): файл с тех пор изменился (сессия в папке пространства,
  * сессия состояния) — 409, правка не пишется.
  */
-export type SpacePatch = { title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; mapBase?: unknown; stateBase?: unknown };
+export type SpacePatch = { title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; mapBase?: unknown; stateBase?: unknown; legacySummary?: unknown; keepTitle?: unknown };
 
 export function updateSpace(slug: string, patch: SpacePatch): Space | undefined {
   const meta = readSpaceMeta(slug);
@@ -459,16 +467,43 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
     throw new SpaceError(400, (err as Error).message);
   }
   const title = patch.title === undefined ? meta.title : cleanLine(patch.title as string, SPACE_TITLE_MAX);
+  // саммари тега, которое дописала старая версия: взять в состояние (с той же проверкой чужой правки) или скрыть
+  if (patch.legacySummary !== undefined && patch.legacySummary !== 'import' && patch.legacySummary !== 'dismiss') throw new SpaceError(400, 'legacySummary — import или dismiss');
+  const legacy = patch.legacySummary !== undefined ? legacySummaryOf(meta) : undefined;
+  if (patch.legacySummary === 'import' && !legacy) throw new SpaceError(409, 'Саммари тега не менялось после переноса: брать нечего');
+  if (patch.legacySummary === 'import' && patch.state !== undefined) throw new SpaceError(400, 'state и legacySummary: import — что-то одно');
+  if (patch.legacySummary === 'import' && changed(stateFile(slug), patch.stateBase)) {
+    throw new SpaceError(409, 'Состояние переписали, пока ты его смотрел: перечитай и реши заново');
+  }
   if (map !== undefined) writeAtomic(mapFile(slug), map.trim() ? map.trimEnd() + '\n' : '');
-  if (patch.state !== undefined) {
-    const state = (patch.state as string).trim();
+  const newState = patch.legacySummary === 'import' ? legacy!.text : (patch.state as string | undefined);
+  if (newState !== undefined) {
+    const state = newState.trim();
     writeAtomic(stateFile(slug), state ? clampState(state) + '\n' : '');
   }
-  // переписанный руками заголовок — уже текст пользователя
-  const autoTitle = meta.autoTitle && title === meta.title;
-  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, ...rest } = meta;
-  writeMeta({ ...rest, ...(title ? { title } : {}), ...(autoTitle ? { autoTitle: true as const } : {}), ...(dirs?.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), updatedAt: new Date().toISOString() });
+  // переписанный руками заголовок — уже текст пользователя; keepTitle — «оставить как есть» без правки текста
+  const autoTitle = meta.autoTitle && title === meta.title && patch.keepTitle !== true;
+  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, migratedFrom, ...rest } = meta;
+  const from = migratedFrom && legacy ? { ...migratedFrom, summaryMtimeMs: legacy.mtimeMs } : migratedFrom;
+  writeMeta({ ...rest, ...(title ? { title } : {}), ...(autoTitle ? { autoTitle: true as const } : {}), ...(dirs?.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), ...(from ? { migratedFrom: from } : {}), updatedAt: new Date().toISOString() });
   return readSpace(slug)!;
+}
+
+/**
+ * Саммари тега задачи, которое изменилось после переноса: старая версия agentgraph (откат, другой checkout на той же
+ * папке настроек) дописывает его, а перенос был разовым снимком. Сравнивается mtime: с учтённым (summaryMtimeMs), а у
+ * пространства, перенесённого до этой отметки, — с временем переноса.
+ */
+export function legacySummaryOf(meta: Pick<SpaceMeta, 'migratedFrom'>): LegacySummary | undefined {
+  const from = meta.migratedFrom;
+  if (!from || !SPACE_SLUG_RE.test(from.tag)) return undefined;
+  const file = path.join(tagsDir(), from.tag, 'summary.md');
+  const st = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!st?.isFile()) return undefined;
+  const seen = from.summaryMtimeMs ?? Date.parse(from.at);
+  if (!(st.mtimeMs > seen + 1)) return undefined;
+  const text = readText(file).trim();
+  return text ? { path: file, text: clampState(text), mtimeMs: st.mtimeMs } : undefined;
 }
 
 export function deleteSpace(slug: string): boolean {
@@ -508,6 +543,9 @@ export function docName(raw: unknown): string {
   return name;
 }
 
+/** Имя файла годится в список документов: без папок, управляющих и невидимых символов, угловых скобок. */
+const plainDocName = (name: string): boolean => name === path.basename(name) && !/[\u0000-\u001f\u007f-\u009f\p{Zl}\p{Zp}\p{Cf}<>\\/]/u.test(name);
+
 /**
  * Имя уже лежащего документа — для чтения и удаления: одно имя файла без папок, «..», скрытых, управляющих и невидимых
  * символов. Мягче docName в одном: зарезервированное имя (AGENTS.md, загруженный до того, как имя закрыли) открывается и
@@ -516,7 +554,7 @@ export function docName(raw: unknown): string {
 function existingDocName(raw: unknown): string {
   if (typeof raw !== 'string' || !raw.trim()) throw new SpaceError(400, 'Нужно имя документа');
   const name = raw.trim();
-  if (name !== path.basename(name) || name.startsWith('.') || /[\u0000-\u001f\u007f\p{Zl}\p{Zp}\p{Cf}<>\\/]/u.test(name)) {
+  if (name.startsWith('.') || !plainDocName(name)) {
     throw new SpaceError(400, `Неверное имя документа «${cleanLine(name, 80)}»`);
   }
   return name;
@@ -659,9 +697,21 @@ export type SpaceContextOpts = {
   where: 'session' | 'phase';
   /** Карта уже загружена памятью: папка пространства была в --add-dir (доп. директориях) при старте процесса. */
   mapLoaded: boolean;
-  /** Сколько документов перечислить; остальные — строкой «ещё N». 0 — только число документов. */
+  /** Сколько документов назвать; остальные — «ещё N». 0 — только число. По умолчанию: сессии — 30, этапу — 10. */
   docsMax?: number;
 };
+
+/**
+ * Документы одной строкой: папка и имена с размером, дальше — «ещё N». Заголовков нет: заголовок — первая строка файла,
+ * её мог написать кто угодно (space_write, Write в «Сессии в папке»), а строка идёт вне обёртки source-data.
+ */
+function docsLine(space: Space, max: number): string {
+  const dir = path.join(space.dir, DOCS_DIR);
+  const docs = space.docs;
+  if (max <= 0) return `Документов пространства: ${docs.length}, в ${dir} — открывай инструментом Read, когда нужны (какой когда — в карте).`;
+  const shown = docs.slice(0, max).map((d) => `${cleanLine(d.name, 200)} (${kb(d.size)})`);
+  return `Документы пространства в ${dir} (открывай инструментом Read, когда нужны): ${shown.join(', ')}${docs.length > max ? `, …и ещё ${docs.length - max}` : ''}.`;
+}
 
 /**
  * Текст модели или недоверенный текст перед обёрткой source-data. wrapData (intake.ts) обезвреживает только ASCII-вариант
@@ -680,32 +730,37 @@ const STATE_NOTE =
 
 /**
  * Единственный составитель текста пространства для модели — хука сессии, раздела промпта этапа и предпросмотра:
- * шапка, карта (уже память или «прочитай»), документы списком, папки, правило записи, состояние данными.
+ * шапка, карта (уже память или «прочитай»), документы строкой, папки, правило записи, состояние данными. Этапу — не
+ * длиннее PHASE_SPACE_MAX: сначала короче список папок, потом документы — только числом.
  */
 export function spaceContext(space: Space, o: SpaceContextOpts): string {
-  const lines = [`Пространство agentgraph ${spaceTitle(space)} — фича или проект, в котором идёт эта работа. Папка пространства: ${space.dir}`];
-  const hasMap = Boolean(space.map.trim());
-  if (!hasMap) lines.push('Карты (CLAUDE.md) у пространства ещё нет.');
-  else if (o.mapLoaded) lines.push(`Её ${MAP_FILE} — карта пространства (суть, где что, договорённости): она уже в контексте как память.`);
-  else lines.push(`Карта пространства — ${path.join(space.dir, MAP_FILE)} (суть, где что, договорённости): прочитай её инструментом Read, прежде чем браться за работу.`);
-  const docs = space.docs;
-  const max = Math.max(0, o.docsMax ?? DOCS_LIST_MAX);
-  if (docs.length && max > 0) {
-    lines.push('Документы пространства (открывай инструментом Read, когда нужны):');
-    for (const d of docs.slice(0, max)) lines.push(`- ${path.join(space.dir, DOCS_DIR, d.name)}${d.title ? ` — «${d.title}»` : ''} (${kb(d.size)})`);
-    if (docs.length > max) lines.push(`- …и ещё ${docs.length - max}: ${path.join(space.dir, DOCS_DIR)}`);
-  } else if (docs.length) lines.push(`Документов пространства: ${docs.length}, в ${path.join(space.dir, DOCS_DIR)} (открывай инструментом Read, когда нужны).`);
   const paths = existingSpacePaths(space).listed;
-  if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.join(', ')}`);
-  lines.push(
-    o.where === 'session'
-      ? `Папка пространства только для чтения: карту и состояние правит пользователь на странице пространства, документ в ${DOCS_DIR}/ записывай инструментом ${SPACE_WRITE_TOOL} (спросит пользователя).`
-      : 'Папка пространства только для чтения: состояние после запуска запишет agentgraph.',
-  );
-  const state = clampState(space.state);
-  if (state) lines.push(STATE_NOTE, wrapModelData(defuseMarkers(state)));
-  else lines.push('Состояния ещё нет: его запишет agentgraph после первой сессии или запуска с пространством.');
-  return lines.join('\n');
+  const docsMax = Math.max(0, o.docsMax ?? (o.where === 'phase' ? PHASE_DOCS_MAX : DOCS_LIST_MAX));
+  const build = (dirsMax: number, docs: number): string => {
+    const lines = [`Пространство agentgraph ${spaceTitle(space)} — фича или проект, в котором идёт эта работа. Папка пространства: ${space.dir}`];
+    const hasMap = Boolean(space.map.trim());
+    if (!hasMap) lines.push('Карты (CLAUDE.md) у пространства ещё нет.');
+    else if (o.mapLoaded) lines.push(`Её ${MAP_FILE} — карта пространства (суть, где что, договорённости): она уже в контексте как память.`);
+    else lines.push(`Карта пространства — ${path.join(space.dir, MAP_FILE)} (суть, где что, договорённости): прочитай её инструментом Read, прежде чем браться за работу.`);
+    if (space.docs.length) lines.push(docsLine(space, docs));
+    if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.slice(0, dirsMax).join(', ')}${paths.length > dirsMax ? `, …и ещё ${paths.length - dirsMax}` : ''}`);
+    lines.push(
+      o.where === 'session'
+        ? `Папка пространства только для чтения: карту и состояние правит пользователь на странице пространства, документ в ${DOCS_DIR}/ записывай инструментом ${SPACE_WRITE_TOOL} (спросит пользователя).`
+        : 'Папка пространства только для чтения: состояние после запуска запишет agentgraph.',
+    );
+    const state = clampState(space.state);
+    if (state) lines.push(STATE_NOTE, wrapModelData(defuseMarkers(state)));
+    else lines.push('Состояния ещё нет: его запишет agentgraph после первой сессии или запуска с пространством.');
+    return lines.join('\n');
+  };
+  let text = build(paths.length, docsMax);
+  if (o.where !== 'phase') return text;
+  for (const [dirs, docs] of [[5, docsMax], [0, docsMax], [0, 0]] as const) {
+    if (text.length <= PHASE_SPACE_MAX) break;
+    text = build(dirs, docs);
+  }
+  return text;
 }
 
 // --- guard этапов: папки данных agentgraph только для чтения
@@ -809,6 +864,31 @@ export function mapFromTag(tag: Pick<Tag, 'slug' | 'title' | 'autoTitle' | 'note
   return `${tag.title && !tag.autoTitle ? `# ${cleanLine(tag.title, SPACE_TITLE_MAX)}\n\n` : ''}${notes}\n`;
 }
 
+/** Резервные копии до пространств: <папка настроек>/backups/pre-spaces/tags/<слаг> — папка тега задачи как была. */
+export const backupsDir = () => path.join(configDir(), 'backups', 'pre-spaces');
+
+/**
+ * Копия папки тега задачи перед переносом — один раз: перенос папку тега не трогает, но копия переживёт её правку
+ * старой версией и даст вернуться. Ссылки и не обычные файлы не копируются. Не вышло — перенос всё равно идёт.
+ */
+function backupTag(slug: string): void {
+  const dst = path.join(backupsDir(), 'tags', slug);
+  if (fs.existsSync(dst)) return;
+  try {
+    fs.cpSync(path.join(tagsDir(), slug), dst, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      filter: (src) => {
+        const st = fs.lstatSync(src, { throwIfNoEntry: false });
+        return Boolean(st && (st.isDirectory() || st.isFile()));
+      },
+    });
+  } catch (err) {
+    console.error(`перенос тега ${slug}: резервная копия не записалась —`, (err as Error).message);
+  }
+}
+
 /** Одно пространство из тега: собирается во временной папке и встаёт на место одним rename — наполовину перенесённых нет. */
 function migrateTag(tag: Tag, at: string): void {
   const root = spacesDir();
@@ -823,7 +903,7 @@ function migrateTag(tag: Tag, at: string): void {
       updatedAt: tag.updatedAt,
       ...(tag.dirs?.length ? { dirs: tag.dirs } : {}),
       history: tag.runs.map(fromTagRun),
-      migratedFrom: { tag: tag.slug, at },
+      migratedFrom: { tag: tag.slug, at, summaryMtimeMs: fs.statSync(path.join(tagsDir(), tag.slug, 'summary.md'), { throwIfNoEntry: false })?.mtimeMs ?? 0 },
     };
     fs.writeFileSync(path.join(tmp, META_FILE), JSON.stringify(meta, null, 2) + '\n');
     const map = mapFromTag(tag);
@@ -879,6 +959,7 @@ export function migrateTaskTags(o: { force?: boolean } = {}): string[] {
     if (!tag || tag.kind !== 'task') continue;
     try {
       if (!fs.existsSync(path.join(root, name))) {
+        backupTag(name);
         migrateTag(tag, at);
         moved.push(name);
       }
@@ -976,7 +1057,8 @@ export function spacesListReply(work: Map<string, { at: string; path?: string; f
 export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions' | 'workdir'> = () => ({ runs: [], sessions: [] })): ApiReply {
   try {
     const s = readSpace(slug);
-    return s ? { status: 200, body: { ...s, ...extra(s) } satisfies SpaceDetail } : notFound(slug);
+    const legacySummary = s ? legacySummaryOf(s) : undefined;
+    return s ? { status: 200, body: { ...s, ...extra(s), ...(legacySummary ? { legacySummary } : {}) } satisfies SpaceDetail } : notFound(slug);
   } catch (err) {
     return bad(err);
   }
@@ -1031,6 +1113,8 @@ export function spaceWarnings(s: Space): string[] {
   if (s.docs.length > DOCS_LIST_MAX) out.push(`Документов ${s.docs.length}: в контекст попадёт список первых ${DOCS_LIST_MAX}.`);
   const missing = (s.dirs ?? []).filter((d) => !fs.existsSync(d));
   if (missing.length) out.push(`Нет на диске: ${missing.join(', ')} — эти папки пространства пропускаются.`);
+  const legacy = legacySummaryOf(s);
+  if (legacy) out.push(`Саммари тега ${s.migratedFrom!.tag} изменилось после переноса (его дописывает старая версия agentgraph на той же папке настроек): ${legacy.path}. В контекст оно не идёт — возьми его в состояние на вкладке «Состояние» или скрой там.`);
   return out;
 }
 

@@ -3,10 +3,13 @@
 // правки по ревью, конфликты) не описывали работу заново. Сессия терминала («Сессии», sessions-server.ts) обновляет
 // состояние так же — по журналу ходов, при выходе и кнопкой (ниже). Раньше это было саммари тега задачи.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { ARTIFACTS_DIR } from './artifact-store.js';
+import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
+import { canonical, isInside, type PathProbe } from './artifacts.js';
+import { configDir } from './settings.js';
 import { stripTagBlocks } from './tags.js';
-import { DOCS_DIR, MAP_FILE, spaceTitle, wrapModelData, type Space } from './spaces.js';
+import { DOCS_DIR, existingSpacePaths, MAP_FILE, spaceTitle, wrapModelData, type Space } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { RunReport } from './runner.js';
 
@@ -42,6 +45,42 @@ const SECTIONS = [
   '- **Ключевые решения** — то, что не видно из кода и нельзя потерять;',
   '- **Что осталось / известные проблемы**;',
 ];
+
+/** Путь у инструментов чтения сессии состояния; у Grep и Glob без path — рабочая папка. */
+const READ_PATH: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path' };
+
+/**
+ * Guard сессии состояния. На входе у неё недоверенный текст (задача из тикета, ходы сессии с ответами модели), а её
+ * ответ уходит в каждую следующую сессию и этап пространства: инъекция не должна переписать в состояние чужой файл.
+ * Читать можно только внутри allow (проект, папка запуска, папка и папки пространства) и никогда — секреты: папку
+ * настроек agentgraph (токен Jira; сама папка пространства — можно), настройки Claude Code, ~/.ssh, ~/.aws, ~/.gnupg,
+ * ~/.netrc. Grep и Glob по папке, внутри которой секрет (рабочая папка — ~), — тоже нет: они искали бы и в нём. Шаблон
+ * Glob — только относительный, без «..», «~» и фигурных скобок. Пути — по realpath, как у guard этапа.
+ */
+export function stateReadGuard(allow: string[], spaceDir: string, probe: Pick<PathProbe, 'realpath'> = nodeProbe): (tool: string, input: Record<string, unknown>, ctx?: { cwd: string }) => string | undefined {
+  const home = os.homedir();
+  const roots = allow.map((d) => canonical(d, '/', probe));
+  const own = canonical(spaceDir, '/', probe);
+  const secrets = [configDir(), process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), ...['.ssh', '.aws', '.gnupg', '.netrc'].map((d) => path.join(home, d))]
+    .map((d) => canonical(d, '/', probe));
+  return (tool, input, ctx) => {
+    const key = READ_PATH[tool];
+    if (!key) return undefined;
+    const cwd = ctx?.cwd || process.cwd();
+    const raw = input[key];
+    if (tool === 'Glob') {
+      const pattern = input.pattern;
+      if (typeof pattern === 'string' && (path.isAbsolute(pattern) || pattern.startsWith('~') || /[{}]/.test(pattern) || pattern.split(/[\\/]/).includes('..'))) {
+        return 'Шаблон Glob — относительный, без «..», «~» и фигурных скобок: сессия состояния читает только папки проекта, запуска и пространства.';
+      }
+    }
+    const p = canonical(typeof raw === 'string' && raw.trim() ? raw : cwd, cwd, probe);
+    if (isInside(p, own)) return undefined;
+    if (secrets.some((d) => isInside(p, d) || (tool !== 'Read' && isInside(d, p)))) return `${p}: настройки и секреты сессии состояния не читаются.`;
+    if (!roots.some((d) => isInside(p, d))) return `Сессия состояния читает только папку проекта, папку запуска и папки пространства: ${p} вне них.`;
+    return undefined;
+  };
+}
 
 /** Промпт: прошлое состояние и задача (без старых блоков тегов) — как данные; где искать результат — от нас. */
 export function spaceStatePrompt(report: RunReport, space: Pick<Space, 'slug' | 'title' | 'autoTitle' | 'dir' | 'map' | 'docs'>, prevState: string): string {
@@ -85,6 +124,7 @@ export function spaceStateRequest(report: RunReport, space: Space, prevState: st
     additionalDirectories: [report.runDir, space.dir],
     system: SYSTEM,
     tools: ['Read', 'Grep', 'Glob'],
+    guard: stateReadGuard([report.cwd, report.runDir, space.dir, ...(report.worktree ? [report.worktree.path] : []), ...existingSpacePaths(space).dirs], space.dir),
     implicitTools: [],
     model: opts.model,
     maxTurns: 15,
@@ -191,6 +231,7 @@ export function sessionStateRequest(
     additionalDirectories: [space.dir],
     system: SYSTEM,
     tools: ['Read', 'Grep', 'Glob'],
+    guard: stateReadGuard([s.cwd, space.dir, ...existingSpacePaths(space).dirs], space.dir),
     implicitTools: [],
     model: opts.model,
     maxTurns: 15,

@@ -205,6 +205,27 @@ export function SpacesScreen() {
     await load(s.slug);
   };
 
+  /**
+   * Действие без правки формы — взять саммари тега в состояние, скрыть его, оставить заголовок ИИ: сервер пишет сам, форма
+   * перечитывается (несохранённое пропало бы — сначала спросим).
+   */
+  const quick = async (patch: Parameters<typeof saveSpace>[1], done: string) => {
+    const s = cur.current.space;
+    if (!s) return;
+    if (dirtyNow() && !(await askConfirm(t('Несохранённые правки пространства пропадут: форма перечитается с диска. Продолжить?'), { ok: t('Продолжить') }))) return;
+    const my = ++seq.current;
+    try {
+      await saveSpace(s.slug, patch);
+      await load(s.slug, my);
+      setMsg({ cls: 'msg', text: done });
+      void qc.invalidateQueries({ queryKey: keys.spaces });
+    } catch (err) {
+      if (my !== seq.current) return;
+      setConflict(err instanceof ApiError && err.status === 409);
+      setMsg({ cls: 'msg err', text: errorText(err) });
+    }
+  };
+
   const remove = async () => {
     const s = cur.current.space;
     if (!s) return;
@@ -329,6 +350,7 @@ export function SpacesScreen() {
               onSave={() => void save()}
               onReload={() => void reload()}
               onRemove={() => void remove()}
+              onQuick={(patch, done) => void quick(patch, done)}
               onDocs={(docs) => setSpace((s) => (s ? { ...s, docs } : s))}
               onDocDirty={(d) => (docDirty.current = d)}
             />
@@ -354,11 +376,13 @@ type EditorProps = {
   onSave: () => void;
   onReload: () => void;
   onRemove: () => void;
+  /** Запись без правки формы (саммари тега, «оставить заголовок»): done — что сказать после. */
+  onQuick: (patch: Parameters<typeof saveSpace>[1], done: string) => void;
   onDocs: (docs: SpaceDoc[]) => void;
   onDocDirty: (dirty: boolean) => void;
 };
 
-function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onDocs, onDocDirty }: EditorProps) {
+function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onQuick, onDocs, onDocDirty }: EditorProps) {
   const home = useConfig().data?.home;
   const reveal = useFeature('reveal');
   const toast = useToast();
@@ -434,6 +458,21 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
           )}
           {tab === 'state' && (
             <div className={styles.tabBody}>
+              {s.legacySummary && s.migratedFrom && (
+                <div className={styles.legacy} role="status">
+                  <p className="small">
+                    {t('Старая версия agentgraph дописала саммари тега {tag} после переноса ({time}). В контекст оно не идёт.', { tag: s.migratedFrom.tag, time: feedTime(new Date(s.legacySummary.mtimeMs).toISOString()) })}
+                  </p>
+                  <details>
+                    <summary className="small">{t('Показать саммари')}</summary>
+                    <pre className={styles.mono}>{s.legacySummary.text}</pre>
+                  </details>
+                  <span className="row">
+                    <button type="button" className="btn small" title={t('Заменить состояние этим саммари: {path}', { path: s.legacySummary.path })} onClick={() => onQuick({ legacySummary: 'import', stateBase: s.stateMtimeMs ?? 0 }, t('Саммари тега взято в состояние'))}>{t('Взять в состояние')}</button>
+                    <button type="button" className="btn small ghost" title={t('Оставить состояние как есть; это саммари больше не показывать')} onClick={() => onQuick({ legacySummary: 'dismiss' }, t('Скрыто'))}>{t('Скрыть')}</button>
+                  </span>
+                </div>
+              )}
               <p className={cx('muted small', styles.hint)}>{stateByText(s)}</p>
               <textarea name="state" className={styles.mono} rows={14} spellCheck={false} placeholder={t('Суть · Где код · Ключевые решения · Что осталось · Где читать подробнее')} value={form.state} onChange={(e) => edit('state', e.target.value)} />
               <div className={styles.fieldFoot}>
@@ -451,6 +490,12 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
           {tab === 'settings' && (
             <div className={styles.tabBody}>
               <label><span>{t('Заголовок')}</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
+              {s.autoTitle && (
+                <p className="muted small">
+                  {t('Заголовок придумал ИИ: модель его не получает и видит пространство по слагу {slug}. Перепиши его или', { slug: s.slug })}{' '}
+                  <button type="button" className="btn small ghost" disabled={form.title !== (s.title ?? '')} title={t('Заголовок станет твоим и пойдёт в текст для модели')} onClick={() => onQuick({ keepTitle: true }, t('Заголовок оставлен'))}>{t('оставь как есть')}</button>
+                </p>
+              )}
               <label>
                 <span title={t('Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Пусто — папка последней сессии или запуска в нём')}>{t('Рабочая папка')}</span>
                 <div className="path-field">

@@ -11,9 +11,15 @@ const enc = encodeURIComponent;
 export const fetchSpaces = () => api<{ spaces: SpaceListItem[] }>('GET', '/api/spaces');
 export const fetchSpace = (slug: string) => api<SpaceDetail>('GET', `/api/spaces/${enc(slug)}`);
 export const createSpace = (body: { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string }) => api<Space>('POST', '/api/spaces', body);
-/** mapBase и stateBase — mtimeMs файла, с которого начали правку (0 — файла не было): изменили снаружи — 409. */
-export const saveSpace = (slug: string, patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number }) =>
-  api<Space>('PUT', `/api/spaces/${enc(slug)}`, patch);
+/**
+ * mapBase и stateBase — mtimeMs файла, с которого начали правку (0 — файла не было): изменили снаружи — 409.
+ * legacySummary — саммари тега, дописанное старой версией: взять в состояние или скрыть; keepTitle — оставить
+ * заголовок, придуманный ИИ, как есть (он станет заголовком пользователя).
+ */
+export const saveSpace = (
+  slug: string,
+  patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number; legacySummary?: 'import' | 'dismiss'; keepTitle?: true },
+) => api<Space>('PUT', `/api/spaces/${enc(slug)}`, patch);
 export const deleteSpace = (slug: string) => api<{ ok: true }>('DELETE', `/api/spaces/${enc(slug)}`);
 export const fetchSpaceContext = (slug: string) => api<SpaceContextView>('GET', `/api/spaces/${enc(slug)}/context`);
 /** Документ грузится сразу на сервер: типы и лимиты — как у вложений запуска. data — base64. */

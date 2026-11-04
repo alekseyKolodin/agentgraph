@@ -51,6 +51,10 @@
 .tab-count { margin-left: 6px; font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .tab-body { display: flex; flex-direction: column; gap: 10px; }
 .hint { margin: 0; max-width: 760px; }
+/* саммари тега от старой версии: ждёт решения — жёлтая кромка «ждёт тебя», без заливки */
+.legacy { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-left: 3px solid var(--st-wait); border-radius: var(--r-sm); padding: 8px 10px; background: var(--panel); }
+.legacy p { margin: 0; }
+.legacy pre { margin: 6px 0 0; padding: 8px 10px; background: var(--well); border-radius: var(--r-sm); white-space: pre-wrap; max-height: 240px; overflow: auto; }
 .mono { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.5; }
 .field-foot { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .field-foot > :first-child { max-width: 680px; }

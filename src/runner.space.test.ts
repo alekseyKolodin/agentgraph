@@ -109,7 +109,7 @@ test(
     });
     const stage = f.phases()[0];
     assert.match(stage.prompt, /^сделай задача\n\nПространство agentgraph «Пуш» \(p\)/);
-    assert.ok(stage.prompt.includes(path.join(spaceDir('p'), 'docs', 'spec.md')));
+    assert.ok(stage.prompt.includes(`Документы пространства в ${path.join(spaceDir('p'), 'docs')} (открывай инструментом Read, когда нужны): spec.md (`), stage.prompt);
     assert.match(stage.prompt, /<source-data>\nСуть: пуш\n<\/source-data>$/);
     assert.match(stage.prompt, /уже в контексте как память/);
     assert.ok(!stage.prompt.includes('space_write'));

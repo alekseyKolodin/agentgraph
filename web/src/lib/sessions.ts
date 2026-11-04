@@ -110,10 +110,14 @@ export function osc52Text(data: string): string | null {
 }
 
 /** Кнопка «Обновить состояние»: есть ли она (нужно пространство), можно ли нажать и почему нет. */
-export function canUpdateState(s: Pick<SessionView, 'space' | 'spaceChip' | 'updatingState' | 'newTurns'>): { show: boolean; ok: boolean; why: string } {
-  if (!s.space || s.spaceChip?.missing) return { show: false, ok: false, why: '' };
+export function canUpdateState(s: Pick<SessionView, 'space' | 'spaceChip' | 'updatingState' | 'newTurns' | 'stateSpaces'>): { show: boolean; ok: boolean; why: string } {
+  // куда уйдут ходы, считает сервер (по пространству, где сделан ход); старый сервер — в текущее пространство
+  const spaces = s.stateSpaces ?? (s.space && !s.spaceChip?.missing ? [s.space] : []);
+  if (!spaces.length && (!s.space || s.spaceChip?.missing)) return { show: false, ok: false, why: '' };
   if (s.updatingState) return { show: true, ok: false, why: t('Состояние уже пишется') };
   if (!s.newTurns) return { show: true, ok: false, why: t('Новых ходов с прошлого обновления нет') };
+  if (!spaces.length) return { show: true, ok: false, why: t('Новые ходы сделаны без пространства или в удалённом: записать их некуда') };
+  if (spaces.length > 1 || spaces[0] !== s.space) return { show: true, ok: true, why: t('Сессия haiku перепишет состояние пространств {list}: каждому — ходы, сделанные в нём', { list: spaces.join(', ') }) };
   return { show: true, ok: true, why: t('Сессия haiku перепишет состояние пространства по ходам после прошлого обновления') };
 }
 
