@@ -349,6 +349,8 @@ test(
     fs.symlinkSync(spaceDir('p'), path.join(proj, 'link'));
     assert.ok(guard('Edit', { file_path: 'link/CLAUDE.md' }, { cwd: proj }));
     assert.ok(guard('Write', { file_path: path.relative(proj, path.join(spaceDir('p'), 'STATE.md')) }, { cwd: proj }));
+    // обратный слэш — часть имени (posix): «..» в нём ни Claude Code, ни ядро не разбирают
+    assert.ok(guard('Write', { file_path: path.join(spaceDir('p'), '.claude', 'rules', 'a\\..\\..\\..\\..\\tmp\\z.md') }));
     // проект и папка пространства внутри проекта — можно; чтение и Bash guard не ловит
     assert.equal(guard('Write', { file_path: path.join(proj, 'a.ts') }), undefined);
     assert.equal(guard('Write', { file_path: path.join(proj, 'sub', 'b.ts') }), undefined);
