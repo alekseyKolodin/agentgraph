@@ -105,3 +105,10 @@
 .dot.wait { background: var(--st-wait); border-color: var(--st-wait); }
 /* вкладка «Документы» живёт и скрытой (открытый документ переживает переключение вкладок): display из .tab-body не должен её показать */
 .tab-body[hidden] { display: none; }
+
+/* черновик с моделью: призыв на пустой карте, кнопка в подсказке, «Предложить пространства» над списком */
+.draft-call { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; border: 1px dashed var(--line-strong); border-radius: var(--r-sm); padding: 10px 12px; }
+.draft-call p { margin: 0; flex: 1 1 360px; }
+.inline-btn { padding: 1px 8px; vertical-align: baseline; }
+.propose { align-self: flex-start; }
+.editor-form > :global(.tabs)[hidden] { display: none; }

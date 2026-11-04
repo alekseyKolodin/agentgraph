@@ -3,7 +3,7 @@
 // папке пространства, удалить), вкладки «Карта» (CLAUDE.md), «Состояние» (STATE.md), «Документы», «Контекст» (что
 // уходит модели) и «Настройки» (заголовок, папки); сессии и запуски пространства — колонкой справа или ниже.
 // Каждое открытие страницы (переход, в том числе на тот же адрес) перечитывает список и пространство с сервера.
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, matchPath, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SpaceDetail, SpaceDoc } from '@server/api-types';
@@ -25,6 +25,9 @@ import {
   dirLines, docLine, fieldCount, filterSpaces, itemsCount, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText,
   spaceFormOf, spaceItems, spaceLabel, spaceMetaLine, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, stateByText, type SpaceForm,
 } from '../../lib/spaces';
+import { DraftPanel, draftSetupOf, openDraft } from './DraftPanel';
+import { GROUPS, groups } from './draftStore';
+import { GroupsPanel } from './GroupsPanel';
 import styles from './Spaces.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -46,6 +49,7 @@ export function SpacesScreen() {
   const qc = useQueryClient();
   const { askConfirm } = useConfirm();
   const sessionsOn = useFeature('sessions');
+  const draftsOn = useFeature('space-drafts');
   const spacesQuery = useSpaces(true);
 
   // как у «Знаний»: поиск, форма нового и вкладка переживают уход с экрана и возврат
@@ -55,6 +59,10 @@ export function SpacesScreen() {
   const [newMsg, setNewMsg] = useState<Msg>(NO_MSG);
   const [focusNew, setFocusNew] = useState(0);
   const slugInput = useRef<HTMLInputElement>(null);
+  /** Панель справа без открытого пространства: черновик нового с моделью или «Предложить пространства». */
+  const [panel, setPanel] = useMemoryState<'new' | 'groups' | null>('spaces.panel', null);
+  /** Пространство, у которого вместо вкладок открыт черновик карты с моделью. */
+  const [draftFor, setDraftFor] = useMemoryState<string | null>('spaces.draftFor', null);
 
   /** Открытое пространство с сервера, поля формы и снимок полей на момент загрузки/сохранения. */
   const [space, setSpace] = useState<SpaceDetail | null>(null);
@@ -175,6 +183,18 @@ export function SpacesScreen() {
       setNewMsg({ cls: 'msg err', text: errorText(err) });
     }
   };
+
+  /** Черновик нового пространства с моделью: то, что уже вписано в форму, — его ввод (идущий черновик не сбрасывается). */
+  const draftNew = () => {
+    openDraft('new', draftSetupOf(undefined, { slug: ns.slug.trim(), title: ns.title.trim(), about: ns.gist.trim(), cwd: (ns.cwd ?? '').trim(), dirs: ns.dirs }));
+    setNewOpen(false);
+    setPanel('new');
+    go();
+  };
+
+  /** Перед записью черновика существующего: несохранённые правки формы пропадут (форма перечитается). */
+  const confirmDiscard = async () =>
+    !dirtyNow() || askConfirm(t('Несохранённые правки пространства пропадут: форма перечитается с диска. Продолжить?'), { ok: t('Продолжить') });
 
   const save = async (ev?: FormEvent) => {
     ev?.preventDefault();
@@ -307,10 +327,26 @@ export function SpacesScreen() {
             </div>
             <div className="row">
               <button type="submit" className="btn">{t('Завести пространство')}</button>
+              {draftsOn && (
+                <button type="button" className="btn ghost" title={t('Модель изучит рабочую папку на чтение и напишет черновик карты и документов по сути и папкам из формы; ты посмотришь и создашь пространство сам')} onClick={draftNew}>
+                  {t('Черновик с моделью…')}
+                </button>
+              )}
               <button type="button" className="btn ghost" onClick={() => setNewOpen(false)}>{t('Отмена')}</button>
               <span className={newMsg.cls}>{newMsg.text}</span>
             </div>
           </form>
+          {draftsOn && (
+            <button
+              type="button"
+              className={cx('btn small ghost', styles.propose, panel === 'groups' && !slug && styles.on)}
+              title={t('Модель разложит сессии и запуски без пространства по работе и предложит пространства; создашь их ты')}
+              onClick={() => {
+                setPanel('groups');
+                go();
+              }}
+            >{t('Предложить пространства…')}</button>
+          )}
           <p className={cx('msg err', styles.listMsg)}>{spacesMsg}</p>
           <input
             className={styles.search}
@@ -359,6 +395,37 @@ export function SpacesScreen() {
               onDocDirty={(d) => {
                 docDirty.current = d;
               }}
+              onDraft={draftsOn ? () => setDraftFor(space.slug) : undefined}
+              draftPanel={
+                draftsOn && draftFor === space.slug ? (
+                  <DraftPanel
+                    space={space}
+                    onClose={() => setDraftFor(null)}
+                    confirmDiscard={confirmDiscard}
+                    onSaved={(s) => {
+                      setDraftFor(null);
+                      void load(s).then(() => setMsg({ cls: 'msg', text: t('Черновик сохранён') }));
+                    }}
+                  />
+                ) : null
+              }
+            />
+          ) : draftsOn && panel === 'new' && !slug ? (
+            <DraftPanel
+              onClose={() => setPanel(null)}
+              onSaved={(s) => {
+                setPanel(null);
+                go(s);
+              }}
+              onBackToGroups={() => setPanel('groups')}
+            />
+          ) : draftsOn && panel === 'groups' && !slug ? (
+            <GroupsPanel
+              onClose={() => {
+                groups.set(GROUPS, undefined);
+                setPanel(null);
+              }}
+              onOpenDraft={() => setPanel('new')}
             />
           ) : (
             <p className={cx(styles.empty, 'muted')}>{t('Выбери пространство в списке — откроются его карта, состояние, документы и все его сессии и запуски. Новое — кнопкой «+ Новое пространство»; его можно вписать и прямо в форме сессии или запуска.')}</p>
@@ -388,9 +455,13 @@ type EditorProps = {
   onLooseAdded: (ids: string[]) => void;
   onDocs: (docs: SpaceDoc[]) => void;
   onDocDirty: (dirty: boolean) => void;
+  /** Открыть черновик карты с моделью (фича space-drafts); нет — кнопки нет. */
+  onDraft?: () => void;
+  /** Открытый черновик: показывается вместо вкладок (документ во вкладке «Документы» не закрывается). */
+  draftPanel?: ReactNode;
 };
 
-function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onQuick, onLooseAdded, onDocs, onDocDirty }: EditorProps) {
+function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, sessionsOn, onSave, onReload, onRemove, onQuick, onLooseAdded, onDocs, onDocDirty, onDraft, draftPanel }: EditorProps) {
   const toast = useToast();
   const [adding, setAdding] = useState(false);
   /** Сессии без пространства из тех же папок — в это пространство (их ходы потом уйдут в его состояние). */
@@ -472,7 +543,8 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               {conflict && <button type="button" className="btn small" onClick={onReload}>{t('Перечитать с диска')}</button>}
             </div>
           )}
-          <div className="tabs" role="tablist" aria-label={t('Разделы пространства')} onKeyDown={onTabKey}>
+          {draftPanel}
+          <div className="tabs" role="tablist" aria-label={t('Разделы пространства')} onKeyDown={onTabKey} hidden={Boolean(draftPanel)}>
             {TABS.map(([id, label]) => (
               <button key={id} type="button" role="tab" data-space-tab={id} aria-selected={tab === id} aria-controls={`space-pane-${id}`} tabIndex={tab === id ? 0 : -1} className={cx('tab', tab === id && 'active')} onClick={() => setTab(id)}>
                 {label}
@@ -480,12 +552,21 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               </button>
             ))}
           </div>
-          {tab === 'map' && (
+          {!draftPanel && tab === 'map' && (
             <div id="space-pane-map" role="tabpanel" className={styles.tabBody}>
               {s.migratedFrom && !s.map.trim() && (
                 <p className={cx('small', styles.hint)}>{t('Карты нет: у тега задачи {tag} не было заметок. Опиши фичу здесь — суть, где код, куда за чем ходить — или открой «Сессию в папке»: Claude поможет, правки подтвердишь ты.', { tag: s.migratedFrom.tag })}</p>
               )}
-              <p className={cx('muted small', styles.hint)}>{t('CLAUDE.md пространства — карта: суть, где что, куда за чем ходить, договорённости. Claude Code загружает её памятью в каждую сессию и этап пространства, как CLAUDE.md репозитория. Держи её короткой: подробности — в документы, их агент откроет сам')}</p>
+              {onDraft && !s.map.trim() && (
+                <div className={styles.draftCall}>
+                  <p className="small">{t('Карты ещё нет. Модель может набросать её по описанию и проекту или по сессиям и запускам этого пространства: проверенные команды, устройство, подводные камни, куда за чем — и документы-навыки. Ты посмотришь черновик и сохранишь то, что верно.')}</p>
+                  <button type="button" className="btn small primary" onClick={onDraft}>{t('Черновик с моделью…')}</button>
+                </div>
+              )}
+              <p className={cx('muted small', styles.hint)}>
+                {t('CLAUDE.md пространства — карта: суть, где что, куда за чем ходить, договорённости. Claude Code загружает её памятью в каждую сессию и этап пространства, как CLAUDE.md репозитория. Держи её короткой: подробности — в документы, их агент откроет сам')}
+                {onDraft && s.map.trim() && <>{' '}<button type="button" className={cx('btn small ghost', styles.inlineBtn)} title={t('Модель перепишет карту по проекту или по сессиям и запускам; ты увидишь разницу с текущей и сохранишь выбранное')} onClick={onDraft}>{t('Черновик с моделью…')}</button></>}
+              </p>
               <textarea name="map" className={styles.mono} rows={18} spellCheck={false} placeholder={MAP_PLACEHOLDER} value={form.map} onChange={(e) => edit('map', e.target.value)} />
               <div className={styles.fieldFoot}>
                 <span className={cx('small', mapLong ? 'warn' : 'muted')}>{mapLong ? t('Карта длинная: она уходит в каждый запрос модели — вынеси подробности в документы') : t('Карту правишь ты; агент её не меняет — только сессия в папке пространства с твоим подтверждением')}</span>
@@ -493,7 +574,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               </div>
             </div>
           )}
-          {tab === 'state' && (
+          {!draftPanel && tab === 'state' && (
             <div id="space-pane-state" role="tabpanel" className={styles.tabBody}>
               {s.legacySummary && s.migratedFrom && (
                 <div className={styles.legacy} role="status">
@@ -522,9 +603,9 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               </div>
             </div>
           )}
-          <DocsTab key={s.slug} space={s} onDocs={onDocs} onDirty={onDocDirty} hidden={tab !== 'docs'} />
-          {tab === 'context' && <div id="space-pane-context" role="tabpanel"><ContextTab slug={s.slug} version={`${s.updatedAt}|${s.mapMtimeMs ?? 0}|${s.stateMtimeMs ?? 0}`} /></div>}
-          {tab === 'settings' && (
+          <DocsTab key={s.slug} space={s} onDocs={onDocs} onDirty={onDocDirty} hidden={tab !== 'docs' || Boolean(draftPanel)} />
+          {!draftPanel && tab === 'context' && <div id="space-pane-context" role="tabpanel"><ContextTab slug={s.slug} version={`${s.updatedAt}|${s.mapMtimeMs ?? 0}|${s.stateMtimeMs ?? 0}`} /></div>}
+          {!draftPanel && tab === 'settings' && (
             <div id="space-pane-settings" role="tabpanel" className={styles.tabBody}>
               <label><span>{t('Заголовок')}</span><input name="title" autoComplete="off" value={form.title} onChange={(e) => edit('title', e.target.value)} /></label>
               {s.autoTitle && (

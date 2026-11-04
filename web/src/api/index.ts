@@ -17,7 +17,7 @@ export {
 } from './run';
 export { addTagAttachment, createTag, deleteTag, deleteTagAttachment, fetchTags, saveTag } from './tags';
 export {
-  addSpaceDoc, createSpace, deleteSpace, deleteSpaceDoc, fetchModelContext, fetchSpace, fetchSpaceContext, fetchSpaceDoc, fetchSpaces, saveSpace, saveSpaceDoc, useModelContext,
-  useSpaces,
+  addSpaceDoc, createSpace, deleteSpace, deleteSpaceDoc, DraftError, draftSpace, estimateDraft, estimateGroups, fetchModelContext, fetchSpace, fetchSpaceContext, fetchSpaceDoc,
+  fetchSpaces, proposeSpaces, saveSpace, saveSpaceDoc, useModelContext, useSpaces,
 } from './spaces';
 export { fetchContext, fetchContextFile, saveContextFile } from './context';
