@@ -18,8 +18,8 @@ import type {
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
-import { knowledgeTags, readTag, runTagSlugs } from './tags.js';
-import { cleanLine, createSpace, existingSpacePaths, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS, SpaceError } from './spaces.js';
+import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
+import { cleanLine, createSpace, existingSpacePaths, META_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS, SpaceError } from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
 import { canonical, isInside, toolPath, WRITE_TOOLS } from './artifacts.js';
 import { nodeProbe } from './artifact-store.js';
@@ -793,7 +793,7 @@ export class SessionManager {
       readTargets: (ctx) => sessionReadTargets(ctx, this.deps.runsDir),
       realpath: safeRealpath,
       askDetail: (tool, args) => this.askDetail(s, tool, args),
-      writeGuard: (tool, args) => spaceWriteGuard(s.rec.cwd, tool, args),
+      writeGuard: (tool, args, toolCwd) => spaceWriteGuard(s.rec.cwd, tool, args, toolCwd),
     });
     const p = r.patch;
     if (p.claudeSessionIds) s.rec.claudeSessionIds = p.claudeSessionIds;
@@ -1114,20 +1114,31 @@ function newLive(rec: SessionRecord, status: SessionStatus): Live {
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
 /**
- * Запись сессии, открытой в папке пространства («Сессия в папке»): в папке пространств — только своё пространство.
- * Запреты в --settings — снимок на старте; пространство, заведённое потом, и новая папка в spaces/ ловятся здесь, в момент
- * вызова. Путь — по realpath, регистр не важен (APFS). Сессия не в папке пространства — undefined: решают правила.
+ * Запись сессии, открытой в папке пространства («Сессия в папке»): в папке пространств — только своё пространство, и в
+ * нём не .claude/ и не space.json; папка тегов знаний — нет. Запреты в --settings — снимок на старте и сверка строк;
+ * пространство, заведённое потом, новая папка в spaces/ и путь в другом регистре (APFS) ловятся здесь, в момент вызова.
+ * Путь — по realpath, относительный — от рабочей папки claude в момент вызова (toolCwd из входа хука). Сессия не в
+ * папке пространства — undefined: решают правила.
  */
-export function spaceWriteGuard(cwd: string, tool: string, input: Record<string, unknown>): string | undefined {
+export function spaceWriteGuard(cwd: string, tool: string, input: Record<string, unknown>, toolCwd?: string): string | undefined {
   const root = path.resolve(spacesDir());
   if (!WRITE_TOOLS.includes(tool) || !isInside(cwd, root) || cwd === root) return undefined;
   const own = path.join(root, path.relative(root, cwd).split(path.sep)[0]);
   const raw = toolPath(tool, input);
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
-  const fold = (p: string) => canonical(p, cwd, nodeProbe).normalize('NFC').toLowerCase();
+  const base = toolCwd && path.isAbsolute(toolCwd) ? toolCwd : cwd;
+  const fold = (p: string) => canonical(p, base, nodeProbe).normalize('NFC').toLowerCase();
   const p = fold(raw);
-  if (!isInside(p, fold(root)) || isInside(p, fold(own))) return undefined;
-  return `Сессия в папке пространства ${path.basename(own)} правит только его: ${raw} — в другом пространстве или в папке пространств. Другие пространства правят на их страницах в agentgraph.`;
+  if (isInside(p, fold(tagsDir()))) return `${raw} — в папке тегов знаний: теги правят на странице «Знания» в agentgraph.`;
+  if (!isInside(p, fold(root))) return undefined;
+  const mine = fold(own);
+  if (!isInside(p, mine)) {
+    return `Сессия в папке пространства ${path.basename(own)} правит только его: ${raw} — в другом пространстве или в папке пространств. Другие пространства правят на их страницах в agentgraph.`;
+  }
+  if (isInside(p, path.join(mine, '.claude')) || p === path.join(mine, META_FILE)) {
+    return `${raw} — настройки пространства: .claude/ грузится во все его сессии, а ${META_FILE} задаёт папки другим сессиям. Их правят в agentgraph, на странице пространства.`;
+  }
+  return undefined;
 }
 
 /** Новое пространство по слагу из формы; папка без space.json с чужими файлами — 409, как у POST /api/spaces. */

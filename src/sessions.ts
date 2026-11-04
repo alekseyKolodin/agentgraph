@@ -462,6 +462,8 @@ export type HookInput = {
   tool_input?: Record<string, unknown>;
   /** Режим разрешений в момент хука: default, plan, acceptEdits, auto… */
   permission_mode?: string;
+  /** Рабочая папка claude в момент хука: от неё — относительные пути инструментов. */
+  cwd?: string;
 };
 
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
@@ -473,7 +475,7 @@ export function parseHookInput(raw: unknown): HookInput | undefined {
   if (!event) return undefined;
   const input = r.tool_input && typeof r.tool_input === 'object' && !Array.isArray(r.tool_input) ? (r.tool_input as Record<string, unknown>) : undefined;
   const out: HookInput = { hook_event_name: event };
-  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode'] as const) {
+  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode', 'cwd'] as const) {
     const v = str(r[k]);
     if (v !== undefined) out[k] = v;
   }
@@ -529,7 +531,7 @@ export type HookDeps = {
   /** Подробности к вопросу PreToolUse: что сделает этот вызов (папка, пространство, режим новой сессии; какой документ). */
   askDetail?: (tool: string, input: Record<string, unknown>) => string | undefined;
   /** Запись файла (сессия в папке пространства): строка — отказ с этим объяснением; undefined — решают правила и режим. */
-  writeGuard?: (tool: string, input: Record<string, unknown>) => string | undefined;
+  writeGuard?: (tool: string, input: Record<string, unknown>, cwd?: string) => string | undefined;
 };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
@@ -587,7 +589,7 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       if (WRITE_TOOLS.includes(input.tool_name ?? '') && deps.writeGuard) {
         let deny: string | undefined;
         try {
-          deny = deps.writeGuard(input.tool_name!, input.tool_input ?? {});
+          deny = deps.writeGuard(input.tool_name!, input.tool_input ?? {}, input.cwd);
         } catch (err) {
           // упавшая проверка не пропускает запись
           deny = `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.`;

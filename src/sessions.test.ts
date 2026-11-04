@@ -243,6 +243,11 @@ test(
     assert.deepEqual(write(() => 'нельзя'), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'нельзя' } });
     assert.deepEqual(write(() => undefined), {});
     assert.match(JSON.stringify(write(() => { throw new Error('boom'); })), /Проверка записи не удалась \(boom\)/);
+    // рабочая папка claude из входа хука доходит до проверки: от неё — относительные пути
+    let seen: string | undefined;
+    const input = parseHookInput({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'a.md' }, cwd: '/sp/own/docs' })!;
+    handleHook(state(), input, { ...deps(), writeGuard: (_t, _i, cwd) => { seen = cwd; return undefined; } });
+    assert.equal(seen, '/sp/own/docs');
   }),
 );
 

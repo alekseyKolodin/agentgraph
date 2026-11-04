@@ -312,7 +312,7 @@ test('удаление пространства: идущая сессия, у �
   await until(async () => !(await view(s.id)).live && !(await view(s.id)).updatingState);
 });
 
-test('сессия в папке пространства: запись в пространство, заведённое после её старта, в новую папку и в другом регистре — отказ хука; своё — решают правила', () => {
+test('сессия в папке пространства: запись в пространство, заведённое после её старта, в новую папку, в своё .claude/ и space.json, в теги и в другом регистре — отказ хука; своё — решают правила', () => {
   createSpace('wg-alpha');
   const cwd = spaceDir('wg-alpha');
   createSpace('wg-gamma');
@@ -324,6 +324,19 @@ test('сессия в папке пространства: запись в пр�
     assert.match(w(p) ?? '', /правит только его/, p);
   }
   assert.equal(spaceWriteGuard(cwd, 'Read', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
+  // своё .claude/ и space.json — тоже отказ, и в другом регистре (правило в --settings сверяет строки)
+  for (const p of [path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.CLAUDE', 'skills', 'x', 'SKILL.md'), path.join(cwd, 'space.json'), path.join(cwd, 'SPACE.JSON'), '.claude/agents/a.md']) {
+    assert.match(w(p) ?? '', /настройки пространства/, p);
+  }
+  // папка тегов знаний — отказ в любом регистре
+  const tags = path.join(path.dirname(spaces), 'tags');
+  for (const p of [path.join(tags, 'qa', 'notes.md'), path.join(path.dirname(spaces), 'TAGS', 'qa', 'notes.md')]) {
+    assert.match(w(p) ?? '', /папке тегов знаний/, p);
+  }
+  // относительный путь — от рабочей папки claude в момент вызова (вход хука), а не от папки запуска
+  const docs = path.join(cwd, 'docs');
+  assert.match(spaceWriteGuard(cwd, 'Write', { file_path: '../../wg-gamma/CLAUDE.md' }, docs) ?? '', /правит только его/);
+  assert.equal(spaceWriteGuard(cwd, 'Write', { file_path: 'spec.md' }, docs), undefined);
   // сессия не в папке пространства — хук не мешает
   assert.equal(spaceWriteGuard(path.join(root, 'proj'), 'Write', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
 });
