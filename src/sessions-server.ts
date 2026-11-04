@@ -521,7 +521,8 @@ export class SessionManager {
       throw new SessionError(400, errMsg(err));
     }
     if (space && !readSpaceMeta(space)) newSpace(space);
-    if (space !== s.rec.space) s.rec.turnSpaces = withTurnSpace(s.rec, space);
+    // тот же слаг, но заведён заново (удалили мимо agentgraph) — тоже смена: ходы дальше — в новое
+    if (space !== s.rec.space || staleInstance(s.rec)) s.rec.turnSpaces = withTurnSpace(s.rec, space);
     if (space) s.rec.space = space;
     else delete s.rec.space;
     // пространство выбрали руками: сессия до пространств больше не числится за своими тегами задач (иначе она осталась
@@ -771,6 +772,9 @@ export class SessionManager {
   hook(s: Live, raw: unknown, res: ServerResponse): Record<string, unknown> {
     const input = parseHookInput(raw);
     if (!input) throw new SessionError(400, 'Это не вход хука Claude Code');
+    // пространство сессии завели заново с тем же слагом: новый ход — уже в нём (отрезок с этого хода, до счёта хода)
+    const reinstanced = input.hook_event_name === 'UserPromptSubmit' && staleInstance(s.rec);
+    if (reinstanced) s.rec.turnSpaces = withTurnSpace(s.rec, s.rec.space);
     const state: HookState = {
       ...(s.rec.space ? { space: s.rec.space } : {}),
       tags: s.rec.tags,
@@ -808,7 +812,7 @@ export class SessionManager {
       });
     }
     if (r.turn) this.appendTurn(s, r.turn);
-    if (p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
+    if (reinstanced || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
     this.changed(s);
     return r.reply;
   }
@@ -1150,6 +1154,18 @@ const turnSpacesOf = (r: SessionRecord): TurnSpace[] => (r.turnSpaces?.length ? 
 /** Сессия связана с пространством: выбрано сейчас, тег задачи до пространств или неотцеплённые прошлые ходы. */
 const spaceUsedBy = (r: SessionRecord, slug: string) =>
   r.space === slug || Boolean(r.legacyTaskTags?.includes(slug)) || Boolean(r.turnSpaces?.some((x) => x.space === slug && !x.gone));
+
+/**
+ * Пространство сессии есть, но это другой экземпляр, чем у отрезка текущих ходов (удалили мимо agentgraph и завели
+ * заново с тем же слагом). Отрезок без at (запись до экземпляров) не сверяется — как в stateGroups.
+ */
+function staleInstance(r: SessionRecord): boolean {
+  if (!r.space) return false;
+  const last = turnSpacesOf(r).at(-1)!;
+  if (last.space !== r.space || !last.at) return false;
+  const at = spaceInstance(r.space);
+  return at !== undefined && at !== last.at;
+}
 
 /** Отрезки после смены пространства на space с текущего хода; смена без новых ходов заменяет последний отрезок. */
 function withTurnSpace(r: SessionRecord, space: string | undefined): TurnSpace[] {

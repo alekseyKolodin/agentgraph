@@ -251,6 +251,36 @@ test('удаление пространства: идущая сессия с н
   assert.equal((await call<{ sessions: unknown[] }>('GET', '/api/spaces/del-x')).body.sessions.length, 0);
 });
 
+test('пространство удалили мимо agentgraph и завели заново с тем же слагом: новые ходы — в новое, старые туда не попадут; выбор того же слага — тоже смена', async () => {
+  createSpace('inst');
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: 'inst' });
+  const token = tokenOf(spawned.at(-1)!);
+  const say = (prompt: string) => hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt });
+  await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: s.id });
+  await say('ход-старый');
+  // удалили в Finder и завели снова: другой createdAt — другой экземпляр
+  fs.rmSync(spaceDir('inst'), { recursive: true, force: true });
+  await new Promise((r) => setTimeout(r, 5));
+  createSpace('inst');
+  assert.deepEqual((await view(s.id)).stateSpaces, []);
+  await say('ход-новый');
+  assert.deepEqual((await view(s.id)).stateSpaces, ['inst']);
+  // и выбор того же слага руками после пересоздания открывает новый отрезок
+  fs.rmSync(spaceDir('inst'), { recursive: true, force: true });
+  await new Promise((r) => setTimeout(r, 5));
+  createSpace('inst');
+  assert.deepEqual((await view(s.id)).stateSpaces, []);
+  await call('PUT', `/api/sessions/${s.id}/space`, { space: 'inst' });
+  await say('ход-третий');
+  assert.deepEqual((await view(s.id)).stateSpaces, ['inst']);
+  const before = summaries.length;
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => !(await view(s.id)).live && !(await view(s.id)).updatingState);
+  assert.equal(summaries.length - before, 1);
+  const prompt = summaries.at(-1)!.prompt;
+  assert.ok(prompt.includes('ход-третий') && !prompt.includes('ход-новый') && !prompt.includes('ход-старый'), prompt);
+});
+
 test('удаление пространства: идущая сессия, у которой оно было раньше, не мешает — её прошлые ходы отцепляются; не удалилось — сессии как были', async () => {
   createSpace('del-past');
   createSpace('del-now');
