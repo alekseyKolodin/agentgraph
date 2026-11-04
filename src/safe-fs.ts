@@ -85,18 +85,24 @@ const within = (p: string, root: string) => p === root || p.startsWith(root.ends
  * Так проверяются пути пространств и тегов знаний: они уходят в --add-dir и в «читать без вопроса» хука сессии.
  */
 export function tooBroadPath(p: string): string | undefined {
-  const home = path.resolve(os.homedir());
-  const cfg = path.resolve(configDir());
-  let real: string | undefined;
-  try {
-    real = fs.realpathSync.native(p);
-  } catch {
-    real = undefined;
-  }
-  for (const x of [path.resolve(p), ...(real ? [real] : [])]) {
+  // и дом, и папку настроек — тоже как есть и по realpath: папка настроек бывает ссылкой (на диск с синхронизацией)
+  const homes = asIsAndReal(os.homedir());
+  const cfgs = asIsAndReal(configDir());
+  for (const x of asIsAndReal(p)) {
     if (x === path.parse(x).root) return 'корень диска';
-    if (within(home, x)) return 'домашняя папка целиком';
-    if (within(cfg, x) || within(x, cfg)) return 'папка настроек agentgraph';
+    if (homes.some((home) => within(home, x))) return 'домашняя папка целиком';
+    if (cfgs.some((cfg) => within(cfg, x) || within(x, cfg))) return 'папка настроек agentgraph';
   }
   return undefined;
+}
+
+/** Путь как есть (абсолютный) и его realpath, если он есть и другой. */
+function asIsAndReal(p: string): string[] {
+  const abs = path.resolve(p);
+  try {
+    const real = fs.realpathSync.native(abs);
+    return real === abs ? [abs] : [abs, real];
+  } catch {
+    return [abs];
+  }
 }

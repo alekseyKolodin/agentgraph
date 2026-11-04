@@ -52,15 +52,49 @@ test('сессия состояния: читает только проект, �
     assert.match(guard('Read', { file_path: '/etc/hosts' }, { cwd: proj }) ?? '', /вне них/);
     assert.match(guard('Glob', { pattern: '../**' }, { cwd: proj }) ?? '', /относительный/);
     assert.match(guard('Glob', { pattern: '/etc/*' }, { cwd: proj }) ?? '', /относительный/);
-    // рабочая папка содержит папку настроек (как ~): Grep и Glob по ней искали бы и в токене
+    // рабочая папка содержит папку настроек (как ~): Grep и Glob по ней искали бы и в токене, а сама она не разрешена
     const home = stateReadGuard([root, spaceDir], spaceDir);
     assert.match(home('Grep', { pattern: 'token' }, { cwd: root }) ?? '', /секреты/);
-    assert.equal(home('Read', { file_path: path.join(proj, 'a.ts') }, { cwd: root }), undefined);
+    assert.match(home('Read', { file_path: path.join(proj, 'a.ts') }, { cwd: root }) ?? '', /вне них/);
+    assert.equal(home('Read', { file_path: path.join(spaceDir, 'STATE.md') }, { cwd: root }), undefined);
     // запросы сессий состояния несут guard
     assert.ok(sessionStateRequest(session, space({ dir: spaceDir }), '', [{ prompt: 'x' }], {}).guard);
   } finally {
     if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
     else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('сессия состояния, открытая в доме: ~/.claude.json и ключи не читаются, дом не разрешён — только папки запуска и пространства', () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-sthome-')));
+  const prev = { home: process.env.HOME, cfg: process.env.AGENTGRAPH_CONFIG_DIR, claude: process.env.CLAUDE_CONFIG_DIR };
+  // дом — временная папка (os.homedir() читает HOME), настройки agentgraph — в нём, как ~/.agentgraph
+  process.env.HOME = root;
+  process.env.AGENTGRAPH_CONFIG_DIR = path.join(root, '.agentgraph');
+  delete process.env.CLAUDE_CONFIG_DIR;
+  try {
+    const spaceDir = path.join(root, '.agentgraph', 'spaces', 'p');
+    const runDir = path.join(root, 'runs', 'r1');
+    for (const d of [spaceDir, runDir, path.join(root, 'notes')]) fs.mkdirSync(d, { recursive: true });
+    for (const f of ['.claude.json', '.git-credentials', '.npmrc']) fs.writeFileSync(path.join(root, f), 'secret');
+    const guard = stateReadGuard([root, runDir, spaceDir], spaceDir);
+    for (const f of ['.claude.json', '.git-credentials', '.npmrc', path.join('.config', 'gh', 'hosts.yml'), path.join('.kube', 'config')]) {
+      assert.match(guard('Read', { file_path: path.join(root, f) }, { cwd: root }) ?? '', /секреты/, f);
+    }
+    assert.match(guard('Read', { file_path: '~/.claude.json' }, { cwd: root }) ?? '', /секреты/);
+    assert.match(guard('Read', { file_path: path.join(root, 'notes', 'a.md') }, { cwd: root }) ?? '', /вне них/);
+    assert.equal(guard('Read', { file_path: path.join(runDir, 'run.json') }, { cwd: root }), undefined);
+    assert.equal(guard('Read', { file_path: path.join(spaceDir, 'STATE.md') }, { cwd: root }), undefined);
+    // $CLAUDE_CONFIG_DIR — там тоже .claude.json
+    process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude-alt');
+    const alt = stateReadGuard([runDir, spaceDir], spaceDir);
+    assert.match(alt('Read', { file_path: path.join(root, 'claude-alt', '.claude.json') }, { cwd: runDir }) ?? '', /секреты/);
+  } finally {
+    for (const [k, v] of [['HOME', prev.home], ['AGENTGRAPH_CONFIG_DIR', prev.cfg], ['CLAUDE_CONFIG_DIR', prev.claude]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -9,6 +9,7 @@ import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
 import { canonical, isInside, type PathProbe } from './artifacts.js';
 import { configDir } from './settings.js';
 import { stripTagBlocks } from './tags.js';
+import { tooBroadPath } from './safe-fs.js';
 import { DOCS_DIR, existingSpacePaths, MAP_FILE, spaceTitle, wrapModelData, type Space } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { RunReport } from './runner.js';
@@ -46,6 +47,9 @@ const SECTIONS = [
   '- **Что осталось / известные проблемы**;',
 ];
 
+/** Файлы и папки в доме с ключами и токенами: сессия состояния их не читает, даже если дом — её рабочая папка. */
+const SECRET_HOME_PATHS = ['.claude.json', '.ssh', '.aws', '.gnupg', '.netrc', '.git-credentials', '.npmrc', '.pgpass', '.docker', '.kube', path.join('.config', 'gh')];
+
 /** Путь у инструментов чтения сессии состояния; у Grep и Glob без path — рабочая папка. */
 const READ_PATH: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path' };
 
@@ -53,16 +57,20 @@ const READ_PATH: Record<string, string> = { Read: 'file_path', Grep: 'path', Glo
  * Guard сессии состояния. На входе у неё недоверенный текст (задача из тикета, ходы сессии с ответами модели), а её
  * ответ уходит в каждую следующую сессию и этап пространства: инъекция не должна переписать в состояние чужой файл.
  * Читать можно только внутри allow (проект, папка запуска, папка и папки пространства) и никогда — секреты: папку
- * настроек agentgraph (токен Jira; сама папка пространства — можно), настройки Claude Code, ~/.ssh, ~/.aws, ~/.gnupg,
- * ~/.netrc. Grep и Glob по папке, внутри которой секрет (рабочая папка — ~), — тоже нет: они искали бы и в нём. Шаблон
- * Glob — только относительный, без «..», «~» и фигурных скобок. Пути — по realpath, как у guard этапа.
+ * настроек agentgraph (токен Jira; сама папка пространства — можно), настройки и токены Claude Code (~/.claude,
+ * $CLAUDE_CONFIG_DIR, ~/.claude.json), ~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc и другие известные файлы с ключами. Папка из
+ * allow, которая открыла бы слишком много (дом, его предок, папка с папкой настроек — tooBroadPath), в разрешённые не
+ * идёт: сессия, открытая в ~, читает только папки запуска и пространства. Grep и Glob по папке, внутри которой секрет, —
+ * тоже нет: они искали бы и в нём. Шаблон Glob — только относительный, без «..», «~» и фигурных скобок. Пути — по
+ * realpath, как у guard этапа.
  */
 export function stateReadGuard(allow: string[], spaceDir: string, probe: Pick<PathProbe, 'realpath'> = nodeProbe): (tool: string, input: Record<string, unknown>, ctx?: { cwd: string }) => string | undefined {
   const home = os.homedir();
-  const roots = allow.map((d) => canonical(d, '/', probe));
+  // своя папка пространства лежит в папке настроек (tooBroadPath её отсеет) — её пропускает own ниже
+  const roots = allow.filter((d) => !tooBroadPath(d)).map((d) => canonical(d, '/', probe));
   const own = canonical(spaceDir, '/', probe);
-  const secrets = [configDir(), process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), ...['.ssh', '.aws', '.gnupg', '.netrc'].map((d) => path.join(home, d))]
-    .map((d) => canonical(d, '/', probe));
+  const claudeDirs = [path.join(home, '.claude'), ...(process.env.CLAUDE_CONFIG_DIR ? [process.env.CLAUDE_CONFIG_DIR] : [])];
+  const secrets = [configDir(), ...claudeDirs, ...SECRET_HOME_PATHS.map((d) => path.join(home, d))].map((d) => canonical(d, '/', probe));
   return (tool, input, ctx) => {
     const key = READ_PATH[tool];
     if (!key) return undefined;

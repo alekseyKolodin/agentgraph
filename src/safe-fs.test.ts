@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readHead, readRegular, UnsafeFileError, writeAtomic } from './safe-fs.js';
+import { readHead, readRegular, tooBroadPath, UnsafeFileError, writeAtomic } from './safe-fs.js';
 
 function withDir(fn: (dir: string) => void) {
   return () => {
@@ -59,5 +59,26 @@ test(
     assert.equal(fs.lstatSync(path.join(docs, 'x.md')).isFile(), true);
     assert.equal(fs.readFileSync(path.join(docs, 'x.md'), 'utf8'), 'новое');
     assert.deepEqual(fs.readdirSync(docs), ['x.md']);
+  }),
+);
+
+test(
+  'tooBroadPath: папка настроек — ссылка: её настоящая папка, предок и содержимое тоже слишком широки',
+  withDir((dir) => {
+    const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+    const real = path.join(dir, 'sync', 'agentgraph');
+    fs.mkdirSync(path.join(real, 'spaces'), { recursive: true });
+    fs.symlinkSync(real, path.join(dir, 'cfg'));
+    process.env.AGENTGRAPH_CONFIG_DIR = path.join(dir, 'cfg');
+    try {
+      for (const p of [real, path.join(dir, 'sync'), path.join(real, 'spaces'), path.join(dir, 'cfg', 'spaces')]) {
+        assert.equal(tooBroadPath(p), 'папка настроек agentgraph', p);
+      }
+      fs.mkdirSync(path.join(dir, 'proj'));
+      assert.equal(tooBroadPath(path.join(dir, 'proj')), undefined);
+    } finally {
+      if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+      else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    }
   }),
 );
