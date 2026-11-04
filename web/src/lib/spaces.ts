@@ -60,6 +60,39 @@ export function workdirNote(space: Pick<SpaceListItem, 'slug' | 'title'> | undef
   return wd.from === 'session' ? t('из пространства «{name}»: папка его последней сессии', { name }) : t('из пространства «{name}»: папка его последнего запуска', { name });
 }
 
+/**
+ * Папка формы и откуда она: from — слаг пространства, которое её подставило ('' — не пространство); touched — папку
+ * задали сами (вписали, выбрали, недавняя, ссылка «Сессия в папке»); locked — её дал «Запустить…» (проект задачи или MR)
+ * или подготовленный worktree.
+ */
+export type CwdState = { cwd: string; from: string; touched: boolean; locked?: boolean };
+
+/**
+ * Что станет с папкой, когда выбрали пространство slug (wd — его рабочая папка, её считает сервер). Рабочей папки нет —
+ * папка как была, без подписи. Папка уже та же — подпись «из пространства». Папку подставило другое пространство или
+ * её не трогали — подставить рабочую папку с подписью. Заданную самим, из «Запустить…» и worktree не трогать: под полем
+ * будет предложение «подставить» (workdirHint).
+ */
+export function pickWorkdir(slug: string, wd: SpaceWorkdir | undefined, st: CwdState): CwdState {
+  if (!wd) return { ...st, from: '' };
+  if (wd.path === st.cwd.trim()) return { ...st, from: slug.trim() };
+  if (!st.from && (st.touched || st.locked)) return st;
+  return { ...st, cwd: wd.path, from: slug.trim(), touched: false };
+}
+
+/** Под полем папки: подпись (папку подставило выбранное пространство) или предложение подставить его рабочую папку. */
+export function workdirHint(
+  space: string,
+  options: Pick<SpaceListItem, 'slug' | 'title' | 'workdir'>[],
+  st: Pick<CwdState, 'cwd' | 'from'>,
+): { note?: string; offer?: SpaceWorkdir; wd?: SpaceWorkdir } {
+  const slug = space.trim();
+  const wd = spaceWorkdir(slug, options);
+  if (!wd) return {};
+  if (wd.path !== st.cwd.trim()) return { wd, offer: wd };
+  return st.from === slug ? { wd, note: workdirNote(options.find((o) => o.slug === slug), slug, wd) } : { wd };
+}
+
 /** Строка списка выбора пространства. */
 export type PickerRow = { kind: 'space'; s: SpaceListItem; at: string } | { kind: 'none' } | { kind: 'new'; slug: string };
 
@@ -83,11 +116,15 @@ export function pickerRows(query: string, options: SpaceListItem[]): PickerRow[]
 const CHARS_PER_TOKEN = 3.2;
 const approx = (chars: number): string => `≈${ctxTokens(Math.round(chars / CHARS_PER_TOKEN))}`;
 
-/** Свёрнутая строка превью: «карта ≈1.2k ток. — памятью · состояние ≈600 ток. · документов: 3 · папок: 2 · знаний: 2». */
-export function modelSummary(v: Pick<ModelContextView, 'space' | 'knowledge'>): string {
+/**
+ * Свёрнутая строка превью: «карта ≈1.2k ток. — памятью · состояние ≈600 ток. · документов: 3 · папок: 2 · знаний: 2».
+ * У сессии карта бывает и по запросу: папка пространства внутри её рабочей папки (map.loaded = false).
+ */
+export function modelSummary(v: Pick<ModelContextView, 'space' | 'knowledge'>, where: 'session' | 'phase' = 'phase'): string {
   const parts: string[] = [];
   if (v.space) {
-    parts.push(v.space.map.chars ? t('карта {n} ток. — памятью', { n: approx(v.space.map.chars) }) : t('карты нет'));
+    const loaded = where === 'phase' || v.space.map.loaded !== false;
+    parts.push(v.space.map.chars ? (loaded ? t('карта {n} ток. — памятью', { n: approx(v.space.map.chars) }) : t('карта {n} ток. — по запросу', { n: approx(v.space.map.chars) })) : t('карты нет'));
     parts.push(v.space.state ? t('состояние {n} ток.', { n: approx(v.space.state.length) }) : t('состояния ещё нет'));
     if (v.space.docs.length) parts.push(t('документов: {n}', { n: v.space.docs.length }));
     if (v.space.dirs.length) parts.push(t('папок: {n}', { n: v.space.dirs.length }));

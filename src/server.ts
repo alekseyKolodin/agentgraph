@@ -37,7 +37,7 @@ import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
-import { modelContextReply } from './model-context.js';
+import { modelContextReply, spaceContextReply } from './model-context.js';
 import type { ContextFile, ContextFileSaved, ContextView } from './api-types.js';
 import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
@@ -82,7 +82,6 @@ import {
   spaceWorkdirOf,
   spaceWorkOf,
   type SpaceWork,
-  spaceContextReply,
   spaceDocReply,
   spaceReadDirs,
   spaceReply,
@@ -109,6 +108,8 @@ export type ServerOptions = {
   update?: boolean;
   /** Перезапуск процесса после автообновления, сервер останавливает сам; нет — UI просит перезапустить вручную. */
   restart?: Restart;
+  /** Раннер запусков: тесты API подменяют его, чтобы не звать настоящий Agent SDK. */
+  runFlow?: typeof runFlow;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -953,7 +954,7 @@ function startRun(
   const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
-  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv).id;
+  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined).id;
 }
 
 /**

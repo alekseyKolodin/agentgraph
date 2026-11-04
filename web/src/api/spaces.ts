@@ -23,13 +23,19 @@ export const fetchSpaceDoc = (slug: string, name: string) => api<SpaceDocText>('
 export const saveSpaceDoc = (slug: string, name: string, text: string, base: number) => api<SpaceDocText>('PUT', `/api/spaces/${enc(slug)}/docs/${enc(name)}`, { text, base });
 export const deleteSpaceDoc = (slug: string, name: string) => api<{ docs: SpaceDoc[] }>('DELETE', `/api/spaces/${enc(slug)}/docs/${enc(name)}`);
 
-/** «Модель получит»: что пространство (слаг; пусто — без него) и теги знаний дадут модели — точный текст и разбор. */
-export const fetchModelContext = (space: string, tags: string[]) =>
-  api<ModelContextView>('GET', `/api/model-context?${new URLSearchParams({ ...(space ? { space } : {}), ...(tags.length ? { tags: tags.join(',') } : {}) })}`);
+/**
+ * «Модель получит»: что пространство (слаг; пусто — без него) и теги знаний дадут модели — точный текст и разбор. cwd —
+ * рабочая папка сессии: от неё зависит, придёт ли карта памятью.
+ */
+export const fetchModelContext = (space: string, tags: string[], cwd = '') =>
+  api<ModelContextView>('GET', `/api/model-context?${new URLSearchParams({ ...(space ? { space } : {}), ...(tags.length ? { tags: tags.join(',') } : {}), ...(cwd ? { cwd } : {}) })}`);
 
-/** Превью «Модель получит» в формах и на экране сессии: перечитывается при смене пространства или тегов. */
-export function useModelContext(space: string, tags: string[], enabled: boolean) {
-  return useQuery({ queryKey: ['model-context', space, tags.join(',')], queryFn: () => fetchModelContext(space, tags), enabled, staleTime: 15_000 });
+/**
+ * Превью «Модель получит» в формах и на экране сессии: перечитывается при смене пространства, тегов или папки. Ключ — под
+ * keys.spaces: правка карты, состояния, документов и запись состояния снимают его вместе со списком пространств.
+ */
+export function useModelContext(space: string, tags: string[], cwd: string, enabled: boolean) {
+  return useQuery({ queryKey: [...keys.spaces, 'model-context', space, tags.join(','), cwd], queryFn: () => fetchModelContext(space, tags, cwd), enabled, staleTime: 15_000 });
 }
 
 /** GET /api/spaces: список для страницы и выбора пространства в формах. */

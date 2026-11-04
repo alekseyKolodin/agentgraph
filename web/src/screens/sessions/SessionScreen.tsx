@@ -100,6 +100,11 @@ function Session({ s }: { s: SessionView }) {
   useEffect(() => {
     if (s.live) setScreenOnly(false);
   }, [s.live]);
+  // состояние пространства записано (выход, «Обновить состояние»): «Модель получит» и список пространств — заново
+  const stateAt = s.stateUpdate?.ok ? s.stateUpdate.at : '';
+  useEffect(() => {
+    if (stateAt) void qc.invalidateQueries({ queryKey: keys.spaces });
+  }, [stateAt]);
   const tone = sessionTone(s);
   const update = canUpdateState(s);
   return (
@@ -218,7 +223,7 @@ function SessionModelPreview({ s }: { s: SessionView }) {
   const spacesQuery = useSpaces(useFeature('spaces'));
   const tagList = useTags(true).data?.tags;
   const tags = tagList ? s.tags.filter((x) => tagList.some((t) => t.slug === x)) : [];
-  return <ModelPreview className={styles.modelPreview} space={s.space ?? ''} tags={tags} where="session" options={spacesQuery.data?.spaces ?? []} loaded={!spacesQuery.isPending && Boolean(tagList)} />;
+  return <ModelPreview className={styles.modelPreview} space={s.space ?? ''} missing={s.spaceChip?.missing} tags={tags} where="session" cwd={s.cwd} options={spacesQuery.data?.spaces ?? []} loaded={!spacesQuery.isPending && Boolean(tagList)} />;
 }
 
 /**

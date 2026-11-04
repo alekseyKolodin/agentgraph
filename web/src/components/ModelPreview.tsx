@@ -1,11 +1,12 @@
 // «Модель получит» — один компонент для формы сессии, формы запуска и экрана сессии (.interface-design/system.md →
 // Model gets): что пространство и теги знаний дадут модели. Свёрнуто — строка-сводка; раскрыто — читаемо (карта, состояние
 // markdown, документы, папки, строка каждого тега знаний) или «как есть» — точный текст из GET /api/model-context, тем же
-// кодом, что сервер отправит. where: session — хук SessionStart, phase — хвост промпта каждого этапа.
-import { useState } from 'react';
+// кодом, что сервер отправит. where: session — хук SessionStart, phase — хвост промпта каждого этапа. Сервер без фичи
+// spaces (UI новее сервера) превью не отдаёт — его нет.
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import type { SpaceListItem } from '@server/api-types';
-import { errorText, useModelContext } from '../api';
+import { errorText, useFeature, useModelContext } from '../api';
 import { plural } from '../lib/format';
 import { t } from '../lib/i18n';
 import { docLine, modelSummary } from '../lib/spaces';
@@ -23,22 +24,41 @@ type Props = {
   options: SpaceListItem[];
   /** Список пространств загружен: до этого существующее нельзя отличить от нового. */
   loaded: boolean;
+  /** Рабочая папка сессии: от неё зависит, придёт ли карта памятью (папка пространства внутри неё — нет). */
+  cwd?: string;
+  /** Пространство сессии удалили: сессия получит контекст без него. */
+  missing?: boolean;
   className?: string;
 };
 
+/** Значение с задержкой: папку печатают по букве, а превью перечитывается по паузе. */
+function useSettled(value: string, ms = 400): string {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return v;
+}
+
 const chars = (n: number) => `${n} ${plural(n, 'знак', 'знака', 'знаков')}`;
 
-export function ModelPreview({ space, tags, where, options, loaded, className }: Props) {
-  const slug = space.trim();
+export function ModelPreview({ space, tags, where, options, loaded, cwd = '', missing, className }: Props) {
+  const on = useFeature('spaces');
+  const slug = missing ? '' : space.trim();
   const known = options.some((o) => o.slug === slug);
   const fresh = loaded && Boolean(slug) && !known;
-  const query = useModelContext(known ? slug : '', tags, loaded && Boolean((slug && known) || tags.length));
+  const dir = useSettled(where === 'session' ? cwd.trim() : '');
+  const query = useModelContext(known ? slug : '', tags, dir, on && loaded && Boolean((slug && known) || tags.length));
   const [raw, setRaw] = useState(false);
-  if (!slug && !tags.length) return null;
+  if (!on || (!slug && !tags.length && !missing)) return null;
   const v = query.data;
   const freshLine = fresh ? t('◇ {slug} — новое пространство: заведётся пустым, карты и состояния у него нет', { slug }) : '';
+  const missingLine = missing ? t('◇ {slug} — пространства больше нет: сессия получит контекст без него', { slug: space.trim() }) : '';
   const busy = !loaded || query.isFetching;
-  const summary = [freshLine, v ? modelSummary(v) : query.isError ? errorText(query.error) : busy ? t('загружаю…') : ''].filter(Boolean).join(' · ');
+  const what = v ? modelSummary(v, where) : query.isError ? errorText(query.error) : busy && (slug || tags.length) ? t('загружаю…') : '';
+  const summary = [missingLine, freshLine, what].filter(Boolean).join(' · ');
+  const mapLoaded = where === 'phase' || v?.space?.map.loaded !== false;
   const text = v ? (where === 'session' ? v.session : v.phase) : '';
   return (
     <details className={cx(styles.preview, className)}>
@@ -59,10 +79,17 @@ export function ModelPreview({ space, tags, where, options, loaded, className }:
             <div className={styles.readable}>
               {v.space && (
                 <>
+                  {v.space.autoTitle && (
+                    <p className="muted small">{t('Модель видит пространство по слагу {slug}: заголовок «{title}» придумал ИИ, в её текст он не идёт', { slug: v.space.slug, title: v.space.title })}</p>
+                  )}
                   <section>
                     <h4>{t('Карта')} <span className="mono">CLAUDE.md</span></h4>
                     <p>
-                      {v.space.map.chars ? t('Памятью, как CLAUDE.md репозитория · {n}', { n: chars(v.space.map.chars) }) : t('Карты нет: заполни её на странице пространства')}
+                      {!v.space.map.chars
+                        ? t('Карты нет: заполни её на странице пространства')
+                        : mapLoaded
+                          ? t('Памятью, как CLAUDE.md репозитория · {n}', { n: chars(v.space.map.chars) })
+                          : t('По запросу: папка пространства внутри рабочей папки, и Claude получит строку «прочитай карту» · {n}', { n: chars(v.space.map.chars) })}
                       {' '}<Link to={`/spaces/${encodeURIComponent(v.space.slug)}`}>{t('открыть пространство')}</Link>
                     </p>
                   </section>

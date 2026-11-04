@@ -26,7 +26,7 @@ import {
   recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
   worktreeRequest, type RunLink,
 } from '../../lib/run-form';
-import { spaceWorkdir, workdirNote } from '../../lib/spaces';
+import { pickWorkdir, spaceWorkdir, workdirHint } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
 import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm } from './formStore';
@@ -141,25 +141,20 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     cwdChanged();
   };
   /**
-   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём). Директорию, вписанную руками,
-   * пришедшую из «Запустить…» и подготовленный worktree не трогаем — под полем появится «подставить папку пространства».
+   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём) — правило pickWorkdir: директорию,
+   * вписанную руками, пришедшую из «Запустить…» и подготовленный worktree не трогаем, под полем будет «подставить».
    */
   const pickSpace = (slug: string) => {
-    setForm({ space: slug });
-    const wd = spaceWorkdir(slug, spaceList);
-    if (!wd || wd.path === runForm.cwd) return setForm({ cwdFrom: wd ? slug : '' });
-    if (runForm.cwdTouched || runForm.link?.worktree || runForm.link?.project) return;
-    setForm({ cwd: wd.path, cwdFrom: slug });
-    cwdChanged();
+    const next = pickWorkdir(slug, spaceWorkdir(slug, spaceList), { cwd: runForm.cwd, from: runForm.cwdFrom, touched: runForm.cwdTouched, locked: Boolean(runForm.link?.worktree || runForm.link?.project) });
+    setForm({ space: slug, cwd: next.cwd, cwdFrom: next.from, cwdTouched: next.touched });
+    if (next.cwd !== runForm.cwd) cwdChanged();
   };
   const applyWorkdir = (path: string) => {
     setForm({ cwd: path, cwdFrom: f.space.trim(), cwdTouched: false });
     cwdChanged();
   };
-  const workdir = spaceWorkdir(f.space, spaceList);
-  const cwdNote = f.cwdFrom && f.cwdFrom === f.space.trim() && workdir && workdir.path === f.cwd.trim() ? workdirNote(spaceList.find((x) => x.slug === f.cwdFrom), f.cwdFrom, workdir) : '';
-  // пространство выбрано, а директория своя: предложить его папку, не подставляя молча
-  const cwdOffer = !cwdNote && workdir && workdir.path !== f.cwd.trim() ? workdir : undefined;
+  // подпись «из пространства» или — пространство выбрано, а директория своя — предложение его папки, без молчаливой замены
+  const { note: cwdNote, offer: cwdOffer, wd: workdir } = workdirHint(f.space, spaceList, { cwd: f.cwd, from: f.cwdFrom });
 
   // ---------- вложения
   const readAttachments = async (files: File[]) => {
@@ -423,7 +418,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
       {cwdOffer && (
         <span className={cx('muted small', styles.cwdFrom)}>
-          {t('Папка пространства: {path}', { path: cwdOffer.path })}{' '}
+          {t('Рабочая папка пространства: {path}', { path: cwdOffer.path })}{' '}
           <button type="button" className="btn small ghost" title={f.link?.worktree ? t('Директория worktree отвяжется от запуска') : undefined} onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
         </span>
       )}

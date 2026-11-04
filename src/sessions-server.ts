@@ -190,14 +190,22 @@ export class SessionManager {
     }
     for (const name of names) {
       if (!ID_RE.test(name) || this.sessions.has(name)) continue;
-      const rec = readRecord(path.join(this.deps.dir, name, 'session.json'), name);
-      if (!rec) continue;
+      const file = path.join(this.deps.dir, name, 'session.json');
+      const read = readRecord(file, name);
+      if (!read) continue;
+      const { rec, legacy } = read;
       const s = newLive(rec, 'ended');
       if (!rec.endedAt) {
         rec.endedAt = rec.lastActivityAt;
         if (this.wantsState(s)) rec.statePending = 'app-closed';
+      }
+      // запись до пространств сохраняется в новом виде сразу: пространство, выведенное из тегов задач, не меняется от
+      // старта к старту (удалили пространство — сессия не переезжает в следующий тег). Прежний файл — рядом копией:
+      // старая версия agentgraph (откат, другой checkout на той же папке) читает теги задач оттуда
+      if (legacy || !read.ended) {
         // не записалось (нет прав, нет места) — сессия всё равно в списке, остальные тоже
         try {
+          if (legacy) backupLegacyRecord(file);
           this.save(s);
         } catch (err) {
           console.error(`сессия ${name}: не записалась —`, errMsg(err));
@@ -373,7 +381,8 @@ export class SessionManager {
     // CLAUDE.md ищется только в папках пространства и тегов: папка перетащенных файлов — не повод
     const proc = kit.spawn(bin, args, { name: 'xterm-256color', ...size, cwd: r.cwd, env: sessionEnv(this.deps.env(), dirs.addDirs.length > 1) });
     const pty = new PtySession(proc, kit.mirror(size.cols, size.rows), size);
-    // карта в памяти, только если папка пространства и правда ушла в --add-dir (не внутри cwd, без спецсимволов)
+    // карта в памяти, только если папка пространства и правда ушла в --add-dir (не внутри cwd, без спецсимволов) или
+    // сессия в самой папке пространства; то же правило показывает превью «Модель получит» (mapLoadedAt)
     const launchSpace = ctx.space && (dirs.addDirs.includes(ctx.space.dir) || isInside(r.cwd, ctx.space.dir)) ? ctx.space.slug : undefined;
     Object.assign(s, { pty, status: 'starting', injected: null, launchSpace, started: false, mode: undefined, trustNow: false, sawTrust: false, spawnedAt: Date.now(), lastHookAt: Date.now() });
     delete r.endedAt;
@@ -485,6 +494,9 @@ export class SessionManager {
     if (space && !readSpaceMeta(space)) createSpace(space);
     if (space) s.rec.space = space;
     else delete s.rec.space;
+    // пространство выбрали руками: сессия до пространств больше не числится за своими тегами задач (иначе она осталась
+    // бы на странице прежнего пространства, а её папка — его рабочей папкой)
+    delete s.rec.legacyTaskTags;
     this.save(s);
     this.changed(s);
     return this.view(s);
@@ -1023,12 +1035,24 @@ function isKnowledge(slug: string): boolean {
   }
 }
 
+/** Копия session.json до пространств — один раз, рядом: её читает старая версия agentgraph. */
+export const LEGACY_RECORD_FILE = 'session.pre-spaces.json';
+
+function backupLegacyRecord(file: string): void {
+  try {
+    fs.copyFileSync(file, path.join(path.dirname(file), LEGACY_RECORD_FILE), fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
+}
+
 /**
  * session.json с диска: битый или чужой (id не совпадает с папкой) — undefined, сессия не показывается. Запись до
- * пространств (без saveState): теги делятся по виду — первый тег задачи становится пространством (тег перенесён в
- * пространство с тем же слагом), все теги задач — legacyTaskTags; saveTag — saveState; итог саммари — итог состояния.
+ * пространств (без saveState, legacy): теги делятся по виду — первый тег задачи становится пространством (тег перенесён
+ * в пространство с тем же слагом), все теги задач — legacyTaskTags; saveTag — saveState; итог саммари — итог состояния.
+ * ended — в файле был endedAt.
  */
-export function readRecord(file: string, id: string): SessionRecord | undefined {
+export function readRecord(file: string, id: string): { rec: SessionRecord; legacy: boolean; ended: boolean } | undefined {
   let raw: Partial<SessionRecord> & LegacyRecord;
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof raw;
@@ -1052,7 +1076,7 @@ export function readRecord(file: string, id: string): SessionRecord | undefined 
     });
   }
   const state = legacy && summary && space ? legacyState(summary, space) : raw.stateUpdate;
-  return {
+  const rec: SessionRecord = {
     ...rest,
     id,
     name: typeof raw.name === 'string' ? raw.name : id.slice(0, 8),
@@ -1068,6 +1092,7 @@ export function readRecord(file: string, id: string): SessionRecord | undefined 
     ...(state ? { stateUpdate: state } : {}),
     ...(raw.statePending === 'app-closed' || summaryPending === 'app-closed' ? { statePending: 'app-closed' as const } : {}),
   };
+  return { rec, legacy, ended: typeof raw.endedAt === 'string' };
 }
 
 /** Итог саммари старой сессии как итог состояния её пространства (тег задачи с тем же слагом). */

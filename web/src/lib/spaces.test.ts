@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { Space, SpaceRun, SpaceSession } from '@server/api-types';
 import {
   dirLines, docLine, docSize, filterSpaces, itemsCount, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
-  modelSummary, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirNote,
+  modelSummary, pickWorkdir, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirHint, workdirNote,
+  type CwdState,
 } from './spaces';
 
 const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false, hasState: false });
@@ -89,6 +90,41 @@ test('рабочая папка пространства — посчитанн�
   assert.match(workdirNote(undefined, 'p', { path: '/x', from: 'session' }), /^из пространства «p»: папка его последней сессии$/);
 });
 
+test('рабочая папка в формах: подставить или нет — вручную, недавняя, «Запустить…», worktree, ссылка, смена пространства, пространство без папки', () => {
+  const opts = [
+    { slug: 'a', title: 'Альфа', workdir: { path: '/code/a', from: 'space' as const } },
+    { slug: 'b', title: '', workdir: { path: '/code/b', from: 'session' as const } },
+    { slug: 'c', title: '' },
+  ];
+  const wd = (slug: string) => spaceWorkdir(slug, opts);
+  const fresh: CwdState = { cwd: '/home/me', from: '', touched: false };
+  // папку не трогали (по умолчанию, запомненная, ?space= без &cwd=, когда пришёл список) — подставляется с подписью
+  const a = pickWorkdir('a', wd('a'), fresh);
+  assert.deepEqual(a, { cwd: '/code/a', from: 'a', touched: false });
+  assert.deepEqual(workdirHint('a', opts, a), { wd: { path: '/code/a', from: 'space' }, note: 'из пространства «Альфа»: его рабочая папка' });
+  // папку подставило пространство — другое пространство её меняет; без рабочей папки — папка остаётся, подпись снимается
+  assert.deepEqual(pickWorkdir('b', wd('b'), a), { cwd: '/code/b', from: 'b', touched: false });
+  const c = pickWorkdir('c', wd('c'), a);
+  assert.deepEqual(c, { cwd: '/code/a', from: '', touched: false });
+  assert.deepEqual(workdirHint('c', opts, c), {});
+  assert.deepEqual(pickWorkdir('b', wd('b'), c).cwd, '/code/b');
+  // вписали руками, выбрали «Выбрать…» или недавнюю, ссылка «Сессия в папке» (&cwd=) — не трогаем: предложение «подставить»
+  const own: CwdState = { cwd: '/mine', from: '', touched: true };
+  assert.deepEqual(pickWorkdir('a', wd('a'), own), own);
+  assert.deepEqual(workdirHint('a', opts, own), { wd: { path: '/code/a', from: 'space' }, offer: { path: '/code/a', from: 'space' } });
+  // «Запустить…» с проектом и worktree — тоже
+  const locked: CwdState = { cwd: '/wt/x', from: '', touched: false, locked: true };
+  assert.deepEqual(pickWorkdir('a', wd('a'), locked), locked);
+  // «подставить» (папка от пространства) — дальше её снова меняет выбор пространства, даже при «Запустить…»
+  assert.equal(pickWorkdir('b', wd('b'), { ...locked, cwd: '/code/a', from: 'a' }).cwd, '/code/b');
+  // своя папка совпала с рабочей (&cwd= со страницы пространства) — подпись «из пространства»
+  const same = pickWorkdir('b', wd('b'), { cwd: '/code/b', from: '', touched: true });
+  assert.deepEqual(same, { cwd: '/code/b', from: 'b', touched: true });
+  assert.match(workdirHint('b', opts, same).note ?? '', /папка его последней сессии/);
+  // папка та же, но подставило её не это пространство — ни подписи, ни предложения
+  assert.deepEqual(workdirHint('b', opts, { cwd: '/code/b', from: '' }), { wd: { path: '/code/b', from: 'session' } });
+  assert.deepEqual(workdirHint('', opts, fresh), {});
+});
 
 test('выбор пространства: свежие сверху по последней работе или обновлению, поиск; «+ новое» для нового слага — перед «без пространства»', () => {
   const a = { ...item('a', 'Альфа', 'суть альфы'), updatedAt: '2026-11-01T00:00:00Z', lastWorkAt: '2026-11-04T00:00:00Z' };
@@ -104,8 +140,12 @@ test('выбор пространства: свежие сверху по пос
 
 
 test('модель получит: строка-сводка — карта и состояние в токенах (оценка), документы, папки, знания; без пространства — только знания', () => {
-  const space = { slug: 'p', title: 'П', dir: '/c/p', map: { path: '/c/p/CLAUDE.md', chars: 3840 }, state: 'x'.repeat(640), docs: [{ name: 'a.md', size: 1, mtimeMs: 0, text: true }], dirs: ['/a', '/b'] };
+  const space = { slug: 'p', title: 'П', dir: '/c/p', map: { path: '/c/p/CLAUDE.md', chars: 3840, loaded: true }, state: 'x'.repeat(640), docs: [{ name: 'a.md', size: 1, mtimeMs: 0, text: true }], dirs: ['/a', '/b'] };
   assert.equal(modelSummary({ space, knowledge: [{ slug: 'qa', title: '', inline: false, text: '- qa' }] }), 'карта ≈1.2k ток. — памятью · состояние ≈200 ток. · документов: 1 · папок: 2 · знаний: 1');
+  // сессия в папке, которая содержит папку пространства (~): карта — строкой «прочитай»; этапу она приходит памятью всегда
+  const home = { space: { ...space, map: { ...space.map, loaded: false } }, knowledge: [] };
+  assert.match(modelSummary(home, 'session'), /^карта ≈1\.2k ток\. — по запросу/);
+  assert.match(modelSummary(home), /^карта ≈1\.2k ток\. — памятью/);
   assert.equal(modelSummary({ space: { ...space, map: { ...space.map, chars: 0 }, state: '', docs: [], dirs: [] }, knowledge: [] }), 'карты нет · состояния ещё нет');
   assert.equal(modelSummary({ knowledge: [{ slug: 'qa', title: '', inline: true, text: '' }] }), 'знаний: 1');
 });

@@ -8,6 +8,7 @@ import type { SessionRequest, SessionResult } from './agent.js';
 import type { FlowSpec } from './schema.js';
 import { addSpaceDoc, createSpace, readSpace, spaceDir, spaceReadDirs, updateSpace, writeSpaceState } from './spaces.js';
 import { dropRunPaths, isStateRequest } from './space-state.js';
+import { modelContext } from './model-context.js';
 
 const result = (text: string, over: Partial<SessionResult> = {}): SessionResult =>
   ({ ok: true, subtype: 'success', text, costUsd: 0.01, turns: 1, durationMs: 10, errors: [], ...over });
@@ -93,6 +94,8 @@ test(
     createSpace('p', { title: 'Пуш', dirs: [extra] });
     addSpaceDoc('p', { name: 'spec.md', data: Buffer.from('# Спека').toString('base64') });
     writeSpaceState('p', 'Суть: пуш', { id: 'r0', at: '', kind: 'run' });
+    // «Модель получит» до запуска: после него сессия состояния перепишет состояние
+    const preview = modelContext({ space: 'p' })!.phase;
     const f = fake();
     const judge: SessionRequest[] = [];
     await runFlow(spec({ loop: { max_iterations: 1, until: { type: 'judge', prompt: 'ok?' } } }), {
@@ -110,6 +113,8 @@ test(
     assert.match(stage.prompt, /<source-data>\nСуть: пуш\n<\/source-data>$/);
     assert.match(stage.prompt, /уже в контексте как память/);
     assert.ok(!stage.prompt.includes('space_write'));
+    // хвост промпта этапа — ровно то, что показывает «Модель получит»
+    assert.ok(stage.prompt.endsWith('\n\n' + preview), stage.prompt);
     for (const d of [spaceDir('p'), extra]) {
       assert.ok(stage.additionalDirectories!.includes(d), d);
       assert.ok(judge[0].additionalDirectories!.includes(d), d);

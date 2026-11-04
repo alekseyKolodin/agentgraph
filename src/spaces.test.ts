@@ -26,7 +26,6 @@ import {
   SPACE_STATE_MAX,
   spaceArtifactDirs,
   spaceContext,
-  spaceContextReply,
   spaceDir,
   spaceDocReply,
   dataDirsGuard,
@@ -47,6 +46,7 @@ import {
   type SpaceUpdate,
 } from './spaces.js';
 import { createTag, readTag, tagDir, tagsDir } from './tags.js';
+import { spaceContextReply } from './model-context.js';
 import type { SpaceListItem } from './api-types.js';
 
 function withConfigDir(fn: (root: string) => Promise<void> | void) {
@@ -367,6 +367,33 @@ test(
     const withArt = dataDirsGuard(phaseProtectedRoots({ runsDir: runs, artifacts: true, cwd: proj }));
     assert.equal(withArt('Write', { file_path: path.join(runs, 'r2', 'artifacts', 'plan.md') }), undefined);
     assert.ok(withArt('Write', { file_path: map }));
+  }),
+);
+
+test(
+  'пространства: guard этапа — папок пространств и тегов ещё нет: их заводят заранее, и путь в другом регистре тоже отказ',
+  withConfigDir((root) => {
+    const cfg = process.env.AGENTGRAPH_CONFIG_DIR!;
+    assert.equal(fs.existsSync(spacesDir()), false);
+    assert.equal(fs.existsSync(tagsDir()), false);
+    const proj = path.join(root, 'proj');
+    fs.mkdirSync(proj);
+    const guard = dataDirsGuard(phaseProtectedRoots({ runsDir: path.join(root, 'runs'), artifacts: true, cwd: proj }));
+    // корни есть: realpath даёт их настоящий регистр, и том без учёта регистра (APFS) путь «Spaces/…» не проведёт
+    assert.ok(fs.statSync(spacesDir()).isDirectory() && fs.statSync(tagsDir()).isDirectory());
+    for (const p of [
+      path.join(cfg, 'spaces', 'android', 'CLAUDE.md'),
+      path.join(cfg, 'Spaces', 'android', 'CLAUDE.md'),
+      path.join(cfg, 'SPACES', 'android', 'space.json'),
+      path.join(cfg, 'x', '..', 'Spaces', 'a', 'CLAUDE.md'),
+      path.join(cfg, 'Tags', 'qa', 'notes.md'),
+    ]) assert.ok(guard('Write', { file_path: p }), p);
+    assert.equal(guard('Write', { file_path: path.join(proj, 'Spaces.md') }), undefined);
+    // корень не создался (нет прав) — сравнение без учёта регистра: запрет шире, но не уже
+    const missing = path.join(root, 'nope', 'spaces');
+    const strict = dataDirsGuard([{ dir: missing, why: 'нет', reason: 'space-readonly' }]);
+    assert.equal(strict('Write', { file_path: path.join(root, 'nope', 'SPACES', 'a', 'CLAUDE.md') }), 'нет');
+    assert.equal(strict('Write', { file_path: path.join(root, 'nope', 'other.md') }), undefined);
   }),
 );
 

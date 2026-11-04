@@ -399,7 +399,7 @@ export type SpaceContextView = {
 };
 
 /**
- * GET /api/model-context?space=&tags=a,b — «Модель получит»: точный текст и разбор для превью в формах и на экране сессии.
+ * GET /api/model-context?space=&tags=a,b&cwd= — «Модель получит»: точный текст и разбор для превью в формах и на экране сессии.
  * session — текст хука SessionStart новой сессии (sessionContext, с бюджетом хука); phase — хвост промпта каждого этапа
  * (раздел пространства и строки тегов знаний; у блоков flow бывают и свои теги). state — как уйдёт (обрезанное по лимиту).
  */
@@ -412,7 +412,8 @@ export type ModelContextView = {
     /** Заголовок придумала модель: в текст для модели он не идёт. */
     autoTitle?: true;
     dir: string;
-    map: { path: string; chars: number };
+    /** loaded — сессия получит карту памятью; нет — строкой «прочитай» (папка пространства внутри рабочей папки, например ~). */
+    map: { path: string; chars: number; loaded: boolean };
     state: string;
     docs: SpaceDoc[];
     /** Пути пространства, которые есть на диске (только чтение). */

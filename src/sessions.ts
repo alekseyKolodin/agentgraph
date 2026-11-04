@@ -180,6 +180,15 @@ export function sessionReadTargets(ctx: SessionCtx, runsDir: string): ReadTarget
 const plainPath = (d: string) => !/[()[\]*?{}\n]/.test(d);
 
 /**
+ * Придёт ли карта пространства памятью сессии с рабочей папкой cwd: папка пространства уйдёт в --add-dir (не внутри cwd,
+ * не содержит его, без спецсимволов — как в launchDirs) или сессия открыта в самой папке пространства (CLAUDE.md
+ * грузится от cwd вверх). Папка пространства внутри cwd (cwd — ~) — нет: карта придёт строкой «прочитай».
+ */
+export function mapLoadedAt(spaceDir: string, cwd: string): boolean {
+  return isInside(cwd, spaceDir) || (!isInside(spaceDir, cwd) && plainPath(spaceDir));
+}
+
+/**
  * --add-dir и запрет записи. --add-dir открывает и запись, поэтому всё, что он открыл, вся папка тегов
  * (~/.agentgraph/tags), вся папка пространств (~/.agentgraph/spaces: карты, состояния, документы — документ пишется только
  * инструментом space_write с подтверждением) и артефакты прошлых запусков закрыты правилом Edit (оно же запрещает Write).

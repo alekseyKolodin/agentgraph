@@ -2,7 +2,11 @@
 // задач, — выбор пространства в формах запуска и сессии, строка сессии, «Итог» запуска, страница «Знания».
 // Ключ — русский текст из t() как есть.
 export const space: Record<string, string> = {
-  'Папка пространства: {path}': 'The space’s folder: {path}',
+  'карта {n} ток. — по запросу': 'map {n} tok. — on request',
+  '◇ {slug} — пространства больше нет: сессия получит контекст без него': '◇ {slug} — the space is gone: the session gets its context without it',
+  'Модель видит пространство по слагу {slug}: заголовок «{title}» придумал ИИ, в её текст он не идёт': 'The model sees the space by its slug {slug}: the title “{title}” was made up by AI and isn’t sent to it',
+  'По запросу: папка пространства внутри рабочей папки, и Claude получит строку «прочитай карту» · {n}': 'On request: the space folder is inside the working folder, so Claude gets a “read the map” line · {n}',
+  'Рабочая папка пространства: {path}': 'The space’s working folder: {path}',
   'Памятью, как CLAUDE.md репозитория · {n}': 'As memory, like a repository’s CLAUDE.md · {n}',
   'целиком: {n}': 'in full: {n}',
   'знак|знака|знаков': 'character|characters',

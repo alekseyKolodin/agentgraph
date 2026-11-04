@@ -1,8 +1,8 @@
 // Страница «Сессии» /sessions (system.md → Sessions): новая сессия — пространство (первым: его рабочая папка
 // подставляется в «Папку» с подписью «из пространства»), папка, теги знаний, «Дополнительно» (название, модель, режим
 // разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху. ?space=x — форма
-// открыта с этим пространством и его папкой (кнопка «Новая сессия» на странице пространства), &cwd= — с этой папкой
-// («Сессия в папке»); ?tags=a,b — с этими тегами знаний.
+// открыта с этим пространством, его рабочую папку подставит список пространств (кнопка «Новая сессия» на странице
+// пространства); &cwd= — с этой папкой, её выбор пространства не затирает («Сессия в папке»); ?tags=a,b — с тегами знаний.
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -21,7 +21,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canUpdateState, sessionStatusLabel, sessionTone } from '../../lib/sessions';
-import { SPACE_SLUG_RE, spaceWorkdir, workdirNote } from '../../lib/spaces';
+import { pickWorkdir, SPACE_SLUG_RE, spaceWorkdir, workdirHint, type CwdState } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import styles from './Sessions.module.css';
 
@@ -90,9 +90,11 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const spacesOn = useFeature('spaces');
   const spacesQuery = useSpaces(spacesOn);
   const spaceList = spacesQuery.data?.spaces ?? [];
-  const [cwd, setCwd] = useState(() => preset.cwd || LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '');
-  /** Слаг пространства, которое подставило папку; правка папки руками — ''. */
-  const [cwdFrom, setCwdFrom] = useState('');
+  // папка и откуда она: ссылка с &cwd= — задана сами (выбор пространства её не затирает), иначе — запомненная
+  const [folder, setFolder] = useState<CwdState>(() =>
+    preset.cwd ? { cwd: preset.cwd, from: '', touched: true } : { cwd: LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '', from: '', touched: false },
+  );
+  const cwd = folder.cwd;
   const [space, setSpace] = useState(preset.space);
   const [tags, setTags] = useState<string[]>(preset.tags);
   const [tagText, setTagText] = useState('');
@@ -103,41 +105,24 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const [msg, setMsg] = useState<Msg>({ text: '', tone: '' });
   const [busy, setBusy] = useState(false);
 
-  const editCwd = (path: string) => {
-    cwdTouched.current = true;
-    setCwd(path);
-    setCwdFrom('');
-  };
+  const editCwd = (path: string) => setFolder({ cwd: path, from: '', touched: true });
   /**
-   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём). Папку, вписанную руками или
-   * пришедшую ссылкой (&cwd=), не трогаем — под полем появится «подставить папку пространства».
+   * Выбор пространства подставляет его рабочую папку (или папку последней работы в нём) — правило pickWorkdir: папку,
+   * вписанную руками или пришедшую ссылкой (&cwd=), не трогаем — под полем появится «подставить».
    */
   const pickSpace = (slug: string) => {
     setSpace(slug);
-    const wd = spaceWorkdir(slug, spaceList);
-    if (!wd || (cwdTouched.current && !cwdFrom)) return;
-    setCwd(wd.path);
-    setCwdFrom(slug);
+    setFolder((st) => pickWorkdir(slug, spaceWorkdir(slug, spaceList), st));
   };
-  const applyWorkdir = (path: string) => {
-    setCwd(path);
-    setCwdFrom(space.trim());
-  };
-  // папку задали руками или ссылкой — выбор пространства её не затирает; ?space=x без &cwd= — подставим, когда придёт список
-  const cwdTouched = useRef(Boolean(preset.cwd));
-  const presetDone = useRef(Boolean(preset.cwd) || !preset.space);
+  const applyWorkdir = (path: string) => setFolder({ cwd: path, from: space.trim(), touched: false });
+  // пространство пришло ссылкой (?space=), а список ещё грузился: когда придёт — то же правило, один раз
+  const presetDone = useRef(!preset.space);
   useEffect(() => {
-    if (presetDone.current || cwdTouched.current) return;
-    const wd = spaceWorkdir(preset.space, spaceList);
-    if (!spacesQuery.isSuccess) return;
+    if (presetDone.current || !spacesQuery.isSuccess) return;
     presetDone.current = true;
-    if (!wd) return;
-    setCwd(wd.path);
-    setCwdFrom(preset.space);
+    setFolder((st) => pickWorkdir(space, spaceWorkdir(space, spaceList), st));
   }, [spaceList]);
-  const workdir = spaceWorkdir(space, spaceList);
-  const cwdNote = cwdFrom && cwdFrom === space.trim() && workdir && workdir.path === cwd.trim() ? workdirNote(spaceList.find((x) => x.slug === cwdFrom), cwdFrom, workdir) : '';
-  const cwdOffer = !cwdNote && workdir && workdir.path !== cwd.trim() ? workdir : undefined;
+  const { note: cwdNote, offer: cwdOffer, wd: workdir } = workdirHint(space, spaceList, folder);
 
   /** Тег знаний — только существующий: пустой из формы бесполезен, его заводят на странице «Знания». */
   const addTag = (raw: string) => {
@@ -198,7 +183,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
       {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
       {cwdOffer && (
         <span className={cx('muted small', styles.cwdFrom)}>
-          {t('Папка пространства: {path}', { path: cwdOffer.path })}{' '}
+          {t('Рабочая папка пространства: {path}', { path: cwdOffer.path })}{' '}
           <button type="button" className="btn small ghost" onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
         </span>
       )}
@@ -226,7 +211,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         />
         <p className="muted small">{t('Строка каждого тега — в контексте, полный текст Claude возьмёт инструментом knowledge_read. Можно и без тегов.')}</p>
       </div>
-      <ModelPreview space={space} tags={tags} where="session" options={spaceList} loaded={!spacesQuery.isPending} />
+      <ModelPreview space={space} tags={tags} where="session" cwd={cwd} options={spaceList} loaded={!spacesOn || !spacesQuery.isPending} />
       <details className={styles.more}>
         <summary>{t('Дополнительно')}</summary>
         <div className={styles.moreBody}>

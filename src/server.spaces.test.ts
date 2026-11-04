@@ -1,0 +1,141 @@
+// Пространства через настоящий HTTP-сервер (startServer): ошибки POST /api/runs, запуски на странице пространства,
+// продолжение старого запуска с тегом задачи. Раннер подменён: настоящий Agent SDK не зовётся. runs/ и flows/ — во
+// временной папке: paths.ts читает AGENTGRAPH_HOME при загрузке модуля, поэтому сервер импортируется после env.
+import { after, before, test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import type { RunOptions } from './runner.js';
+import type { FlowSpec } from './schema.js';
+import type { SpaceDetail, SpaceListItem } from './api-types.js';
+
+const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-srvspaces-')));
+const prevHome = process.env.AGENTGRAPH_HOME;
+const prevCfg = process.env.AGENTGRAPH_CONFIG_DIR;
+process.env.AGENTGRAPH_HOME = home;
+process.env.AGENTGRAPH_CONFIG_DIR = path.join(home, 'cfg');
+const proj = path.join(home, 'proj');
+const runs = path.join(home, 'runs');
+for (const d of [path.join(home, 'flows'), runs, proj]) fs.mkdirSync(d, { recursive: true });
+fs.writeFileSync(path.join(home, 'flows', 'demo.yaml'), 'name: demo\nphases:\n  - name: work\n    tools: [Read]\n    prompt: "Задача: {{input}}"\n');
+
+const { startServer, stopServer } = await import('./server.js');
+const { MAIN_BLOCK } = await import('./schema.js');
+const { spaceDir } = await import('./spaces.js');
+
+/** Что получил раннер: задача и опции пространства. Запуск сразу падает — run.json пишет сервер. */
+const started: { spec: FlowSpec; opts: RunOptions }[] = [];
+const fakeRunFlow = async (spec: FlowSpec, opts: RunOptions): Promise<never> => {
+  started.push({ spec: { ...spec }, opts });
+  throw new Error('поддельный раннер');
+};
+
+/** Старый тег задачи и запуски до пространств: блок тега в задаче, saveTag, дочерний запуск и запуск в worktree. */
+const OLD = '2026-10-30_18-50-33-kai';
+const CHILD = '2026-10-30_19-00-00-kai-child';
+const WT = '2026-10-31_10-00-00-kai-wt';
+function seed() {
+  const tag = path.join(home, 'cfg', 'tags', 'kai');
+  fs.mkdirSync(tag, { recursive: true });
+  fs.writeFileSync(path.join(tag, 'tag.json'), JSON.stringify({ slug: 'kai', kind: 'task', title: 'Kai', createdAt: '2026-10-29T20:00:00.000Z', updatedAt: '2026-10-30T16:00:00.000Z', runs: [] }));
+  fs.writeFileSync(path.join(tag, 'summary.md'), 'Суть: Kai MVP');
+  const report = (id: string, extra: Record<string, unknown>) => {
+    fs.mkdirSync(path.join(runs, id), { recursive: true });
+    fs.writeFileSync(path.join(runs, id, 'run.json'), JSON.stringify({
+      id, flow: 'demo', cwd: proj, status: 'max_iterations', iterations: 1, maxIterations: 1, totalCostUsd: 0,
+      blocks: [{ name: MAIN_BLOCK, status: 'max_iterations' }], phases: [], conditions: [], questions: [], runDir: path.join(runs, id),
+      startedAt: '2026-10-30T18:50:33.000Z', finishedAt: '2026-10-30T18:59:00.000Z', ...extra,
+    }));
+  };
+  report(OLD, { input: 'Сделай пуш\n\n<!-- tag:kai -->\nСаммари тега на момент старта\n<!-- /tag -->\n\n<!-- tag:other -->\nчужой блок\n<!-- /tag -->', tags: ['kai'], saveTag: true });
+  report(CHILD, { input: 'дочерний', tags: ['kai'], parent: { runId: OLD, block: MAIN_BLOCK }, startedAt: '2026-10-30T19:00:00.000Z' });
+  report(WT, { input: 'в worktree', tags: ['kai'], worktree: { path: path.join(home, 'wt'), branch: 'x' }, startedAt: '2026-10-31T10:00:00.000Z' });
+}
+
+let base = '';
+before(async () => {
+  seed();
+  const port = await new Promise<number>((resolve) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const p = (s.address() as net.AddressInfo).port;
+      s.close(() => resolve(p));
+    });
+  });
+  await startServer({ port, host: '127.0.0.1', defaultCwd: proj, notify: false, runFlow: fakeRunFlow as never });
+  base = `http://127.0.0.1:${port}`;
+});
+
+after(async () => {
+  await stopServer(2000);
+  if (prevHome === undefined) delete process.env.AGENTGRAPH_HOME;
+  else process.env.AGENTGRAPH_HOME = prevHome;
+  if (prevCfg === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+  else process.env.AGENTGRAPH_CONFIG_DIR = prevCfg;
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+async function call<T = unknown>(method: string, url: string, body?: unknown): Promise<{ status: number; body: T }> {
+  const res = await fetch(base + url, { method, headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await res.text();
+  return { status: res.status, body: (text ? JSON.parse(text) : undefined) as T };
+}
+
+const slugs = async () => (await call<{ spaces: SpaceListItem[] }>('GET', '/api/spaces')).body.spaces.map((s) => s.slug).sort();
+
+test('POST /api/runs: старые поля и тег задачи — 400, неверный слаг и flow — 400; после 400 пустого пространства на диске нет', async () => {
+  // перенос тега задачи — при первом обращении к пространствам
+  assert.deepEqual(await slugs(), ['kai']);
+  const bad = async (body: Record<string, unknown>, re: RegExp) => {
+    const r = await call<{ error: string }>('POST', '/api/runs', { flow: 'demo', input: 'x', cwd: proj, ...body });
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.match(r.body.error, re, JSON.stringify(body));
+  };
+  await bad({ saveTag: true, space: 'fresh-a' }, /Теги задач заменены пространствами/);
+  await bad({ autoTag: true, space: 'fresh-b' }, /Теги задач заменены пространствами/);
+  await bad({ tags: ['kai'], space: 'fresh-c' }, /пространство kai/);
+  await bad({ space: '../x' }, /Неверное пространство/);
+  await bad({ flow: 'nope', space: 'fresh-d' }, /./);
+  await bad({ autoSpace: 'yes', space: 'fresh-e' }, /autoSpace/);
+  assert.deepEqual(await slugs(), ['kai']);
+  assert.equal(started.length, 0);
+});
+
+test('страница пространства: старые запуски тега задачи — с пометкой legacy, без дочерних; папка — только у запуска не в worktree', async () => {
+  const r = await call<SpaceDetail>('GET', '/api/spaces/kai');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.runs.map((x) => [x.id, x.legacy, x.cwd]), [[WT, true, undefined], [OLD, true, proj]]);
+  // рабочая папка для форм — папка последнего запуска не в worktree
+  assert.deepEqual(r.body.workdir, { path: proj, from: 'run' });
+  const list = (await call<{ spaces: SpaceListItem[] }>('GET', '/api/spaces')).body.spaces;
+  assert.deepEqual(list.find((s) => s.slug === 'kai')?.workdir, { path: proj, from: 'run' });
+});
+
+test('продолжение старого запуска с тегом задачи: пространство — перенесённый тег, saveTag — галочка состояния, из задачи снят блок только этого тега', async () => {
+  const before = started.length;
+  const r = await call<{ id: string }>('POST', `/api/runs/${OLD}/continue`, {});
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(started.length, before + 1);
+  const { spec, opts } = started.at(-1)!;
+  assert.equal(spec.input, 'Сделай пуш\n\n<!-- tag:other -->\nчужой блок\n<!-- /tag -->');
+  assert.deepEqual([opts.space, opts.saveState], ['kai', true]);
+  assert.ok(opts.spaceDirs?.includes(spaceDir('kai')), String(opts.spaceDirs));
+  // упавший запуск записан с пространством: он виден на странице пространства уже не как legacy
+  const page = (await call<SpaceDetail>('GET', '/api/spaces/kai')).body;
+  const fresh = page.runs.find((x) => x.id === r.body.id);
+  assert.ok(fresh && !fresh.legacy, JSON.stringify(page.runs));
+});
+
+test('продолжение старого запуска, чьё пространство удалили: без пространства, задача как была (блок тега — единственный контекст)', async () => {
+  assert.equal((await call('DELETE', '/api/spaces/kai')).status, 200);
+  const before = started.length;
+  const r = await call<{ id: string }>('POST', `/api/runs/${OLD}/continue`, {});
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const { spec, opts } = started[before];
+  assert.match(spec.input ?? '', /<!-- tag:kai -->/);
+  assert.equal(opts.space, undefined);
+  // удалённое пространство не воскресает: тег перенесён раньше
+  assert.deepEqual(await slugs(), []);
+});

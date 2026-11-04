@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configDir } from './settings.js';
 import type {
-  DenialReason, Space, SpaceContextView, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
+  DenialReason, Space, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
 } from './api-types.js';
 import { wrapData } from './intake.js';
 import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
@@ -727,6 +727,15 @@ const spaceDirReadonly = (d: string) => `${d} — папка пространс�
  * чтение». Папка внутри проекта или содержащая его — сам проект: его этап правит.
  */
 export function phaseProtectedRoots(o: { runsDir: string; artifacts: boolean; spaceDirs?: string[]; cwd: string }, probe: Pick<PathProbe, 'realpath'> = nodeProbe): ProtectedRoot[] {
+  // корни заводим заранее: у несуществующей папки realpath нет, её путь остаётся в регистре кода, а путь агента
+  // «~/.agentgraph/Spaces/…» на томе без учёта регистра (APFS) — в своём, и строки бы не совпали
+  for (const d of [spacesDir(), tagsDir()]) {
+    try {
+      fs.mkdirSync(d, { recursive: true });
+    } catch {
+      /* не создалась (нет прав): dataDirsGuard сравнит такой корень без учёта регистра */
+    }
+  }
   const roots: ProtectedRoot[] = [
     { dir: spacesDir(), why: SPACES_READONLY, reason: 'space-readonly' },
     { dir: tagsDir(), why: TAGS_READONLY, reason: 'knowledge-readonly' },
@@ -744,21 +753,26 @@ export function phaseProtectedRoots(o: { runsDir: string; artifacts: boolean; sp
 
 /**
  * Guard этапа (PreToolUse) по защищённым папкам: путь записи сверяется по realpath ближайшего существующего предка
- * (ссылка из проекта наружу не проходит). Bash не ловится — как у артефактов. onDeny — счёт отказов в отчёт этапа.
- * undefined — разрешено.
+ * (ссылка из проекта наружу не проходит). Корень, которого нет на диске, — без учёта регистра: realpath не дал его
+ * настоящий регистр, а том может его не различать (запрет шире, но не уже). Bash не ловится — как у артефактов.
+ * onDeny — счёт отказов в отчёт этапа. undefined — разрешено.
  */
 export function dataDirsGuard(
   roots: ProtectedRoot[],
   onDeny?: (tool: string, reason: DenialReason) => void,
   probe: Pick<PathProbe, 'realpath'> = nodeProbe,
 ): (tool: string, input: Record<string, unknown>, ctx?: { cwd: string }) => string | undefined {
-  const list = roots.map((r) => ({ ...r, dir: canonical(r.dir, '/', probe) }));
+  const fold = (s: string) => s.normalize('NFC').toLowerCase();
+  const list = roots.map((r) => {
+    const dir = canonical(r.dir, '/', probe);
+    return { ...r, dir, folded: probe.realpath(dir) === undefined ? fold(dir) : undefined };
+  });
   return (tool, input, ctx) => {
     if (!WRITE_TOOLS.includes(tool)) return undefined;
     const raw = toolPath(tool, input);
     if (typeof raw !== 'string' || !raw.trim()) return undefined;
     const p = canonical(raw, ctx?.cwd || process.cwd(), probe);
-    const hit = list.find((r) => isInside(p, r.dir));
+    const hit = list.find((r) => isInside(p, r.dir) || (r.folded !== undefined && isInside(fold(p), r.folded)));
     if (hit) onDeny?.(tool, hit.reason);
     return hit?.why;
   };
@@ -1018,25 +1032,6 @@ export function spaceWarnings(s: Space): string[] {
   const missing = (s.dirs ?? []).filter((d) => !fs.existsSync(d));
   if (missing.length) out.push(`Нет на диске: ${missing.join(', ')} — эти папки пространства пропускаются.`);
   return out;
-}
-
-/** Что пространство даёт модели: текст сессии и этапа тем же spaceContext, что у настоящей доставки, и папки чтения. */
-export function spaceContextReply(slug: string, runsDir: string): ApiReply {
-  try {
-    const s = readSpace(slug);
-    if (!s) return notFound(slug);
-    const map = path.join(s.dir, MAP_FILE);
-    const view: SpaceContextView = {
-      session: spaceContext(s, { where: 'session', mapLoaded: true }),
-      phase: spaceContext(s, { where: 'phase', mapLoaded: true }),
-      readDirs: spaceReadDirs(s, runsDir),
-      map: { path: map, exists: Boolean(s.map.trim()), chars: s.map.trim().length },
-      warnings: spaceWarnings(s),
-    };
-    return { status: 200, body: view };
-  } catch (err) {
-    return bad(err);
-  }
 }
 
 export function addSpaceDocReply(slug: string, body: unknown): ApiReply {

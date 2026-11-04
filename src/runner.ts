@@ -31,7 +31,7 @@ import {
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
 import { knowledgeBlock, knowledgeDirs, resolveKnowledge, type KnowledgeTag } from './tags.js';
-import { dataDirsGuard, phaseProtectedRoots, queueSpaceState, readSpace, spaceContext, writeSpaceState } from './spaces.js';
+import { dataDirsGuard, phaseProtectedRoots, queueSpaceState, readSpace, spaceContext, writeSpaceState, type Space } from './spaces.js';
 import { dropRunPaths, parseSpaceState, SPACE_STATE_PROMPT_FILE, spaceStateRequest } from './space-state.js';
 import type { AutoSpaceReport } from './auto-space.js';
 import type { RunTitleReport } from './run-title.js';
@@ -1327,10 +1327,15 @@ export function spaceSection(opts: Pick<RunOptions, 'space' | 'spaceDirs'>): str
   if (!opts.space) return undefined;
   try {
     const space = readSpace(opts.space);
-    return space ? spaceContext(space, { where: 'phase', mapLoaded: (opts.spaceDirs ?? []).includes(space.dir) }) : undefined;
+    return space ? phaseSpaceSection(space, opts.spaceDirs ?? []) : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Раздел пространства этапа по прочитанному пространству; без spaceDirs — как у запуска: его папка среди доп. директорий. */
+export function phaseSpaceSection(space: Space, spaceDirs: string[] = [space.dir]): string {
+  return spaceContext(space, { where: 'phase', mapLoaded: spaceDirs.includes(space.dir) });
 }
 
 /** Guard этапа: сначала артефакты (свои артефакты, папка запусков), затем папки данных agentgraph; первый отказ решает. */

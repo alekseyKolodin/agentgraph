@@ -398,7 +398,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                 <>
                   <Link
                     className="btn small"
-                    to={`/sessions?space=${encodeURIComponent(s.slug)}${workdir ? `&cwd=${encodeURIComponent(workdir.path)}` : ''}`}
+                    to={`/sessions?space=${encodeURIComponent(s.slug)}`}
                     title={t('Новая сессия Claude Code в терминале в этом пространстве: карта — памятью, состояние и документы — в контексте') + (workdir ? `\n${t('Папка: {path}', { path: workdir.path })}` : '')}
                   >{t('Новая сессия')}</Link>
                   <Link className="btn small ghost" to={`/sessions?space=${encodeURIComponent(s.slug)}&cwd=${encodeURIComponent(s.dir)}`} title={t('Сессия в самой папке пространства: Claude правит карту и документы как обычный проект, ты подтверждаешь правки')}>{t('Сессия в папке')}</Link>

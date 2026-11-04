@@ -9,11 +9,11 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { SessionError, SessionManager, sessionManager } from './sessions-server.js';
+import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, tagDir, updateTag } from './tags.js';
-import { createSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
+import { createSpace, deleteSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 
 class FakePty implements PtyProcess {
@@ -159,6 +159,32 @@ test('создание: claude без shell в папке проекта, окр
   assert.ok(fs.existsSync(path.join(root, 'sessions', r.body.id, 'session.json')));
   assert.equal((await call('GET', '/api/spaces/checkout')).status, 200);
   await until(async () => (await view(r.body.id)).claudeVersion === '2.1.311');
+});
+
+test('превью совпадает с отправленным: текст SessionStart — тот же, что /api/model-context с папкой сессии и вкладка «Контекст» пространства; папка пространства внутри рабочей — карта строкой «прочитай» и там, и там', async () => {
+  createSpace('eq-space', { title: 'Равенство', gist: 'суть' });
+  writeSpaceState('eq-space', 'Суть: равенство', { id: 'r0', at: '', kind: 'run' });
+  createTag('eq-know');
+  updateTag('eq-know', { description: 'правила', notes: 'гоняй тесты' });
+  const startText = async (body: Record<string, unknown>) => {
+    const { body: s } = await call<SessionView>('POST', '/api/sessions', body);
+    const r = await hook(s.id, tokenOf(spawned.at(-1)!), { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id });
+    await call('POST', `/api/sessions/${s.id}/end`);
+    return (r.body.hookSpecificOutput as { additionalContext: string }).additionalContext;
+  };
+  const preview = async (q: string) => (await call<{ session: string; space?: { map: { loaded: boolean } } }>('GET', `/api/model-context?${q}`)).body;
+  const proj = path.join(root, 'proj');
+  const withTag = await startText({ cwd: proj, space: 'eq-space', tags: ['eq-know'] });
+  assert.equal(withTag, (await preview(`space=eq-space&tags=eq-know&cwd=${encodeURIComponent(proj)}`)).session);
+  const bare = await startText({ cwd: proj, space: 'eq-space' });
+  assert.equal(bare, (await call<{ session: string }>('GET', '/api/spaces/eq-space/context')).body.session);
+  assert.match(bare, /уже в контексте как память/);
+  // рабочая папка содержит папку настроек (как ~): папка пространства в --add-dir не идёт, карта — строкой «прочитай»
+  const home = await startText({ cwd: root, space: 'eq-space' });
+  const v = await preview(`space=eq-space&cwd=${encodeURIComponent(root)}`);
+  assert.equal(home, v.session);
+  assert.match(home, /прочитай её инструментом Read/);
+  assert.equal(v.space?.map.loaded, false);
 });
 
 test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
@@ -567,11 +593,45 @@ test('выход приложения: состояние не пишется, �
   assert.deepEqual(next.spaceSessions('app-legacy').map((x) => [x.id, x.legacy]), [[crashed, true]]);
   const saved = JSON.parse(fs.readFileSync(path.join(dir, crashed, 'session.json'), 'utf8'));
   assert.deepEqual([saved.space, saved.legacyTaskTags, saved.saveState, 'saveTag' in saved, 'summary' in saved], ['app-legacy', ['app-legacy'], true, false, false]);
+  // прежний файл — рядом копией: его читает старая версия agentgraph
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, crashed, LEGACY_RECORD_FILE), 'utf8')).tags, ['app-know', 'app-legacy']);
   // «Обновить состояние» по завершённой — по журналу ходов
   next.startState(v.id);
   await until(() => next.view(next.get(v.id)).stateUpdate !== undefined);
   assert.equal(next.view(next.get(v.id)).statePending, undefined);
   assert.ok(summaries.at(-1)!.prompt.includes('шаг'));
+});
+
+test('старая завершённая сессия с тегами задач: пространство выводится один раз и не меняется от старта к старту; выбор пространства руками снимает её со страниц тегов задач', async () => {
+  const dir = path.join(root, 'sessions-legacy');
+  const deps = { ...sessionManager().deps, dir };
+  for (const slug of ['lg-a', 'lg-b']) {
+    fs.mkdirSync(tagDir(slug), { recursive: true });
+    fs.writeFileSync(path.join(tagDir(slug), 'tag.json'), JSON.stringify({ slug, kind: 'task', createdAt: '', updatedAt: '', runs: [] }));
+  }
+  migrateTaskTags({ force: true });
+  const id = uuid(11);
+  fs.mkdirSync(path.join(dir, id), { recursive: true });
+  const legacy = { id, name: 'старая', cwd: root, tags: ['lg-a', 'lg-b'], saveTag: true, claudeSessionIds: [], createdAt: '2026-10-27T10:00:00.000Z', lastActivityAt: '2026-10-27T11:00:00.000Z', endedAt: '2026-10-27T11:00:00.000Z', turns: 3 };
+  fs.writeFileSync(path.join(dir, id, 'session.json'), JSON.stringify(legacy));
+  const first = new SessionManager(deps);
+  await first.available();
+  assert.equal(first.view(first.get(id)).space, 'lg-a');
+  // завершённая запись тоже сохранена в новом виде, прежняя — рядом
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, id, 'session.json'), 'utf8')).space, 'lg-a');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, id, LEGACY_RECORD_FILE), 'utf8')), legacy);
+  // пространство удалили: после перезапуска сессия не переезжает в следующий тег задачи
+  deleteSpace('lg-a');
+  const second = new SessionManager(deps);
+  await second.available();
+  assert.deepEqual([second.view(second.get(id)).space, second.view(second.get(id)).spaceChip?.missing], ['lg-a', true]);
+  assert.deepEqual(second.spaceSessions('lg-b').map((x) => [x.id, x.legacy]), [[id, true]]);
+  // выбрали пространство руками: со страниц тегов задач сессия уходит, её папка их рабочей папкой больше не считается
+  second.setSpace(id, { space: 'lg-b' });
+  assert.deepEqual(second.spaceSessions('lg-b').map((x) => [x.id, x.legacy]), [[id, undefined]]);
+  second.setSpace(id, { space: null });
+  assert.deepEqual([second.spaceSessions('lg-a'), second.spaceSessions('lg-b')], [[], []]);
+  assert.equal('legacyTaskTags' in JSON.parse(fs.readFileSync(path.join(dir, id, 'session.json'), 'utf8')), false);
 });
 
 test('остановка сервера прерывает идущее обновление состояния: сессия haiku гасится, ходы не учтены, пометка «приложение закрыли»', async () => {
