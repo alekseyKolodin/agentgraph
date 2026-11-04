@@ -15,9 +15,11 @@ test('статус сессии: подписи и тон точки; выход
 });
 
 test('строка «Сейчас»: сессия · пространство, без него — папка · состояние', () => {
-  assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'сессия · shop · ждёт тебя');
-  assert.equal(sessionSub({ cwd: '/p/api', status: 'working' }), 'сессия · api · работает');
-  assert.equal(sessionSub({ cwd: '/p/api', status: 'working', space: 'press-alert' }), 'сессия · press-alert · работает');
+  assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'shop · ждёт тебя');
+  assert.equal(sessionSub({ cwd: '/p/api', status: 'working' }), 'api · работает');
+  // пространство вместо папки и время последней активности: три сессии в одной папке различимы
+  const now = new Date('2026-11-04T12:00:00Z');
+  assert.equal(sessionSub({ cwd: '/p/api', status: 'working', space: 'press-alert', lastActivityAt: '2026-11-04T11:55:00Z' }, now), '◇ press-alert · работает · 5 мин назад');
 });
 
 test('пространство и теги на ходу: подсказка у чипа и строка о недоставленном', () => {

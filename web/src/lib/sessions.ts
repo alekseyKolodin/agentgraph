@@ -2,7 +2,7 @@
 // на ходу, адрес WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52, состояние
 // пространства.
 import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
-import { baseName, clock } from './format';
+import { baseName, clock, feedTime } from './format';
 import { t } from './i18n';
 
 /** Тон точки и подписи: live — работает, wait — ход за тобой, off — завершена или запускается, fail — не запустилась. */
@@ -31,9 +31,11 @@ export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | '
 }
 
 /** Вторая строка в «Сейчас»: «сессия · press-alert · работает» — пространство, без него — папка. */
-export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'>): string {
+export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt'>>, now: Date = new Date()): string {
   const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? t('ждёт тебя') : t('запускается');
-  return t('сессия · {dir} · {state}', { dir: s.space ?? baseName(s.cwd), state });
+  // чем сессии различаются: пространство (без него — папка), статус и когда была активность — а не повтор папки
+  const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
+  return [where, state, ...(s.lastActivityAt ? [feedTime(s.lastActivityAt, now)] : [])].join(' · ');
 }
 
 /** Подсказка у чипа тега или пространства, которые ещё не дошли до модели. */
