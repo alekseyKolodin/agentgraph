@@ -1,12 +1,13 @@
 // Вкладка «Обзор» проекта (spec §11; макет Overview.dc.html): активный спринт с полосой и счётчиками, агенты по задачам проекта
-// на этом компьютере (local.json → work), документы, репо кода с локальной папкой (PUT …/local → repoPaths), моё пространство
+// на этом компьютере (local.json → work), документы, репо кода с локальной папкой (PUT …/local → repoPaths; «+ Репо» — выбор
+// моей папки, ненайденное — «Указать папку» и подсказка git clone), моё пространство
 // для проекта (PUT …/local → projectSpaces) и лента команды по git log папки проекта.
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDetail, TeamDocBrief, TeamProject, TeamRepoRef, TeamTask, TeamTaskStatus } from '@server/api-types';
 import { errorText, useConfig, useSpaces } from '../../api';
-import { teamKeys, updateTeamLocal, useHistory } from '../../api/teamwork';
+import { teamKeys, updateProject, updateTeamLocal, useHistory } from '../../api/teamwork';
 import { SpaceBadge } from '../../components/Badge';
 import { PathLink } from '../../components/PathLink';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -20,7 +21,9 @@ import { docSize } from '../../lib/spaces';
 import { plannedSprint, points, pointsWord } from '../../lib/teamwork/backlog';
 import { activeSprint, memberByEmail, noSprintText, sprintStrip, sprintTasks, workBadge, type WorkState } from '../../lib/teamwork/board';
 import { docFile, docLabel, updatedText } from '../../lib/teamwork/docs';
+import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
 import { cx, ErrorLine, Who } from './parts';
+import { CloneHint, RepoChooser, RepoDraftRow, type RepoTaken } from './RepoPicker';
 import { projectPath } from './shell';
 import styles from './Teamwork.module.css';
 
@@ -164,21 +167,81 @@ function extraNames(docs: readonly TeamDocBrief[]): string {
   return t('{list} и ещё {n}', { list: names.slice(0, 2).join(', '), n: names.length - 2 });
 }
 
+/**
+ * Репо кода проекта: строки с моей папкой; «+ Репо» — выбор моей папки (RepoChooser), ссылка и ветка из git уходят в
+ * project.yaml (PUT проекта со всеми репо), папка — только в мой local.json.
+ */
 function ReposBlock({ team, project }: { team: TeamDetail; project: TeamProject }) {
+  const qc = useQueryClient();
+  const [choosing, setChoosing] = useState(false);
+  const [draft, setDraft] = useState<RepoDraft | undefined>();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const readonly = team.sync.state === 'readonly';
+  const existing = project.repos.map((r) => ({ key: r.key, url: r.url }));
+  const body = draft ? reposBody([draft], existing) : undefined;
+  const taken: RepoTaken = {
+    paths: new Set(project.repos.flatMap((r) => (r.local ? [r.local] : []))),
+    urls: new Set(project.repos.map((r) => r.url)),
+    keys: project.repos.map((r) => r.key),
+  };
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!body?.length || busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const repos = [...project.repos.map((r) => ({ key: r.key, url: r.url, ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}) })), ...body];
+      await updateProject(team.slug, project.slug, { repos });
+      await qc.invalidateQueries({ queryKey: teamKeys.all });
+      setDraft(undefined);
+    } catch (e2) {
+      setErr(errorText(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section aria-label={t('Репо кода')}>
-      <h2 className={styles.cap}>{t('Репо кода')}</h2>
-      {project.repos.length === 0 && <p className={styles.note}>{t('У проекта нет репо кода: добавить можно в настройках проекта (⋯)')}</p>}
+      <div className={styles.capRow}>
+        <h2 className={styles.cap}>{t('Репо кода')}</h2>
+        {!readonly && !choosing && !draft && <button type="button" className="btn ghost small" title={t('Выбрать папку репо среди своих проектов')} onClick={() => setChoosing(true)}>{t('+ Репо')}</button>}
+      </div>
+      {project.repos.length === 0 && !choosing && !draft && <p className={styles.note}>{t('У проекта нет репо кода. «+ Репо» — выбрать свою папку: ссылка и ветка возьмутся из git, ничего не скачивается.')}</p>}
       {project.repos.length > 0 && (
         <div className={styles.rows}>
           {project.repos.map((r) => <RepoRow key={r.key} team={team.slug} repo={r} />)}
         </div>
       )}
+      {choosing && (
+        <RepoChooser
+          team={team.slug}
+          taken={taken}
+          onAdd={(d) => {
+            setDraft(d);
+            setChoosing(false);
+          }}
+          onClose={() => setChoosing(false)}
+        />
+      )}
+      {draft && (
+        <form className={styles.repoAdd} aria-label={t('Новое репо кода')} onSubmit={(e) => void add(e)}>
+          <RepoDraftRow draft={draft} all={[draft]} existing={existing} onChange={(patch) => setDraft({ ...draft, ...patch })} onRemove={() => setDraft(undefined)} />
+          {err && <p className="msg err">{err}</p>}
+          <div className="row">
+            <button type="submit" className="btn small primary" disabled={busy || !body?.length}>{busy ? t('Добавляю…') : t('Добавить в проект')}</button>
+            <button type="button" className="btn ghost small" disabled={busy} onClick={() => setDraft(undefined)}>{t('Отмена')}</button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
 
-/** Репо кода и его папка у меня: найдена — путь, нет — «Указать папку» (поле и выбор в Finder) → PUT …/local. */
+/**
+ * Репо кода и его папка у меня: найдена — путь, нет — «Указать папку» (поле и выбор в Finder) → PUT …/local и подсказка
+ * «git clone <ссылка>»: agentgraph сам не клонирует.
+ */
 function RepoRow({ team, repo }: { team: string; repo: TeamRepoRef }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -209,7 +272,12 @@ function RepoRow({ team, repo }: { team: string; repo: TeamRepoRef }) {
       </div>
       <span className={styles.url}>{repo.url}</span>
       {!edit && repo.local && <PathLink className={styles.p} path={repo.local}>{tildePath(repo.local, home)}</PathLink>}
-      {!edit && !repo.local && <span className={styles.miss}>{t('Не найден на этом компьютере — без папки задачи этого репо нельзя отправить агенту')}</span>}
+      {!edit && !repo.local && (
+        <>
+          <span className={styles.miss}>{t('Не найден на этом компьютере — без папки задачи этого репо нельзя отправить агенту. Укажите свою папку или склонируйте:')}</span>
+          <CloneHint url={repo.url} />
+        </>
+      )}
       {edit && (
         <form
           className={styles.repoPick}

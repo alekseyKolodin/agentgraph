@@ -1569,7 +1569,16 @@ export type TeamDetail = TeamSummary & {
 /** Ответ проверки ссылки перед созданием или подключением (POST /api/teams/check). */
 export type TeamRemoteCheck =
   | { kind: 'empty'; writable?: boolean }
-  | { kind: 'team'; title: string; prefix: string; format: number; members: TeamMember[]; projects: { slug: string; title: string; repos: string[] }[] }
+  | {
+      kind: 'team';
+      title: string;
+      prefix: string;
+      format: number;
+      members: TeamMember[];
+      projects: { slug: string; title: string; repos: string[] }[];
+      /** Ссылка репо кода → папка на этом компьютере, найденная среди проектов дашборда по origin; ненайденных ссылок нет. */
+      localRepos?: Record<string, string>;
+    }
   | { kind: 'not_empty' }
   | { kind: 'error'; error: string };
 
@@ -1581,6 +1590,16 @@ export type TeamFlow<Spec = unknown> = { name: string; yaml: string; file: strin
 
 /** Репо кода проекта и где оно лежит у меня (local.json → repoPaths, иначе найдено среди проектов дашборда по origin). */
 export type TeamRepoRef = { key: string; url: string; defaultBranch?: string; local?: string };
+
+/**
+ * POST /api/teams/:t/repo-info { path }: что git знает о моей папке репо кода — для добавления репо в проект выбором папки.
+ * path — корень репо (или присланная папка, если это не git), key — из имени папки по правилам ключа, url — origin (общая
+ * ссылка в project.yaml), defaultBranch — origin/HEAD, иначе текущая ветка. problem: not_git — не git-репозиторий;
+ * no_origin — нет origin, участники не найдут репо автоматически, ссылку нужно ввести; bad_origin — origin не годится как
+ * ссылка в project.yaml. Папка в project.yaml не попадает: её принимает create/update проекта полем repos[].local и
+ * хранит только в local.json → repoPaths.
+ */
+export type TeamRepoInfo = { path: string; key: string; url?: string; defaultBranch?: string; problem?: 'not_git' | 'no_origin' | 'bad_origin' };
 
 export type TeamDocBrief = { name: TeamDocName; title: string; size: number; updatedAt?: string; updatedBy?: string };
 

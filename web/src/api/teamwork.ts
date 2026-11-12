@@ -5,7 +5,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocName, TeamFlow, TeamHistoryItem, TeamLocal, TeamMember, TeamProject, TeamProjectBrief,
-  TeamProjectStatus, TeamRemoteCheck, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskType,
+  TeamProjectStatus, TeamRemoteCheck, TeamRepoInfo, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskType,
 } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
 import { api } from './client';
@@ -68,12 +68,16 @@ export const saveTeamFlow = (team: string, name: string, yaml: string) => api<Te
 
 // ---------- проекты и документы
 
-export type NewProject = { slug: string; title: string; summary?: string; repos?: { key: string; url: string; defaultBranch?: string }[] };
+/** Репо кода в create/update проекта: key, url, defaultBranch — в project.yaml; local — моя папка, только в local.json. */
+export type ProjectRepoBody = { key: string; url: string; defaultBranch?: string; local?: string };
+export type NewProject = { slug: string; title: string; summary?: string; repos?: ProjectRepoBody[] };
 export const fetchProjects = (team: string) => api<TeamProjectBrief[]>('GET', `${base(team)}/projects`);
 export const createProject = (team: string, body: NewProject) => api<TeamProject>('POST', `${base(team)}/projects`, body);
 export const fetchProject = (team: string, project: string) => api<TeamProject>('GET', projectBase(team, project));
-export type ProjectPatch = { title?: string; summary?: string; status?: TeamProjectStatus; repos?: { key: string; url: string; defaultBranch?: string }[] };
+export type ProjectPatch = { title?: string; summary?: string; status?: TeamProjectStatus; repos?: ProjectRepoBody[] };
 export const updateProject = (team: string, project: string, patch: ProjectPatch) => api<TeamProject>('PUT', projectBase(team, project), patch);
+/** Что git знает о моей папке репо кода: корень, origin, ветка по умолчанию, ключ из имени папки; problem — not_git, no_origin, bad_origin. */
+export const fetchRepoInfo = (team: string, path: string) => api<TeamRepoInfo>('POST', `${base(team)}/repo-info`, { path });
 
 export const fetchDoc = (team: string, project: string, name: TeamDocName) => api<TeamDoc>('GET', `${projectBase(team, project)}/docs/${docPath(name)}`);
 /**

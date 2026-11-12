@@ -4,10 +4,11 @@
 // GET …/conflicts, DELETE …/conflicts/:id («оставить версию команды»), POST …/conflicts/:id/mine («взять мою»: поле, текст
 // или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*) — объект
 // TeamDrafts из teamwork-drafts.ts в deps маршрута; текст задачи для запуска (…/intake) и worktree задачи (…/worktree)
-// добавляет сессия work волны 2 — их маршруты не заняты.
+// добавляет сессия work волны 2 — их маршруты не заняты. Репо кода добавляется выбором моей папки: POST …/repo-info читает её
+// origin и ветку по умолчанию из git, а папка (repos[].local в create/update проекта) хранится только в local.json → repoPaths.
 import path from 'node:path';
 import { parseFlow } from './flows.js';
-import { exec, parseRemote, type Exec } from './git.js';
+import { defaultBranch, exec, originUrl, parseRemote, repoRoot, type Exec } from './git.js';
 import { describeProjects } from './projects.js';
 import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
@@ -22,7 +23,7 @@ import {
 } from './teamwork.js';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
-  TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
+  TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
   TeamTaskWork,
 } from './api-types.js';
 
@@ -86,6 +87,21 @@ const strArr = (v: unknown, field: string): string[] => {
 };
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/i;
 const DOC_UPDATED: Record<string, string> = { prd: 'ТЗ обновлено', architecture: 'архитектура обновлена', design: 'дизайн обновлён' };
+
+/** Ключ репо из имени папки: латиница в нижнем регистре, цифры, дефис и подчёркивание (KEY_RE); ничего не осталось — repo. */
+export function repoKeyFrom(name: string): string {
+  const k = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 41).replace(/[-_]+$/, '');
+  return KEY_RE.test(k) ? k : 'repo';
+}
+
+/** Текущая ветка папки (запасная ветка по умолчанию, когда нет origin/HEAD); отделённый HEAD — undefined. */
+async function currentBranch(root: string, x: Exec): Promise<string | undefined> {
+  try {
+    return (await x('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: root, timeoutMs: 10_000 })).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Локальная папка репо кода среди проектов дашборда по origin (spec §5.3). */
 export async function findLocalRepo(url: string, x: Exec = exec): Promise<string | undefined> {
@@ -164,8 +180,16 @@ export class TeamService {
     return out;
   }
 
-  check(url: string): Promise<TeamRemoteCheck> {
-    return checkRemote(url, this.repoDeps);
+  /** Проверка ссылки; у репо команды — ещё и какие репо кода проектов уже есть на этом компьютере (по origin). */
+  async check(url: string): Promise<TeamRemoteCheck> {
+    const r = await checkRemote(url, this.repoDeps);
+    if (r.kind !== 'team') return r;
+    const localRepos: Record<string, string> = {};
+    for (const u of new Set(r.projects.flatMap((p) => p.repos))) {
+      const found = await (this.deps.findLocal ?? findLocalRepo)(u).catch(() => undefined);
+      if (found) localRepos[u] = found;
+    }
+    return { ...r, localRepos };
   }
 
   async createTeam(body: { url: string; title: string; prefix: string }): Promise<TeamDetail> {
@@ -476,9 +500,14 @@ export class TeamService {
     };
   }
 
-  private parseRepos(v: unknown): ProjectRepo[] {
+  /**
+   * Репо кода из тела запроса: key, url, defaultBranch — в project.yaml (общее); local — моя папка этого репо, только в
+   * local.json → repoPaths, в репо команды не попадает.
+   */
+  private parseRepos(v: unknown): { repos: ProjectRepo[]; local: Record<string, string> } {
     if (!Array.isArray(v)) bad('Поле repos — список репо кода');
     const out: ProjectRepo[] = [];
+    const local: Record<string, string> = {};
     for (const r of v as unknown[]) {
       if (!isRecord(r)) bad('Репо кода — объект с key и url');
       const key = reqStr(r.key, 'key', 'У репо кода нужен ключ');
@@ -489,8 +518,34 @@ export class TeamService {
       if (out.some((x) => x.key === key)) bad(`Ключ репо повторяется: ${key}`);
       const defaultBranch = optStr(r.defaultBranch, 'defaultBranch');
       out.push({ key, url, ...(defaultBranch ? { defaultBranch } : {}) });
+      const dir = optStr(r.local, 'local');
+      if (dir) {
+        if (!path.isAbsolute(dir)) bad(`Путь к репо кода должен быть абсолютным: ${dir}`);
+        local[url] = dir;
+      }
     }
-    return out;
+    return { repos: out, local };
+  }
+
+  /** Мои папки репо кода из create/update проекта — в local.json, после удачного коммита project.yaml. */
+  private saveRepoPaths(repo: TeamRepo, local: Record<string, string>): void {
+    if (Object.keys(local).length) repo.saveLocal((l) => Object.assign(l.repoPaths, local));
+  }
+
+  /** Что git знает о моей папке репо кода (POST …/repo-info): корень, origin, ветка по умолчанию, ключ из имени папки. */
+  async repoInfo(team: string, body: unknown): Promise<TeamRepoInfo> {
+    this.repo(team);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const dir = reqStr((body as Record<string, unknown>).path, 'path', 'Укажи папку репо кода');
+    if (!path.isAbsolute(dir)) bad(`Путь к репо кода должен быть абсолютным: ${dir}`);
+    const x = this.repoDeps.exec;
+    const root = await repoRoot(dir, x);
+    if (!root) return { path: dir, key: repoKeyFrom(path.basename(dir)), problem: 'not_git' };
+    const branch = (await defaultBranch(root, x)) ?? (await currentBranch(root, x));
+    const info: TeamRepoInfo = { path: root, key: repoKeyFrom(path.basename(root)), ...(branch ? { defaultBranch: branch } : {}) };
+    const url = await originUrl(root, x);
+    if (!url) return { ...info, problem: 'no_origin' };
+    return { ...info, url, ...(remoteProblem(url) ? { problem: 'bad_origin' as const } : {}) };
   }
 
   async createProject(team: string, body: unknown): Promise<TeamProject> {
@@ -501,7 +556,7 @@ export class TeamService {
     if (!TEAM_SLUG_RE.test(slug)) bad('Slug проекта — латиница в нижнем регистре, цифры и дефис');
     const title = reqStr(b.title, 'title', 'Укажи название проекта');
     const summary = optStr(b.summary, 'summary') ?? '';
-    const repos = b.repos === undefined ? [] : this.parseRepos(b.repos);
+    const { repos, local } = b.repos === undefined ? { repos: [], local: {} } : this.parseRepos(b.repos);
     const me = await repo.requireIdentity();
     let cfg!: ProjectConfig;
     await repo.write(`${slug}: проект создан`, (r) => {
@@ -511,6 +566,7 @@ export class TeamService {
       const docs = projectDocs({ title, summary }, [r.abs(PROJECT_TEMPLATE_DIR), path.join(this.repoDeps.templateDir ?? TEMPLATE_DIR, PROJECT_TEMPLATE_DIR)]);
       for (const [file, text] of Object.entries(docs)) r.writeFile(`projects/${slug}/${file}`, text);
     });
+    this.saveRepoPaths(repo, local);
     return this.projectView(repo, cfg);
   }
 
@@ -535,12 +591,14 @@ export class TeamService {
       patch.status = st;
       changes.push(st === 'archived' ? 'в архив' : 'снова активен');
     }
+    let local: Record<string, string> = {};
     if (b.repos !== undefined) {
-      patch.repos = this.parseRepos(b.repos);
+      ({ repos: patch.repos, local } = this.parseRepos(b.repos));
       changes.push('репо кода');
     }
     if (b.slug !== undefined && b.slug !== slug) bad('Slug проекта не меняется');
     if (changes.length) await repo.write(`${slug}: ${changes.join(', ')}`, (r) => r.writeFile(`projects/${slug}/project.yaml`, updateYaml(r.read(`projects/${slug}/project.yaml`) ?? '', patch)));
+    this.saveRepoPaths(repo, local);
     return this.projectView(repo, this.readProjectConfig(repo, slug));
   }
 
@@ -1163,6 +1221,7 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts$/)) && method === 'GET') return ok(svc.conflicts(seg(m[1])));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)$/)) && method === 'DELETE') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'theirs'));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)\/mine$/)) && method === 'POST') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'mine'));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/repo-info$/)) && method === 'POST') return ok(await svc.repoInfo(seg(m[1]), await readBody()));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/local$/))) {
       if (method === 'GET') return ok(svc.local(seg(m[1])));
       if (method === 'PUT') return ok(svc.updateLocal(seg(m[1]), await readBody()));

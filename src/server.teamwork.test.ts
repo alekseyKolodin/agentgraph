@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { TeamComment, TeamDetail, TeamDoc, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamSprint, TeamSummary, TeamSync, TeamTask } from './api-types.js';
+import type { TeamComment, TeamDetail, TeamDoc, TeamLocal, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamSprint, TeamSummary, TeamSync, TeamTask } from './api-types.js';
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-srvteam-')));
 const prevHome = process.env.AGENTGRAPH_HOME;
@@ -415,6 +415,61 @@ test('конфликты: после sync одно поле с двух стор
   assert.deepEqual((await call<unknown[]>('DELETE', `/api/teams/team/conflicts/${second[0].id}`)).body, []);
   assert.equal((await call<TeamTask>('GET', `${P}/tasks/PAY-2`)).body.title, 'От Боба');
   assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
+});
+
+test('папка репо кода: repo-info берёт origin, ветку и ключ из git; repos[].local — только в local.json; проверка ссылки находит репо у меня', async () => {
+  const info = (dir: unknown) => call<TeamRepoInfo & Err>('POST', '/api/teams/team/repo-info', { path: dir });
+  assert.equal((await call('POST', '/api/teams/nope/repo-info', { path: proj })).status, 404);
+  assert.equal((await info('relative')).status, 400);
+  assert.equal((await info(undefined)).status, 400);
+  // не git — ключ из имени папки и not_git
+  const plain = path.join(home, 'plain');
+  fs.mkdirSync(plain);
+  assert.deepEqual((await info(plain)).body, { path: plain, key: 'plain', problem: 'not_git' });
+  // git без origin: ветка — текущая, ключ из имени папки по правилам ключа
+  const lonely = path.join(home, 'My Lonely.Repo');
+  git(home, 'init', '-q', '-b', 'trunk', lonely);
+  assert.deepEqual((await info(lonely)).body, { path: lonely, key: 'my-lonely-repo', defaultBranch: 'trunk', problem: 'no_origin' });
+  // с origin: ссылка как есть, ветка — origin/HEAD, а не текущая; подпапка — корень репо
+  const code = path.join(home, 'ledger');
+  const ledger = 'git@github.com:acme/ledger.git';
+  git(home, 'init', '-q', '-b', 'feature', code);
+  git(code, 'commit', '-q', '--allow-empty', '-m', 'init');
+  git(code, 'remote', 'add', 'origin', ledger);
+  git(code, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git(code, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  fs.mkdirSync(path.join(code, 'src'));
+  assert.deepEqual((await info(path.join(code, 'src'))).body, { path: code, key: 'ledger', defaultBranch: 'main', url: ledger });
+  // origin, который не годится ссылкой в project.yaml
+  const odd = path.join(home, 'odd');
+  git(home, 'init', '-q', '-b', 'main', odd);
+  git(odd, 'config', 'remote.origin.url', 'not a link');
+  assert.equal((await info(odd)).body.problem, 'bad_origin');
+  // проект с папкой репо: ссылка и ветка — в project.yaml, папка — только в local.json
+  assert.equal((await call('POST', '/api/teams/team/projects', { slug: 'ledger-ui', title: 'Счета', repos: [{ key: 'ledger', url: ledger, local: 'relative' }] })).status, 400);
+  assert.equal((await call('GET', '/api/teams/team/projects/ledger-ui')).status, 404);
+  const created = await call<TeamProject>('POST', '/api/teams/team/projects', { slug: 'ledger-ui', title: 'Счета', repos: [{ key: 'ledger', url: ledger, defaultBranch: 'main', local: code }] });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.body.repos, [{ key: 'ledger', url: ledger, defaultBranch: 'main', local: code }]);
+  assert.equal((await call<TeamLocal>('GET', '/api/teams/team/local')).body.repoPaths[ledger], code);
+  const yaml = fs.readFileSync(path.join(teamsDir(), 'team', 'repo', 'projects', 'ledger-ui', 'project.yaml'), 'utf8');
+  assert.match(yaml, /url: git@github\.com:acme\/ledger\.git/);
+  assert.doesNotMatch(yaml, /local:/);
+  assert.ok(!yaml.includes(home), yaml);
+  // второе репо правкой проекта: ссылка введена руками, папка без origin — моя
+  const lonelyUrl = 'git@github.com:acme/lonely.git';
+  const upd = await call<TeamProject>('PUT', '/api/teams/team/projects/ledger-ui', { repos: [{ key: 'ledger', url: ledger, defaultBranch: 'main' }, { key: 'lonely', url: lonelyUrl, local: lonely }] });
+  assert.equal(upd.status, 200);
+  assert.deepEqual(upd.body.repos.map((r) => [r.key, r.local]), [['ledger', code], ['lonely', lonely]]);
+  assert.equal((await call<TeamLocal>('GET', '/api/teams/team/local')).body.repoPaths[lonelyUrl], lonely);
+  assert.doesNotMatch(git(path.join(teamsDir(), 'team', 'repo'), 'show', 'HEAD'), /Lonely/);
+  // проверка ссылки на репо команды: репо кода проектов, которые есть среди проектов дашборда по origin
+  // (проверка читает репо команды по ссылке — сначала отправить)
+  assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
+  assert.equal((await call('POST', '/api/projects', { path: code })).status, 201);
+  const chk = await call<TeamRemoteCheck>('POST', '/api/teams/check', { url: bare });
+  assert.equal(chk.body.kind, 'team');
+  if (chk.body.kind === 'team') assert.deepEqual(chk.body.localRepos, { [ledger]: code });
 });
 
 test('событие team в /api/events после записи и после отправки через POST /sync; отключение с неотправленными — 409 unpushed, с force — удаление', async () => {

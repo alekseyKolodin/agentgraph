@@ -80,7 +80,26 @@
 .strip.big .st { flex: 1 1 0; width: auto; max-width: 44px; height: 22px; border-radius: 3px; }
 .new-project { background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; max-width: 640px; margin-bottom: 16px; }
 .repo-rows { display: flex; flex-direction: column; gap: 6px; }
-.repo-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.repo-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; }
+/* поля строки репо и вне формы .f (обзор проекта) — как поля формы */
+.repo-row input { background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 5px 8px; color: var(--ink); width: 100%; min-width: 0; font: inherit; font-family: var(--font-mono); font-size: var(--fs-small); }
+.repo-row input:focus { outline: none; border-color: var(--live); }
+.repo-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.repo-cell .u { font-family: var(--font-mono); font-size: var(--fs-small); color: var(--ink); overflow-wrap: anywhere; }
+.repo-cell .meta:empty { display: none; }
+.repo-hint { grid-column: 1 / -1; }
+/* выбор репо: мои проекты строками с разделителями (не карточка в карточке), снизу — другая папка и ссылка руками */
+.chooser { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 2px; border-top: 1px solid var(--line); }
+.chooser-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); max-height: 264px; overflow-y: auto; }
+.chooser-list button { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: baseline; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 7px 6px; color: var(--ink); font: inherit; font-size: var(--fs-small); cursor: pointer; }
+.chooser-list button:hover:not(:disabled) { background: var(--hover); }
+.chooser-list button:disabled { cursor: default; }
+.chooser-list button:disabled b { color: var(--ink-3); }
+.chooser-list b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chooser-list .meta { overflow-wrap: anywhere; }
+.origin { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.chooser-warn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chooser-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tab-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 
 /* --- участники */
@@ -141,6 +160,11 @@
 .repo-pick { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .repo-pick input { flex: 1 1 160px; min-width: 0; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 4px 8px; color: var(--ink); font: inherit; font-family: var(--font-mono); font-size: var(--fs-meta); }
 .repo-pick input:focus { outline: none; border-color: var(--live); }
+.cap-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.repo-add { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+/* «git clone <ссылка>» для ненайденного репо: команда моно в углублении, рядом «Копировать» */
+.clone { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.clone code { flex: 1 1 auto; min-width: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 2px 6px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; user-select: all; }
 .feed { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .feed li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .feed .x { font-size: var(--fs-small); color: var(--ink); overflow-wrap: anywhere; }
@@ -173,6 +197,9 @@
 .jrepo { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .jrepo b { font-family: var(--font-mono); font-size: var(--fs-small); font-weight: 500; }
 .jrepo .p { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.jrepo-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.jrepo-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.jrepo-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .foot .hint { font-size: var(--fs-meta); color: var(--ink-3); }
 .cf { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -206,7 +233,11 @@
   .opts { grid-template-columns: minmax(0, 1fr); }
   .tree { white-space: pre-wrap; }
   .panel-form { max-width: none; }
-  .repo-row { grid-template-columns: minmax(0, 1fr); }
+  .repo-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .repo-row > input { grid-column: 1; }
+  .repo-row .repo-cell { grid-column: 1; }
+  .repo-row > button { grid-column: 2; grid-row: 1; }
+  .chooser-list button { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .jrepo { grid-template-columns: minmax(0, 1fr); }
   .drawer { width: 100vw; border-left: 0; }
 }
@@ -225,7 +256,9 @@
 .sync.off { color: var(--ink-3); }
 .hrun.wait .hrun-sum { color: var(--st-wait); }
 .hrun.fail .hrun-sum { color: var(--st-fail); }
-.repo .miss { font-size: var(--fs-meta); color: var(--st-wait); }
+.repo .miss, .jrepo .miss { font-size: var(--fs-meta); color: var(--st-wait); }
+.origin.none { color: var(--st-wait); }
+.repo-row input[aria-invalid] { border-color: var(--st-fail); }
 .note.ok { color: var(--st-ok); }
 .note.warn { color: var(--st-wait); }
 .note.err { color: var(--st-fail); }

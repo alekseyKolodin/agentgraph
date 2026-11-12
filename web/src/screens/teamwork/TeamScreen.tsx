@@ -1,5 +1,5 @@
 // Экран команды (/teamwork/:team?tab=; spec §11; макет Team.dc.html): шапка с названием, репо и префиксом, строкой синхронизации
-// и участниками; вкладки «Проекты» (строки с полосой спринта и форма нового проекта), «Участники», «Процесс» (flow команды
+// и участниками; вкладки «Проекты» (строки с полосой спринта и форма нового проекта, репо кода — из моих папок), «Участники», «Процесс» (flow команды
 // в редакторе YAML с проверкой схемы, сохранение коммитит), «Настройки» (название, колонки, flow по умолчанию, отключение).
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -16,8 +16,10 @@ import { tildePath } from '../../lib/paths';
 import { STATUSES, tasksWord } from '../../lib/teamwork/board';
 import { YamlEditor, type YamlEditorHandle } from '../flow/YamlEditor';
 import { Loading } from '../sessions/Loading';
+import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
 import { ConflictsDialog } from './ConflictsDialog';
 import { Crumbs, cx, ErrorLine, People, SprintStrip, Tabs, Who } from './parts';
+import { RepoChooser, RepoDraftRow, type RepoTaken } from './RepoPicker';
 import { projectPath, remoteLabel, SLUG_RE, TEAM_TABS, TEAMS_PATH, teamTabLabel, teamTabOf, teamTabPath, type TeamTab } from './shell';
 import { SyncLine } from './SyncLine';
 import styles from './Teamwork.module.css';
@@ -122,28 +124,30 @@ function ProjectRow({ team, p }: { team: string; p: TeamProjectBrief }) {
   );
 }
 
-type RepoRow = { key: string; url: string };
-
-/** Новый проект: slug, название, суть, репо кода по ссылке (spec §8.3). */
+/**
+ * Новый проект: slug, название, суть, репо кода (spec §8.3). Репо — из моих папок (RepoChooser): ссылка и ветка из git уходят
+ * в project.yaml, папка — только в мой local.json; ссылку руками — «Ввести ссылку».
+ */
 function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => void }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [slug, setSlug] = useState('');
   const [title, setTitle] = useState('');
   const [summary, setSummary] = useState('');
-  const [repos, setRepos] = useState<RepoRow[]>([]);
+  const [repos, setRepos] = useState<RepoDraft[]>([]);
+  const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const slugOk = slug === '' || SLUG_RE.test(slug);
-  const can = !busy && SLUG_RE.test(slug) && title.trim() !== '' && repos.every((r) => (r.key.trim() === '' && r.url.trim() === '') || (r.key.trim() && r.url.trim()));
+  const body = reposBody(repos);
+  const can = !busy && SLUG_RE.test(slug) && title.trim() !== '' && body !== undefined;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!can) return;
     setBusy(true);
     setErr('');
     try {
-      const list = repos.filter((r) => r.key.trim() && r.url.trim()).map((r) => ({ key: r.key.trim(), url: r.url.trim() }));
-      const p = await createProject(team.slug, { slug, title: title.trim(), summary: summary.trim(), ...(list.length ? { repos: list } : {}) });
+      const p = await createProject(team.slug, { slug, title: title.trim(), summary: summary.trim(), ...(body.length ? { repos: body } : {}) });
       await qc.invalidateQueries({ queryKey: teamKeys.all });
       onClose();
       void navigate(projectPath(team.slug, p.slug));
@@ -153,7 +157,12 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
       setBusy(false);
     }
   };
-  const setRepo = (i: number, patch: Partial<RepoRow>) => setRepos((list) => list.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const setRepo = (id: number, patch: Partial<RepoDraft>) => setRepos((list) => list.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const taken: RepoTaken = {
+    paths: new Set(repos.flatMap((r) => (r.local ? [r.local] : []))),
+    urls: new Set(repos.flatMap((r) => (r.url.trim() ? [r.url.trim()] : []))),
+    keys: repos.map((r) => r.key.trim()).filter(Boolean),
+  };
   return (
     <form className={styles.newProject} aria-label={t('Новый проект')} onSubmit={(e) => void submit(e)}>
       <div className={styles.two} style={{ gridTemplateColumns: 'minmax(0, 1fr) 200px' }}>
@@ -174,16 +183,24 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
       <div className={styles.f}>
         <label>{t('Репо кода')}</label>
         <div className={styles.repoRows}>
-          {repos.map((r, i) => (
-            <div key={i} className={styles.repoRow}>
-              <input className={styles.mono} value={r.key} placeholder={t('ключ: billing')} spellCheck={false} aria-label={t('Ключ репо')} onChange={(e) => setRepo(i, { key: e.target.value })} />
-              <input className={styles.mono} value={r.url} placeholder="git@github.com:acme/billing.git" spellCheck={false} aria-label={t('Ссылка на репо кода')} onChange={(e) => setRepo(i, { url: e.target.value })} />
-              <button type="button" className="btn ghost small" aria-label={t('Убрать репо')} onClick={() => setRepos((list) => list.filter((_, j) => j !== i))}>×</button>
-            </div>
+          {repos.map((r) => (
+            <RepoDraftRow key={r.id} draft={r} all={repos} onChange={(patch) => setRepo(r.id, patch)} onRemove={() => setRepos((list) => list.filter((x) => x.id !== r.id))} />
           ))}
-          <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} onClick={() => setRepos((list) => [...list, { key: '', url: '' }])}>{t('+ Репо')}</button>
+          {choosing ? (
+            <RepoChooser
+              team={team.slug}
+              taken={taken}
+              onAdd={(d) => {
+                setRepos((list) => [...list, d]);
+                setChoosing(false);
+              }}
+              onClose={() => setChoosing(false)}
+            />
+          ) : (
+            <button type="button" className="btn small" style={{ alignSelf: 'flex-start' }} title={t('Выбрать папку репо среди своих проектов')} onClick={() => setChoosing(true)}>{t('+ Репо')}</button>
+          )}
         </div>
-        <span className={styles.note}>{t('Ключ — короткое имя репо в задачах и у агента; ссылка — как для git clone. Свою локальную папку каждый укажет на обзоре проекта.')}</span>
+        <span className={styles.note}>{t('Ничего не скачивается: в проект попадают ссылка (origin) и ветка, а ваша папка остаётся только у вас. У коллег agentgraph найдёт их папку этого репо по origin среди их проектов. Ключ — короткое имя репо в задачах и у агента.')}</span>
       </div>
       {err && <p className="msg err">{err}</p>}
       <div className="row">

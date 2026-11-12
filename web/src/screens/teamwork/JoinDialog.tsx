@@ -1,14 +1,17 @@
 // «Подключиться по ссылке» (spec §8.2; макет Join.dc.html): ссылка на репо команды проверяется по мере ввода, найденная команда
 // показывается с участниками и проектами, галочка «Добавить меня в участники» (отдельный коммит) включена по умолчанию.
-// Папки репо кода проектов указываются после подключения — на обзоре проекта.
+// Репо кода проектов — найдено ли у меня по origin среди проектов дашборда (localRepos проверки) или подсказка git clone;
+// папку ненайденного указывают после подключения — на обзоре проекта.
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDetail } from '@server/api-types';
-import { errorText } from '../../api';
+import { errorText, useConfig } from '../../api';
 import { joinTeam, teamKeys } from '../../api/teamwork';
 import { t } from '../../lib/i18n';
+import { tildePath } from '../../lib/paths';
 import { memberLabel } from '../../lib/teamwork/board';
 import { cx, Who } from './parts';
+import { CloneHint } from './RepoPicker';
 import { checkLine, projectsWord, slugFromUrl } from './shell';
 import { useRemoteCheck } from './useRemoteCheck';
 import styles from './Teamwork.module.css';
@@ -23,6 +26,7 @@ export function JoinDialog({ initialUrl = '', onClose, onJoined }: { initialUrl?
   const { check, busy: checking } = useRemoteCheck(url);
   const line = checkLine(check, checking);
   const found = check?.kind === 'team' ? check : undefined;
+  const home = useConfig().data?.home;
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -90,11 +94,25 @@ export function JoinDialog({ initialUrl = '', onClose, onJoined }: { initialUrl?
               {found.projects.filter((p) => p.repos.length).map((p) => (
                 <div key={p.slug} className={styles.jrepo}>
                   <b>{p.slug}</b>
-                  <span className={styles.p}>{p.repos.join('\n')}</span>
+                  <span className={styles.jrepoList}>
+                    {p.repos.map((url) => {
+                      const local = found.localRepos?.[url];
+                      return (
+                        <span key={url} className={styles.jrepoItem}>
+                          <span className={styles.jrepoH}>
+                            <span className={cx(styles.dot, styles.s6, local ? styles.ok : styles.wait)} aria-hidden="true" />
+                            <span className={styles.p}>{url}</span>
+                          </span>
+                          {local ? <span className={styles.p}>{tildePath(local, home)}</span> : <span className={styles.miss}>{t('не найден на этом компьютере')}</span>}
+                          {!local && <CloneHint url={url} />}
+                        </span>
+                      );
+                    })}
+                  </span>
                 </div>
               ))}
             </div>
-            <p className={styles.note} style={{ marginTop: 6 }}>{t('Папки на этом компьютере укажете на обзоре проекта. Без папки задачи этого репо нельзя отправить агенту.')}</p>
+            <p className={styles.note} style={{ marginTop: 6 }}>{t('Ничего не скачивается: свою папку репо agentgraph находит по origin среди ваших проектов. Ненайденное — склонируйте и укажите папку на обзоре проекта; без папки задачи этого репо нельзя отправить агенту.')}</p>
           </div>
         )}
         {err && <p className="msg err">{err}</p>}
