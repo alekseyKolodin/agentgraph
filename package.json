@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.285",
+    "@codemirror/lang-markdown": "^6.5.2",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
     "ws": "^8.22.0",

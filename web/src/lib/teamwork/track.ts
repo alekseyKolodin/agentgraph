@@ -456,7 +456,9 @@ export function applyDecisions(oldMd: string, nextMd: string, decisions: Decisio
     }
     const ok = decisions[item.edit.id] === 'accept';
     const { a, b } = item;
-    if (a && b) emit(ok ? b : a, ok ? 'b' : 'a', a.blanks);
+    // принятая замена, за которой сразу принятая вставка (новый пункт под изменённым): пустые строки — как в новом тексте
+    const addedNext = accepted(k + 1) && (plan.items[k + 1] as Extract<PlanItem, { type: 'edit' }>).edit.kind === 'added';
+    if (a && b) emit(ok ? b : a, ok ? 'b' : 'a', ok && addedNext ? b.blanks : a.blanks);
     else if (a && !ok) emit(a, 'a', a.blanks);
     else if (a && ok && prev && prev.blanks === 0 && a.blanks.length) {
       out.push(...a.blanks);

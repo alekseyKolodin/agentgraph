@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { TeamComment, TeamDetail, TeamDoc, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamSprint, TeamSummary, TeamSync, TeamTask } from './api-types.js';
+import type { TeamComment, TeamDetail, TeamDoc, TeamDocRevision, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamSprint, TeamSummary, TeamSync, TeamTask } from './api-types.js';
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-srvteam-')));
 const prevHome = process.env.AGENTGRAPH_HOME;
@@ -215,6 +215,26 @@ test('разделы ТЗ: сохранение раздела не трогае
   assert.equal((await call('GET', `${P}/docs/readme`)).status, 400);
   const p = await call<TeamProject>('GET', P);
   assert.deepEqual(p.body.docs.map((d) => d.name), ['prd', 'architecture', 'design', 'docs/notes.md']);
+});
+
+test('история документа: версия до и после коммита для диффа; без doc и с плохим хэшем — 400, нет такого коммита — 404', async () => {
+  const hist = await call<{ hash: string; message: string }[]>('GET', `${P}/history?doc=prd&limit=2`);
+  const [last, prev] = hist.body;
+  const rev = await call<TeamDocRevision>('GET', `${P}/history/${last.hash}?doc=prd`);
+  assert.equal(rev.status, 200);
+  assert.equal(rev.body.hash, last.hash);
+  assert.ok(rev.body.after.endsWith('- Нужен ли XLSX?\n'));
+  assert.ok(!rev.body.before.includes('Нужен ли XLSX?'));
+  const older = await call<TeamDocRevision>('GET', `${P}/history/${prev.hash}?doc=prd`);
+  assert.equal(older.body.after, rev.body.before);
+  // первый коммит документа: до него файла не было
+  const all = await call<{ hash: string }[]>('GET', `${P}/history?doc=prd&limit=50`);
+  const first = await call<TeamDocRevision>('GET', `${P}/history/${all.body[all.body.length - 1].hash}?doc=prd`);
+  assert.equal(first.body.before, '');
+  assert.match(first.body.after, /^# ТЗ/);
+  assert.equal((await call('GET', `${P}/history/${last.hash}`)).status, 400);
+  assert.equal((await call('GET', `${P}/history/HEAD~1?doc=prd`)).status, 400);
+  assert.equal((await call('GET', `${P}/history/deadbeef0?doc=prd`)).status, 404);
 });
 
 test('задачи: создание одной и пачкой с dependsOn → blockedBy, PATCH с base (409), move между соседями, 404 и удаление', async () => {

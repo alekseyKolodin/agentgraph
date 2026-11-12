@@ -16,6 +16,7 @@ import { Loading } from '../sessions/Loading';
 import { ConflictsDialog } from './ConflictsDialog';
 import { DocTab } from './docs/DocTab';
 import { DocsListTab } from './docs/DocsListTab';
+import { UnsavedLine } from './docs/UnsavedLine';
 import { OverviewTab } from './OverviewTab';
 import { Crumbs, cx, ErrorLine, People, Tabs } from './parts';
 import { PROJECT_TABS, projectPath, projectTabLabel, projectTabOf, TASK_PARAM, TEAMS_PATH, teamPath } from './shell';
@@ -85,6 +86,7 @@ export function ProjectScreen() {
         </div>
         <div className={styles.headR}>
           <SyncLine team={team} sync={td.sync} format={td.format} conflicts={conflictsQ.data} onResolve={() => setConflictsOpen(true)} />
+          <UnsavedLine team={team} project={project} />
           <People members={td.memberList} />
           <ProjectMenu team={td} project={p} />
         </div>

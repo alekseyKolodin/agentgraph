@@ -21,7 +21,7 @@ import {
   taskFrontmatter, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
 } from './teamwork.js';
 import type {
-  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
+  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
   TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
   TeamTaskWork,
 } from './api-types.js';
@@ -635,6 +635,19 @@ export class TeamService {
     return repo.history({ path: p, ...(Number.isFinite(o.limit) ? { limit: o.limit } : {}) });
   }
 
+  /** Документ до и после коммита из истории (spec §8.4 «История» — дифф): файла в одной из версий нет — пустая строка. */
+  async docRevision(team: string, slug: string, name: string, hash: string): Promise<TeamDocRevision> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const { rel } = this.docPath(slug, name);
+    if (!/^[0-9a-f]{7,40}$/.test(hash)) bad('hash — номер коммита');
+    const show = (ref: string) => repo.git(['show', `${ref}:${rel}`]).catch(() => undefined);
+    const after = await show(hash);
+    const before = await show(`${hash}^`);
+    if (after === undefined && before === undefined) throw new TeamError(404, `В коммите ${hash.slice(0, 7)} нет документа ${name}`);
+    return { name: name as TeamDocName, hash, before: before ?? '', after: after ?? '' };
+  }
+
   // ---------- задачи (spec §8.5–8.7)
 
   private taskId(id: string): string {
@@ -1191,6 +1204,11 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/history$/)) && method === 'GET') {
       const limit = url.searchParams.get('limit');
       return ok(await svc.history(seg(m[1]), seg(m[2]), { doc: url.searchParams.get('doc') ?? undefined, limit: limit ? Number(limit) : undefined }));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/history\/([^/]+)$/)) && method === 'GET') {
+      const doc = url.searchParams.get('doc');
+      if (!doc) bad('Нужен doc — какой документ показать');
+      return ok(await svc.docRevision(seg(m[1]), seg(m[2]), doc as string, seg(m[3])));
     }
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/tasks$/))) {
       if (method === 'GET') return ok(svc.tasks(seg(m[1]), seg(m[2])));

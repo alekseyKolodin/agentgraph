@@ -86,8 +86,9 @@ export function initials(m: Pick<TeamMember, 'name' | 'email'> | string | undefi
   return (email.split('@')[0] ?? '').slice(0, 2).toUpperCase();
 }
 
+/** Участник по email без учёта регистра: в teamwork.yaml email в нижнем регистре, у коммитов — как в git config. */
 export const memberByEmail = (members: readonly TeamMember[], email: string | undefined): TeamMember | undefined =>
-  email ? members.find((m) => m.email === email) : undefined;
+  email ? members.find((m) => m.email.toLowerCase() === email.toLowerCase()) : undefined;
 
 export type AssigneeChip = { who: BoardWho; label: string; count: number };
 
