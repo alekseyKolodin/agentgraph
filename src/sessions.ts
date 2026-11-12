@@ -23,10 +23,17 @@ export const SESSION_NEW_TOOL = 'session_new';
 export const SESSION_NEW_FULL = `mcp__${SESSION_MCP_SERVER}__${SESSION_NEW_TOOL}`;
 /** Запись документа пространства: как session_new — не в SESSION_ALLOWED_TOOLS, PreToolUse велит спросить всегда. */
 export const SPACE_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_WRITE_TOOL}`;
+/** Инструменты сессии из задачи Teamwork (spec §9.5): статус, PR и комментарий задачи; документ проекта. Оба всегда с вопросом. */
+export const TEAM_TASK_UPDATE_TOOL = 'team_task_update';
+export const TEAM_DOC_WRITE_TOOL = 'team_doc_write';
+export const TEAM_TASK_UPDATE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_TASK_UPDATE_TOOL}`;
+export const TEAM_DOC_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_DOC_WRITE_TOOL}`;
 /** Инструменты, о каждом вызове которых claude спрашивает человека в любом режиме: хук PreToolUse отвечает ask. */
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
   [SPACE_WRITE_FULL]: 'agentgraph: документ пространства увидят все следующие сессии и запуски',
+  [TEAM_TASK_UPDATE_FULL]: 'agentgraph: изменение задачи Teamwork уйдёт коммитом в репо команды',
+  [TEAM_DOC_WRITE_FULL]: 'agentgraph: документ проекта Teamwork уйдёт коммитом в репо команды',
 };
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';

@@ -139,3 +139,44 @@ test('MCP: пакет сообщений — ответы только на за
   const r = await mcpReply([rpc('ping', undefined, 1), { jsonrpc: '2.0', method: 'notifications/cancelled' }, rpc('ping', undefined, 2)], ctx);
   assert.deepEqual(r, { status: 200, body: [{ jsonrpc: '2.0', id: 1, result: {} }, { jsonrpc: '2.0', id: 2, result: {} }] });
 });
+
+test('MCP: инструменты задачи Teamwork — только у сессии из задачи; team_task_update и team_doc_write уходят в контекст, лишнее и не строки — ошибка', async () => {
+  const task = { id: 'PAY-12', team: 'team', project: 'export' };
+  const updates: unknown[] = [];
+  const docs: [string, string][] = [];
+  const base = ctxOf(() => ({ knowledge: [], task })).ctx;
+  const withTask: McpCtx = { ...base, teamTask: async (a) => (updates.push(a), `Задача PAY-12: ${JSON.stringify(a)}`), teamDoc: async (name, text) => (docs.push([name, text]), `/teams/team/repo/projects/export/${name}.md`) };
+  type Tool = { name: string; description: string; annotations: unknown; inputSchema: { properties: Record<string, { enum?: string[] }> } };
+  const list = ((await mcpReply(rpc('tools/list'), withTask)).body as { result: { tools: Tool[] } }).result.tools;
+  assert.deepEqual(list.slice(3).map((t) => [t.name, t.annotations]), [
+    ['team_task_update', { readOnlyHint: false, destructiveHint: true }],
+    ['team_doc_write', { readOnlyHint: false, destructiveHint: true }],
+  ]);
+  assert.match(list[3].description, /PAY-12 \(команда team, проект export\)/);
+  assert.deepEqual(list[3].inputSchema.properties.status.enum, ['todo', 'in_progress', 'review', 'done']);
+  // без задачи инструментов в списке нет, а вызов — ошибка
+  const plain = ((await mcpReply(rpc('tools/list'), ctx)).body as { result: { tools: Tool[] } }).result.tools;
+  assert.deepEqual(plain.map((t) => t.name), ['knowledge_read', 'space_write', 'session_new']);
+  const noTask = await callWith(ctx, 'team_task_update', { status: 'review' });
+  assert.deepEqual([noTask.isError, noTask.content[0].text], [true, 'Эта сессия не открыта из задачи Teamwork: инструмент недоступен']);
+  // статус, PR и комментарий — как есть; пустые строки — как не заданные; управляющие символы вычищаются
+  const r = await callWith(withTask, 'team_task_update', { status: 'review', pr: ' https://github.com/acme/billing/pull/42 ', comment: 'готово\x07' });
+  assert.equal(r.isError, undefined);
+  assert.deepEqual(updates, [{ status: 'review', pr: 'https://github.com/acme/billing/pull/42', comment: 'готово' }]);
+  await callWith(withTask, 'team_task_update', { status: '', comment: 'только комментарий' });
+  assert.deepEqual(updates.at(-1), { comment: 'только комментарий' });
+  for (const bad of [{}, { status: 'later' }, { status: 5 }, { pr: 'x', title: 'нет такого' }, { comment: ['a'] }]) {
+    assert.equal((await callWith(withTask, 'team_task_update', bad)).isError, true, JSON.stringify(bad));
+  }
+  assert.equal(updates.length, 2);
+  const d = await callWith(withTask, 'team_doc_write', { name: 'architecture', text: '# Архитектура' });
+  assert.match(d.content[0].text, /^Документ записан: \/teams\/team\/repo\/projects\/export\/architecture\.md\. Коммит в репо команды/);
+  assert.deepEqual(docs, [['architecture', '# Архитектура']]);
+  for (const bad of [{ name: 'design' }, { text: 'x' }, { name: 1, text: 'x' }, { name: 'design', text: 'x', base: 'h' }]) {
+    assert.equal((await callWith(withTask, 'team_doc_write', bad)).isError, true, JSON.stringify(bad));
+  }
+  // ошибка записи — текстом модели
+  const failing: McpCtx = { ...withTask, teamDoc: async () => { throw new Error('ТЗ из сессии не пишется'); } };
+  const f = await callWith(failing, 'team_doc_write', { name: 'prd', text: 'x' });
+  assert.deepEqual([f.isError, f.content[0].text], [true, 'ТЗ из сессии не пишется']);
+});

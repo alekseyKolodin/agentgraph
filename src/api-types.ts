@@ -95,10 +95,10 @@ export type QuestionRecord = {
 /** Сводка запуска и после какой итерации какого блока она написана. */
 export type RunDigest = { text: string; block: string; iteration: number; at: string };
 
-/** Задача Jira, MR или ветка, из которой запущен запуск. */
+/** Задача Jira, MR, ветка или задача Teamwork, из которой запущен запуск. */
 export type RunSource = {
-  type: 'jira' | 'mr' | 'branch';
-  /** KEY-123, !42 (ref MR) или имя ветки. */
+  type: 'jira' | 'mr' | 'branch' | 'teamwork';
+  /** KEY-123, !42 (ref MR), имя ветки или номер задачи Teamwork (PAY-12). */
   key: string;
   title: string;
   url?: string;
@@ -592,6 +592,8 @@ export type SessionView = {
   resumable?: boolean;
   /** Живая, статус waiting: с какого момента ждёт тебя (главная — «ждёт N мин»). */
   waitingSince?: string;
+  /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
+  teamwork?: RunTeamworkLink;
 };
 
 /** GET /api/sessions. */
@@ -1671,6 +1673,8 @@ export type TeamTaskPatch = {
   estimate?: number | null;
   repo?: string | null;
   branch?: string | null;
+  /** Ссылка на PR и его состояние (без state — open); null снимает. Пишут автоматика статусов и team_task_update. */
+  pr?: { url: string; state?: TeamPr['state'] } | null;
   blockedBy?: string[];
   covers?: string[];
   body?: string;
@@ -1833,3 +1837,37 @@ export type TeamDraftAccepted = TeamDoc | { tasks: TeamTask[] };
  * запускам и черновики читают её на сервере.
  */
 export type RunTeamworkLink = { team: string; project: string; task?: string; draft?: TeamDraftKind; section?: string; brief?: string; docs?: TeamDraftDocName[] };
+
+/**
+ * GET …/tasks/:id/intake?repo=<ключ>&flow=<flow команды>: что форма запуска «В работу ▸» заполняет сама (spec §8.8, §8.9,
+ * §9.4). Текст участников команды — только внутри source-data; снаружи номера, слаги и пути, собранные сервером.
+ */
+export type TeamTaskIntake = {
+  /** Вход запуска: анкета flow (строки «Задача:» и «Ветка:» заполнены) и под ней текст задачи. */
+  input: string;
+  /** Текст задачи без анкеты: для flow не из команды форма собирает вход сама, как composeInput. */
+  context: string;
+  source: RunSource;
+  teamwork: RunTeamworkLink;
+  /** Flow по умолчанию — flow команды: ?flow=, иначе defaultFlow из teamwork.yaml, иначе teamwork-task; нет в репо — пусто. */
+  teamFlow?: { team: string; name: string };
+  /** Все flow команды — группа «Flow команды» в списке формы. */
+  teamFlows: string[];
+  /** Ветка задачи: из файла задачи, иначе tw/<ID>-<slug заголовка>. */
+  branch: string;
+  /** Репо кода задачи (?repo= или repo задачи; единственное репо проекта — оно); нет local — папку репо просят указать в настройках команды. */
+  repo?: TeamRepoRef;
+  /** Все репо проекта: выбор, если их несколько и у задачи репо не задано. */
+  repos: TeamRepoRef[];
+  /** Папка запуска до worktree: локальная папка репо кода. Worktree ветки задачи готовит POST …/worktree. */
+  cwd?: string;
+  /** Доп. папки запуска: папка проекта в клоне команды (документы), только для чтения — guard папок данных. */
+  addDirs: string[];
+  /** Пространство, привязанное к проекту (local.json → projectSpaces). */
+  space?: string;
+  /** Запуски и сессии по задаче на этом компьютере со статусами. */
+  work: TeamTaskWork[];
+};
+
+/** POST …/tasks/:id/worktree { repo? }: worktree репо кода на ветке задачи (spec §8.8 п. 2); ветка и репо записаны в задачу. */
+export type TeamTaskWorktree = WorktreeResult & { branch: string; repo: TeamRepoRef; task: TeamTask };

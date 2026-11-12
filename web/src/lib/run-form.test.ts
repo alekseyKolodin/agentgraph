@@ -60,6 +60,7 @@ test('источник и worktree: MR и PR по ключу, проект, те
   assert.equal(sourceLabel({ type: 'mr', key: 'o/app#5', title: '' }), 'PR');
   assert.equal(sourceLabel({ type: 'jira', key: 'A-1', title: '' }), 'Задача');
   assert.equal(sourceLabel({ type: 'branch', key: 'main', title: '' }), 'Ветка');
+  assert.equal(sourceLabel({ type: 'teamwork', key: 'PAY-12', title: '' }), 'Задача');
   const projects = [{ path: '/a' }, { path: '/b' }];
   assert.equal(worktreeProject(projects, null, '/b/sub'), '/b');
   assert.equal(worktreeProject(projects, { project: '/a' }, '/b'), '/a');

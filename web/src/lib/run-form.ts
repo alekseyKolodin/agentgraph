@@ -106,8 +106,8 @@ export function appendDir(text: string, dir: string): string {
 /** Задача Jira, MR/PR или ветка, из которой собран вход; worktree — подготовленный для запуска. */
 export type RunLink = { source?: RunSource; branch?: string; project?: string; worktree?: RunWorktree };
 
-/** «Задача», «MR» или «PR» (по ключу: owner/repo#N — GitHub), «Ветка». */
-export const sourceLabel = (s: RunSource): string => (s.type === 'jira' ? t('Задача') : s.type === 'mr' ? (mrSign(s.key) === '#' ? 'PR' : 'MR') : t('Ветка'));
+/** «Задача» (Jira и Teamwork), «MR» или «PR» (по ключу: owner/repo#N — GitHub), «Ветка». */
+export const sourceLabel = (s: RunSource): string => (s.type === 'jira' || s.type === 'teamwork' ? t('Задача') : s.type === 'mr' ? (mrSign(s.key) === '#' ? 'PR' : 'MR') : t('Ветка'));
 
 /** Проект в выборе worktree: из привязки, по директории проекта, иначе первый. */
 export function worktreeProject(projects: Pick<ProjectInfo, 'path'>[], link: RunLink | null, cwd: string): string {
