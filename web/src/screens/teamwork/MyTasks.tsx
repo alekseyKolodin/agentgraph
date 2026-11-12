@@ -73,9 +73,16 @@ export function MyTasks({ mine, className }: { mine: TeamMine; className?: strin
       {rows.length > 0 && done > 0 && <p className={styles.empty}>{t('Уже готово: ещё {n} {tasks}.', { n: done, tasks: plural(done, 'задача', 'задачи', 'задач') })}</p>}
       {noEmail.length > 0 && (
         <p className={cx(styles.empty, tw.tWait)}>
-          {t('Git не знает ваш email, поэтому задачи в «{teams}» не найти: git config --global user.email you@example.com', { teams: noEmail.map((x) => x.title).join('», «') })}
+          {t('Git не знает ваш email, поэтому ваши задачи в командах {teams} не найти: git config --global user.email you@example.com', { teams: noEmail.map((x) => x.title).join(', ') })}
         </p>
       )}
+      {/* teamwork.yaml команды не читается: задач в ней не найти, а пустой блок молчал бы почему */}
+      {mine.teams.filter((x) => x.error).map((x) => (
+        <p key={x.slug} className={cx(styles.empty, styles.fail)}>
+          <Link to={teamPath(x.slug)}>{x.slug}</Link>
+          {`: ${t('teamwork.yaml не читается — {error}', { error: x.error! })}`}
+        </p>
+      ))}
     </section>
   );
 }

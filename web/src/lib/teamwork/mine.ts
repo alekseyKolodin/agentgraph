@@ -1,7 +1,7 @@
 // «Мои задачи» на главной (spec §11): строки из ответа GET /api/teams/mine — порядок, значок работы агента и адрес его
 // запуска или сессии. Без React и DOM: адрес задачи (/teamwork/<t>/<p>/board?task=ID) собирает экран из shell.ts.
 import type { TeamMine, TeamMineProject, TeamMineTeam, TeamTask, TeamTaskStatus, TeamTaskWork } from '@server/api-types';
-import { workBadge, type WorkBadge } from './board';
+import { workBadge, workState, type WorkBadge } from './board';
 
 export type MyTaskRow = {
   /** Уникален во всех командах: номер задачи сквозной только внутри команды. */
@@ -44,6 +44,16 @@ export function myTaskRows(mine: TeamMine): { rows: MyTaskRow[]; done: number } 
   rows.sort((a, b) => urgency(a) - urgency(b) || ORDER[a.task.status] - ORDER[b.task.status] || a.i - b.i);
   return { rows: rows.map(({ i: _i, ...r }) => r), done };
 }
+
+/**
+ * Идёт или ждёт ответа хоть один мой запуск или сессия по задаче — пока да, главная перечитывает «Мои задачи» по таймеру.
+ * Записи work в local.json не чистятся, поэтому закончившиеся и упавшие не в счёт.
+ */
+export const mineWorkLive = (mine: TeamMine | undefined): boolean =>
+  (mine?.tasks ?? []).some((x) => (x.task.work ?? []).some((w) => {
+    const s = workState(w);
+    return s === 'working' || s === 'waiting';
+  }));
 
 /** Есть ли команды, где git не знает мой email: задачи там не найти, на главной — подсказка. */
 export const unknownMe = (mine: TeamMine): TeamMineTeam[] => mine.teams.filter((x) => !x.me && !x.error);

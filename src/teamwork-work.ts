@@ -168,7 +168,7 @@ export async function taskWorktree(deps: WorkDeps, team: string, project: string
   const proj = await svc.project(team, project);
   let task = readableTask(svc, team, project, id);
   const repo = pickRepo(proj, body.repo ?? task.repo);
-  if (!repo) throw new TeamError(400, proj.repos.length ? 'Выбери репо кода задачи: в проекте их несколько' : 'У проекта нет репо кода: добавь его в настройках проекта');
+  if (!repo) throw new TeamError(400, proj.repos.length ? 'Выбери репо кода задачи: в проекте их несколько' : 'У проекта нет репо кода: добавь его на обзоре проекта («+ Репо»)');
   if (!repo.local) throw new TeamError(409, `Репо ${repo.key} (${repo.url}) не найдено на этом компьютере: укажи его папку в настройках команды`, 'no_local');
   const branch = taskBranch(task);
   const s = loadSettings();

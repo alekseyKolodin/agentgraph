@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { quitPrompt, type UnsentTeam } from '../quit-dialog.js';
+import { askQuit, type UnsentTeam } from '../quit-dialog.js';
 
 const HOST = '127.0.0.1';
 
@@ -153,11 +153,14 @@ function openWindow(): void {
       detail: 'Если уйти, они пропадут.',
     });
     if (choice === 0) e.preventDefault();
-    else if (pendingRestart) {
-      // «Остаться» отменило выход: перезапуска после обновления не будет, UI скажет перезапустить вручную
-      pendingRestart(false);
-      pendingRestart = null;
+    else {
+      // «Остаться» отменило выход: следующий Cmd+Q снова спросит о сессиях и неотправленном
       quitConfirmed = false;
+      if (pendingRestart) {
+        // перезапуска после обновления не будет, UI скажет перезапустить вручную
+        pendingRestart(false);
+        pendingRestart = null;
+      }
     }
   });
   win.on('closed', () => (win = null));
@@ -198,44 +201,27 @@ let stopping: Promise<void> | null = null;
 /** Названия живых сессий терминала (src/sessions-server.ts): выход при них спрашивает подтверждение. */
 let liveSessions: () => string[] = () => [];
 /** Неотправленные изменения команд Teamwork и их отправка (src/teamwork-server.ts): о них выход тоже спрашивает. */
-let unsentTeams: () => Promise<(UnsentTeam & { slug: string })[]> = async () => [];
+let unsentTeams: () => Promise<UnsentTeam[]> = async () => [];
 let pushTeams: (slugs: string[]) => Promise<void> = async () => undefined;
 let quitConfirmed = false;
 let quitAsking = false;
 /** Перезапуск после автообновления ждёт выхода: relaunch — в will-quit, false — выход отменили в окне. */
 let pendingRestart: ((ok: boolean) => void) | null = null;
 
-/** Сколько ждать git перед вопросом (подсчёт коммитов) и отправки по «Отправить и закрыть». */
-const UNSENT_WAIT_MS = 3_000;
-const PUSH_WAIT_MS = 20_000;
-
-/** Ответ или запасное значение, если не успел за ms: выход не должен зависать на git. */
-const within = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
-  Promise.race([p.catch(() => fallback), new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms).unref())]);
-
 /**
- * Что спросить перед выходом (макет QuitDialog, spec §7.5): живые сессии терминала завершатся, неотправленные изменения
- * Teamwork останутся в клоне. «Отправить и закрыть» синхронизирует команды и выходит, если всё ушло; не ушло — спрашивает
- * ещё раз с причиной. true — выходить.
+ * Вопрос перед выходом (src/quit-dialog.ts): живые сессии терминала завершатся, неотправленные изменения Teamwork
+ * останутся в клоне, «Отправить и закрыть» сначала синхронизирует команды. true — выходить.
  */
-async function askQuit(): Promise<boolean> {
-  const sessions = liveSessions();
-  let teams = await within(unsentTeams(), UNSENT_WAIT_MS, []);
-  let pushFailed = false;
-  for (;;) {
-    const p = quitPrompt({ sessions, teams, pushFailed });
-    if (!p) return true;
-    const opts = { type: 'question' as const, buttons: p.buttons, defaultId: p.defaultId, cancelId: p.cancelId, message: p.message, detail: p.detail };
-    const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-    const choice = p.choices[r.response] ?? 'cancel';
-    if (choice !== 'push') return choice === 'quit';
-    await within(pushTeams(teams.map((x) => x.slug)), PUSH_WAIT_MS, undefined);
-    teams = await within(unsentTeams(), UNSENT_WAIT_MS, teams);
-    // всё ушло: про сессии человек уже ответил той же кнопкой
-    if (!teams.length) return true;
-    pushFailed = true;
-  }
-}
+const confirmQuit = (): Promise<boolean> =>
+  askQuit({
+    sessions: () => liveSessions(),
+    unsent: () => unsentTeams(),
+    push: (slugs) => pushTeams(slugs),
+    show: async (p) => {
+      const opts = { type: 'question' as const, buttons: p.buttons, defaultId: p.defaultId, cancelId: p.cancelId, message: p.message, detail: p.detail };
+      return (win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)).response;
+    },
+  });
 
 async function main(): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
@@ -296,14 +282,14 @@ async function main(): Promise<void> {
 }
 
 // Cmd+Q при живых сессиях терминала (claude завершатся вместе с приложением) или неотправленных изменениях Teamwork —
-// сначала спрашиваем. Коммиты считает git, поэтому выход всегда откладывается до ответа askQuit; спрашивать не о чем —
+// сначала спрашиваем. Коммиты считает git, поэтому выход всегда откладывается до ответа confirmQuit; спрашивать не о чем —
 // выходим сразу. Сигналы (kill, Ctrl-C у desktop:dev) выходят без вопроса: отвечать на диалог некому.
 app.on('before-quit', (e) => {
   if (quitConfirmed || stopping) return;
   e.preventDefault();
   if (quitAsking) return;
   quitAsking = true;
-  void askQuit()
+  void confirmQuit()
     // диалог не открылся — выходим, как выходили без вопроса: застрять с неработающим Cmd+Q хуже
     .catch(() => true)
     .then((ok) => {

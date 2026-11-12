@@ -8,6 +8,7 @@ import type {
   TeamProjectStatus, TeamRemoteCheck, TeamRepoInfo, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskType,
 } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
+import { mineWorkLive } from '../lib/teamwork/mine';
 import { api } from './client';
 
 const enc = encodeURIComponent;
@@ -157,13 +158,13 @@ export function useTeams(enabled = true) {
 }
 
 /**
- * GET /api/teams/mine для главной. Событие `team` сбрасывает и его (ключ под ['teams']); пока по задаче идёт запуск или
- * сессия, раз в 30 с — «ждёт ответа» у запуска события `team` не даёт.
+ * GET /api/teams/mine для главной. Событие `team` сбрасывает и его (ключ под ['teams']); пока по моей задаче идёт запуск
+ * или сессия, раз в 30 с — переход «идёт → ждёт ответа» события `team` не даёт.
  */
 export function useTeamMine(enabled = true) {
   return useQuery({
     queryKey: teamKeys.mine, queryFn: fetchTeamMine, enabled,
-    refetchInterval: (q) => ((q.state.data?.tasks ?? []).some((x) => x.task.work?.length) ? IDLE_POLL_MS : false),
+    refetchInterval: (q) => (mineWorkLive(q.state.data) ? IDLE_POLL_MS : false),
   });
 }
 

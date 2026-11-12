@@ -287,7 +287,9 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   teamChanges = null;
   setSessionTeamwork(null);
   await stopTeamworkStatus();
-  await stopTeamwork();
+  // текущий push без сети висит до таймаута git (2 минуты): выход ждёт его не дольше оставшегося времени — коммиты и так
+  // остаются в клоне и уйдут при следующем запуске
+  await Promise.race([stopTeamwork(), new Promise<void>((resolve) => setTimeout(resolve, Math.max(deadline - Date.now(), 2_000)).unref())]);
   await Promise.all(
     [...servers].map(
       (server) =>

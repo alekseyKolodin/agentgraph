@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamMine, TeamMineProject, TeamMineTeam } from '@server/api-types';
 import { task } from './fixtures';
-import { canSendToWork, myTaskRows, unknownMe, workHref } from './mine';
+import { canSendToWork, mineWorkLive, myTaskRows, unknownMe, workHref } from './mine';
 
 const team = (slug: string, over: Partial<TeamMineTeam> = {}): TeamMineTeam => ({ slug, title: slug, prefix: 'PAY', flows: [], me: 'alex@x.io', ...over });
 const project = (t: string, slug: string): TeamMineProject => ({ team: t, slug, title: slug, sprint: { number: 1, title: 'Спринт 1' }, repos: [] });
@@ -47,4 +47,19 @@ test('мои задачи: «В работу ▸» — как на карточ�
   assert.equal(workHref({ kind: 'run', id: '2026-11-12 a' }), '/run/2026-11-12%20a');
   assert.equal(workHref({ kind: 'session', id: 's1' }), '/sessions/s1');
   assert.deepEqual(unknownMe({ teams: [team('a'), team('b', { me: undefined }), team('c', { me: undefined, error: 'не читается' })], projects: [], tasks: [] }).map((x) => x.slug), ['b']);
+});
+
+test('мои задачи: перечитывать по таймеру, только пока запуск или сессия идёт или ждёт ответа', () => {
+  const at = '2026-11-12T10:00:00Z';
+  const mine = (status: string): TeamMine => ({
+    teams: [team('pay')], projects: [project('pay', 'export')],
+    tasks: [{ team: 'pay', project: 'export', task: task({ id: 'PAY-1', status: 'done', work: [{ kind: 'run', id: 'r', at, status }] }), waiting: [] }],
+  });
+  assert.equal(mineWorkLive(undefined), false);
+  assert.equal(mineWorkLive(mine('done')), false);
+  assert.equal(mineWorkLive(mine('failed')), false);
+  assert.equal(mineWorkLive(mine('ended')), false);
+  assert.equal(mineWorkLive(mine('running')), true);
+  assert.equal(mineWorkLive(mine('waiting')), true);
+  assert.equal(mineWorkLive(mine('working')), true);
 });

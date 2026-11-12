@@ -21,6 +21,8 @@
 .acts { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
 .acts :global(.btn) { white-space: nowrap; }
 .empty { margin: 6px 0 0; font-size: var(--fs-small); color: var(--ink-2); }
+.empty.fail { color: var(--st-fail); }
+.empty.fail a { color: inherit; }
 @media (max-width: 700px) {
   .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .id { grid-column: 1 / -1; }

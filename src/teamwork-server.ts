@@ -1273,8 +1273,8 @@ export async function stopTeamwork(): Promise<void> {
   await s?.stop();
 }
 
-/** Команда, у которой в клоне есть коммиты, которых нет в репо команды (диалог выхода десктопа, spec §7.5). */
-export type TeamUnsent = { slug: string; title: string; unpushed: number; error?: string };
+/** Команда, у которой в клоне есть коммиты, которых нет в репо команды (диалог выхода десктопа, spec §7.5); pushing — отправка идёт сейчас. */
+export type TeamUnsent = { slug: string; title: string; unpushed: number; error?: string; pushing?: boolean };
 
 /** Неотправленные изменения всех команд — src/desktop/main.ts спрашивает о них перед выходом. Сервиса нет — пусто. */
 export async function unsentTeams(): Promise<TeamUnsent[]> {
@@ -1292,7 +1292,7 @@ export async function unsentTeams(): Promise<TeamUnsent[]> {
       } catch {
         // teamwork.yaml не читается: подпись — слаг
       }
-      out.push({ slug, title, unpushed: sync.unpushed, ...(sync.error ? { error: sync.error } : {}) });
+      out.push({ slug, title, unpushed: sync.unpushed, ...(sync.error ? { error: sync.error } : {}), ...(sync.state === 'pushing' ? { pushing: true } : {}) });
     } catch {
       // клон не открылся: отправлять нечего
     }
