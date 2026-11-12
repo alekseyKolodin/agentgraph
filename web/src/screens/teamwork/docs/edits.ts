@@ -53,9 +53,12 @@ export function patchEdit(team: string, project: string, doc: TeamDocName, patch
   if (cur) setEdit(team, project, doc, { ...cur, ...patch });
 }
 
-/** Тело раздела, которое уйдёт на сервер: в виде «Текст» раздела требований — из строк. */
+/**
+ * Тело раздела, которое уйдёт на сервер: в виде «Текст» раздела требований — из строк; пустая строка требования не
+ * сохраняется («- FR-9.» без текста не узнаётся как требование, и номер потом выдали бы снова).
+ */
 export function editBody(e: SectionEdit, serialize: (p: ReqSectionParts) => string): string {
-  return e.mode === 'text' && e.rows ? serialize(e.rows) : e.body;
+  return e.mode === 'text' && e.rows ? serialize({ ...e.rows, rows: e.rows.rows.filter((r) => r.text.trim()) }) : e.body;
 }
 
 /**

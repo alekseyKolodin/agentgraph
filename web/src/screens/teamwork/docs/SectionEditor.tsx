@@ -10,16 +10,16 @@ import { saveDoc, teamKeys } from '../../../api/teamwork';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { useToast } from '../../../components/Toast';
 import { t } from '../../../lib/i18n';
-import { lastIssued, reqKindFor, rowChanges, sectionName, wrapMark } from '../../../lib/teamwork/doc-view';
+import { lastIssued, reqKindFor, rowChanges, rowsLossless, sectionName, wrapMark } from '../../../lib/teamwork/doc-view';
 import {
-  addRequirementRow, addRequirementText, changesText, docFile, moveRequirementRow, parseRequirementRows, removeRequirementRow, requirementShort, sectionCommitMessage,
+  addRequirementRow, addRequirementText, changesText, docFile, moveRequirementRow, parseRequirementRows, requirementShort, sectionCommitMessage,
   serializeRequirementRows, splitSections, type ReqRow, type ReqSectionParts,
 } from '../../../lib/teamwork/docs';
 import { trackChanges } from '../../../lib/teamwork/track';
 import { cx } from '../parts';
 import { AgentAsk, type DraftDoc } from './AgentAsk';
 import { DocText } from './DocText';
-import { editBody, isDirty, patchEdit, setEdit, type SectionEdit } from './edits';
+import { editBody, getEdit, isDirty, patchEdit, setEdit, type SectionEdit } from './edits';
 import { MdEditor, type EditTarget } from './MdEditor';
 import styles from './Docs.module.css';
 
@@ -41,7 +41,10 @@ type Props = {
 
 const ser = serializeRequirementRows;
 
-/** Новая правка раздела документа: тело, строки требований (у ТЗ), хэш раздела для проверки параллельной правки. */
+/**
+ * Новая правка раздела документа: тело, строки требований (у ТЗ, если раздел собирается из строк без потерь), хэш раздела
+ * для проверки параллельной правки. У начала документа сервер хэша не отдаёт — его считает introHash.
+ */
 export function startEdit(doc: TeamDoc, heading: string, withReqs: boolean): SectionEdit | undefined {
   const sec = splitSections(doc.text).find((s) => s.heading === heading);
   if (!sec) return undefined;
@@ -49,8 +52,20 @@ export function startEdit(doc: TeamDoc, heading: string, withReqs: boolean): Sec
   const headLine = heading ? doc.text.replace(/\r\n?/g, '\n').split('\n')[sec.start]! : '';
   // пустые строки вокруг текста раздела в редакторе не нужны: при сохранении после заголовка ставится одна
   const body = sec.body.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
-  const parts = withReqs ? parseRequirementRows(body) : undefined;
+  const parts = withReqs && rowsLossless(body) ? parseRequirementRows(body) : undefined;
   return { heading, hash, headLine, original: body, body, mode: 'text', ...(parts ? { rows: parts, originalRows: parts } : {}) };
+}
+
+/** Хэш начала документа как у сервера (sectionHash: sha256 текста без хвостовых пробелов, 16 знаков); без WebCrypto — пусто. */
+export async function introHash(doc: TeamDoc): Promise<string> {
+  const sec = splitSections(doc.text).find((s) => !s.heading);
+  if (!sec || !globalThis.crypto?.subtle) return '';
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sec.text.trimEnd()));
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  } catch {
+    return '';
+  }
 }
 
 export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, files, agent, onClosed }: Props) {
@@ -60,6 +75,7 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [seq, setSeq] = useState(0);
+  const [note, setNote] = useState('');
   const target = useRef<EditTarget | null>(null);
   const box = useRef<HTMLElement>(null);
   const patch = (p: Partial<SectionEdit>) => patchEdit(team, project, name, p);
@@ -99,19 +115,25 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
     setErr('');
     const body = editBody(edit, ser).replace(/^(?:[ \t]*\n)+/, '').trimEnd();
     const text = edit.headLine ? `${edit.headLine}\n${body ? `\n${body}\n` : ''}` : `${body}\n`;
+    // пока запрос идёт, могли бросить эту правку и открыть другой раздел: ответ касается только своей
+    const same = () => getEdit(team, project, name)?.heading === edit.heading;
     try {
       const r = await saveDoc(team, project, name, { text, section: edit.heading, ...(hash ? { hash } : {}), message });
       qc.setQueryData(teamKeys.doc(team, project, name), r);
       void qc.invalidateQueries({ queryKey: teamKeys.project(team, project), exact: true });
       void qc.invalidateQueries({ queryKey: teamKeys.history(team, project).slice(0, 6) });
-      setEdit(team, project, name, undefined);
-      onClosed();
+      if (same()) {
+        setEdit(team, project, name, undefined);
+        onClosed();
+      }
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === 'object' && 'current' in e.data) {
+      if (!same()) setErr('');
+      else if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === 'object' && 'current' in e.data) {
         const current = (e.data as { current: TeamDoc }).current;
         qc.setQueryData(teamKeys.doc(team, project, name), current);
         const sec = splitSections(current.text).find((s) => s.heading === edit.heading);
-        patch({ theirs: { text: sec?.body ?? '', hash: current.sections.find((s) => s.heading === edit.heading)?.hash ?? '' } });
+        const theirsHash = edit.heading ? current.sections.find((s) => s.heading === edit.heading)?.hash ?? '' : await introHash(current);
+        patch({ theirs: { text: sec?.body.replace(/^(?:[ \t]*\n)+/, '').trimEnd() ?? '', hash: theirsHash } });
       } else if (e instanceof ApiError && e.status === 404) {
         setErr(t('Раздела «{section}» больше нет в документе: его удалили или переименовали. Скопируйте свой текст и откройте документ заново.', { section: sectionName(edit.heading) }));
       } else setErr(errorText(e));
@@ -137,7 +159,11 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
     if (edit.originalRows) {
       // раздел требований: «Markdown» — исходник из строк, обратно — строки из исходника
       if (mode === 'md') patch({ mode, body: ser(edit.rows ?? edit.originalRows) });
-      else patch({ mode, rows: parseRequirementRows(edit.body) });
+      else if (!rowsLossless(edit.body)) {
+        setNote(t('Между требованиями есть текст, которого строки не хранят: раздел правится в Markdown.'));
+        return;
+      } else patch({ mode, rows: parseRequirementRows(edit.body) });
+      setNote('');
       setSeq((n) => n + 1);
     } else patch({ mode });
   };
@@ -200,7 +226,7 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
           onCancel={() => void cancel()}
           intro={(text, which) => (
             <MdEditor
-              key={`${which}-${seq}`}
+              key={`${name}|${edit.heading}|${which}|${seq}`}
               value={text}
               live
               label={which === 'intro' ? t('Текст перед требованиями') : t('Текст после требований')}
@@ -214,7 +240,7 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
       ) : (
         <div className={styles.ebody}>
           <MdEditor
-            key={`md-${seq}`}
+            key={`${name}|${edit.heading}|md|${seq}`}
             value={edit.body}
             live={edit.mode === 'text'}
             label={t('Текст раздела «{section}»', { section: sectionName(edit.heading) })}
@@ -231,6 +257,7 @@ export function SectionEditor({ team, project, name, doc, edit, byReq, tasks, fi
         </div>
       )}
 
+      {note && <p className={styles.notice}>{note}</p>}
       {err && <p className="msg err" style={{ margin: '0 12px' }}>{err}</p>}
       <div className={styles.efoot}>
         <span className={styles.meta}>{dirty ? changesText(changes, message) : t('без изменений')}</span>
@@ -292,25 +319,35 @@ function ReqRowsEditor({ parts, original, byReq, nextId, seq, onChange, onAdd, o
   const focusRow = (id: string, on: 'text' | 'grip' = 'text') =>
     setTimeout(() => list.current?.querySelector<HTMLElement>(on === 'grip' ? `button[data-grip="${id}"]` : `textarea[data-id="${id}"]`)?.focus(), 0);
 
-  const setText = (id: string, text: string) => onChange({ ...parts, rows: parts.rows.map((r) => (r.id === id ? { ...r, text: text.replace(/\s*\n\s*/g, ' ') } : r)) });
+  // строки читаются в момент действия: панель раздела держит цель с фокуса, а строки с тех пор могли удалить или переставить
+  const current = useRef(parts);
+  current.current = parts;
+  /** Текст строки: occ — какая по счёту строка с этим номером (после слияний номер бывает дважды). */
+  const setText = (id: string, occ: number, text: string) => {
+    const p = current.current;
+    let seen = -1;
+    onChange({ ...p, rows: p.rows.map((r) => (r.id === id && ++seen === occ ? { ...r, text: text.replace(/\s*\n\s*/g, ' ') } : r)) });
+  };
   /** Перенос строки; фокус остаётся на ней — на поле текста или на ⋮⋮, откуда переносили с клавиатуры. */
   const move = (from: number, to: number, on: 'text' | 'grip' = 'text') => {
-    if (to < 0 || to >= parts.rows.length || from === to) return;
-    const id = parts.rows[from]!.id;
-    onChange(moveRequirementRow(parts, from, to));
+    const p = current.current;
+    if (to < 0 || to >= p.rows.length || from === to) return;
+    const id = p.rows[from]!.id;
+    onChange(moveRequirementRow(p, from, to));
     focusRow(id, on);
   };
-  const remove = async (row: ReqRow) => {
+  const remove = async (row: ReqRow, index: number) => {
     const linked = byReq.get(row.id) ?? [];
     if (linked.length && !(await askConfirm(t('На {id} ссылаются задачи {tasks}. Удалить требование? Номер больше никто не займёт.', { id: row.id, tasks: linked.map((x) => x.id).join(', ') }), { ok: t('Удалить'), danger: true }))) return;
-    onChange(removeRequirementRow(parts, row.id));
+    const p = current.current;
+    onChange({ ...p, rows: p.rows.filter((_, k) => k !== index) });
   };
   const add = () => focusRow(onAdd());
 
-  const rowTarget = (el: HTMLTextAreaElement, id: string): EditTarget => ({
+  const rowTarget = (el: HTMLTextAreaElement, id: string, occ: number): EditTarget => ({
     wrap: (mark) => {
       const r = wrapMark(el.value, el.selectionStart, el.selectionEnd, mark);
-      setText(id, r.text);
+      setText(id, occ, r.text);
       requestAnimationFrame(() => {
         el.focus();
         el.setSelectionRange(r.from, r.to);
@@ -319,7 +356,7 @@ function ReqRowsEditor({ parts, original, byReq, nextId, seq, onChange, onAdd, o
     insert: (text) => {
       const v = el.value;
       const at = el.selectionStart;
-      setText(id, v.slice(0, at) + text + v.slice(el.selectionEnd));
+      setText(id, occ, v.slice(0, at) + text + v.slice(el.selectionEnd));
       requestAnimationFrame(() => {
         el.focus();
         el.setSelectionRange(at + text.length, at + text.length);
@@ -337,9 +374,10 @@ function ReqRowsEditor({ parts, original, byReq, nextId, seq, onChange, onAdd, o
         {parts.rows.map((row, i) => {
           const linked = byReq.get(row.id) ?? [];
           const changed = !was.has(row.id) || was.get(row.id) !== row.text.trim();
+          const occ = parts.rows.slice(0, i).filter((r) => r.id === row.id).length;
           return (
             <div
-              key={row.id}
+              key={occ ? `${row.id}#${occ}` : row.id}
               role="listitem"
               className={cx(styles.erow, drag === i && styles.dragging, over === i && drag !== null && drag !== i && styles.over)}
               onDragOver={(e: DragEvent) => {
@@ -385,8 +423,8 @@ function ReqRowsEditor({ parts, original, byReq, nextId, seq, onChange, onAdd, o
                 value={row.text}
                 seq={seq}
                 label={t('Текст {id}', { id: row.id })}
-                onChange={(v) => setText(row.id, v)}
-                onFocusEl={(el) => onTarget(rowTarget(el, row.id))}
+                onChange={(v) => setText(row.id, occ, v)}
+                onFocusEl={(el) => onTarget(rowTarget(el, row.id, occ))}
                 onKeyDown={(e) => {
                   if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
                     e.preventDefault();
@@ -410,7 +448,7 @@ function ReqRowsEditor({ parts, original, byReq, nextId, seq, onChange, onAdd, o
               <span className={cx(styles.lk, !linked.length && styles.tWait)} title={linked.map((x) => `${x.id} · ${x.title}`).join('\n') || undefined}>
                 {linked.length ? linked.map((x) => x.id).join(' · ') : t('нет задач')}
               </span>
-              <button type="button" className={styles.x} aria-label={t('Удалить {id}', { id: row.id })} title={t('Удалить требование')} onClick={() => void remove(row)}>×</button>
+              <button type="button" className={styles.x} aria-label={t('Удалить {id}', { id: row.id })} title={t('Удалить требование')} onClick={() => void remove(row, i)}>×</button>
             </div>
           );
         })}

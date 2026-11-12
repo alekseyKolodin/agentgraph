@@ -7,7 +7,7 @@ import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDetail, TeamDocName, TeamDraft, TeamDraftDetail, TeamDraftStart, TeamProject, TeamTask } from '@server/api-types';
 import { ApiError, errorText } from '../../../api';
-import { saveDoc, teamKeys, useDoc, useProject, useTasks, useTeam } from '../../../api/teamwork';
+import { fetchDoc, saveDoc, teamKeys, useDoc, useProject, useTasks, useTeam } from '../../../api/teamwork';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { useToast } from '../../../components/Toast';
 import { t } from '../../../lib/i18n';
@@ -21,7 +21,7 @@ import { draftKeys, startDraft, useDrafts } from './api';
 import { HistoryDialog, SourceDialog } from './DocDialogs';
 import { DocView } from './DocView';
 import { DraftReview, readMemory, writeMemory } from './DraftReview';
-import { anyEdits, guardUnload, isDirty } from './edits';
+import { anyEdits, guardUnload, isDirty, useEdit } from './edits';
 import styles from './Docs.module.css';
 
 export type DocTabProps = { team: string; project: string; doc: TeamDocName };
@@ -34,7 +34,8 @@ export function DocTab({ team, project, doc }: DocTabProps) {
   const projQ = useProject(team, project);
   const tasksQ = useTasks(team, project);
   if (!teamQ.data || !projQ.data) return <Loading className={tw.loading} />;
-  return <DocBody team={teamQ.data} project={projQ.data} name={doc} tasks={tasksQ.data ?? []} />;
+  // ключ — документ: правки и редактор одного документа не переезжают в другой при смене вкладки
+  return <DocBody key={doc} team={teamQ.data} project={projQ.data} name={doc} tasks={tasksQ.data ?? []} />;
 }
 
 const DRAFT_DOCS: readonly TeamDocName[] = ['prd', 'architecture', 'design'];
@@ -57,6 +58,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
   const [writeSelf, setWriteSelf] = useState(false);
   const [creating, setCreating] = useState(false);
   const readonly = team.sync.state === 'readonly';
+  const openEdit = useEdit(team.slug, project.slug, name);
 
   useEffect(() => guardUnload(() => anyEdits().some((e) => isDirty(e, serializeRequirementRows))), []);
 
@@ -91,6 +93,12 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
     const create = async () => {
       setCreating(true);
       try {
+        // файл мог появиться у коллеги после нашего 404: тогда просто перечитываем, а не пишем поверх
+        const exists = await fetchDoc(team.slug, project.slug, name).catch(() => undefined);
+        if (exists) {
+          qc.setQueryData(teamKeys.doc(team.slug, project.slug, name), exists);
+          return;
+        }
         const r = await saveDoc(team.slug, project.slug, name, { text: `# ${docLabel(name)}\n` });
         qc.setQueryData(teamKeys.doc(team.slug, project.slug, name), r);
         void qc.invalidateQueries({ queryKey: teamKeys.project(team.slug, project.slug), exact: true });
@@ -119,7 +127,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
     return (
       <>
         <p className={styles.hint} style={{ margin: '0 0 10px' }}><button type="button" className={styles.linkBtn} onClick={() => setReview(null)}>{t('← К документу')}</button></p>
-        <DraftReview team={team} project={project} name={name} run={review} onClose={() => setReview(null)} onRetry={(d: TeamDraftDetail) => void retry(d)} />
+        <DraftReview key={`${review}|${name}`} team={team} project={project} name={name} run={review} onClose={() => setReview(null)} onRetry={(d: TeamDraftDetail) => void retry(d)} />
       </>
     );
   }
@@ -131,7 +139,8 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
       {draftable && !readonly && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} disabledReason={agentReason}>{t('Черновик с моделью…')}</AgentAsk>}
     </>
   );
-  const empty = isDocEmpty(doc.text) && !writeSelf;
+  // открытая правка раздела важнее призыва пустого документа: после ухода с вкладки и возврата она на месте
+  const empty = isDocEmpty(doc.text) && !writeSelf && !openEdit;
   return (
     <>
       {latest && <DraftLine draft={latest} name={name} onReview={() => setReview(latest.run)} onRetry={() => void retry(latest)} />}

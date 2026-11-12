@@ -457,6 +457,12 @@ export const teamwork: Record<string, string> = {
   'Это место поменяли после старта черновика: принять — значит заменить чужую правку.': 'This spot changed after the draft started: accepting replaces someone else’s edit.',
   'Принять': 'Accept',
   'Принять вручную': 'Accept by hand',
+  'Между требованиями есть текст, которого строки не хранят: раздел правится в Markdown.': 'There is text between the requirements that rows can’t hold: edit this section in Markdown.',
+  'Раздела «{section}» больше нет в документе: его переименовали или удалили. Ваша несохранённая правка:': 'Section “{section}” is no longer in the document: it was renamed or deleted. Your unsaved edit:',
+  'Бросить правку': 'Discard the edit',
+  'Скопировано': 'Copied',
+  'Документ удалили из репо после старта черновика: записывать некуда.': 'The document was deleted from the repo after the draft started: there is nowhere to write.',
+  'Запись заменит правки, сделанные в документе после старта черновика:\n{list}\nЗаписать всё равно?': 'Writing replaces edits made to the document after the draft started:\n{list}\nWrite anyway?',
   // docs/
   'Документы в docs/': 'Documents in docs/',
   'новый-файл.md': 'new-file.md',

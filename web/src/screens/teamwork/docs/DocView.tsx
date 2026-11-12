@@ -15,8 +15,8 @@ import { coverage, currentSection, docHeadLine, parseRequirements, requirementSh
 import { cx } from '../parts';
 import { TASK_PARAM } from '../shell';
 import { DocText, RefCtx, scrollToAnchor, type RefContext } from './DocText';
-import { isDirty, setEdit, useEdit } from './edits';
-import { docFiles, SectionEditor, startEdit } from './SectionEditor';
+import { editBody, getEdit, isDirty, patchEdit, setEdit, useEdit } from './edits';
+import { docFiles, introHash, SectionEditor, startEdit } from './SectionEditor';
 import styles from './Docs.module.css';
 import tw from '../Teamwork.module.css';
 
@@ -64,11 +64,22 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
     return () => document.removeEventListener('scroll', onScroll, { capture: true });
   }, [sections.length]);
 
-  // якорь в адресе (#FR-3 из другого документа или ссылка) — прокрутить к нему, когда документ на экране
+  // якорь в адресе (#FR-3 из другого документа или ссылка) — прокрутить к нему один раз, когда документ на экране;
+  // сохранение раздела и синхронизация меняют документ, но не должны уводить от редактора к якорю
+  const scrolledTo = useRef('');
   useEffect(() => {
-    if (!loc.hash) return;
-    const id = decodeURIComponent(loc.hash.slice(1));
-    const timer = setTimeout(() => scrollToAnchor(id), 50);
+    if (!loc.hash || scrolledTo.current === loc.hash) return;
+    let id: string;
+    try {
+      id = decodeURIComponent(loc.hash.slice(1));
+    } catch {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (!document.getElementById(id)) return;
+      scrolledTo.current = loc.hash;
+      scrollToAnchor(id);
+    }, 50);
     return () => clearTimeout(timer);
   }, [loc.hash, doc.base]);
 
@@ -79,6 +90,11 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
     const sec = sections.find((s) => s.heading === heading);
     const next = startEdit(doc, heading, isPrd && Boolean(sec && heading && isReqSection(heading, sec.body)));
     setEdit(team.slug, project.slug, name, next);
+    // у начала документа хэша от сервера нет — считаем сами, чтобы и его сохранение проверялось на параллельную правку
+    if (next && !heading && !next.hash) {
+      const hash = await introHash(doc);
+      if (hash && getEdit(team.slug, project.slug, name)?.heading === '') patchEdit(team.slug, project.slug, name, { hash });
+    }
   };
 
   const editing = edit ? sections.findIndex((s) => s.heading === edit.heading) : -1;
@@ -137,9 +153,10 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
             {!readonly && !edit && <span className={styles.hint}>{t('Нажмите на раздел, чтобы править')}</span>}
             {actions}
           </div>
+          {edit && editing < 0 && <OrphanEdit team={team.slug} project={project.slug} name={name} />}
           {sections.map((s, i) =>
             i === editing && edit ? (
-              <div key={i} id={sectionAnchor(i)} data-sec={i}>
+              <div key={`edit:${edit.heading}`} id={sectionAnchor(i)} data-sec={i}>
                 <SectionEditor
                   team={team.slug}
                   project={project.slug}
@@ -321,5 +338,32 @@ function CreateTaskDialog({ team, project, req, onClose }: { team: string; proje
         </div>
       </form>
     </dialog>
+  );
+}
+
+/**
+ * Раздел, который правили, исчез из документа (его переименовали или удалили, документ перечитался): правка не
+ * пропадает молча — её текст виден, его можно скопировать или бросить.
+ */
+function OrphanEdit({ team, project, name }: { team: string; project: string; name: TeamDocName }) {
+  const edit = useEdit(team, project, name);
+  const [copied, setCopied] = useState(false);
+  if (!edit) return null;
+  const text = editBody(edit, serializeRequirementRows);
+  return (
+    <div className={styles.orphan} role="alert">
+      <h3>{t('Раздела «{section}» больше нет в документе: его переименовали или удалили. Ваша несохранённая правка:', { section: sectionName(edit.heading) })}</h3>
+      <pre>{text}</pre>
+      <div className={styles.go}>
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => void navigator.clipboard?.writeText(`${edit.headLine ? `${edit.headLine}\n\n` : ''}${text}`).then(() => setCopied(true), () => setCopied(false))}
+        >
+          {copied ? t('Скопировано') : t('Скопировать')}
+        </button>
+        <button type="button" className="btn small ghost" onClick={() => setEdit(team, project, name, undefined)}>{t('Бросить правку')}</button>
+      </div>
+    </div>
   );
 }

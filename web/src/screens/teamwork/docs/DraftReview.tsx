@@ -114,7 +114,21 @@ function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamD
     setBusy(true);
     setNotice('');
     const accepted: Decisions = Object.fromEntries(Object.entries(mem.d).filter(([, v]) => v === 'accept'));
-    const r = draftResult(doc, accepted);
+    const written: Decisions = Object.fromEntries(mem.w.map((id) => [id, 'accept' as const]));
+    const r = draftResult(doc, accepted, written);
+    if (r.gone) {
+      setNotice(t('Документ удалили из репо после старта черновика: записывать некуда.'));
+      setBusy(false);
+      return;
+    }
+    // запись заменит чьи-то правки, сделанные после старта черновика, — только с явного согласия
+    if (r.lost.length) {
+      const list = r.lost.map((x) => `«${x.length > 120 ? `${x.slice(0, 120)}…` : x}»`).join('\n');
+      if (!(await askConfirm(t('Запись заменит правки, сделанные в документе после старта черновика:\n{list}\nЗаписать всё равно?', { list }), { ok: t('Записать'), danger: true }))) {
+        setBusy(false);
+        return;
+      }
+    }
     try {
       const res = await acceptDraft(team.slug, project.slug, run, { doc: doc.name, text: r.text, base: r.base });
       if ('name' in res) qc.setQueryData(teamKeys.doc(team.slug, project.slug, name), res);

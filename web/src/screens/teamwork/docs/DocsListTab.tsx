@@ -6,7 +6,7 @@ import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDocName } from '@server/api-types';
 import { errorText } from '../../../api';
-import { saveDoc, teamKeys, useProject, useTasks, useTeam } from '../../../api/teamwork';
+import { fetchDoc, saveDoc, teamKeys, useProject, useTasks, useTeam } from '../../../api/teamwork';
 import { t } from '../../../lib/i18n';
 import { Loading } from '../../sessions/Loading';
 import { cx } from '../parts';
@@ -49,14 +49,27 @@ export function DocsListTab({ team, project }: DocsListTabProps) {
       setErr(t('Имя файла — латиница, цифры, точка, дефис или подчёркивание'));
       return;
     }
-    const name = `docs/${base}.md` as TeamDocName;
-    if (docs.some((d) => d.name === name)) {
-      setSearch(new URLSearchParams(link(name)));
+    let name = `docs/${base}.md` as TeamDocName;
+    // такой файл уже есть (имена сравниваем без регистра: на macOS Notes.md и notes.md — один файл) — открываем его
+    const same = docs.find((d) => d.name.toLowerCase() === name.toLowerCase());
+    if (same) {
+      setFile('');
+      setSearch(new URLSearchParams(link(same.name)));
       return;
     }
     setBusy(true);
     setErr('');
     try {
+      // список мог отстать от репо: файл, который уже есть, не перезаписываем
+      const exists = await fetchDoc(team, project, name).catch(() => undefined);
+      if (exists) {
+        name = exists.name;
+        qc.setQueryData(teamKeys.doc(team, project, name), exists);
+        await qc.invalidateQueries({ queryKey: teamKeys.project(team, project), exact: true });
+        setFile('');
+        setSearch(new URLSearchParams(link(name)));
+        return;
+      }
       const r = await saveDoc(team, project, name, { text: `# ${base}\n` });
       qc.setQueryData(teamKeys.doc(team, project, name), r);
       await qc.invalidateQueries({ queryKey: teamKeys.project(team, project), exact: true });

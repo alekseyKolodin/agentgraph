@@ -5,7 +5,9 @@
 import type { TeamColumns, TeamDocName, TeamDraft, TeamSprint, TeamTask } from '@server/api-types';
 import { t } from '../i18n';
 import { statusText } from './board';
-import { fencedLines, REQ_RE, requirementId, splitLines, splitSections, type ReqKind, type ReqRow, type TextRef } from './docs';
+import {
+  fencedLines, parseRequirementRows, REQ_RE, requirementId, serializeRequirementRows, splitLines, splitSections, type ReqKind, type ReqRow, type TextRef,
+} from './docs';
 import { applyDecisions, lcsOps, parseBlocks, type Block, type BlockKind, type Decisions } from './track';
 
 // ---------- чтение
@@ -73,6 +75,18 @@ export function isDocEmpty(md: string): boolean {
 /** Раздел требований ТЗ: в нём уже есть строки FR/NFR или он так называется («Требования», «Нефункциональные требования»). */
 export const isReqSection = (heading: string, body: string): boolean =>
   /требован|requirement/i.test(heading) || splitLines(body).some((l) => REQ_RE.test(l));
+
+/**
+ * Можно ли править раздел строками требований без потерь: сборка строк обратно даёт тот же текст с точностью до пустых
+ * строк. Подзаголовки, абзацы, таблицы или вложенные пункты между требованиями строки не хранят — такой раздел
+ * правится в Markdown.
+ */
+export function rowsLossless(body: string): boolean {
+  const solid = (text: string) => splitLines(text).filter((l) => l.trim()).map((l) => l.trimEnd());
+  const a = solid(body);
+  const b = solid(serializeRequirementRows(parseRequirementRows(body)));
+  return a.length === b.length && a.every((l, i) => l === b[i]);
+}
 
 /** Какой номер получит «+ Требование» в разделе: как у последней строки; без строк — NFR для нефункциональных, иначе FR. */
 export function reqKindFor(heading: string, rows: readonly Pick<ReqRow, 'id'>[]): ReqKind {
@@ -154,72 +168,113 @@ function matchBlocks(a: readonly Block[], b: readonly Block[]): number[] {
   return out;
 }
 
-/** Кусок наших правок: блоки base [bi, bj) заменены блоками ours [oi, oj); куда он ложится в theirs — [lo, hi). */
-type Patch = { bi: number; bj: number; oi: number; oj: number; lo: number; hi: number };
+/** Операция над theirs: блоки [lo, hi) заменяются blocks; bi, bj — какие блоки base она покрывает (для слияния соседних). */
+type Op = { lo: number; hi: number; blocks: Block[]; bi: number; bj: number };
+
+/** Итог слияния: текст и чужие блоки (их правки после старта черновика), которые он заменил, — показать человеку. */
+export type MergeResult = { text: string; lost: string[] };
 
 /**
- * Три стороны по блокам markdown: base — с чего начал агент, ours — base с принятыми правками, theirs — документ сейчас.
- * Каждый наш кусок правок накладывается на theirs: его старые блоки в theirs на месте — заменяем ровно их, вставка —
- * сразу за общим соседом; старые блоки там поменяли или убрали — это конфликт (markConflicts пометил такие правки, человек
- * принял их вручную), и наш кусок заменяет всё между ближайшими общими соседями. Чужие правки вне наших кусков остаются.
- * Пустые строки — со стороны, откуда взят блок; у общего блока перед нашей вставкой — как в ours.
+ * Три стороны по блокам markdown: base — с чего начали правки, ours — base с принятыми правками, theirs — документ сейчас.
+ * Каждый наш кусок правок (base → ours) накладывается на theirs:
+ * - его старые блоки в theirs на месте — заменяются ровно они (чужие вставки между ними остаются);
+ * - вставка — сразу за общим соседом сверху, а если его поменяли — перед общим соседом снизу; та же вставка уже есть —
+ *   не повторяется;
+ * - старые блоки у них поменяли или убрали — конфликт: кусок между ближайшими блоками, общими для всех трёх, берётся из
+ *   ours целиком (такие правки человек принял вручную, markConflicts), а чужие блоки, которые он заменил, — в lost.
+ * Пересекающиеся куски сливаются в один конфликт. Пустые строки — со стороны, откуда взят блок; у общего блока перед
+ * нашей вставкой — как в ours.
  */
-export function merge3(base: string, ours: string, theirs: string): string {
+export function merge3(base: string, ours: string, theirs: string): MergeResult {
   const B = parseBlocks(base).blocks;
   const O = parseBlocks(ours);
   const T = parseBlocks(theirs);
   const mo = matchBlocks(B, O.blocks);
   const mt = matchBlocks(B, T.blocks);
-  const patches: Patch[] = [];
-  let cur: Patch | undefined;
+  const both = (k: number) => mo[k]! >= 0 && mt[k]! >= 0;
+  /** Конфликт над блоками base [bi, bj): между ближайшими соседями, общими для всех трёх, берём ours. */
+  const conflict = (bi: number, bj: number): Op => {
+    let pk = bi - 1;
+    while (pk >= 0 && !both(pk)) pk--;
+    let nk = bj;
+    while (nk < B.length && !both(nk)) nk++;
+    const lo = pk >= 0 ? mt[pk]! + 1 : 0;
+    const hi = nk < B.length ? mt[nk]! : T.blocks.length;
+    const oi = pk >= 0 ? mo[pk]! + 1 : 0;
+    const oj = nk < B.length ? mo[nk]! : O.blocks.length;
+    return { lo, hi, blocks: O.blocks.slice(oi, oj), bi: pk + 1, bj: nk };
+  };
+  const ops: Op[] = [];
+  let bi = 0;
+  let oi = 0;
   let i = 0;
   let j = 0;
+  let open = false;
+  const close = () => {
+    if (!open) return;
+    open = false;
+    const bj = i;
+    const oj = j;
+    const blocks = O.blocks.slice(oi, oj);
+    if (bj === bi) {
+      // вставка: за общим соседом сверху; его поменяли — перед общим соседом снизу; нет обоих — конфликт
+      const lo = bi > 0 && mt[bi - 1]! >= 0 ? mt[bi - 1]! + 1 : bi < B.length && mt[bi]! >= 0 ? mt[bi]! : -1;
+      if (lo < 0) {
+        ops.push(conflict(bi, bj));
+        return;
+      }
+      if (blocks.every((b, k) => T.blocks[lo + k]?.text === b.text)) return;
+      ops.push({ lo, hi: lo, blocks, bi, bj });
+      return;
+    }
+    const at = mt.slice(bi, bj);
+    if (!at.every((x) => x >= 0)) {
+      ops.push(conflict(bi, bj));
+      return;
+    }
+    if (at.every((x, k) => k === 0 || x === at[k - 1]! + 1)) {
+      ops.push({ lo: at[0]!, hi: at[at.length - 1]! + 1, blocks, bi, bj });
+      return;
+    }
+    // старые блоки на месте, но у них между ними вставки: меняем только их, вставки остаются
+    if (blocks.length === at.length) at.forEach((x, k) => ops.push({ lo: x, hi: x + 1, blocks: [blocks[k]!], bi: bi + k, bj: bi + k + 1 }));
+    else at.forEach((x, k) => ops.push({ lo: x, hi: x + 1, blocks: k === 0 ? blocks : [], bi: bi + k, bj: bi + k + 1 }));
+  };
   for (const op of lcsOps(B, O.blocks, (x, y) => x.text === y.text)) {
     if (op === 'same') {
-      if (cur) patches.push(cur);
-      cur = undefined;
+      close();
       i++;
       j++;
       continue;
     }
-    cur ??= { bi: i, bj: i, oi: j, oj: j, lo: 0, hi: 0 };
-    if (op === 'del') cur.bj = ++i;
-    else cur.oj = ++j;
-  }
-  if (cur) patches.push(cur);
-  for (const p of patches) {
-    const at = mt.slice(p.bi, p.bj);
-    if (at.length && at.every((x, k) => x >= 0 && (k === 0 || x === at[k - 1]! + 1))) {
-      p.lo = at[0]!;
-      p.hi = at[at.length - 1]! + 1;
-      continue;
+    if (!open) {
+      open = true;
+      bi = i;
+      oi = j;
     }
-    let lo = 0;
-    for (let k = p.bi - 1; k >= 0; k--) if (mt[k]! >= 0) { lo = mt[k]! + 1; break; }
-    let hi = T.blocks.length;
-    for (let k = p.bj; k < B.length; k++) if (mt[k]! >= 0) { hi = mt[k]!; break; }
-    p.lo = lo;
-    p.hi = p.bj === p.bi ? lo : hi;
+    if (op === 'del') i++;
+    else j++;
   }
-  // та же вставка уже есть в theirs (наша прошлая запись или такая же правка у них) — второй раз не вставляем
-  const already = (p: Patch) =>
-    p.bj === p.bi && p.oj > p.oi && O.blocks.slice(p.oi, p.oj).every((b, k) => T.blocks[p.lo + k]?.text === b.text);
-  const todo = patches.filter((p) => !already(p));
-  // конфликтные куски, чьи места в theirs пересекаются, сливаются в один
-  const merged: Patch[] = [];
-  for (const p of todo) {
+  close();
+  // пересекающиеся куски — один конфликт по объединённым блокам base
+  ops.sort((a, b) => a.lo - b.lo || a.hi - b.hi);
+  const merged: Op[] = [];
+  for (const op of ops) {
     const last = merged[merged.length - 1];
-    if (last && p.lo < last.hi) {
-      last.bj = p.bj;
-      last.oj = p.oj;
-      last.hi = Math.max(last.hi, p.hi);
-    } else merged.push({ ...p });
+    if (last && (op.lo < last.hi || (op.lo === last.lo && op.hi === last.hi && op.lo === op.hi))) {
+      merged[merged.length - 1] = conflict(Math.min(last.bi, op.bi), Math.max(last.bj, op.bj));
+    } else merged.push(op);
   }
   type Item = { block: Block; side: 'o' | 't'; base?: number };
   const baseOf = new Map<number, number>();
   mt.forEach((x, k) => x >= 0 && baseOf.set(x, k));
   const items: Item[] = T.blocks.map((block, k) => ({ block, side: 't', ...(baseOf.has(k) ? { base: baseOf.get(k)! } : {}) }));
-  for (const p of [...merged].reverse()) items.splice(p.lo, p.hi - p.lo, ...O.blocks.slice(p.oi, p.oj).map((block): Item => ({ block, side: 'o' })));
+  const lost: string[] = [];
+  for (const op of [...merged].reverse()) {
+    const put = new Set(op.blocks.map((b) => b.text));
+    lost.unshift(...T.blocks.slice(op.lo, op.hi).filter((b, k) => !baseOf.has(op.lo + k) && !put.has(b.text)).map((b) => b.text));
+    items.splice(op.lo, op.hi - op.lo, ...op.blocks.map((block): Item => ({ block, side: 'o' })));
+  }
   const out: string[] = [...T.lead];
   items.forEach((it, k) => {
     const next = items[k + 1];
@@ -229,17 +284,25 @@ export function merge3(base: string, ours: string, theirs: string): string {
     out.push(...it.block.lines, ...blanks);
     if (next && !blanks.length && next.side !== it.side && !(listish(it.block.kind) && listish(next.block.kind))) out.push('');
   });
-  return out.join('\n');
+  return { text: out.join('\n'), lost };
 }
 
 /**
- * Что отправить в «Записать принятые»: документ не менялся со старта — решения поверх base и хэш base; менялся — решения
- * сливаются с текущей версией (merge3) и уходят с хэшем текущей.
+ * Что отправить в «Записать принятые»: документ не менялся со старта — решения поверх base и хэш base; менялся — новые
+ * решения сливаются с текущей версией (merge3) от того, что уже записано раньше (written — записанные правки), и уходят
+ * с хэшем текущей. lost — чужие блоки, которые запись заменит. Документ удалили после старта — gone.
  */
-export function draftResult(doc: { base: string; next: string; current: string; moved: boolean; baseHash: string; currentHash: string }, decisions: Decisions): { text: string; base: string } {
+export function draftResult(
+  doc: { base: string; next: string; current: string; moved: boolean; baseHash: string; currentHash: string },
+  decisions: Decisions,
+  written: Decisions = {},
+): { text: string; base: string; lost: string[]; gone?: true } {
   const ours = applyDecisions(doc.base, doc.next, decisions);
-  if (!doc.moved) return { text: ours, base: doc.baseHash };
-  return { text: merge3(doc.base, ours, doc.current), base: doc.currentHash };
+  if (!doc.moved) return { text: ours, base: doc.baseHash, lost: [] };
+  if (!doc.current.trim() && doc.base.trim()) return { text: '', base: doc.currentHash, lost: [], gone: true };
+  const own = Object.keys(written).length ? applyDecisions(doc.base, doc.next, written) : doc.base;
+  const m = merge3(own, ours, doc.current);
+  return { text: m.text, base: doc.currentHash, lost: m.lost };
 }
 
 // ---------- правка
