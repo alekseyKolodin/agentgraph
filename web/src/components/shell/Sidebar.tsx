@@ -152,6 +152,7 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
   const tags = useFeature('tags');
   const context = useFeature('context');
   const sessions = useFeature('sessions');
+  const teamwork = useFeature('teamwork');
   const questions = inboxCount(useHome().data?.runs ?? []);
   const allSessions = useAllSessions();
   const ended = allSessions.filter((s) => !s.live);
@@ -181,6 +182,9 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
         </li>
         {spaces && (
           <li className={styles.navWork}><NavLink to="/spaces" title={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')}>{t('Пространства')}</NavLink></li>
+        )}
+        {teamwork && (
+          <li className={styles.navWork}><NavLink to="/teamwork" title={t('Teamwork: команда ведёт проекты в общем git-репо — ТЗ, архитектура, задачи и спринты')}>Teamwork</NavLink></li>
         )}
         {sessions && (
           <li className={styles.navWork}><NavLink to="/sessions" title={t('Обычная сессия Claude Code в терминале, в пространстве и с тегами знаний')}>{t('Сессии')}</NavLink></li>

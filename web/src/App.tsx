@@ -1,4 +1,4 @@
-// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context; сервер отдаёт на них index.html. Старые
+// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context, /teamwork/…; сервер отдаёт на них index.html. Старые
 // хеши /#run/<id> и т. п. переводятся на пути ниже (lib/legacy-url.ts), старые /next/… — сервер (308).
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
@@ -27,6 +27,10 @@ const ContextScreen = lazy(() => import('./screens/context/ContextScreen').then(
 // «Сессии»: список с формой и экран терминала; терминал (xterm) — отдельным файлом, только экрану сессии
 const SessionsScreen = lazy(() => import('./screens/sessions/SessionsScreen').then((m) => ({ default: m.SessionsScreen })));
 const SessionScreen = lazy(() => import('./screens/sessions/SessionScreen').then((m) => ({ default: m.SessionScreen })));
+// Teamwork: команды, команда, проект — одним файлом сборки (один динамический импорт на три экрана)
+const TeamsScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.TeamsScreen })));
+const TeamScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.TeamScreen })));
+const ProjectScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.ProjectScreen })));
 
 // старые ссылки /#run/<id>, /#flow/<имя>, /#tags/<slug>, /#context — до создания роутера: он читает адрес сразу
 const legacy = legacyLocation(location);
@@ -44,6 +48,10 @@ const router = createBrowserRouter(
         { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
         { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },
         { path: 'sessions/:id', element: <Suspense><SessionScreen /></Suspense> },
+        // Teamwork (spec §11): команды, команда (вкладка — ?tab=), проект с вкладкой; ?task=ID открывает панель задачи поверх любой вкладки
+        { path: 'teamwork', element: <Suspense><TeamsScreen /></Suspense> },
+        { path: 'teamwork/:team', element: <Suspense><TeamScreen /></Suspense> },
+        { path: 'teamwork/:team/:project/:tab?', element: <Suspense><ProjectScreen /></Suspense> },
         { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },
         // черновик разового запуска: живёт только в памяти вкладки, после перезагрузки — на главную
         { path: 'draft', element: <Suspense><FlowScreen draft /></Suspense> },
