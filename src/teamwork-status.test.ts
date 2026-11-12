@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamTask, TeamTaskPatch, TeamTaskWork } from './api-types.js';
 import type { Exec } from './git.js';
-import { fetchPrState, parseTeamworkLink, prNumber, prPatch, runEndPatch, startPatch, TeamworkStatus, watched, type StatusService } from './teamwork-status.js';
+import { fetchPrState, parseTeamworkLink, prBelongsTo, prNumber, prPatch, runEndPatch, startPatch, TeamworkStatus, watched, type StatusService } from './teamwork-status.js';
 import { TeamError } from './teamwork-repo.js';
 
 function task(over: Partial<TeamTask> = {}): TeamTask {
@@ -311,4 +311,47 @@ test('конец запуска, пришедший раньше записи с
   await Promise.all([begun, finished]);
   assert.deepEqual(f.patches.map((p) => p.patch), [{ status: 'in_progress', assignee: 'me@x' }, { status: 'review' }]);
   assert.deepEqual(f.work['PAY-1'].map((w) => w.status), ['done']);
+});
+
+test('prBelongsTo: ссылка ведёт в remote репо — тот же хост и путь с хвостом PR; другой репо, другой хост или путь без хоста — нет', () => {
+  const gh = { host: 'github.com', path: 'acme/billing' };
+  assert.equal(prBelongsTo(gh, 'https://github.com/acme/billing/pull/42'), true);
+  assert.equal(prBelongsTo(gh, 'https://GitHub.com/acme/billing/pulls/42/files'), true);
+  assert.equal(prBelongsTo(gh, 'https://github.com/acme/billing-next/pull/42'), false);
+  assert.equal(prBelongsTo(gh, 'https://github.com/other/repo/pull/3'), false);
+  assert.equal(prBelongsTo(gh, 'https://gitlab.com/acme/billing/-/merge_requests/3'), false);
+  assert.equal(prBelongsTo(gh, '/acme/billing/pull/42'), false);
+  assert.equal(prBelongsTo({ host: 'gitlab.example.com', path: 'g/app' }, 'https://gitlab.example.com/g/app/-/merge_requests/7'), true);
+});
+
+test('опрос PR: ссылка в задаче ведёт в другой репозиторий — точного запроса нет, задача не меняется, причина в ошибках', async () => {
+  const f = fake({ export: [task({ status: 'review', branch: 'tw/PAY-1-x', pr: { url: 'https://github.com/other/repo/pull/3', state: 'open' } })] });
+  const x = fakeExec({ 'gh repos/acme/billing/pulls?state=open': ghList([]) });
+  const r = await new TeamworkStatus({ service: f.svc, exec: x.x, timers: false, log: () => {} }).poll();
+  assert.deepEqual([r.requests, r.changed], [1, []]);
+  assert.deepEqual(r.errors, ['PAY-1 https://github.com/other/repo/pull/3: ссылка на PR ведёт не в репо github.com/acme/billing']);
+  assert.deepEqual(x.calls, ['gh repos/acme/billing/pulls?state=open&per_page=100&sort=updated&direction=desc']);
+  assert.deepEqual(f.patches, []);
+});
+
+test('stop дожидается идущих записей старта и конца: переход записан до остановки сервиса команды', async () => {
+  const f = fake({ export: [task()] }, { me: 'me@x' });
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const slow: StatusService = { ...f.svc, me: () => gate.then(() => 'me@x') };
+  const st = new TeamworkStatus({ service: slow, timers: false });
+  void st.started(link, { kind: 'run', id: 'r1', status: 'running' });
+  void st.ended(link, { kind: 'run', id: 'r1', status: 'done' });
+  const stopped = st.stop();
+  let done = false;
+  void stopped.then(() => {
+    done = true;
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(done, false);
+  release();
+  await stopped;
+  assert.deepEqual(f.patches.map((p) => p.patch), [{ status: 'in_progress', assignee: 'me@x' }, { status: 'review' }]);
 });

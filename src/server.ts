@@ -38,7 +38,7 @@ import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
-import { parseTeamworkLink, statusService, stopTeamworkStatus, teamworkStatus } from './teamwork-status.js';
+import { currentTeamworkStatus, parseTeamworkLink, statusService, stopTeamworkStatus, teamworkStatus } from './teamwork-status.js';
 import { sessionTeamwork, teamworkWorkRoute } from './teamwork-work.js';
 import { TeamError } from './teamwork-repo.js';
 import { getLimits } from './limits.js';
@@ -731,9 +731,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     let teamSource: RunSource | undefined;
     if (teamwork?.task) {
       try {
-        const task = teamworkStatus().check(teamwork);
+        const status = currentTeamworkStatus();
+        if (!status) throw new HttpError(503, 'Сервер останавливается');
+        const task = status.check(teamwork);
         if (task) teamSource = { type: 'teamwork', key: task.id, title: task.title };
       } catch (err) {
+        if (err instanceof HttpError) throw err;
         throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err));
       }
     }
@@ -1122,10 +1125,11 @@ function startRun(
   const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
-  const { id } = launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined);
-  // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json
-  if (o.teamwork?.task) void teamworkStatus().started(o.teamwork, { kind: 'run', id, status: 'running', ...(o.title ? { title: o.title } : {}) });
-  return id;
+  // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json.
+  // До раннера: его событие end может прийти раньше, чем он вернёт управление, а конец ждёт записи старта той же задачи
+  const id = path.basename(runDir);
+  if (o.teamwork?.task) void currentTeamworkStatus()?.started(o.teamwork, { kind: 'run', id, status: 'running', ...(o.title ? { title: o.title } : {}) });
+  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined).id;
 }
 
 /**
@@ -1250,7 +1254,8 @@ function launchRun(
       live.delete(id);
       // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
       // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
-      if (opts.teamwork?.task && !parent) void teamworkStatus().ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
+      // (автоматика уже снята остановкой сервера — конец опоздавшего запуска просто не записывается)
+      if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
   };
   lr.broadcast = broadcast;

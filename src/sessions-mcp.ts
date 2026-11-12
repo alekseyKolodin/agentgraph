@@ -10,6 +10,7 @@ import { knowledgeReadText } from './knowledge-tools.js';
 import { KNOWLEDGE_READ_TOOL } from './tags.js';
 import { DOCS_DIR, SPACE_DOC_TEXT_MAX, SPACE_WRITE_TOOL, WRITE_DOC_EXTS } from './spaces.js';
 import { SESSION_NEW_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL } from './sessions.js';
+import { TASK_STATUSES } from './teamwork.js';
 
 /** Что у сессии на момент вызова: пространство (слаг), теги знаний и задача Teamwork, если сессия открыта из неё. */
 export type McpScope = () => { space?: string; knowledge: string[]; task?: { id: string; team: string; project: string } };
@@ -31,8 +32,6 @@ export type McpCtx = {
   /** Документ проекта Teamwork (architecture, design, docs/<имя>.md); ответ — путь файла в клоне. Нет у сессии без задачи. */
   teamDoc?: (name: string, text: string) => Promise<string>;
 };
-
-const TASK_STATUSES: readonly TeamTaskStatus[] = ['todo', 'in_progress', 'review', 'done'];
 
 export type McpReply = { status: number; body?: unknown };
 

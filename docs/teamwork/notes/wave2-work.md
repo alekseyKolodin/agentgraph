@@ -112,10 +112,18 @@ status)` из `teamwork-work.ts`. MCP сессии из задачи получ�
 
 ## check-sdk-hooks
 
-Прогонять не обязательно: guard папок данных и `launchDirs` не трогались. Изменены `ASK_TOOLS` (два новых инструмента в
-`permissions.ask` и PreToolUse) — это та же механика, что у `space_write`, покрыта `sessions.test.ts` и
-`server.teamwork.work.test.ts`. Если прогон запланирован ради drafts или core — добавить сценарий «сессия из задачи зовёт
-`team_task_update` в auto → вопрос».
+Guard папок данных и `launchDirs` не трогались. Изменён `ASK_TOOLS` в `src/sessions.ts`: два новых инструмента в
+`permissions.ask` и под хуком PreToolUse — та же механика, что у `space_write`, покрыта `sessions.test.ts` и
+`server.teamwork.work.test.ts`. По правилам ревью это правка прав сессии, поэтому прогон `npx tsx scripts/check-sdk-hooks.mts`
+нужен (здесь не запускался, он тратит деньги) — со сценарием «сессия из задачи зовёт `team_task_update` в auto → вопрос».
+
+## Ревью
+
+Независимое ревью `code-reviewer` прошло, замечания исправлены вторым коммитом: старт запуска регистрируется до раннера
+(конец мгновенного запуска не перетирает запись старта), точный запрос состояния PR идёт только по ссылке в remote репо
+проекта (`prBelongsTo`), `stop()` дожидается идущих записей, конец опоздавшего запуска после остановки сервера не бросает,
+`pr.url` в PATCH — только http(s), подпись задачи в вопросе PreToolUse через `cleanLine`, `started` у сессии в фоне, битый
+`defaultFlow` в `teamwork.yaml` не ломает intake.
 
 ## Не проверено
 

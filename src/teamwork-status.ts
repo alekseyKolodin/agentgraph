@@ -49,7 +49,8 @@ export function parseTeamworkLink(raw: unknown): RunTeamworkLink | undefined {
   const section = str('section');
   if (section !== undefined) {
     if (section === null) throw new Error('teamwork.section — строка');
-    if (section) link.section = section;
+    // заголовок раздела документа: длиннее не бывает, а в run.json уходит как есть
+    if (section) link.section = section.slice(0, 200);
   }
   return link;
 }
@@ -89,6 +90,12 @@ export const watched = (t: TeamTask): boolean => !t.error && Boolean(t.branch) &
 export function prNumber(url: string): number | undefined {
   const m = url.match(/\/(?:pulls?|merge_requests)\/(\d+)(?:[/?#]|$)/);
   return m ? Number(m[1]) : undefined;
+}
+
+/** Ссылка на PR ведёт в этот remote: тот же хост, путь начинается с пути репо (…/acme/billing/pull/42, …/g/app/-/merge_requests/7). */
+export function prBelongsTo(remote: Remote, url: string): boolean {
+  const r = parseRemote(url);
+  return Boolean(r && r.host === remote.host && (r.path === remote.path || r.path.startsWith(`${remote.path}/`)));
 }
 
 /**
@@ -164,6 +171,8 @@ export class TeamworkStatus {
   private readonly lastErrors = new Map<string, string>();
   /** Идущие записи старта по задаче: конец очень короткого запуска ждёт их, иначе «Ревью» не наступит. */
   private readonly starting = new Map<string, Promise<void>>();
+  /** Все идущие записи старта и конца: stop() дожидается их до остановки сервиса команды. */
+  private readonly writes = new Set<Promise<void>>();
 
   constructor(private readonly deps: TeamworkStatusDeps) {}
 
@@ -202,7 +211,9 @@ export class TeamworkStatus {
       }
     });
     this.starting.set(key, run);
+    this.writes.add(run);
     await run;
+    this.writes.delete(run);
     if (this.starting.get(key) === run) this.starting.delete(key);
   }
 
@@ -212,16 +223,21 @@ export class TeamworkStatus {
    */
   async ended(link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'> & { at?: string }): Promise<void> {
     if (!link.task) return;
-    // старт той же задачи ещё пишется (запуск кончился за секунды): сначала он, иначе done не даст «Ревью»
-    await this.starting.get(`${link.team}/${link.task}`);
-    try {
-      this.deps.service.recordWork(link.team, link.task, { ...work, at: work.at ?? this.now() });
-      if (work.kind !== 'run' || !work.status) return;
-      const patch = runEndPatch(this.deps.service.task(link.team, link.project, link.task), work.status);
-      if (patch) await this.deps.service.updateTask(link.team, link.project, link.task, patch);
-    } catch (err) {
-      this.log(`${link.task}: конец работы не записан — ${errMsg(err)}`);
-    }
+    const run = (async () => {
+      // старт той же задачи ещё пишется (запуск кончился за секунды): сначала он, иначе done не даст «Ревью»
+      await this.starting.get(`${link.team}/${link.task}`);
+      try {
+        this.deps.service.recordWork(link.team, link.task!, { ...work, at: work.at ?? this.now() });
+        if (work.kind !== 'run' || !work.status) return;
+        const patch = runEndPatch(this.deps.service.task(link.team, link.project, link.task!), work.status);
+        if (patch) await this.deps.service.updateTask(link.team, link.project, link.task!, patch);
+      } catch (err) {
+        this.log(`${link.task}: конец работы не записан — ${errMsg(err)}`);
+      }
+    })();
+    this.writes.add(run);
+    await run;
+    this.writes.delete(run);
   }
 
   /** Опрос PR сейчас; идущий опрос не дублируется — возвращается его итог. */
@@ -287,7 +303,12 @@ export class TeamworkStatus {
           let seen: TeamPr | undefined;
           if (mr) seen = { url: mr.url, state: 'open' };
           else if (task.pr?.state === 'open') {
-            // открытым он был, а в списке открытых его нет: смёржен или закрыт — точный запрос по номеру
+            // открытым он был, а в списке открытых его нет: смёржен или закрыт — точный запрос по номеру. Ссылка,
+            // записанная рукой и ведущая в другой репозиторий, по этому remote не спрашивается: чужой PR не двигает задачу
+            if (!prBelongsTo(remote, task.pr.url)) {
+              fail(`${task.id} ${task.pr.url}`, `ссылка на PR ведёт не в репо ${key}`);
+              continue;
+            }
             try {
               report.requests++;
               const state = await fetchPrState(remote, task.pr.url, x);
@@ -315,15 +336,16 @@ export class TeamworkStatus {
   /** Опрос по таймеру; с timers: false — ничего. */
   start(): void {
     if (this.deps.timers === false || this.timer) return;
-    this.timer = setInterval(() => void this.poll(), this.deps.intervalMs ?? PR_POLL_MS);
+    this.timer = setInterval(() => void this.poll().catch((err: unknown) => this.log(`опрос PR: ${errMsg(err)}`)), this.deps.intervalMs ?? PR_POLL_MS);
     this.timer.unref();
   }
 
-  /** Снять таймер и дождаться идущего опроса. */
+  /** Снять таймер и дождаться идущего опроса и записей старта и конца: сервис команды останавливается после них. */
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.polling?.catch(() => undefined);
+    await Promise.all([...this.writes].map((w) => w.catch(() => undefined)));
   }
 }
 
@@ -337,6 +359,9 @@ export function teamworkStatus(deps?: TeamworkStatusDeps): TeamworkStatus {
   }
   return status;
 }
+
+/** Автоматика, если она создана и не снята остановкой сервера: конец опоздавшего запуска не должен ронять процесс. */
+export const currentTeamworkStatus = (): TeamworkStatus | undefined => status;
 
 /** Остановить автоматику (stopServer): таймер снимается, идущий опрос дожидается. */
 export async function stopTeamworkStatus(): Promise<void> {

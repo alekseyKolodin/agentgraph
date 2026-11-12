@@ -308,6 +308,8 @@ test('запуск по flow команды со связью с задачей:
   const t2 = await task('PAY-2');
   assert.equal(t2.status, 'in_progress');
   assert.deepEqual(t2.work?.map((w) => [w.id, w.status]), [[f.body.id, 'failed']]);
+  // и в local.json конец не перетёрт записью старта: старт зарегистрирован до раннера
+  assert.deepEqual(localJson().work['PAY-2'].map((w) => [w.id, w.status]), [[f.body.id, 'failed']]);
   // ещё один запуск по задаче в «Ревью» статус не трогает, только work
   knobs.status = 'done';
   const again = await call<RunStarted>('POST', '/api/runs', { teamFlow: { team: 'team', name: 'teamwork-task' }, teamwork: intake.teamwork, input: intake.input, cwd: wt.path });

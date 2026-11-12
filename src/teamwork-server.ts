@@ -796,6 +796,8 @@ export class TeamService {
         if (patch.pr !== null) {
           if (!isRecord(patch.pr)) bad('Поле pr — { url, state? } или null');
           const url = reqStr(patch.pr.url, 'pr.url', 'Укажи ссылку на PR');
+          // UI рисует её ссылкой: только http(s), без пробелов и управляющих символов
+          if (!/^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(url)) bad('Поле pr.url — ссылка на PR или MR, https://…');
           const state = patch.pr.state ?? 'open';
           if (!['open', 'merged', 'closed'].includes(state)) bad('Поле pr.state: open | merged | closed');
           pr = { url, state };

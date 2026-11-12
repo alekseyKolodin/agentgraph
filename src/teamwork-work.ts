@@ -15,7 +15,8 @@ import { TeamError } from './teamwork-repo.js';
 import type { Reply, TeamService } from './teamwork-server.js';
 import type { TeamworkStatus } from './teamwork-status.js';
 import { docFile, docLabel, FLOW_NAME_RE, TASK_STATUSES } from './teamwork.js';
-import type { SessionTeamwork, TeamTaskUpdateArgs } from './sessions-server.js';
+import type { SessionTeamwork } from './sessions-server.js';
+import type { TeamTaskUpdateArgs } from './sessions-mcp.js';
 import type { RunTeamworkLink, TeamColumns, TeamProject, TeamRepoRef, TeamTask, TeamTaskIntake, TeamTaskPatch, TeamTaskWorktree, WorktreeResult } from './api-types.js';
 
 /** Flow команды для кнопки «В работу ▸», когда defaultFlow в teamwork.yaml не задан. */
@@ -139,7 +140,9 @@ export async function taskIntake(deps: WorkDeps, team: string, project: string, 
       teamFlow = { team, name: flowName };
     } else if (q.flow) throw new TeamError(400, `Flow ${flowName} не проходит проверку: ${f.error}`);
   } catch (err) {
-    if (q.flow || !(err instanceof TeamError && err.status === 404)) throw err;
+    // flow по умолчанию нет в репо (404) или defaultFlow в teamwork.yaml поправили руками в недопустимое имя (400) —
+    // форма выберет flow сама; заданный ?flow= — ошибка как есть
+    if (q.flow || !(err instanceof TeamError && (err.status === 404 || err.status === 400))) throw err;
   }
   const context = taskText(task, { teamSlug: team, teamTitle: cfg.title, project: proj, columns: cfg.columns, tasks });
   return {

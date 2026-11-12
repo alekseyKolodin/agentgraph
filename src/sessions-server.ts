@@ -35,8 +35,6 @@ import {
 } from './sessions.js';
 import { mcpReply, parseSessionNewArgs, parseTeamTaskArgs, type McpReply, type SessionNewArgs, type TeamTaskUpdateArgs } from './sessions-mcp.js';
 import { parseTeamworkLink } from './teamwork-status.js';
-
-export type { TeamTaskUpdateArgs } from './sessions-mcp.js';
 import type { DraftSession } from './space-draft.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
@@ -481,9 +479,9 @@ export class SessionManager {
       this.sessions.delete(id);
       throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
     }
-    // сессия начата из задачи (spec §10): «К работе» → «В работе», исполнитель, запись в local.json — до ответа, чтобы
-    // доска обновилась вместе с ним; сбой — в лог внутри started
-    if (teamwork?.task && teamworkHooks) await teamworkHooks.started(teamwork, { kind: 'session', id, status: s.status, title: rec.name });
+    // сессия начата из задачи (spec §10): «К работе» → «В работе», исполнитель, запись в local.json. В фоне, как у
+    // запусков: очередь репо команды может быть занята pull по сети; доска обновится событием team. Сбой — в лог внутри started
+    if (teamwork?.task && teamworkHooks) void teamworkHooks.started(teamwork, { kind: 'session', id, status: s.status, title: rec.name });
     return this.view(s);
   }
 
@@ -1046,7 +1044,8 @@ export class SessionManager {
     if (tool === TEAM_TASK_UPDATE_FULL || tool === TEAM_DOC_WRITE_FULL) {
       const link = s.rec.teamwork;
       if (!link?.task || !teamworkHooks) return 'Сессия не открыта из задачи Teamwork: вызов вернёт ошибку';
-      const label = teamworkHooks.label(link);
+      // заголовок задачи правят люди в репо команды: в терминал — одной строкой, без управляющих символов
+      const label = cleanLine(teamworkHooks.label(link), 160);
       if (tool === TEAM_DOC_WRITE_FULL) {
         const name = typeof input.name === 'string' ? cleanLine(input.name, 80) : '';
         const size = typeof input.text === 'string' ? Buffer.byteLength(input.text) : 0;
