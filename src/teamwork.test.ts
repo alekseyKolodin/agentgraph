@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts,
+  acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts, shareableUrl,
   nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, rankNear, remoteProblem,
   replaceSection, requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections,
   teamSlugFromUrl, updateYaml, validRank, type TaskFile,
@@ -303,6 +303,30 @@ test('слияние файлов задачи и YAML: поля по отдел
   assert.match(yc.text, /status: closed/);
 });
 
+test('слияние задачи: updatedAt и updatedBy без конфликта — более поздняя правка со своим автором, настоящий конфликт остаётся', async () => {
+  const file = 'x/PAY-1.md';
+  const fm = (o: Record<string, unknown>) => ({ id: 'PAY-1', title: 't', type: 'feature', status: 'todo', rank: 'V', blockedBy: [], ...o });
+  const base = composeTask(fm({ updatedAt: '2026-11-12T10:00:00.000Z', updatedBy: 'base@example.com' }), 'описание\n');
+  // разные поля, оба поставили свою метку: конфликтов нет, метка — их (позже)
+  const mine = composeTask(fm({ status: 'in_progress', updatedAt: '2026-11-12T10:00:01.000Z', updatedBy: 'me@example.com' }), 'описание\n');
+  const theirs = composeTask(fm({ assignee: 'bob', updatedAt: '2026-11-12T10:00:01.100Z', updatedBy: 'bob@example.com' }), 'описание\n');
+  const r = await mergeTaskTexts(base, mine, theirs, file, () => undefined);
+  assert.deepEqual(r.conflicts, []);
+  const t = parseTask(r.text, file);
+  assert.deepEqual([t.status, t.assignee, t.updatedAt, t.updatedBy], ['in_progress', 'bob', '2026-11-12T10:00:01.100Z', 'bob@example.com']);
+  // моя правка позже — метка моя; одно поле по-разному — единственный конфликт, значение команды
+  const mine2 = composeTask(fm({ estimate: 5, updatedAt: '2026-11-12T10:00:02.000Z', updatedBy: 'me@example.com' }), 'описание\n');
+  const theirs2 = composeTask(fm({ estimate: 3, updatedAt: '2026-11-12T10:00:01.900Z', updatedBy: 'bob@example.com' }), 'описание\n');
+  const r2 = await mergeTaskTexts(base, mine2, theirs2, file, () => undefined);
+  assert.deepEqual(r2.conflicts, [{ field: 'estimate', ours: 5, theirs: 3 }]);
+  const t2 = parseTask(r2.text, file);
+  assert.deepEqual([t2.estimate, t2.updatedAt, t2.updatedBy], [3, '2026-11-12T10:00:02.000Z', 'me@example.com']);
+  // без базы и с одинаковым временем — метка команды
+  const r3 = await mergeTaskTexts(undefined, composeTask(fm({ updatedAt: '2026-11-12T10:00:00.000Z', updatedBy: 'me@example.com' }), ''), composeTask(fm({ updatedAt: '2026-11-12T10:00:00.000Z', updatedBy: 'bob@example.com' }), ''), file, () => undefined);
+  assert.deepEqual(r3.conflicts, []);
+  assert.equal(parseTask(r3.text, file).updatedBy, 'bob@example.com');
+});
+
 test('комментарии: имя файла по времени и handle, разбор и запись', () => {
   assert.equal(commentFileName('2026-11-12T10:31:05.123Z', 'Alice.Smith@example.com'), '2026-11-12T10-31-05Z-alice.smith.md');
   assert.equal(commentFileName('2026-11-12T10:31:05Z', '@@'), '2026-11-12T10-31-05Z-user.md');
@@ -340,4 +364,13 @@ test('ссылка на репо: допустимые формы, отказ н
   assert.equal(teamSlugFromUrl('https://gitlab.com/g/sub/x.git/'), 'x');
   assert.equal(teamSlugFromUrl('/tmp/bare.git'), 'bare');
   assert.equal(teamSlugFromUrl('///'), 'team');
+});
+
+test('ссылка для репо команды: у https без логина и токена, у ssh без пароля, остальное как есть', () => {
+  assert.equal(shareableUrl('https://alex:ghp_secret@github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
+  assert.equal(shareableUrl('https://ghp_secret@github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
+  assert.equal(shareableUrl('ssh://git:pw@host:2222/a/b.git'), 'ssh://git@host:2222/a/b.git');
+  assert.equal(shareableUrl('ssh://git@host:2222/a/b.git'), 'ssh://git@host:2222/a/b.git');
+  assert.equal(shareableUrl('git@github.com:acme/billing.git'), 'git@github.com:acme/billing.git');
+  assert.equal(shareableUrl('https://github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
 });

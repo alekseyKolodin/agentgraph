@@ -292,8 +292,9 @@ export class TeamRepo {
     return () => this.listeners.delete(fn);
   }
 
-  private emit(files: string[]): void {
-    if (!files.length) return;
+  /** Событие team: что поменялось в клоне. force — и без файлов (отправка или ошибка сети сменили строку синхронизации). */
+  private emit(files: string[], force = false): void {
+    if (!files.length && !force) return;
     const e = { team: this.slug, projects: projectsOf(files) };
     for (const fn of this.listeners) fn(e);
   }
@@ -393,16 +394,24 @@ export class TeamRepo {
     return this.syncState();
   }
 
-  /** Внутри очереди: правки руками, fetch, слияние, push при push и неотправленных коммитах. Ошибка сети — в local.sync.error и повтор. */
+  /**
+   * Внутри очереди: правки руками, fetch, слияние, push при push и неотправленных коммитах. Ошибка сети — в local.sync.error
+   * и повтор. Событие team — одно на вызов: fetch принёс изменения, коммиты ушли, ошибка синхронизации появилась или
+   * снялась (UI не опрашивает сервер, пока идёт отправка, а ждёт этого события). Смена одного текста ошибки на другой
+   * («…after 3 ms» → «…after 4 ms») события не даёт: иначе событие → GET команды → фоновый pull → новая ошибка → событие.
+   */
   private async syncNow(push: boolean): Promise<string[]> {
     this.busy = true;
     let changed: string[] = [];
+    let pushed = false;
+    const failedBefore = Boolean(this.local().sync.error);
     try {
       await this.commitManual();
       await this.fetch();
       changed = await this.integrate();
       if (push && (await this.unpushed()) > 0) {
         await this.git(['push', '-q', '-u', 'origin', `HEAD:refs/heads/${this.branch()}`], NET_TIMEOUT);
+        pushed = true;
         this.saveLocal((l) => {
           l.sync.lastPushAt = this.deps.now().toISOString();
           l.sync.error = null;
@@ -421,7 +430,7 @@ export class TeamRepo {
       throw err;
     } finally {
       this.busy = false;
-      if (changed.length) this.emit(changed);
+      this.emit(changed, pushed || Boolean(this.local().sync.error) !== failedBefore);
     }
     return changed;
   }

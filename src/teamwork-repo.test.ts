@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { exec, type Exec } from './git.js';
-import { checkRemote, createTeam, joinTeam, TeamError, TeamRepo, type RepoDeps } from './teamwork-repo.js';
+import { checkRemote, createTeam, joinTeam, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import { defaultRepoDeps } from './teamwork-repo.js';
 import { composeTask, parseTask, parseTeamConfig, serializeTask, type TaskFile } from './teamwork.js';
 
@@ -217,6 +217,33 @@ test('два клона: разные задачи сливаются, разн�
   b.saveLocal((l) => (l.conflicts = []));
 });
 
+test('два клона: updatedAt и updatedBy сливаются без конфликта — более поздняя метка; конфликт только по настоящему полю', async () => {
+  await a.pull();
+  await b.pull();
+  const stamp = (r: TeamRepo, id: string, patch: Partial<TaskFile>, at: string, by: string) =>
+    r.write(`${id}: правка`, (x) => x.writeFile(taskFile(id), serializeTask({ ...readTask(x, id), ...patch, updatedAt: at, updatedBy: by })));
+  // разные поля, у обоих своя метка в одной строке frontmatter: rebase конфликтует, слияние по полям — без конфликтов
+  await stamp(a, 'PAY-3', { status: 'review' }, '2026-11-12T10:00:00.000Z', 'alice@example.com');
+  await stamp(b, 'PAY-3', { assignee: 'bob@example.com' }, '2026-11-12T10:00:00.100Z', 'bob@example.com');
+  await a.push();
+  await b.push();
+  let t = readTask(b, 'PAY-3');
+  assert.deepEqual([t.status, t.assignee, t.updatedAt, t.updatedBy], ['review', 'bob@example.com', '2026-11-12T10:00:00.100Z', 'bob@example.com']);
+  assert.deepEqual(b.local().conflicts, []);
+  await a.pull();
+  // одно поле по-разному, метка bob позже: у bob один конфликт estimate, метка его
+  await stamp(a, 'PAY-3', { estimate: 3 }, '2026-11-12T11:00:00.000Z', 'alice@example.com');
+  await stamp(b, 'PAY-3', { estimate: 8 }, '2026-11-12T11:00:00.100Z', 'bob@example.com');
+  await a.push();
+  await b.push();
+  t = readTask(b, 'PAY-3');
+  assert.deepEqual([t.estimate, t.updatedAt, t.updatedBy], [3, '2026-11-12T11:00:00.100Z', 'bob@example.com']);
+  assert.deepEqual(b.local().conflicts.map((c) => [c.kind, c.field, c.ours, c.theirs]), [['field', 'estimate', 8, 3]]);
+  assert.equal(git(b.repoDir, 'status', '--porcelain'), '');
+  b.saveLocal((l) => (l.conflicts = []));
+  await a.pull();
+});
+
 test('два клона: текст документа — версия команды, моя версия сохранена в конфликте; разные разделы сливаются git', async () => {
   const doc = 'projects/p/prd.md';
   await a.write('p: ТЗ', (r) => r.writeFile(doc, '# ТЗ\n\n## Цель\n\nЦель.\n\n## Требования\n\n- FR-1. Один\n'));
@@ -396,6 +423,68 @@ test('нет сети: коммиты ждут, ошибка в строке с�
   assert.equal(st.unpushed, 0);
   assert.equal(st.error, undefined);
   assert.equal(git(bare, 'log', '-1', '--format=%s', 'main'), 'PAY-1: оценка');
+});
+
+test('событие team после отправки: одно на push, с проектами из fetch; без изменений — нет; ошибка сети и её снятие — событие', async () => {
+  await a.pull();
+  await b.pull();
+  const seen: ChangeEvent[] = [];
+  const off = a.onChange((e) => seen.push(e));
+  const estimate = (r: TeamRepo, id: string, n: number) => r.write(`${id}: оценка ${n}`, (x) => x.writeFile(taskFile(id), serializeTask({ ...readTask(x, id), estimate: n })));
+  await estimate(a, 'PAY-3', 4);
+  assert.deepEqual(seen, [{ team: 'team', projects: ['p'] }]);
+  // мои коммиты ушли, нового с сервера нет — одно событие без проектов: сменилась только строка синхронизации
+  seen.length = 0;
+  await a.push();
+  assert.deepEqual(seen, [{ team: 'team', projects: [] }]);
+  // нечего отправлять и нечего получать — тишина
+  seen.length = 0;
+  await a.push();
+  await a.pull();
+  assert.deepEqual(seen, []);
+  // fetch принёс задачу bob, и мои ушли — всё равно одно событие, с проектом
+  await estimate(b, 'PAY-2', 2);
+  await b.push();
+  await estimate(a, 'PAY-3', 6);
+  seen.length = 0;
+  await a.push();
+  assert.deepEqual(seen, [{ team: 'team', projects: ['p'] }]);
+  // нет сети: первая ошибка — событие, та же ошибка при повторе — нет, отправка после восстановления — событие
+  const hidden = `${bare}.hidden`;
+  fs.renameSync(bare, hidden);
+  try {
+    await estimate(a, 'PAY-3', 7);
+    seen.length = 0;
+    await assert.rejects(a.push());
+    assert.equal(seen.length, 1);
+    await assert.rejects(a.push());
+    assert.equal(seen.length, 1);
+  } finally {
+    fs.renameSync(hidden, bare);
+  }
+  await a.push();
+  assert.equal(seen.length, 2);
+  assert.equal((await a.syncState()).state, 'ok');
+  off();
+  await b.pull();
+});
+
+test('ошибка сети с меняющимся текстом: событие только когда ошибка появилась и когда снялась', async () => {
+  let n = 0;
+  let offline = true;
+  const x: Exec = (cmd, args, opts) =>
+    offline && args.includes('fetch') ? Promise.reject(new Error(`Failed to connect to github.com port 443 after ${++n} ms`)) : alice.deps.exec(cmd, args, opts);
+  const r = track(TeamRepo.open(a.slug, { ...alice.deps, exec: x }, alice.root)!);
+  const seen: ChangeEvent[] = [];
+  r.onChange((e) => seen.push(e));
+  // иначе: событие → GET команды → фоновый pull → новый текст ошибки → событие, и так по кругу
+  for (let i = 0; i < 3; i++) await assert.rejects(r.pull());
+  assert.equal(seen.length, 1);
+  assert.match(r.local().sync.error ?? '', /after 3 ms/);
+  offline = false;
+  await r.push();
+  assert.deepEqual(seen, [{ team: 'team', projects: [] }, { team: 'team', projects: [] }]);
+  assert.equal(r.local().sync.error, null);
 });
 
 test('два активных спринта после одновременного запуска: активным остаётся более ранний, второй снова запланирован', async () => {
