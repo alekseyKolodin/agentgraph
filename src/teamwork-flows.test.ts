@@ -14,6 +14,7 @@ const { APP_DIR } = await import('./paths.js');
 const { deleteFlow, parseFlow, saveFlowYaml } = await import('./flows.js');
 const { composeInput, hasPlaceholders } = await import('./intake.js');
 const { flowPhases } = await import('./schema.js');
+const { REQUIREMENT_RE } = await import('./teamwork.js');
 
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 
@@ -76,7 +77,12 @@ test('teamwork-prd: раздел, следующий номер и папка п
   assert.match(p, /«Новые номера»/, 'новый номер — из входа, его считает сервер');
   assert.match(p, /только раздел/i);
   assert.match(p, /"at"/);
-  assert.match(p, /FR-1/);
+  // формат строки требования — тот, что разбирает сервер: примеры из промпта проходят REQUIREMENT_RE, двоеточия нет
+  const examples = [...p.matchAll(/`(- N?FR-\d+[^`]*)`/g)].map((m) => m[1]);
+  assert.equal(examples.length, 2, 'в промпте пример для FR и для NFR');
+  for (const line of examples) assert.match(line, REQUIREMENT_RE, line);
+  assert.doesNotMatch(p, /N?FR-\d+:/, 'требование с двоеточием сервер не увидит');
+  assert.doesNotMatch(p, /сохраняй его оформление/, 'формат обязателен: ТЗ пишут только этот flow и правка в UI');
 });
 
 test('teamwork-architecture: что писать и раздел во входе, оба документа подставляются, ссылки на FR-N', () => {
