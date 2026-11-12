@@ -1743,23 +1743,93 @@ export type TeamDependencyReport = {
 };
 
 export type TeamDraftKind = 'prd' | 'architecture' | 'split';
+/** Документ, который правит черновик: у prd — prd, у architecture — architecture и/или design (по полю what). */
+export type TeamDraftDocName = 'prd' | 'architecture' | 'design';
 
-/** Причина правки черновика документа из notes.json. */
-export type TeamDraftNote = { at: string; why: string };
+/** Причина правки черновика документа из notes.json; doc — у teamwork-architecture: к какому из двух документов относится запись. */
+export type TeamDraftNote = { at: string; why: string; doc?: string };
 
-/** Черновик агента по проекту: обычный локальный запуск flow команды. */
+/**
+ * Черновик агента по проекту (GET …/drafts, ответ POST …/drafts): обычный локальный запуск flow команды (src/teamwork-drafts.ts).
+ * status — статус запуска глазами сервера: running, waiting (вопрос агента), paused, done, failed, aborted, interrupted…
+ */
 export type TeamDraft = {
   run: string;
   kind: TeamDraftKind;
+  /** Flow команды, которым идёт черновик. */
+  flow: string;
   status: string;
   startedAt: string;
+  finishedAt?: string;
   /** Раздел, если правка «С агентом» шла только по нему. */
   section?: string;
+  /** Задание автора черновика. */
   brief?: string;
+  /** Документы, которые правит черновик; у split нет. */
+  docs?: TeamDraftDocName[];
+};
+
+/** POST …/drafts: what — какие документы писать у architecture (по умолчанию оба; с section — один); cwd — папка запуска вместо локальной папки основного репо кода. */
+export type TeamDraftStart = { kind: TeamDraftKind; brief?: string; section?: string; what?: 'architecture' | 'design' | 'both'; model?: string; cwd?: string; maxBudgetUsd?: number };
+
+/**
+ * Документ в черновике (GET …/drafts/:run): base — текст на старте запуска (initial артефакта), next — текст агента (пока
+ * запуск идёт — текущее состояние артефакта; в режиме раздела — base с заменённым разделом, правки вне раздела отброшены),
+ * current — документ в репо сейчас. Режим правок — trackChanges(base, next, notes); moved — документ менялся после старта
+ * черновика, правки на изменённых местах принимаются только руками (markConflicts по current).
+ */
+export type TeamDraftDoc = {
+  name: TeamDraftDocName;
+  base: string;
+  /** Хэш base — base для принятия (TeamDraftAccept.base). */
+  baseHash: string;
+  next: string;
+  /** Агент что-то поменял: next отличается от base. */
+  changed: boolean;
+  current: string;
+  /** Хэш current — base для принятия после ручного разрешения конфликтов. */
+  currentHash: string;
+  moved: boolean;
+  /** Режим раздела: заголовки разделов, где правки агента отброшены («начало документа» — текст до первого раздела). */
+  dropped?: string[];
+};
+
+/** Существующая задача проекта для графа разбивки: статус и исполнитель предшественника. */
+export type TeamDraftExisting = Pick<TeamTask, 'id' | 'status' | 'title'> & Partial<Pick<TeamTask, 'assignee' | 'sprint' | 'estimate'>>;
+
+/**
+ * GET …/drafts/:run. У prd и architecture — documents и notes; у split — tasks, report (checkDependencies ядра: неизвестные
+ * ссылки, цикл, волны, цепочка) и existing. error — черновик не читается: tasks.json не по схеме (задач нет) или у запуска
+ * нет снимка flow.yaml (упал до старта: ни documents, ни notes) — UI показывает ошибку и «Повторить черновик»;
+ * warnings — notes.json не разобрался, раздела нет в ответе агента и подобное.
+ */
+export type TeamDraftDetail = TeamDraft & {
+  documents?: TeamDraftDoc[];
+  notes?: TeamDraftNote[];
+  tasks?: TeamProposedTask[];
+  report?: TeamDependencyReport;
+  existing?: TeamDraftExisting[];
+  error?: string;
+  warnings?: string[];
 };
 
 /**
- * Связь запуска с Teamwork (run.json → teamwork): задача, которую он делает, или черновик документа проекта.
- * Раннер только сохраняет её; статусы задач по запускам и черновики читают её на сервере.
+ * POST …/drafts/:run/accept. Документ: text — итоговый текст после решений человека (applyDecisions), base — хэш документа,
+ * относительно которого приняты правки (по умолчанию TeamDraftDoc.baseHash; после ручного разрешения конфликтов —
+ * currentHash); 409 conflict с current, если документ в репо с тех пор менялся (в режиме раздела — если менялся этот
+ * раздел); правки вне раздела черновика — 400; doc — какой документ (у prd необязателен, у architecture с одним документом
+ * тоже). Разбивка: задачи после правок человека, dependsOn — ключи предложения или номера существующих задач; ошибки
+ * зависимостей или цикл — 400 с report.
  */
-export type RunTeamworkLink = { team: string; project: string; task?: string; draft?: TeamDraftKind; section?: string };
+export type TeamDraftAccept = { doc?: TeamDraftDocName; text: string; base?: string; message?: string } | { tasks: TeamProposedTask[] };
+// Пока запуск черновика идёт (running, waiting, paused) — 409 busy: агент ещё пишет артефакты.
+
+/** Ответ принятия: документ — TeamDoc после записи; разбивка — созданные задачи одним коммитом (dependsOn → blockedBy с номерами). */
+export type TeamDraftAccepted = TeamDoc | { tasks: TeamTask[] };
+
+/**
+ * Связь запуска с Teamwork (run.json → teamwork): задача, которую он делает, или черновик документа проекта (draft —
+ * вид, section — раздел, brief — задание, docs — документы черновика). Раннер только сохраняет её; статусы задач по
+ * запускам и черновики читают её на сервере.
+ */
+export type RunTeamworkLink = { team: string; project: string; task?: string; draft?: TeamDraftKind; section?: string; brief?: string; docs?: TeamDraftDocName[] };

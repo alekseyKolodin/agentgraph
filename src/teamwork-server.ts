@@ -2,14 +2,16 @@
 // TeamRepo и пишет через его очередь (коммит на запись); ответы — типы Teamwork из src/api-types.ts; ошибки — { error } с
 // 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly). Конфликты синхронизации (spec §7.4) —
 // GET …/conflicts, DELETE …/conflicts/:id («оставить версию команды»), POST …/conflicts/:id/mine («взять мою»: поле, текст
-// или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*), текст задачи
-// для запуска (…/intake) и worktree задачи (…/worktree) добавляют сессии волны 2 — здесь их маршруты не заняты.
+// или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*) — объект
+// TeamDrafts из teamwork-drafts.ts в deps маршрута; текст задачи для запуска (…/intake) и worktree задачи (…/worktree)
+// добавляет сессия work волны 2 — их маршруты не заняты.
 import path from 'node:path';
 import { parseFlow } from './flows.js';
 import { exec, parseRemote, type Exec } from './git.js';
 import { describeProjects } from './projects.js';
 import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
+import type { TeamDrafts } from './teamwork-drafts.js';
 import { PROJECT_TEMPLATE_DIR, projectDocs, TEMPLATE_DIR } from './teamwork-template.js';
 import { checkRemote, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import {
@@ -1093,7 +1095,8 @@ export async function stopTeamwork(): Promise<void> {
   await s?.stop();
 }
 
-export type TeamworkRouteDeps = { service: TeamService };
+/** drafts — черновики агентов (teamwork-drafts.ts); без него маршруты …/drafts* отвечают 501. */
+export type TeamworkRouteDeps = { service: TeamService; drafts?: TeamDrafts };
 
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
 
@@ -1205,6 +1208,18 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
       const [t, pr, n] = [seg(m[1]), seg(m[2]), m[3]];
       if (m[4] === 'start') return ok(await svc.startSprint(t, pr, n, (await body<NewSprint>()) as NewSprint));
       return ok(await svc.closeSprint(t, pr, n, (await body<CloseSprint>()) as CloseSprint));
+    }
+    // черновики агентов (spec §9.2–9.3): список и старт, черновик с текстами, принятие
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/drafts(?:\/([^/]+)(\/accept)?)?$/))) {
+      const drafts = deps.drafts;
+      if (!drafts) return { status: 501, body: { error: 'Черновики агентов не подключены' } };
+      const [t, pr, run, accept] = [seg(m[1]), seg(m[2]), m[3] ? seg(m[3]) : undefined, Boolean(m[4])];
+      if (run === undefined) {
+        if (method === 'GET') return ok(drafts.list(t, pr));
+        if (method === 'POST') return ok(await drafts.start(t, pr, await readBody()), 201);
+      } else if (accept) {
+        if (method === 'POST') return ok(await drafts.accept(t, pr, run, await readBody()));
+      } else if (method === 'GET') return ok(await drafts.draft(t, pr, run));
     }
     return undefined;
   } catch (err) {

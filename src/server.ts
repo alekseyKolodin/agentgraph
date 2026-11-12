@@ -37,6 +37,7 @@ import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
+import { TeamDrafts, type DraftRunDeps } from './teamwork-drafts.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
 import { modelContextReply, spaceContextReply } from './model-context.js';
@@ -369,7 +370,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
 
   // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts)
   if (p === '/api/teams' || p.startsWith('/api/teams/')) {
-    const r = await teamworkRoute(method, url, () => readJson(req), { service: teamService(opts.teamwork) });
+    const service = teamService(opts.teamwork);
+    const r = await teamworkRoute(method, url, () => readJson(req), { service, drafts: new TeamDrafts(service, draftRuns(opts)) });
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -1051,6 +1053,8 @@ function startRun(
     model?: string;
     continueFrom?: Continuation;
     source?: RunSource;
+    /** Связь с Teamwork (черновик документа проекта или задача): в run.json. */
+    teamwork?: RunOptions['teamwork'];
     worktree?: RunWorktree;
     addDirs?: string[];
     /** Новые вложения из формы. */
@@ -1249,6 +1253,10 @@ function launchRun(
       runDir,
       startedAt: new Date().toISOString(),
       ...(opts.adhoc ? { adhoc: true as const } : {}),
+      // связи запуска — как у раннера: упавший до start черновик Teamwork или запуск по задаче не должен пропасть из их списков
+      ...(opts.source ? { source: opts.source } : {}),
+      ...(opts.teamwork ? { teamwork: opts.teamwork } : {}),
+      ...(opts.worktree ? { worktree: opts.worktree } : {}),
       ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       ...(opts.space ? { space: opts.space, saveState: opts.saveState !== false } : {}),
@@ -2108,6 +2116,18 @@ async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
 
 /** Подмена сессии модели черновиков (тесты). */
 const draftDeps = (opts: ServerOptions): DraftDeps => (opts.draftSession ? { session: opts.draftSession } : {});
+
+/** Запуски для черновиков Teamwork (teamwork-drafts.ts): старт обычным startRun, список и отчёт глазами сервера, статус живого. */
+const draftRuns = (opts: ServerOptions): DraftRunDeps => ({
+  runsDir: RUNS_DIR,
+  start: (spec, o) => startRun(spec, o, opts),
+  runs: listRuns,
+  report: readReport,
+  live: (id) => {
+    const lr = live.get(id);
+    return lr ? liveStatus(lr) : undefined;
+  },
+});
 
 /**
  * Источники черновика: сессии — из реестра сессий терминала (асинхронно, поэтому заранее — по id из тела), запуски — по
