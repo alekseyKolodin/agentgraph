@@ -47,6 +47,16 @@ test('шаблон вставляется только с плейсхолдер
   assert.equal(composeInput(t, {}, 'к'), t + '\n\nк');
 });
 
+test('строки Задача/Task заполняются номером так же, как Тикет', () => {
+  const t = 'Задача: <PAY-12 — номер задачи Teamwork>\nTask: <id>\nВетка: <tw/…>';
+  assert.equal(composeInput(t, { ticket: 'PAY-12', branch: 'tw/PAY-12-csv' }, 'к'), 'Задача: PAY-12\nTask: PAY-12\nВетка: tw/PAY-12-csv\n\nк');
+  // без номера строка остаётся анкетой; «Задача Teamwork …» без двоеточия — не строка анкеты
+  assert.equal(composeInput(t, { branch: 'b' }, 'к'), 'Задача: <PAY-12 — номер задачи Teamwork>\nTask: <id>\nВетка: b\n\nк');
+  assert.equal(composeInput('Задача Teamwork <PAY-1>\n  задача : <номер>', { ticket: 'PAY-1' }, 'к'), 'Задача Teamwork <PAY-1>\n  задача : PAY-1\n\nк');
+  // источник Jira заполняет её своим ключом
+  assert.ok(jiraIntake(issue, 'Задача: <KEY>').input.startsWith('Задача: ABC-12 (https://example.atlassian.net/browse/ABC-12)\n\n'));
+});
+
 test('вход из задачи Jira: ключ, ссылка, родитель, сабтаски, связи, описание в обёртке', () => {
   const r = jiraIntake(issue, 'Тикет: <KEY-123>', '/repo');
   assert.ok(r.input.startsWith('Тикет: ABC-12 (https://example.atlassian.net/browse/ABC-12)\n\n'));
