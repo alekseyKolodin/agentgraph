@@ -80,6 +80,27 @@ test('зависимости: панель задачи — «Ждёт», «От
   assert.match(startNote('3', cyc, [], checkDependencies(cyc, [])), /^Нельзя начать/);
 });
 
+test('зависимости: панель задачи — одна существующая и задачи предложения: строка об исполнителе называет задачу по номеру', () => {
+  const members = [{ name: 'Алексей Колодин', email: 'alex@x.io' }];
+  const mixed = [...SPLIT, p('9', ['PAY-14', '1'])];
+  assert.equal(
+    startNote('9', mixed, EXISTING, checkDependencies(mixed, EXISTING), members),
+    'Начать можно, когда PAY-14 будет в «Готово» и после задачи 1 из этого предложения. PAY-14 сейчас делает Алексей.',
+  );
+  const two = [...SPLIT, p('9', ['PAY-14', '1', '2'])];
+  assert.match(startNote('9', two, EXISTING, checkDependencies(two, EXISTING), members), /и после задач 1 и 2 из этого предложения\. PAY-14 сейчас делает Алексей\.$/);
+  const free = [p('a', ['PAY-1', 'b']), p('b', [])];
+  const ex: ExistingTask[] = [{ id: 'PAY-1', status: 'todo' }];
+  assert.equal(startNote('a', free, ex, checkDependencies(free, ex)), 'Начать можно, когда PAY-1 будет в «Готово» и после задачи b из этого предложения. У PAY-1 пока нет исполнителя.');
+  setLangForTest('en');
+  try {
+    assert.match(startNote('9', mixed, EXISTING, checkDependencies(mixed, EXISTING), members), /Алексей is doing PAY-14 now\.$/);
+    assert.match(startNote('a', free, ex, checkDependencies(free, ex)), /PAY-1 has no assignee yet\.$/);
+  } finally {
+    setLangForTest('ru');
+  }
+});
+
 test('зависимости: добавить и убрать связь с повторной проверкой; на себя и дубли не добавляются', () => {
   const added = addDependency(SPLIT, EXISTING, '1', '6');
   assert.deepEqual(added.tasks[0]!.dependsOn, ['6']);
@@ -127,6 +148,28 @@ test('граф: задачи цикла — в последней колонке
   assert.equal(countCrossings(ordered, links), 0);
   assert.deepEqual(orderRows([['a'], ['x']], [{ from: 'a', to: 'x' }]), [['a'], ['x']]);
   assert.equal(edgePath({ x: 0, y: 0 }, { x: 240, y: 96 }), 'M200 38 C219 38 219 134 238 134');
+});
+
+test('граф: существующие предшественники задачи из цикла остаются на графе в волне 1 и со стрелкой; готовые — нет', () => {
+  const only = [p('3', ['5', 'PAY-14', 'PAY-9']), p('5', ['3'])];
+  const r = checkDependencies(only, EXISTING);
+  assert.deepEqual(r.waves, {}, 'клиентский отчёт не меняется: у цикла и его предшественников волны нет');
+  const g = layoutGraph(only, EXISTING, r);
+  assert.deepEqual(g.columns.map((c) => [c.label, c.wave, c.note]), [['Волна 1', 1, 'сейчас'], ['Цикл', undefined, undefined]]);
+  const pay14 = g.nodes.find((n) => n.key === 'PAY-14')!;
+  assert.deepEqual([pay14.col, pay14.existing, pay14.wave, pay14.ref?.title], [0, true, 1, 'Шаблон выгрузки для 1С']);
+  assert.equal(g.nodes.some((n) => n.key === 'PAY-9'), false, 'готовая задача не блокирует и на графе не стоит');
+  const e = g.edges.find((x) => x.from === 'PAY-14' && x.to === '3')!;
+  assert.equal(e.existing, true);
+  assert.match(e.path, /^M216 /);
+  assert.deepEqual(focusGraph(g, '3').before.sort(), ['5', 'PAY-14']);
+  assert.equal(g.width, 16 * 2 + 2 * 200 + 40);
+  // рядом обычные волны: предшественник цикла — в общей волне 1, цикл — последней колонкой
+  const mixed = [p('1', []), p('2', ['1']), p('3', ['5', 'PAY-13']), p('5', ['3'])];
+  const gm = layoutGraph(mixed, EXISTING, checkDependencies(mixed, EXISTING));
+  const col = (ci: number) => gm.nodes.filter((n) => n.col === ci).map((n) => n.key).sort();
+  assert.deepEqual([col(0), col(1), col(2)], [['1', 'PAY-13'], ['2'], ['3', '5']]);
+  assert.ok(gm.edges.some((x) => x.from === 'PAY-13' && x.to === '3'));
 });
 
 test('граф: подсветка выбранной задачи — предшественники и последователи по цепочкам, остальное приглушено; рёбра цепочки', () => {

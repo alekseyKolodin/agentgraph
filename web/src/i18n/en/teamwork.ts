@@ -699,4 +699,7 @@ export const teamwork: Record<string, string> = {
   'Имя файла — латиница, цифры, точка, дефис или подчёркивание': 'A file name is Latin letters, digits, dot, hyphen or underscore',
   'Документов в docs/ пока нет': 'No documents in docs/ yet',
   'Здесь живут прочие документы проекта: заметки встреч, шаблоны, разборы. Заведите первый слева — он уйдёт коммитом в репо команды.': 'Other project documents live here: meeting notes, templates, write-ups. Create the first one on the left — it goes to the team repo as a commit.',
+  // wave4-polish: панель задачи разбивки — исполнитель существующей задачи, когда ждут и задач предложения (lib/teamwork/deps.ts)
+  '{id} сейчас делает {who}.': '{who} is doing {id} now.',
+  'У {id} пока нет исполнителя.': '{id} has no assignee yet.',
 };

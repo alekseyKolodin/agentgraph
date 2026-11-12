@@ -300,6 +300,30 @@ test('черновик раздела: во входе «## Раздел», пр
   assert.equal(rebased.body.text, ok.body.text);
 });
 
+test('принятие черновика ТЗ: агент дал новому требованию занятый номер — 400 с номером, документ не меняется; целиком и разделом', async () => {
+  const current = (await call<TeamDoc>('GET', `${P}/docs/prd`)).body;
+  assert.match(current.text, /- FR-2\. Выгрузка в 1С\.\n/);
+  const agent = current.text.replace('- FR-2. Выгрузка в 1С.\n', '- FR-2. Выгрузка в 1С.\n- FR-2. Выгрузка в XLSX.\n');
+  scenario = () => ({ 'prd.md': agent, 'notes.json': '[]' });
+  const whole = await call<TeamDraft>('POST', `${P}/drafts`, { kind: 'prd', brief: 'Добавь XLSX' });
+  await finished(whole.body.run);
+  const bad = await call<Err>('POST', `${P}/drafts/${whole.body.run}/accept`, { text: agent });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /повторяются номера требований: FR-2\./);
+  assert.match(bad.body.error, new RegExp(`следующий свободный: ${current.nextRequirement!.FR}`));
+  const sec = await call<TeamDraft>('POST', `${P}/drafts`, { kind: 'prd', brief: 'Добавь XLSX', section: 'Требования' });
+  await finished(sec.body.run);
+  const badSec = await call<Err>('POST', `${P}/drafts/${sec.body.run}/accept`, { text: agent });
+  assert.equal(badSec.status, 400);
+  assert.match(badSec.body.error, /FR-2/);
+  assert.equal((await call<TeamDoc>('GET', `${P}/docs/prd`)).body.text, current.text, 'документ не изменился');
+  // номер исправлен человеком перед принятием — принимается
+  const fixed = agent.replace('- FR-2. Выгрузка в XLSX.', `- ${current.nextRequirement!.FR}. Выгрузка в XLSX.`);
+  const ok = await call<TeamDoc>('POST', `${P}/drafts/${whole.body.run}/accept`, { text: fixed });
+  assert.equal(ok.status, 200);
+  assert.match(ok.body.text, new RegExp(`- ${current.nextRequirement!.FR}\\. Выгрузка в XLSX\\.`));
+});
+
 test('черновик архитектуры: what выбирает документы, оба initial заполнены, причины с doc; документ не из черновика — 400, doc подставляется сам', async () => {
   const arch = (await call<TeamDoc>('GET', `${P}/docs/architecture`)).body.text;
   const design = (await call<TeamDoc>('GET', `${P}/docs/design`)).body.text;
