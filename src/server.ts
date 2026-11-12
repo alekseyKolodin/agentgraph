@@ -36,6 +36,7 @@ import { writeDigest } from './run-digest.js';
 import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
+import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
 import { modelContextReply, spaceContextReply } from './model-context.js';
@@ -121,6 +122,8 @@ export type ServerOptions = {
   runFlow?: typeof runFlow;
   /** Сессия модели черновиков пространств (space-draft.ts): тесты подменяют её, настоящий claude не зовётся. */
   draftSession?: (req: SessionRequest, log: LogFn) => Promise<SessionResult>;
+  /** Сервис команд Teamwork (teamwork-server.ts): тесты выключают таймеры и подменяют git-идентичность через exec. */
+  teamwork?: TeamServiceDeps;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -173,7 +176,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type'] | 'session'>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -214,6 +217,8 @@ const servers = new Set<http.Server>();
 let updater: Updater | null = null;
 /** Подписка на «сессия ждёт тебя»: одна на поднятые серверы, адрес в уведомлении — первого startServer; снимает stopServer. */
 let sessionWaits: (() => void) | null = null;
+/** Подписка на изменения команд Teamwork: одна на процесс, снимает stopServer. */
+let teamChanges: (() => void) | null = null;
 
 export function startServer(opts: ServerOptions): Promise<string> {
   // перенос тегов задач ищет их запуски в этой папке запусков: их артефакты откроются перенесённому пространству
@@ -240,6 +245,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
     homeBroadcast({ type: 'session', runId: '', flow: '', session });
     notifySession(opts, session);
   });
+  // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
+  teamChanges ??= teamService({ hasSubscribers: () => homeClients.size > 0, ...opts.teamwork }).onChange((e) => homeBroadcast({ type: 'team', runId: '', flow: '', team: e.team, projects: e.projects }));
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -263,6 +270,10 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   await sessionsStopped;
   sessionWaits?.();
   sessionWaits = null;
+  // клоны команд: таймеры снимаются, текущая запись или push дожидается
+  teamChanges?.();
+  teamChanges = null;
+  await stopTeamwork();
   await Promise.all(
     [...servers].map(
       (server) =>
@@ -297,7 +308,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -353,6 +364,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       },
       flows: listFlows,
     });
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
+  // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts)
+  if (p === '/api/teams' || p.startsWith('/api/teams/')) {
+    const r = await teamworkRoute(method, url, () => readJson(req), { service: teamService(opts.teamwork) });
     if (r) return sendJson(res, r.status, r.body);
   }
 

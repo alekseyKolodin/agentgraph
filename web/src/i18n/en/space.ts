@@ -75,6 +75,7 @@ export const space: Record<string, string> = {
   'Не задана, работы в пространстве ещё не было: формы оставят свою папку': 'Not set, and there was no work in the space yet: the forms keep their own folder',
   'запись в папку пространства': 'a write to a space folder',
   'запись в папку тегов знаний': 'a write to the knowledge tags folder',
+  'запись в папку команд Teamwork': 'a write to the Teamwork teams folder',
   // сайдбар и бейджи
   'Пространства': 'Spaces',
   'Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски':

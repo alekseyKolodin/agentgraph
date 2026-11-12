@@ -52,6 +52,7 @@ import {
   wrapModelData,
 } from './spaces.js';
 import { createTag, readTag, tagDir, tagsDir } from './tags.js';
+import { teamsDir } from './teamwork.js';
 import { spaceContextReply } from './model-context.js';
 import type { SpaceListItem } from './api-types.js';
 
@@ -372,6 +373,9 @@ test(
     assert.ok(guard('Write', { file_path: path.join(spacesDir(), 'other', 'CLAUDE.md') }));
     assert.ok(guard('Write', { file_path: path.join(tagsDir(), 'k', 'attachments', 'CLAUDE.md') }));
     assert.ok(guard('Write', { file_path: path.join(runs, 'r1', 'artifacts', 'CLAUDE.md') }));
+    // клон репо команды Teamwork — тоже закрыт, в любом регистре пути
+    assert.match(guard('Write', { file_path: path.join(teamsDir(), 'pay', 'repo', 'projects', 'x', 'tasks', 'PAY-1.md') }) ?? '', /Папка команд Teamwork только для чтения/);
+    assert.ok(guard('Edit', { file_path: path.join(teamsDir(), 'pay', 'repo', 'prd.md').replace('/teams/', '/Teams/') }));
     assert.ok(guard('Edit', { file_path: path.join(ext, 'notes.md') }));
     // относительный путь от cwd проекта и ссылка из проекта в пространство
     fs.symlinkSync(spaceDir('p'), path.join(proj, 'link'));
@@ -385,7 +389,7 @@ test(
     assert.equal(guard('Read', { file_path: map }), undefined);
     assert.equal(guard('Bash', { command: `echo > ${map}` }), undefined);
     assert.equal(guard('Write', {}), undefined);
-    assert.deepEqual([...new Set(reasons)].sort(), ['knowledge-readonly', 'runs-dir', 'space-readonly']);
+    assert.deepEqual([...new Set(reasons)].sort(), ['knowledge-readonly', 'runs-dir', 'space-readonly', 'team-readonly']);
     // у flow с артефактами папку запусков сторожит guard артефактов (он пускает этап в свои артефакты): здесь её нет
     const withArt = dataDirsGuard(phaseProtectedRoots({ runsDir: runs, artifacts: true, cwd: proj }));
     assert.equal(withArt('Write', { file_path: path.join(runs, 'r2', 'artifacts', 'plan.md') }), undefined);

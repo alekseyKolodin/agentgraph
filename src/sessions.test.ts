@@ -10,6 +10,7 @@ import {
 } from './sessions.js';
 import { createTag, readTag, tagDir, tagsDir, updateTag } from './tags.js';
 import { addSpaceDoc, createSpace, readSpace, spaceDir, spacesDir, writeSpaceState } from './spaces.js';
+import { teamsDir } from './teamwork.js';
 
 /** Пространство и теги знаний на диске — как их читает сессия. */
 const ctxOf = (space: string | undefined, tags: string[]) => readSessionCtx(space, tags, { space: readSpace, tag: readTag });
@@ -193,14 +194,14 @@ test('sessionEnv: вычищает только маркеры хоста и с�
 });
 
 test(
-  'launchDirs: пути внутри проекта и содержащие его не трогаются; запрет записи — на всю папку тегов, всю папку пространств, артефакты и открытые папки',
+  'launchDirs: пути внутри проекта и содержащие его не трогаются; запрет записи — на всю папку тегов, всю папку пространств, папку команд, артефакты и открытые папки',
   withConfigDir(() => {
     const root = tagsDir();
     const spaces = spacesDir();
     const art = '/ag/runs/r1/artifacts';
-    const r = launchDirs(['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, `${spaces}/feat`, '/odd(dir)', '/glob[1]', art], '/p/shop', '/s/files', [art]);
-    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, `${spaces}/feat`, art, '/s/files']);
-    assert.deepEqual(r.denyDirs, [root, spaces, art, '/specs']);
+    const r = launchDirs(['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, `${spaces}/feat`, `${teamsDir()}/pay/repo`, '/odd(dir)', '/glob[1]', art], '/p/shop', '/s/files', [art]);
+    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, `${spaces}/feat`, `${teamsDir()}/pay/repo`, art, '/s/files']);
+    assert.deepEqual(r.denyDirs, [root, spaces, teamsDir(), art, '/specs']);
     assert.deepEqual(r.denyFiles, []);
   }),
 );
@@ -212,9 +213,11 @@ test(
     const art = path.join(home, 'ag', 'runs', 'r1', 'artifacts');
     const r = launchDirs([art], home, '/s/files', [art]);
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs, [root, spacesDir(), art]);
-    // cwd внутри папки тегов — её не закрываем: это и есть проект
-    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, [spacesDir()]);
+    assert.deepEqual(r.denyDirs, [root, spacesDir(), teamsDir(), art]);
+    // cwd внутри папки тегов — её не закрываем: это и есть проект; папка команд закрыта всё равно
+    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, [spacesDir(), teamsDir()]);
+    // сессия в клоне команды (терминал из задачи открывается в worktree репо кода, но если открыли сам клон) — он проект
+    assert.deepEqual(launchDirs([], path.join(teamsDir(), 'pay', 'repo'), '/s/files').denyDirs, [root, spacesDir()]);
   }),
 );
 
@@ -227,7 +230,7 @@ test(
     fs.mkdirSync(other, { recursive: true });
     const r = launchDirs([own], own, '/s/files');
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs.sort(), [tagsDir(), other, path.join(own, '.claude')].sort());
+    assert.deepEqual(r.denyDirs.sort(), [tagsDir(), teamsDir(), other, path.join(own, '.claude')].sort());
     assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '*', 'space.json'), path.join(spacesDir(), '.migrated.json')]);
     assert.deepEqual(r.askDirs, [own]);
     const settings = sessionSettings(launch({ ...r, claudeVersion: '2.1.317' })) as { permissions: { ask: string[] }; hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> } };
@@ -268,13 +271,14 @@ test(
     const real = path.join(root, 'real-cfg');
     fs.mkdirSync(path.join(real, 'spaces'), { recursive: true });
     fs.mkdirSync(path.join(real, 'tags'), { recursive: true });
+    fs.mkdirSync(path.join(real, 'teams'), { recursive: true });
     const link = path.join(root, 'link-cfg');
     fs.symlinkSync(real, link);
     const prev = process.env.AGENTGRAPH_CONFIG_DIR;
     process.env.AGENTGRAPH_CONFIG_DIR = link;
     try {
       const r = launchDirs([], '/p', '/s/files');
-      for (const d of [path.join(link, 'spaces'), path.join(real, 'spaces'), path.join(link, 'tags'), path.join(real, 'tags')]) assert.ok(r.denyDirs.includes(d), d);
+      for (const d of [path.join(link, 'spaces'), path.join(real, 'spaces'), path.join(link, 'tags'), path.join(real, 'tags'), path.join(link, 'teams'), path.join(real, 'teams')]) assert.ok(r.denyDirs.includes(d), d);
     } finally {
       process.env.AGENTGRAPH_CONFIG_DIR = prev;
     }
