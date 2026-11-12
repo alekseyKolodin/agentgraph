@@ -186,7 +186,7 @@ function CreateForm({ onJoin }: { onJoin: (url: string) => void }) {
         <span className={styles.note}>{t('Первым участником станете вы: имя и email — из git config.')}</span>
         <div className={styles.f}>
           <span className={styles.cap} style={{ margin: 0 }}>{t('Что положим в репо')}</span>
-          <pre className={styles.tree}>{TREE.map(([file, desc]) => `${file.padEnd(28)}${desc ? t(desc) : ''}`.trimEnd()).join('\n')}</pre>
+          <pre className={styles.tree}>{TREE.map(([file, desc]) => `${file.padEnd(30)}${desc ? t(desc) : ''}`.trimEnd()).join('\n')}</pre>
         </div>
         {err && <p className="msg err">{err}</p>}
         <div className={styles.go}>

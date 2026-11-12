@@ -9,7 +9,7 @@ import type { TeamDetail, TeamProject, TeamSprint, TeamTask } from '@server/api-
 import { errorText } from '../../../api';
 import { closeSprint, createSprint, startSprint, teamKeys } from '../../../api/teamwork';
 import { useToast } from '../../../components/Toast';
-import { t } from '../../../lib/i18n';
+import { locale, t } from '../../../lib/i18n';
 import { backlogTasks, nextSprintTasks, plannedSprint, tasksAndPoints } from '../../../lib/teamwork/backlog';
 import { activeSprint, sprintStrip, sprintTasks, statusText } from '../../../lib/teamwork/board';
 import {
@@ -107,7 +107,8 @@ export function SprintsTab({ team, project }: SprintsTabProps) {
 
 const dateText = (iso: string): string => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  // локаль интерфейса, а не браузера: в английском интерфейсе на русской системе — «12 Nov 2026»
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(locale(), { day: 'numeric', month: 'short', year: 'numeric' });
 };
 const nameOf = (email: string, members: TeamDetail['memberList']): string => members.find((m) => m.email === email)?.name || email;
 

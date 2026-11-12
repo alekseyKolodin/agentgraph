@@ -1,6 +1,6 @@
 // Доска спринта (spec §8.7, макет Main.dc.html): колонки по статусам, фильтры, полоска спринта, значки работы агента,
 // подпись «ждёт PAY-12». Чистая логика без React и DOM; типы — контракт API (src/api-types.ts, раздел Teamwork).
-import type { TeamMember, TeamPr, TeamSprint, TeamTask, TeamTaskMove, TeamTaskStatus, TeamTaskType, TeamTaskWork } from '@server/api-types';
+import type { TeamColumns, TeamMember, TeamPr, TeamSprint, TeamTask, TeamTaskMove, TeamTaskStatus, TeamTaskType, TeamTaskWork } from '@server/api-types';
 import { plural, t } from '../i18n';
 import { statusLabel } from '../format';
 import { byRank, rankForDrop } from './rank';
@@ -11,6 +11,19 @@ export const TASK_TYPES: readonly TeamTaskType[] = ['feature', 'bug', 'chore'];
 /** Подписи статусов на карточках и в списках; названия колонок доски команда задаёт сама (teamwork.yaml → columns). */
 export const STATUS_LABEL: Record<TeamTaskStatus, string> = { todo: 'к работе', in_progress: 'в работе', review: 'ревью', done: 'готово' };
 export const statusText = (s: TeamTaskStatus): string => t(STATUS_LABEL[s]);
+
+/** Названия колонок из шаблона репо команды (DEFAULT_COLUMNS в src/teamwork.ts, templates/teamwork/teamwork.yaml). */
+const DEFAULT_COLUMNS: TeamColumns = { todo: 'К работе', in_progress: 'В работе', review: 'Ревью', done: 'Готово' };
+
+/**
+ * Название колонки для интерфейса: название из шаблона — переводом (на английском «To do», а не «К работе» из файла),
+ * своё название команды — как написано, нет названия — подписью статуса.
+ */
+export function columnName(s: TeamTaskStatus, columns?: Partial<TeamColumns>): string {
+  const name = columns?.[s]?.trim();
+  if (!name) return statusText(s);
+  return name === DEFAULT_COLUMNS[s] ? t(DEFAULT_COLUMNS[s]) : name;
+}
 
 export const activeSprint = (sprints: readonly TeamSprint[]): TeamSprint | undefined => sprints.find((s) => s.status === 'active');
 

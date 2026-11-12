@@ -175,6 +175,8 @@ export type HomeRun = {
   decisions?: true;
   /** Дочерний запуск блока-вызова: кто его вызвал. */
   parent?: RunParent;
+  /** Запуск по задаче или черновик Teamwork (run.json → teamwork): строка на главной ссылается на задачу. */
+  teamwork?: RunTeamworkLink;
 };
 
 export type HomeResponse = { runs: HomeRun[] };
@@ -1565,6 +1567,24 @@ export type TeamDetail = TeamSummary & {
   /** Папка клона на этом компьютере. */
   dir: string;
 };
+
+/**
+ * Команда в GET /api/teams/mine: подписи строки и то, что нужно «В работу ▸». me — мой email по git config клона; readonly — формат
+ * репо новее этого agentgraph (писать нельзя, «В работу» не предлагается); error — teamwork.yaml не читается.
+ */
+export type TeamMineTeam = Pick<TeamDetail, 'slug' | 'title' | 'prefix' | 'flows'> & { columns?: TeamColumns; defaultFlow?: string; me?: string; readonly?: true; error?: string };
+
+/** Проект с моими задачами: активный спринт и репо кода с моими папками (как TeamProject.repos). */
+export type TeamMineProject = { team: string; slug: string; title: string; sprint: { number: number; title: string }; repos: TeamRepoRef[] };
+
+/** Моя задача активного спринта; waiting — номера предшественников, которые ещё не в «Готово». */
+export type TeamMineTask = { team: string; project: string; task: TeamTask; waiting: string[] };
+
+/**
+ * GET /api/teams/mine — блок «Мои задачи» на главной (spec §11): задачи активных спринтов, где исполнитель я (email git config
+ * клона), во всех командах, одним запросом; архивные проекты не входят. teams — все мои команды: пусто — блока нет.
+ */
+export type TeamMine = { teams: TeamMineTeam[]; projects: TeamMineProject[]; tasks: TeamMineTask[] };
 
 /** Ответ проверки ссылки перед созданием или подключением (POST /api/teams/check). */
 export type TeamRemoteCheck =

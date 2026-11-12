@@ -2030,6 +2030,7 @@ function liveRuns(): HomeRun[] {
       // «Ответить на странице запуска» на главной: пауза по просьбе агента и артефакт решений
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
       ...(r.parent ? { parent: r.parent } : {}),
+      ...(r.teamwork ? { teamwork: r.teamwork } : {}),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));

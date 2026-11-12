@@ -11,7 +11,7 @@ import { t } from '../../../lib/i18n';
 import { LS } from '../../../lib/storage';
 import { backlogTasks, plannedSprint } from '../../../lib/teamwork/backlog';
 import {
-  acceptanceText, activeSprint, assigneeChips, blockedLabel, boardColumns, DEFAULT_FILTER, dropMove, filterColumns, keyboardMove, noSprintText, openBlockers, parseFilter, prLabel,
+  acceptanceText, activeSprint, assigneeChips, blockedLabel, boardColumns, columnName, DEFAULT_FILTER, dropMove, filterColumns, keyboardMove, noSprintText, openBlockers, parseFilter, prLabel,
   sameWho, sprintStrip, STATUSES, taskIndex, TASK_TYPES, toggleType, without, workBadge, workSignals, type BoardColumns, type BoardFilter, type Drop,
 } from '../../../lib/teamwork/board';
 import { columnMoves, dropIndex, samePlace, sideMove } from '../../../lib/teamwork/task';
@@ -174,7 +174,7 @@ export function BoardTab({ team, project }: BoardTabProps) {
 function Column({ status, columns, list, full, dnd, readonly, render, footer }: {
   status: TeamTaskStatus; columns: TeamColumns; list: TeamTask[]; full: TeamTask[]; dnd: Dnd; readonly: boolean; render: (x: TeamTask, i: number) => ReactNode; footer?: ReactNode;
 }) {
-  const name = columns[status] || status;
+  const name = columnName(status, columns);
   const over = dnd.over?.list === status && Boolean(dnd.dragging);
   return (
     <section className={styles.col} aria-labelledby={`tw-col-${status}`}>

@@ -4,7 +4,7 @@
 // Ошибки — ApiError со status и code (409: not_empty, is_team, conflict, unpushed, busy, readonly).
 import { useQuery } from '@tanstack/react-query';
 import type {
-  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocName, TeamFlow, TeamHistoryItem, TeamLocal, TeamMember, TeamProject, TeamProjectBrief,
+  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocName, TeamFlow, TeamHistoryItem, TeamLocal, TeamMember, TeamMine, TeamProject, TeamProjectBrief,
   TeamProjectStatus, TeamRemoteCheck, TeamRepoInfo, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskType,
 } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
@@ -20,6 +20,7 @@ const docPath = (name: TeamDocName) => name.split('/').map(enc).join('/');
 export const teamKeys = {
   all: ['teams'] as const,
   list: ['teams', 'list'] as const,
+  mine: ['teams', 'mine'] as const,
   team: (team: string) => ['teams', 'one', team] as const,
   local: (team: string) => ['teams', 'one', team, 'local'] as const,
   conflicts: (team: string) => ['teams', 'one', team, 'conflicts'] as const,
@@ -36,6 +37,8 @@ export const teamKeys = {
 // ---------- команды
 
 export const fetchTeams = () => api<TeamSummary[]>('GET', '/api/teams');
+/** Мои задачи активных спринтов во всех командах — блок «Мои задачи» на главной (spec §11), одним запросом. */
+export const fetchTeamMine = () => api<TeamMine>('GET', '/api/teams/mine');
 export const fetchTeam = (team: string) => api<TeamDetail>('GET', base(team));
 /** Проверка ссылки перед созданием или подключением: пустой репо, уже команда, не пустой или ошибка. */
 export const checkTeamRemote = (url: string) => api<TeamRemoteCheck>('POST', '/api/teams/check', { url });
@@ -150,6 +153,17 @@ export function useTeams(enabled = true) {
   return useQuery({
     queryKey: teamKeys.list, queryFn: fetchTeams, enabled,
     refetchInterval: (q) => Math.min(...(q.state.data ?? []).map((x) => pollBySync(x.sync)), IDLE_POLL_MS),
+  });
+}
+
+/**
+ * GET /api/teams/mine для главной. Событие `team` сбрасывает и его (ключ под ['teams']); пока по задаче идёт запуск или
+ * сессия, раз в 30 с — «ждёт ответа» у запуска события `team` не даёт.
+ */
+export function useTeamMine(enabled = true) {
+  return useQuery({
+    queryKey: teamKeys.mine, queryFn: fetchTeamMine, enabled,
+    refetchInterval: (q) => ((q.state.data?.tasks ?? []).some((x) => x.task.work?.length) ? IDLE_POLL_MS : false),
   });
 }
 

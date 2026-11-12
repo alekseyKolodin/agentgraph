@@ -19,7 +19,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { docSize } from '../../lib/spaces';
 import { plannedSprint, points, pointsWord } from '../../lib/teamwork/backlog';
-import { activeSprint, memberByEmail, noSprintText, sprintStrip, sprintTasks, workBadge, type WorkState } from '../../lib/teamwork/board';
+import { activeSprint, columnName, memberByEmail, noSprintText, sprintStrip, sprintTasks, workBadge, type WorkState } from '../../lib/teamwork/board';
 import { docFile, docLabel, updatedText } from '../../lib/teamwork/docs';
 import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
 import { cx, ErrorLine, Who } from './parts';
@@ -83,7 +83,7 @@ function SprintBlock({ team, project, tasks }: { team: TeamDetail; project: Team
         {stats.map(([s, n]) => (
           <div key={s} className={cx(styles.stat, s === 'done' && styles.ok)}>
             <b>{n}</b>
-            <span>{team.columns[s].toLowerCase()}</span>
+            <span>{columnName(s, team.columns).toLowerCase()}</span>
           </div>
         ))}
         <div className={styles.stat}>

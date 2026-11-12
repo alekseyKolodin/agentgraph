@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { RunReport, RunStarted, RunStatus, RunSummary, SessionView, TeamComment, TeamDetail, TeamProject, TeamTask, TeamTaskIntake, TeamTaskWorktree } from './api-types.js';
+import type { HomeResponse, RunReport, RunStarted, RunStatus, RunSummary, SessionView, TeamComment, TeamDetail, TeamProject, TeamTask, TeamTaskIntake, TeamTaskWorktree } from './api-types.js';
 import type { PtyExit, PtyProcess, PtyKit } from './sessions-pty.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { runFlow } from './runner.js';
@@ -286,6 +286,9 @@ test('запуск по flow команды со связью с задачей:
   const opts = started.at(-1)!;
   assert.deepEqual([opts.adhoc, opts.teamwork, opts.cwd, opts.worktree?.branch, opts.addDirs], [true, intake.teamwork, wt.path, wt.branch, intake.addDirs]);
   assert.deepEqual(opts.source, { type: 'teamwork', key: 'PAY-1', title: 'Выгрузка счетов за период в CSV', project: code });
+  // идущий запуск на главной знает свою задачу: строка ссылается на неё
+  const homeRun = (await call<HomeResponse>('GET', '/api/home')).body.runs.find((x) => x.id === id);
+  assert.deepEqual(homeRun?.teamwork, intake.teamwork);
   release();
   await until(async () => (await history(1))[0] === 'PAY-1: статус → Ревью');
   t = await task('PAY-1');

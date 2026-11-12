@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation } from 'react-router';
 import type { TeamColumns, TeamMember, TeamTaskStatus } from '@server/api-types';
-import { statusText } from '../../../lib/teamwork/board';
+import { columnName } from '../../../lib/teamwork/board';
 import { cx, Who } from '../parts';
 import { TASK_PARAM } from '../shell';
 import styles from './Tasks.module.css';
@@ -128,7 +128,7 @@ export function Assignee({ email, members, className }: { email?: string; member
 }
 
 /** Статус названием колонки команды (teamwork.yaml → columns), без названий — словами по умолчанию. */
-export const columnText = (s: TeamTaskStatus, columns?: Partial<TeamColumns>): string => columns?.[s] || statusText(s);
+export const columnText = (s: TeamTaskStatus, columns?: Partial<TeamColumns>): string => columnName(s, columns);
 
 /** Имя участника коротко: имя, без имени — email. */
 export const memberName = (email: string | undefined, members: readonly TeamMember[]): string => {

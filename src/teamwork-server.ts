@@ -23,7 +23,7 @@ import {
 } from './teamwork.js';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
-  TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
+  TeamMine, TeamMineProject, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
   TeamTaskWork,
 } from './api-types.js';
 
@@ -191,6 +191,64 @@ export class TeamService {
         // teamwork.yaml не читается: команда в списке остаётся, причина — в строке синхронизации
         out.push({ slug, title: slug, prefix: '', remote: repo.local().remote, members: 0, projects: [], sync: { ...(await repo.syncState()), error: errMsg(err) } });
       }
+    }
+    return out;
+  }
+
+  /**
+   * «Мои задачи» на главной (spec §11): задачи активных спринтов всех команд, где исполнитель — я по git config клона,
+   * одним ответом; фонового pull не тянет (главную открывают часто, клоны и так получают по таймеру). Папки репо кода —
+   * как у проекта: local.json, иначе один обход проектов дашборда на все ссылки.
+   */
+  async mine(): Promise<TeamMine> {
+    const out: TeamMine = { teams: [], projects: [], tasks: [] };
+    const wanted = new Map<TeamMineProject, ProjectRepo[]>();
+    const repoPaths = new Map<TeamMineProject, Record<string, string>>();
+    for (const slug of TeamRepo.list(this.root())) {
+      const repo = this.repo(slug);
+      let cfg: TeamConfig;
+      try {
+        cfg = repo.config();
+      } catch (err) {
+        out.teams.push({ slug, title: slug, prefix: '', flows: [], error: errMsg(err) });
+        continue;
+      }
+      const me = (await repo.identity()).email;
+      out.teams.push({
+        slug, title: cfg.title, prefix: cfg.prefix, flows: this.flowNames(repo), columns: cfg.columns,
+        ...(cfg.defaultFlow ? { defaultFlow: cfg.defaultFlow } : {}), ...(me ? { me } : {}), ...(repo.readonly() ? { readonly: true as const } : {}),
+      });
+      if (!me) continue;
+      for (const p of repo.dirs('projects')) {
+        let pc: ProjectConfig;
+        try {
+          pc = this.readProjectConfig(repo, p);
+        } catch {
+          continue; // битый project.yaml виден на экране команды
+        }
+        const active = pc.status === 'active' ? this.readSprints(repo, p).find((s) => s.status === 'active') : undefined;
+        if (!active) continue;
+        const tasks = this.readTasks(repo, p);
+        const mine = tasks.filter((x) => !x.error && x.sprint === active.number && x.assignee?.toLowerCase() === me);
+        if (!mine.length) continue;
+        const project: TeamMineProject = { team: slug, slug: p, title: pc.title, sprint: { number: active.number, title: active.title }, repos: [] };
+        out.projects.push(project);
+        wanted.set(project, pc.repos);
+        repoPaths.set(project, repo.local().repoPaths);
+        const byId = new Map(tasks.map((x) => [x.id, x]));
+        for (const x of mine) {
+          const waiting = x.blockedBy.filter((id) => byId.has(id) && byId.get(id)!.status !== 'done');
+          out.tasks.push({ team: slug, project: p, task: taskView(x), waiting });
+        }
+      }
+    }
+    const own = (p: TeamMineProject, url: string) => (Object.hasOwn(repoPaths.get(p)!, url) ? repoPaths.get(p)![url] : undefined);
+    const auto = await this.findLocals([...new Set([...wanted].flatMap(([p, repos]) => repos.filter((r) => !own(p, r.url)).map((r) => r.url)))]);
+    for (const [p, repos] of wanted) {
+      p.repos = repos.map((r) => {
+        const found = own(p, r.url) ?? auto.get(r.url);
+        return { key: r.key, url: r.url, ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}), ...(found ? { local: found } : {}) };
+      });
     }
     return out;
   }
@@ -1215,6 +1273,40 @@ export async function stopTeamwork(): Promise<void> {
   await s?.stop();
 }
 
+/** Команда, у которой в клоне есть коммиты, которых нет в репо команды (диалог выхода десктопа, spec §7.5). */
+export type TeamUnsent = { slug: string; title: string; unpushed: number; error?: string };
+
+/** Неотправленные изменения всех команд — src/desktop/main.ts спрашивает о них перед выходом. Сервиса нет — пусто. */
+export async function unsentTeams(): Promise<TeamUnsent[]> {
+  const svc = service;
+  if (!svc) return [];
+  const out: TeamUnsent[] = [];
+  for (const slug of TeamRepo.list(svc.root())) {
+    try {
+      const repo = svc.repo(slug);
+      const sync = await repo.syncState();
+      if (!sync.unpushed) continue;
+      let title = slug;
+      try {
+        title = repo.config().title || slug;
+      } catch {
+        // teamwork.yaml не читается: подпись — слаг
+      }
+      out.push({ slug, title, unpushed: sync.unpushed, ...(sync.error ? { error: sync.error } : {}) });
+    } catch {
+      // клон не открылся: отправлять нечего
+    }
+  }
+  return out;
+}
+
+/** «Отправить и закрыть» в диалоге выхода: синхронизировать команды сейчас; ошибка остаётся в строке синхронизации. */
+export async function pushTeams(slugs: readonly string[]): Promise<void> {
+  const svc = service;
+  if (!svc) return;
+  await Promise.all(slugs.map((s) => svc.sync(s).catch(() => undefined)));
+}
+
 /** drafts — черновики агентов (teamwork-drafts.ts); без него маршруты …/drafts* отвечают 501. */
 export type TeamworkRouteDeps = { service: TeamService; drafts?: TeamDrafts };
 
@@ -1236,6 +1328,7 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
       const b = await body<{ url?: unknown; title?: unknown; prefix?: unknown }>();
       return ok(await svc.createTeam({ url: reqStr(b.url, 'url', 'Укажи ссылку на репо'), title: optStr(b.title, 'title') ?? '', prefix: optStr(b.prefix, 'prefix') ?? '' }), 201);
     }
+    if (p === '/api/teams/mine' && method === 'GET') return ok(await svc.mine());
     if (p === '/api/teams/check' && method === 'POST') {
       const b = await body<{ url?: unknown }>();
       return ok(await svc.check(reqStr(b.url, 'url', 'Укажи ссылку на репо')));

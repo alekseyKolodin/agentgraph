@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamMember, TeamTaskWork } from '@server/api-types';
+import { setLangForTest } from '../i18n';
 import { task } from './fixtures';
 import {
-  acceptanceText, assigneeChips, blockedLabel, blocking, boardColumns, dropMove, filterColumns, initials, keyboardMove, matchesFilter, memberLabel,
+  acceptanceText, assigneeChips, blockedLabel, blocking, boardColumns, columnName, dropMove, filterColumns, initials, keyboardMove, matchesFilter, memberLabel,
   noSprintText, openBlockers, parseFilter, prLabel, signalsText, sprintStrip, taskIndex, taskWorkState, toggleType, workBadge, workSignals, workState,
 } from './board';
 
@@ -125,4 +126,19 @@ test('доска: перенос — соседи для сервера и ра�
   assert.equal(keyboardMove(col, 'zzz', 1), undefined);
   assert.equal(noSprintText().title, 'Спринт не запущен');
   assert.match(noSprintText({ number: 3, title: 'Спринт 3', status: 'planned' }).hint, /«Спринт 3»/);
+});
+
+test('название колонки: из шаблона — переводом, своё — как написано, пустое — подписью статуса', () => {
+  const columns = { todo: 'К работе', in_progress: 'Пилим', review: 'Ревью', done: ' ' };
+  assert.equal(columnName('todo', columns), 'К работе');
+  setLangForTest('en');
+  try {
+    assert.equal(columnName('todo', columns), 'To do');
+    assert.equal(columnName('review', columns), 'Review');
+    assert.equal(columnName('in_progress', columns), 'Пилим');
+    assert.equal(columnName('done', columns), 'done');
+    assert.equal(columnName('todo'), 'to do');
+  } finally {
+    setLangForTest('ru');
+  }
 });

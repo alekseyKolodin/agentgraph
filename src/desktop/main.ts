@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { quitPrompt, type UnsentTeam } from '../quit-dialog.js';
 
 const HOST = '127.0.0.1';
 
@@ -196,32 +197,44 @@ let stopServer: (() => Promise<void>) | null = null;
 let stopping: Promise<void> | null = null;
 /** Названия живых сессий терминала (src/sessions-server.ts): выход при них спрашивает подтверждение. */
 let liveSessions: () => string[] = () => [];
+/** Неотправленные изменения команд Teamwork и их отправка (src/teamwork-server.ts): о них выход тоже спрашивает. */
+let unsentTeams: () => Promise<(UnsentTeam & { slug: string })[]> = async () => [];
+let pushTeams: (slugs: string[]) => Promise<void> = async () => undefined;
 let quitConfirmed = false;
 let quitAsking = false;
 /** Перезапуск после автообновления ждёт выхода: relaunch — в will-quit, false — выход отменили в окне. */
 let pendingRestart: ((ok: boolean) => void) | null = null;
 
-/** «Идут 2 сессии Claude: «a» и «b».» */
-function sessionsLine(names: string[]): string {
-  const n = names.length;
-  const word = n % 10 === 1 && n % 100 !== 11 ? 'сессия' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'сессии' : 'сессий';
-  const list = names.map((x) => `«${x}»`);
-  const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} и ${list.at(-1)}` : list[0];
-  return `${n === 1 ? 'Идёт' : 'Идут'} ${n} ${word} Claude: ${joined}.`;
-}
+/** Сколько ждать git перед вопросом (подсчёт коммитов) и отправки по «Отправить и закрыть». */
+const UNSENT_WAIT_MS = 3_000;
+const PUSH_WAIT_MS = 20_000;
 
-/** Подтверждение выхода при живых сессиях терминала (макет QuitDialog): они завершатся, разговор сохранится. */
-async function confirmQuit(names: string[]): Promise<boolean> {
-  const opts = {
-    type: 'question' as const,
-    buttons: ['Завершить сессии и закрыть', 'Отмена'],
-    defaultId: 0,
-    cancelId: 1,
-    message: 'Закрыть AgentGraph?',
-    detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСостояние пространства по этим сессиям при таком выходе не пишется — обновить его можно потом кнопкой «Обновить состояние» на экране сессии.`,
-  };
-  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-  return r.response === 0;
+/** Ответ или запасное значение, если не успел за ms: выход не должен зависать на git. */
+const within = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+  Promise.race([p.catch(() => fallback), new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms).unref())]);
+
+/**
+ * Что спросить перед выходом (макет QuitDialog, spec §7.5): живые сессии терминала завершатся, неотправленные изменения
+ * Teamwork останутся в клоне. «Отправить и закрыть» синхронизирует команды и выходит, если всё ушло; не ушло — спрашивает
+ * ещё раз с причиной. true — выходить.
+ */
+async function askQuit(): Promise<boolean> {
+  const sessions = liveSessions();
+  let teams = await within(unsentTeams(), UNSENT_WAIT_MS, []);
+  let pushFailed = false;
+  for (;;) {
+    const p = quitPrompt({ sessions, teams, pushFailed });
+    if (!p) return true;
+    const opts = { type: 'question' as const, buttons: p.buttons, defaultId: p.defaultId, cancelId: p.cancelId, message: p.message, detail: p.detail };
+    const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    const choice = p.choices[r.response] ?? 'cancel';
+    if (choice !== 'push') return choice === 'quit';
+    await within(pushTeams(teams.map((x) => x.slug)), PUSH_WAIT_MS, undefined);
+    teams = await within(unsentTeams(), UNSENT_WAIT_MS, teams);
+    // всё ушло: про сессии человек уже ответил той же кнопкой
+    if (!teams.length) return true;
+    pushFailed = true;
+  }
 }
 
 async function main(): Promise<void> {
@@ -265,6 +278,9 @@ async function main(): Promise<void> {
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();
+  const teamwork = await import('../teamwork-server.js');
+  unsentTeams = () => teamwork.unsentTeams();
+  pushTeams = (slugs) => teamwork.pushTeams(slugs);
   origin = `http://localhost:${port}`;
   console.log(`agentgraph desktop: ${origin} (данные: ${ROOT})`);
 
@@ -279,16 +295,17 @@ async function main(): Promise<void> {
   });
 }
 
-// Cmd+Q при живых сессиях терминала: claude завершатся вместе с приложением — сначала спрашиваем. Сигналы (kill, Ctrl-C
-// у desktop:dev) выходят без вопроса: отвечать на диалог некому.
+// Cmd+Q при живых сессиях терминала (claude завершатся вместе с приложением) или неотправленных изменениях Teamwork —
+// сначала спрашиваем. Коммиты считает git, поэтому выход всегда откладывается до ответа askQuit; спрашивать не о чем —
+// выходим сразу. Сигналы (kill, Ctrl-C у desktop:dev) выходят без вопроса: отвечать на диалог некому.
 app.on('before-quit', (e) => {
   if (quitConfirmed || stopping) return;
-  const names = liveSessions();
-  if (!names.length) return;
   e.preventDefault();
   if (quitAsking) return;
   quitAsking = true;
-  void confirmQuit(names)
+  void askQuit()
+    // диалог не открылся — выходим, как выходили без вопроса: застрять с неработающим Cmd+Q хуже
+    .catch(() => true)
     .then((ok) => {
       if (!ok) return;
       quitConfirmed = true;

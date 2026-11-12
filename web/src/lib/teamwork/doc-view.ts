@@ -3,8 +3,9 @@
 // требований раздела, черновики документа, слияние принятых правок агента с текущей версией документа (три стороны по
 // блокам), обёртка выделения разметкой. Чистые функции без React и DOM.
 import type { TeamColumns, TeamDocName, TeamDraft, TeamSprint, TeamTask } from '@server/api-types';
+import { statusLabel } from '../format';
 import { t } from '../i18n';
-import { statusText } from './board';
+import { columnName, statusText } from './board';
 import {
   fencedLines, parseRequirementRows, REQ_RE, requirementId, serializeRequirementRows, splitLines, splitSections, type ReqKind, type ReqRow, type TextRef,
 } from './docs';
@@ -108,11 +109,11 @@ export const reqAnchor = (id: string): string => id.toUpperCase();
 
 /** Где задача на полях требования: «бэклог», «спринт 3» (не активный), иначе статус по колонке; tone ok — готово. */
 export function taskWhere(task: Pick<TeamTask, 'status' | 'sprint'>, sprints: readonly Pick<TeamSprint, 'number' | 'status'>[], columns?: TeamColumns): { text: string; tone: '' | 'ok' } {
-  if (task.status === 'done') return { text: columns ? columns.done.toLowerCase() : statusText('done'), tone: 'ok' };
+  if (task.status === 'done') return { text: columns ? columnName('done', columns).toLowerCase() : statusText('done'), tone: 'ok' };
   if (task.sprint == null) return { text: t('бэклог'), tone: '' };
   const sprint = sprints.find((s) => s.number === task.sprint);
   if (!sprint || sprint.status !== 'active') return { text: t('спринт {n}', { n: task.sprint }), tone: '' };
-  return { text: columns ? columns[task.status].toLowerCase() : statusText(task.status), tone: '' };
+  return { text: columns ? columnName(task.status, columns).toLowerCase() : statusText(task.status), tone: '' };
 }
 
 // ---------- ссылки из текста
@@ -142,12 +143,26 @@ export const draftFailed = (status: string): boolean => !draftRunning(status) &&
 export const latestDraftFor = (drafts: readonly TeamDraft[], doc: TeamDocName): TeamDraft | undefined =>
   drafts.find((d) => d.kind !== 'split' && (d.docs ?? []).includes(doc as never));
 
-/** Строка черновика на вкладке документа: «Черновик идёт», «ждёт вашего ответа», «готов», «не получился». */
+/** Почему черновик кончился без результата — словами (статус запуска глазами сервера). */
+const DRAFT_STOP: Record<string, string> = {
+  interrupted: 'agentgraph остановили, пока он шёл',
+  aborted: 'запуск остановили',
+  failed: 'запуск упал с ошибкой',
+  budget_exceeded: 'кончился лимит стоимости',
+};
+/** Причина конца черновика для подписи: «agentgraph остановили…», «запуск остановили»; незнакомый статус — подписью статуса запуска. */
+export const draftStopText = (status: string): string => (DRAFT_STOP[status] ? t(DRAFT_STOP[status]) : statusLabel(status));
+
+/**
+ * Строка черновика на вкладке документа: «Черновик идёт», «ждёт вашего ответа» (вопрос агента), «на паузе», «готов»,
+ * «не получился» с причиной (оборвался, остановлен, ошибка, лимит).
+ */
 export function draftLine(d: Pick<TeamDraft, 'status' | 'section'>): { text: string; tone: 'live' | 'wait' | 'ok' | 'fail' } {
   const where = d.section !== undefined ? t(' · раздел «{section}»', { section: d.section || t('начало') }) : '';
-  if (d.status === 'waiting' || d.status === 'paused') return { text: t('Черновик ждёт вашего ответа') + where, tone: 'wait' };
+  if (d.status === 'waiting') return { text: t('Черновик ждёт вашего ответа') + where, tone: 'wait' };
+  if (d.status === 'paused') return { text: t('Черновик на паузе') + where, tone: 'wait' };
   if (draftRunning(d.status)) return { text: t('Черновик идёт') + where, tone: 'live' };
-  if (draftFailed(d.status)) return { text: t('Черновик не получился') + where, tone: 'fail' };
+  if (draftFailed(d.status)) return { text: t('Черновик не получился: {why}', { why: draftStopText(d.status) }) + where, tone: 'fail' };
   return { text: t('Черновик готов') + where, tone: 'ok' };
 }
 

@@ -3,7 +3,7 @@
 // своего flow для «В работу ▸» и тела запросов запуска и сессии. Чистая логика без React и DOM.
 import type { FlowSummary, TeamProject, TeamTask, TeamTaskIntake, TeamTaskStatus, TeamTaskWorktree } from '@server/api-types';
 import { t } from '../i18n';
-import { dropMove, statusText, without, type Drop } from './board';
+import { columnName, dropMove, statusText, without, type Drop } from './board';
 import { fencedLines, splitLines } from './docs';
 
 // ---------- тело задачи: описание и критерии приёмки
@@ -169,7 +169,7 @@ export function columnMoves(
 ): MoveItem[] {
   return (Object.keys(cols) as TeamTaskStatus[])
     .filter((s) => s !== status)
-    .map((s) => ({ key: s, label: t('В колонку «{name}»', { name: columns?.[s] || statusText(s) }), drop: dropMove(cols[s], cols[s].length, { status: s }) }));
+    .map((s) => ({ key: s, label: t('В колонку «{name}»', { name: columnName(s, columns) }), drop: dropMove(cols[s], cols[s].length, { status: s }) }));
 }
 
 /** Соседняя колонка для ⌥← ⌥→: то же место по счёту, за краем — в конец. */
