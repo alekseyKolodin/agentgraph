@@ -1,6 +1,5 @@
-// Общие детали экранов Teamwork (волны 2–3): инициалы участника, полоса спринта, вкладки, крошки, заглушка «будет в следующей
-// волне». Стили — Teamwork.module.css; классы sprint strip общие с макетом Board (st.done / review / in_progress / todo).
-import type { ReactNode } from 'react';
+// Общие детали экранов Teamwork (волны 2–3): инициалы участника, полоса спринта, вкладки, крошки, строка ошибки.
+// Стили — Teamwork.module.css; классы sprint strip общие с макетом Board (st.done / review / in_progress / todo).
 import { Link } from 'react-router';
 import type { TeamMember, TeamTaskStatus } from '@server/api-types';
 import { STRIP_ORDER } from '../../lib/teamwork/board';
@@ -74,17 +73,6 @@ export function Crumbs({ items }: { items: readonly { to: string; label: string 
         </span>
       ))}
     </p>
-  );
-}
-
-/** Заглушка вкладки или панели волны 3: что здесь будет и с какими данными. */
-export function Stub({ title, what, children }: { title: string; what: string; children?: ReactNode }) {
-  return (
-    <section className={styles.stub} aria-label={title}>
-      <h2>{title}</h2>
-      <p>{t('Будет в следующей волне: {what}', { what })}</p>
-      {children}
-    </section>
   );
 }
 

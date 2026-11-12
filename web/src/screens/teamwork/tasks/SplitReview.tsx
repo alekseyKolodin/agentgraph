@@ -21,6 +21,7 @@ import {
   acceptText, addDependency, canAccept, chainEdges, chainText, checkDependencies, depsSummary, existingNote, focusGraph, keyLabel, layoutGraph, removeDependency,
   startNote, unlocks, waitsOn, wavesCount, waveText, GRAPH_DEFAULTS, type DepsGraph, type ExistingTask, type GraphFocus,
 } from '../../../lib/teamwork/deps';
+import { draftStopText } from '../../../lib/teamwork/doc-view';
 import { proposalCoverage } from '../../../lib/teamwork/docs';
 import { ESTIMATES } from '../../../lib/teamwork/task';
 import { cx } from '../parts';
@@ -76,8 +77,8 @@ export function SplitArea({ team, project, tasks, readonly }: { team: TeamDetail
       {asking && <SplitStart team={team.slug} project={project.slug} onClose={() => setAsking(false)} onStarted={started} />}
       {latest && running && (
         <div className={styles.running} role="status">
-          <span className={cx(tw.dot, latest.status === 'waiting' && tw.wait)} aria-hidden="true" />
-          <span>{latest.status === 'waiting' ? t('Агент разбивает ТЗ и ждёт ответа') : t('Агент разбивает ТЗ на задачи')}</span>
+          <span className={cx(tw.dot, (latest.status === 'waiting' || latest.status === 'paused') && tw.wait)} aria-hidden="true" />
+          <span>{latest.status === 'waiting' ? t('Агент разбивает ТЗ и ждёт ответа') : latest.status === 'paused' ? t('Разбивка ТЗ на паузе') : t('Агент разбивает ТЗ на задачи')}</span>
           <span className={styles.meta}>{latest.flow}</span>
           <Link to={`/run/${encodeURIComponent(latest.run)}`}>{latest.status === 'waiting' ? t('Ответить') : t('Открыть запуск')}</Link>
         </div>
@@ -197,7 +198,7 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
       <section className={styles.prop} aria-label={t('Предложение агента')}>
         {head}
         {d.error && <p className="msg err">{d.error}</p>}
-        {!d.error && d.status !== 'done' && <p className="msg">{t('Запуск закончился со статусом «{status}», задач нет.', { status: d.status })}</p>}
+        {!d.error && d.status !== 'done' && <p className="msg">{t('Задач нет: {why}.', { why: draftStopText(d.status) })}</p>}
         <div className={styles.propF}>
           {!readonly && <button type="button" className="btn" onClick={onRetry}>{t('Повторить черновик')}</button>}
           <button type="button" className="btn ghost" onClick={onDone}>{t('Скрыть')}</button>

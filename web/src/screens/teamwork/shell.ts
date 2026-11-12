@@ -1,6 +1,6 @@
 // Чистые помощники оболочки Teamwork: адреса экранов и вкладок, разбор ссылки на репо, подписи. Без React и DOM.
 // Логика доски, бэклога, документов и синхронизации — в web/src/lib/teamwork/ (волна ui-logic), здесь её нет.
-import type { TeamProjectBrief, TeamRemoteCheck } from '@server/api-types';
+import type { RunTeamworkLink, TeamProjectBrief, TeamRemoteCheck } from '@server/api-types';
 import { plural, t } from '../../lib/i18n';
 
 const enc = encodeURIComponent;
@@ -22,6 +22,23 @@ export const projectPath = (team: string, project: string, tab: ProjectTab = 'ov
   `${teamPath(team)}/${enc(project)}${tab === 'overview' ? '' : `/${tab}`}`;
 /** Параметр ?task=ID: панель задачи поверх любой вкладки проекта. */
 export const TASK_PARAM = 'task';
+
+/** Панель задачи поверх доски её проекта: ссылки на задачу с главной и со страницы запуска. */
+export const taskBoardPath = (team: string, project: string, id: string): string => `${projectPath(team, project, 'board')}?${TASK_PARAM}=${enc(id)}`;
+
+const DRAFT_LABEL: Record<NonNullable<RunTeamworkLink['draft']>, string> = { prd: 'черновик ТЗ', architecture: 'черновик архитектуры', split: 'разбивка ТЗ' };
+const DRAFT_TAB: Record<NonNullable<RunTeamworkLink['draft']>, ProjectTab> = { prd: 'prd', architecture: 'architecture', split: 'backlog' };
+
+/**
+ * Куда ведёт запуск, связанный с Teamwork (run.json → teamwork): по задаче — номер задачи и её панель поверх доски,
+ * черновик — подпись и вкладка документа (разбивка — бэклог). Ни задачи, ни черновика — undefined.
+ */
+export function runTeamworkLink(link: RunTeamworkLink | undefined): { to: string; label: string; title: string } | undefined {
+  if (!link) return undefined;
+  if (link.task) return { to: taskBoardPath(link.team, link.project, link.task), label: link.task, title: t('Задача {id} · проект {project}', { id: link.task, project: link.project }) };
+  if (link.draft) return { to: projectPath(link.team, link.project, DRAFT_TAB[link.draft]), label: t(DRAFT_LABEL[link.draft]), title: t('Черновик агента для проекта {project}', { project: link.project }) };
+  return undefined;
+}
 
 /** Вкладки команды: ?tab=members и т. п.; «Проекты» — без параметра. */
 export type TeamTab = 'projects' | 'members' | 'process' | 'settings';

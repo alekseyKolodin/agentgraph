@@ -31,6 +31,7 @@ import {
   continueTitle, continueVisible, flowEditsLine, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
 } from '../../lib/run/view';
 import { useOpenFlow } from '../flow/nav';
+import { runTeamworkLink } from '../teamwork/shell';
 import { LimitCtl, Overview } from './Overview';
 import {
   art, artBeforeContinue, artConfirmLeave, artDecisions, artEnsureLoaded, artOnEvent, artOnStreamOpen, artOpenRun, artReload, artResume, artTrackPause,
@@ -345,11 +346,18 @@ function RunPage({ id }: { id: string }) {
         {r.addDirs.map((d, i) => <span key={d}>{i > 0 && ', '}<PathLink className={styles.subPath} path={d} /></span>)}
       </span>
     ) : null,
-    // только в новом UI: откуда запуск — задача Jira, MR (GitLab, !N) или PR (GitHub, #N), ветка; и его worktree
+    // только в новом UI: откуда запуск — задача Jira, MR (GitLab, !N) или PR (GitHub, #N), ветка, задача Teamwork (ссылка на
+    // её панель поверх доски); и его worktree
     r.source ? (
       <span key="src">
         {`${sourceLabel(r.source)}: `}
-        {r.source.url ? <a href={r.source.url} target="_blank" rel="noopener">{r.source.key}</a> : r.source.key}
+        {r.source.url ? (
+          <a href={r.source.url} target="_blank" rel="noopener">{r.source.key}</a>
+        ) : r.source.type === 'teamwork' && r.teamwork?.task ? (
+          <Link to={runTeamworkLink(r.teamwork)!.to} title={runTeamworkLink(r.teamwork)!.title}>{r.source.key}</Link>
+        ) : (
+          r.source.key
+        )}
         {r.source.title ? ` — ${r.source.title}` : ''}
       </span>
     ) : null,

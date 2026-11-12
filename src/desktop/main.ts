@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { askQuit, type UnsentTeam } from '../quit-dialog.js';
 
 const HOST = '127.0.0.1';
 
@@ -152,11 +153,14 @@ function openWindow(): void {
       detail: 'Если уйти, они пропадут.',
     });
     if (choice === 0) e.preventDefault();
-    else if (pendingRestart) {
-      // «Остаться» отменило выход: перезапуска после обновления не будет, UI скажет перезапустить вручную
-      pendingRestart(false);
-      pendingRestart = null;
+    else {
+      // «Остаться» отменило выход: следующий Cmd+Q снова спросит о сессиях и неотправленном
       quitConfirmed = false;
+      if (pendingRestart) {
+        // перезапуска после обновления не будет, UI скажет перезапустить вручную
+        pendingRestart(false);
+        pendingRestart = null;
+      }
     }
   });
   win.on('closed', () => (win = null));
@@ -196,33 +200,28 @@ let stopServer: (() => Promise<void>) | null = null;
 let stopping: Promise<void> | null = null;
 /** Названия живых сессий терминала (src/sessions-server.ts): выход при них спрашивает подтверждение. */
 let liveSessions: () => string[] = () => [];
+/** Неотправленные изменения команд Teamwork и их отправка (src/teamwork-server.ts): о них выход тоже спрашивает. */
+let unsentTeams: () => Promise<UnsentTeam[]> = async () => [];
+let pushTeams: (slugs: string[]) => Promise<void> = async () => undefined;
 let quitConfirmed = false;
 let quitAsking = false;
 /** Перезапуск после автообновления ждёт выхода: relaunch — в will-quit, false — выход отменили в окне. */
 let pendingRestart: ((ok: boolean) => void) | null = null;
 
-/** «Идут 2 сессии Claude: «a» и «b».» */
-function sessionsLine(names: string[]): string {
-  const n = names.length;
-  const word = n % 10 === 1 && n % 100 !== 11 ? 'сессия' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'сессии' : 'сессий';
-  const list = names.map((x) => `«${x}»`);
-  const joined = list.length > 1 ? `${list.slice(0, -1).join(', ')} и ${list.at(-1)}` : list[0];
-  return `${n === 1 ? 'Идёт' : 'Идут'} ${n} ${word} Claude: ${joined}.`;
-}
-
-/** Подтверждение выхода при живых сессиях терминала (макет QuitDialog): они завершатся, разговор сохранится. */
-async function confirmQuit(names: string[]): Promise<boolean> {
-  const opts = {
-    type: 'question' as const,
-    buttons: ['Завершить сессии и закрыть', 'Отмена'],
-    defaultId: 0,
-    cancelId: 1,
-    message: 'Закрыть AgentGraph?',
-    detail: `${sessionsLine(names)} Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСостояние пространства по этим сессиям при таком выходе не пишется — обновить его можно потом кнопкой «Обновить состояние» на экране сессии.`,
-  };
-  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-  return r.response === 0;
-}
+/**
+ * Вопрос перед выходом (src/quit-dialog.ts): живые сессии терминала завершатся, неотправленные изменения Teamwork
+ * останутся в клоне, «Отправить и закрыть» сначала синхронизирует команды. true — выходить.
+ */
+const confirmQuit = (): Promise<boolean> =>
+  askQuit({
+    sessions: () => liveSessions(),
+    unsent: () => unsentTeams(),
+    push: (slugs) => pushTeams(slugs),
+    show: async (p) => {
+      const opts = { type: 'question' as const, buttons: p.buttons, defaultId: p.defaultId, cancelId: p.cancelId, message: p.message, detail: p.detail };
+      return (win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)).response;
+    },
+  });
 
 async function main(): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
@@ -265,6 +264,9 @@ async function main(): Promise<void> {
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();
+  const teamwork = await import('../teamwork-server.js');
+  unsentTeams = () => teamwork.unsentTeams();
+  pushTeams = (slugs) => teamwork.pushTeams(slugs);
   origin = `http://localhost:${port}`;
   console.log(`agentgraph desktop: ${origin} (данные: ${ROOT})`);
 
@@ -279,16 +281,17 @@ async function main(): Promise<void> {
   });
 }
 
-// Cmd+Q при живых сессиях терминала: claude завершатся вместе с приложением — сначала спрашиваем. Сигналы (kill, Ctrl-C
-// у desktop:dev) выходят без вопроса: отвечать на диалог некому.
+// Cmd+Q при живых сессиях терминала (claude завершатся вместе с приложением) или неотправленных изменениях Teamwork —
+// сначала спрашиваем. Коммиты считает git, поэтому выход всегда откладывается до ответа confirmQuit; спрашивать не о чем —
+// выходим сразу. Сигналы (kill, Ctrl-C у desktop:dev) выходят без вопроса: отвечать на диалог некому.
 app.on('before-quit', (e) => {
   if (quitConfirmed || stopping) return;
-  const names = liveSessions();
-  if (!names.length) return;
   e.preventDefault();
   if (quitAsking) return;
   quitAsking = true;
-  void confirmQuit(names)
+  void confirmQuit()
+    // диалог не открылся — выходим, как выходили без вопроса: застрять с неработающим Cmd+Q хуже
+    .catch(() => true)
     .then((ok) => {
       if (!ok) return;
       quitConfirmed = true;

@@ -26,19 +26,23 @@ import styles from './Tasks.module.css';
 
 export type WorkMode = 'run' | 'pick' | 'session';
 
+/** Что «В работу ▸» берёт у команды и проекта: экран проекта даёт TeamDetail и TeamProject, главная — ответ GET /api/teams/mine. */
+export type WorkTeam = Pick<TeamDetail, 'slug' | 'defaultFlow' | 'flows'>;
+export type WorkProject = Pick<TeamProject, 'slug' | 'repos'>;
+
 /** Flow команды для «В работу» по умолчанию: defaultFlow, иначе teamwork-task, если он есть. */
 export const teamDefaultFlow = (td: Pick<TeamDetail, 'defaultFlow' | 'flows'>): string | undefined =>
   td.defaultFlow && td.flows.includes(td.defaultFlow) ? td.defaultFlow : td.flows.includes('teamwork-task') ? 'teamwork-task' : undefined;
 
 /** Пункты меню «В работу ▸»: запустить flow по умолчанию, другой flow, сессия. */
-export function workMenu(td: TeamDetail, task: TeamTask, p: TeamProject, open: (mode: WorkMode) => void): MenuEntry[] {
+export function workMenu(td: WorkTeam, task: TeamTask, p: WorkProject, open: (mode: WorkMode) => void): MenuEntry[] {
   const flow = teamDefaultFlow(td);
   const repo = taskRepo(task, p);
   const cap = [repo, task.branch].filter(Boolean).join(' · ');
   const items: MenuEntry[] = [];
   if (cap) items.push({ cap });
   if (!p.repos.length) {
-    items.push({ note: t('У проекта нет репо кода: добавьте его в настройках проекта') });
+    items.push({ note: t('У проекта нет репо кода: добавьте его на обзоре проекта') });
     return items;
   }
   if (flow) items.push({ key: 'run', label: t('Запустить {flow}', { flow }), small: t('flow команды по умолчанию'), onSelect: () => open('run') });
@@ -52,7 +56,7 @@ export function workMenu(td: TeamDetail, task: TeamTask, p: TeamProject, open: (
 }
 
 /** Кнопка «В работу ▸» с меню и формой. */
-export function ToWorkButton({ td, p, task, small = true, onOpen }: { td: TeamDetail; p: TeamProject; task: TeamTask; small?: boolean; onOpen?: (open: boolean) => void }) {
+export function ToWorkButton({ td, p, task, small = true, onOpen }: { td: WorkTeam; p: WorkProject; task: TeamTask; small?: boolean; onOpen?: (open: boolean) => void }) {
   const [mode, setMode] = useState<WorkMode>();
   if (task.error) return null;
   return (
@@ -73,7 +77,7 @@ export function ToWorkButton({ td, p, task, small = true, onOpen }: { td: TeamDe
 type Phase = { kind: 'repo' } | { kind: 'prep'; text: string } | { kind: 'form' } | { kind: 'error'; text: string; noLocal?: boolean };
 
 /** Форма «В работу»: репо → worktree → intake → запуск или сессия. */
-export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p: TeamProject; task: TeamTask; mode: WorkMode; onClose: () => void }) {
+export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: WorkProject; task: TeamTask; mode: WorkMode; onClose: () => void }) {
   const team = td.slug;
   const project = p.slug;
   const qc = useQueryClient();

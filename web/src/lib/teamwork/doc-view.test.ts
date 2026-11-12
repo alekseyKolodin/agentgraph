@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  draftFailed, draftLine, rowsLossless, draftResult, draftRunning, isDocEmpty, isReqSection, lastIssued, latestDraftFor, merge3, readChunks, refTarget, reqKindFor, rowChanges, taskWhere,
+  draftFailed, draftLine, draftStopText, rowsLossless, draftResult, draftRunning, isDocEmpty, isReqSection, lastIssued, latestDraftFor, merge3, readChunks, refTarget, reqKindFor, rowChanges, taskWhere,
   wrapMark,
 } from './doc-view';
 import { applyDecisions, trackChanges } from './track';
@@ -84,7 +84,13 @@ test('черновики документа: идёт, ждёт ответа, г
   assert.deepEqual(draftLine({ status: 'running' }), { text: 'Черновик идёт', tone: 'live' });
   assert.deepEqual(draftLine({ status: 'waiting', section: 'Требования' }), { text: 'Черновик ждёт вашего ответа · раздел «Требования»', tone: 'wait' });
   assert.equal(draftLine({ status: 'done' }).tone, 'ok');
-  assert.equal(draftLine({ status: 'interrupted' }).tone, 'fail');
+  assert.deepEqual(draftLine({ status: 'interrupted' }), { text: 'Черновик не получился: agentgraph остановили, пока он шёл', tone: 'fail' });
+  assert.deepEqual(draftLine({ status: 'paused' }), { text: 'Черновик на паузе', tone: 'wait' });
+  assert.equal(draftLine({ status: 'aborted', section: '' }).text, 'Черновик не получился: запуск остановили · раздел «начало»');
+  assert.equal(draftStopText('failed'), 'запуск упал с ошибкой');
+  // незнакомый статус — подписью статуса запуска, неизвестный совсем — как есть
+  assert.equal(draftStopText('pending'), 'ожидает');
+  assert.equal(draftStopText('weird'), 'weird');
   const d = (run: string, kind: TeamDraft['kind'], docs?: TeamDraft['docs']): TeamDraft => ({ run, kind, flow: `teamwork-${kind}`, status: 'done', startedAt: '2026-11-12T10:00:00Z', ...(docs ? { docs } : {}) });
   const list = [d('r3', 'split'), d('r2', 'architecture', ['architecture', 'design']), d('r1', 'prd', ['prd'])];
   assert.equal(latestDraftFor(list, 'prd')?.run, 'r1');

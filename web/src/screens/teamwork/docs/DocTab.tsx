@@ -186,7 +186,7 @@ function DraftLine({ draft, name, onReview, onRetry }: { draft: TeamDraft; name:
       {draft.brief && <span className={styles.brief} title={draft.brief}>{draft.brief}</span>}
       <span className={styles.meta}>{draft.flow}</span>
       <span className={styles.grow} />
-      <Link className="btn small ghost" to={`/run/${encodeURIComponent(draft.run)}`}>{line.tone === 'wait' ? t('Ответить в запуске') : t('Открыть запуск')}</Link>
+      <Link className="btn small ghost" to={`/run/${encodeURIComponent(draft.run)}`}>{draft.status === 'waiting' ? t('Ответить в запуске') : t('Открыть запуск')}</Link>
       {!running && !failed && <button type="button" className="btn small" onClick={onReview}>{t('Посмотреть')}</button>}
       {failed && <button type="button" className="btn small ghost" onClick={onReview}>{t('Что успел')}</button>}
       {failed && <button type="button" className="btn small" onClick={onRetry}>{t('Повторить')}</button>}

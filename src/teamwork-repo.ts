@@ -940,11 +940,14 @@ export async function checkRemote(url: string, deps: RepoDeps = defaultRepoDeps(
   }
 }
 
+/** Слаги, занятые маршрутами /api/teams/<слово> (GET /api/teams/mine и т. п.): команда с таким слагом получает суффикс. */
+const RESERVED_TEAM_SLUGS = new Set(['mine', 'check', 'join']);
+
 /** Свободный слаг папки команды: из ссылки, с суффиксом -2, -3… если занят. */
 export function freeTeamSlug(url: string, root = teamsDir()): string {
   const base = teamSlugFromUrl(url);
   let slug = base;
-  for (let i = 2; fs.existsSync(path.join(root, slug)); i++) slug = `${base}-${i}`;
+  for (let i = 2; RESERVED_TEAM_SLUGS.has(slug) || fs.existsSync(path.join(root, slug)); i++) slug = `${base}-${i}`;
   return slug;
 }
 

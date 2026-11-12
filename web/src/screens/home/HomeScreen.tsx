@@ -1,12 +1,13 @@
 // Главная (ui/index.html #view-home, ui/app.js renderHome): вопросы агентов с ответом и сессии терминала, которые ждут
-// тебя, идущие запуски и работающие сессии, мои MR, которым нужно внимание, задачи и код, лента событий справа. Ни
+// тебя, идущие запуски и работающие сессии, мои задачи Teamwork, мои MR, которым нужно внимание, задачи и код, лента событий справа. Ни
 // запусков, ни сессий ещё не было — строка «с чего начать». «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
-import { useCallback, useState } from 'react';
+import { lazy, Suspense, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeResponse } from '@server/api-types';
 import { keys, useFeature, useFlows, useHome, useRuns, type IntakeTarget } from '../../api';
 import { useSessions } from '../../api/sessions';
+import { useTeamMine } from '../../api/teamwork';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
 import { QuestionCard } from '../../components/question/QuestionCard';
 import { useNow } from '../../components/useNow';
@@ -26,6 +27,9 @@ import styles from './Home.module.css';
 
 const TICK_MS = 30_000;
 
+/** «Мои задачи» Teamwork — из файла экранов Teamwork: без команд он не грузится. */
+const MyTasks = lazy(() => import('../teamwork').then((m) => ({ default: m.MyTasks })));
+
 export function HomeScreen() {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -44,6 +48,8 @@ export function HomeScreen() {
   const sessionList = useSessions(sessionsOn);
   const sessions = homeSessions(sessionList.data?.sessions ?? []);
   const history = useRuns();
+  // «Мои задачи» (spec §11): блок есть, только когда есть хотя бы одна команда
+  const mine = useTeamMine(useFeature('teamwork'));
 
   // /api/home и ленту перезапрашивает сам React Query при каждом открытии главной (refetchOnMount): запуски из CLI
   // в общий поток не пишут, их события подхватываются при возврате на главную
@@ -101,6 +107,11 @@ export function HomeScreen() {
               {runs.length > 0 && <HomeRuns runs={runs} now={now} />}
               {sessions.live.length > 0 && <HomeSessions sessions={sessions.live} now={now} />}
             </section>
+          )}
+          {Boolean(mine.data?.teams.length) && (
+            <Suspense fallback={null}>
+              <MyTasks mine={mine.data!} className={styles.homeSec} />
+            </Suspense>
           )}
           {attentionOn && <Attention onLaunch={onLaunch} />}
           {dashOn && <Dash onLaunch={onLaunch} onSettings={() => setSettings(true)} />}
