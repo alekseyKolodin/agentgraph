@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · ТЗ, черновик агента</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--fs-read:15px;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 48px}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2)}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 18px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-left:4px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+.draft{background:color-mix(in srgb,var(--st-wait) 6%,var(--panel));border:1px solid color-mix(in srgb,var(--st-wait) 45%,transparent);border-radius:8px;padding:12px 16px;display:flex;flex-direction:column;gap:8px;margin-bottom:22px}
+.draft-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.draft-h h2{margin:0;font-size:16px;font-weight:500}
+.draft-h .grow{flex:1}
+.brief{margin:0;color:var(--ink-2);font-size:13px}
+.brief b{font-weight:500;color:var(--ink-3);margin-right:6px}
+.draft-f{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.draft-f .grow{flex:1}
+.prog{display:inline-flex;align-items:center;gap:8px}
+.pbar{display:flex;gap:3px}
+.pbar i{display:block;width:16px;height:6px;border-radius:2px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.pbar i.ok{background:var(--st-ok);box-shadow:none}
+.nav2{display:inline-flex;gap:2px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--ink-3);padding:3px 10px;font-size:12px;font-weight:500;cursor:pointer}
+.seg button.on{background:var(--raised);color:var(--ink)}
+
+.wrap{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap}
+.toc{flex:0 0 210px;position:sticky;top:16px;display:flex;flex-direction:column;gap:1px}
+.toc .cap{font-size:12px;font-weight:500;color:var(--ink-3);padding:0 8px 6px}
+.toc a{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 8px;border-radius:6px;color:var(--ink-2);font-size:13px;text-decoration:none}
+.toc a.on{background:var(--select);color:var(--ink)}
+.toc a.dim{color:var(--ink-3)}
+.toc a .n{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.doc{flex:999 1 640px;min-width:0;max-width:960px}
+.row{display:grid;grid-template-columns:56px minmax(0,640px) minmax(170px,230px);column-gap:18px;align-items:start}
+.sh{margin:30px 0 10px}
+.sh h2{margin:0;font-size:18px;font-weight:600}
+.rd{font-size:var(--fs-read);line-height:1.65;color:var(--ink)}
+.rd p{margin:0 0 12px}
+.rd ul{margin:0;padding-left:20px}
+.rd li{margin:0 0 6px}
+.rd li::marker{color:var(--ink-3)}
+.req{padding:9px 0;border-top:1px solid var(--line)}
+.rid{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);padding:3px 0 0 4px}
+.rid .new{display:block;font-family:var(--font-sans);font-size:11px;color:var(--st-ok);margin-top:2px}
+del{background:color-mix(in srgb,var(--st-fail) 14%,transparent);color:var(--ink-2);text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--st-fail) 75%,transparent);border-radius:3px;padding:0 2px}
+ins{background:color-mix(in srgb,var(--st-ok) 15%,transparent);color:var(--ink);text-decoration:none;border-radius:3px;padding:0 2px}
+.added{background:color-mix(in srgb,var(--st-ok) 7%,transparent)}
+.cc{border:1px solid var(--line-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;font-size:12px;background:var(--panel)}
+.cc.cur{border-color:var(--ink)}
+.cc.done{border-color:color-mix(in srgb,var(--st-ok) 40%,transparent)}
+.cc .n{font-family:var(--font-mono);color:var(--ink-3)}
+.cc .why{color:var(--ink-2);line-height:1.45}
+.cc .acts{display:flex;gap:6px;align-items:center}
+.fold{display:flex;align-items:center;gap:10px;margin:22px 0 0;padding:8px 0;border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);color:var(--ink-3);font-size:13px}
+.fold button{border:0;background:transparent;color:var(--ink-2);padding:0;cursor:pointer;font-size:13px}
+.fold button:hover{color:var(--ink);text-decoration:underline}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.toc{display:none}.row{grid-template-columns:44px minmax(0,1fr);column-gap:10px}.row .cc{grid-column:2;margin-top:8px}.row>.sp{display:none}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+</aside>
+
+<main class="main" id="main">
+<p class="crumbs"><a href="#">Teamwork</a> › <a href="#">Платёжная команда</a></p>
+<div class="head">
+<div><h1>Экспорт счетов</h1><p class="sub">Бухгалтерия выгружает счета за период в CSV и 1С</p></div>
+<span class="sync"><span class="dot ok s6"></span>синхронизировано · 20 с назад</span>
+</div>
+<nav class="tabs" aria-label="Проект"><a class="tab" href="#">Обзор</a><a class="tab active" href="#" aria-current="page">ТЗ</a><a class="tab" href="#">Архитектура</a><a class="tab" href="#">Дизайн</a><a class="tab" href="#">Документы<span class="n">4</span></a><a class="tab" href="#">Бэклог<span class="n">14</span></a><a class="tab" href="#">Доска</a><a class="tab" href="#">Спринты</a></nav>
+
+<section class="draft" aria-label="Черновик агента">
+<div class="draft-h"><h2>Черновик агента: 4 правки</h2><span class="meta">teamwork-prd · 6 мин · $0.31 · 3 ответа на вопросы агента</span><span class="grow"></span><a href="#" style="font-size: 12px">Открыть запуск</a></div>
+<p class="brief"><b>Задание</b>Добавь журнал выгрузок и уточни кодировку для 1С</p>
+<div class="draft-f">
+<span class="prog"><span class="pbar" role="img" aria-label="Решена 1 правка из 4"><i class="ok"></i><i></i><i></i><i></i></span><span class="meta">решено 1 из 4</span></span>
+<span class="nav2"><button class="btn ghost small" type="button" aria-label="Предыдущая правка">↑</button><button class="btn ghost small" type="button" aria-label="Следующая правка">↓</button></span>
+<button class="btn small" type="button">Принять остальные</button>
+<span class="seg" role="group" aria-label="Вид"><button class="on" type="button" aria-pressed="true">Документ</button><button type="button" aria-pressed="false">Исходник</button></span>
+<span class="grow"></span>
+<button class="btn ghost" type="button">Отклонить черновик</button>
+<button class="btn primary" type="button">Записать принятые · 1</button>
+</div>
+</section>
+
+<div class="wrap">
+<nav class="toc" aria-label="Содержание ТЗ">
+<span class="cap">Содержание</span>
+<a href="#" class="dim">Цель и проблема</a>
+<a href="#" class="dim">Для кого</a>
+<a href="#" class="dim">Сценарии</a>
+<a href="#" class="on" aria-current="true">Требования<span class="n"><span class="dot wait s6"></span>1 из 2</span></a>
+<a href="#" class="dim">Нефункциональные</a>
+<a href="#">Вне рамок<span class="n"><span class="dot wait s6"></span>1</span></a>
+<a href="#" class="dim">Как поймём, что готово</a>
+<a href="#">Открытые вопросы<span class="n"><span class="dot wait s6"></span>1</span></a>
+</nav>
+
+<article class="doc" aria-label="ТЗ с правками агента">
+<div class="fold"><span>Цель и проблема, Для кого, Сценарии — без правок</span><button type="button">Показать</button></div>
+
+<div class="row"><span class="sp"></span><div class="sh"><h2>Требования</h2></div><span class="sp"></span></div>
+<div>
+<div class="row req"><span class="rid">FR-1</span><div class="rd">Выгрузка счетов за выбранный период в CSV. Период включает обе границы.</div><span class="sp"></span></div>
+<div class="row req"><span class="rid">FR-2</span><div class="rd">Колонки и их порядок — как в шаблоне бухгалтерии <a href="#" style="font-family: var(--font-mono); font-size: 13px">docs/columns.md</a>.</div><span class="sp"></span></div>
+<div class="row req"><span class="rid">FR-3</span><div class="rd">Кодировка <del>файла — UTF-8.</del> <ins>на выбор в форме: CP1251 для 1С, UTF-8 с BOM для Excel.</ins></div>
+<div class="cc cur" aria-label="Правка 1 из 4"><span class="n">1 из 4</span><span class="why">Вы ответили агенту: 1С ждёт CP1251, а Excel открывает только UTF-8 с BOM.</span><span class="acts"><button class="btn small" type="button">Принять</button><button class="btn ghost small" type="button">Отклонить</button></span></div>
+</div>
+<div class="row req"><span class="rid">FR-4</span><div class="rd">Пустой период даёт файл только со строкой заголовков, а не ошибку.</div><span class="sp"></span></div>
+<div class="row req"><span class="rid">FR-5</span><div class="rd">Файл больше 50 000 строк делится на части с номером в имени.</div><span class="sp"></span></div>
+<div class="row req"><span class="rid">FR-6</span><div class="rd">Выгрузка по расписанию раз в месяц на почту бухгалтерии.</div><span class="sp"></span></div>
+<div class="row req"><span class="rid">FR-7</span><div class="rd">Фильтр по контрагенту: один или несколько.</div><span class="sp"></span></div>
+<div class="row req added"><span class="rid">FR-8<span class="new">новое</span></span><div class="rd"><ins>Журнал выгрузок: кто, когда и за какой период выгружал. Видит роль «Админ».</ins></div>
+<div class="cc done" aria-label="Правка 2 из 4"><span class="n">2 из 4 · <span class="t-ok">принято</span></span><span class="why">Из задания: журнал выгрузок. Номер — следующий свободный.</span><span class="acts"><button class="btn ghost small" type="button">Отменить</button></span></div>
+</div>
+</div>
+
+<div class="fold"><span>Нефункциональные требования — без правок</span><button type="button">Показать</button></div>
+
+<div class="row"><span class="sp"></span><div class="sh"><h2>Вне рамок</h2></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul><li>Выгрузка в XLSX<ins> и загрузка в 1С через API: отдаём только файл</ins>.</li><li>Правка счетов из выгрузки.</li></ul></div>
+<div class="cc" aria-label="Правка 3 из 4"><span class="n">3 из 4</span><span class="why">Уточняет FR-3: интеграции с 1С по API в проекте нет.</span><span class="acts"><button class="btn small" type="button">Принять</button><button class="btn ghost small" type="button">Отклонить</button></span></div>
+</div>
+
+<div class="fold"><span>Как поймём, что готово — без правок</span><button type="button">Показать</button></div>
+
+<div class="row"><span class="sp"></span><div class="sh"><h2>Открытые вопросы</h2></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul><li>Кому уходит письмо с выгрузкой по расписанию: один адрес или список?</li><li class="added"><ins>Сколько хранить журнал выгрузок: 12 месяцев или дольше?</ins></li></ul></div>
+<div class="cc" aria-label="Правка 4 из 4"><span class="n">4 из 4</span><span class="why">Срока хранения журнала нет ни в коде, ни в ТЗ, а он нужен для FR-8.</span><span class="acts"><button class="btn small" type="button">Принять</button><button class="btn ghost small" type="button">Отклонить</button></span></div>
+</div>
+</article>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

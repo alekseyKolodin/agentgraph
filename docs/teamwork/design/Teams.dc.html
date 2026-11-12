@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · команды</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 40px}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.sec-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 6px}
+.sec-head h2{margin:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.sec-count{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.list{list-style:none;margin:0;padding:0}
+.lrun{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:10px;padding:6px 8px;border-radius:6px}
+.lrun-main{min-width:0;display:flex;flex-direction:column}
+.lrun-t{font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.lrun-s{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrun-it{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.small{padding:3px 9px;font-size:12px}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2);max-width:640px}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3);margin:0 0 8px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+
+.layout{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start;margin-top:22px}
+.teams{flex:999 1 480px;min-width:0}
+.form{flex:1 1 380px;min-width:0;max-width:460px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px 16px;display:flex;flex-direction:column;gap:14px}
+.trow{position:relative;display:flex;flex-direction:column;gap:4px;padding:12px 8px;border-bottom:1px solid var(--line);border-radius:0}
+.trow:hover{background:var(--hover)}
+.trow-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.trow-h a{font-weight:600;color:var(--ink);font-size:15px;text-decoration:none}
+.trow-h a::after{content:"";position:absolute;inset:0}
+.trow-h .grow{flex:1}
+.trow .sy{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.trow .pr{font-size:13px;color:var(--ink-2)}
+.trow .pr b{font-weight:500;color:var(--ink)}
+.seg{display:flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden;align-self:flex-start}
+.seg button{border:0;background:transparent;color:var(--ink-3);padding:4px 12px;font-size:13px;font-weight:500;cursor:pointer}
+.seg button.on{background:var(--raised);color:var(--ink)}
+.f{display:flex;flex-direction:column;gap:5px}
+.f label{font-size:12px;font-weight:500;color:var(--ink-3)}
+.f input{background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:6px 10px;color:var(--ink);width:100%}
+.f input.mono{font-family:var(--font-mono);font-size:13px}
+.f .ok{font-size:12px;color:var(--st-ok)}
+.f .hint{font-size:12px;color:var(--ink-3)}
+.two{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:12px}
+.me{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2)}
+.me b{font-weight:500;color:var(--ink)}
+.tree{background:var(--well);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--ink-2);margin:0;white-space:pre}
+.go{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.form{max-width:none}.two{grid-template-columns:minmax(0,1fr)}.tree{white-space:pre-wrap}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+<section>
+<div class="sec-head"><h2>Сейчас</h2><span class="sec-count t-wait">ждут 1 · идут 2</span></div>
+<ul class="list">
+<li class="lrun"><span class="dot wait"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-14 · Шаблон выгрузки для 1С</a><span class="lrun-s t-wait">ждёт ответа · фаза «code»</span></div><span class="lrun-it">1/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-12 · Выгрузка счетов за период</a><span class="lrun-s">фаза «code»</span></div><span class="lrun-it">2/3</span></li>
+</ul>
+</section>
+</aside>
+
+<main class="main" id="main">
+<h1>Teamwork</h1>
+<p class="sub">Команда ведёт проекты в общем git-репо: ТЗ, архитектура, задачи и спринты. Код остаётся в своих репо, агенты работают у каждого на его компьютере.</p>
+
+<div class="layout">
+<section class="teams" aria-label="Мои команды">
+<h2 class="cap">Мои команды · 2</h2>
+<div style="border-top: 1px solid var(--line)">
+<div class="trow">
+<div class="trow-h"><a href="#">Платёжная команда</a><span class="meta">PAY</span><span class="grow"></span><span class="sy"><span class="dot ok s6"></span>12 с назад</span></div>
+<span class="meta">github.com/acme/payments-team · 3 участника</span>
+<span class="pr"><b>Экспорт счетов</b> — спринт 2, готово 2 из 12 · <b>Сверка с банком</b> — бэклог 7</span>
+</div>
+<div class="trow">
+<div class="trow-h"><a href="#">Внутренние инструменты</a><span class="meta">TOOL</span><span class="grow"></span><span class="sy t-wait"><span class="dot wait s6"></span>не отправлено: 2</span></div>
+<span class="meta">gitlab.acme.dev/tools/team · 5 участников</span>
+<span class="pr"><b>Каталог сервисов</b> — спринт 4, готово 6 из 9</span>
+</div>
+</div>
+</section>
+
+<section class="form" aria-label="Новая команда">
+<div class="seg" role="tablist" aria-label="Как добавить команду"><button class="on" type="button" role="tab" aria-selected="true">Создать команду</button><button type="button" role="tab" aria-selected="false">Подключиться по ссылке</button></div>
+<div class="f">
+<label for="url">Ссылка на пустой репо</label>
+<input id="url" class="mono" value="git@github.com:acme/platform-team.git">
+<span class="ok">✓ Репо пустой, доступ на запись есть</span>
+</div>
+<div class="two">
+<div class="f"><label for="ttl">Название</label><input id="ttl" value="Платформа"></div>
+<div class="f"><label for="pfx">Префикс задач</label><input id="pfx" class="mono" value="PLT"></div>
+</div>
+<span class="f"><span class="hint">Номера задач будут PLT-1, PLT-2… Префикс потом не меняется.</span></span>
+<div class="me"><span class="who">АК</span><span><b>Алексей</b> · alex@example.com — первый участник, из git config</span></div>
+<div class="f">
+<span class="cap" style="margin: 0">Что положим в репо</span>
+<pre class="tree">teamwork.yaml        участники, префикс, колонки
+README.md            как подключиться
+flows/
+  teamwork-prd.yaml           черновик ТЗ
+  teamwork-architecture.yaml  архитектура и дизайн
+  teamwork-split.yaml         разбивка на задачи
+  teamwork-task.yaml          задача в работу</pre>
+</div>
+<div class="go"><button class="btn primary" type="button">Создать команду</button><span class="meta">клон: ~/.agentgraph/teams/platform-team</span></div>
+</section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

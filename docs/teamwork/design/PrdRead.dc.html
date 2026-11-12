@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · ТЗ, чтение</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--fs-read:15px;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 48px}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.sec-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 6px}
+.sec-head h2{margin:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.sec-count{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.list{list-style:none;margin:0;padding:0}
+.lrun{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:10px;padding:6px 8px;border-radius:6px}
+.lrun-main{min-width:0;display:flex;flex-direction:column}
+.lrun-t{font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.lrun-s{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrun-it{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2)}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 22px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-left:4px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* документ */
+.wrap{display:flex;gap:36px;align-items:flex-start;flex-wrap:wrap}
+.toc{flex:0 0 210px;position:sticky;top:16px;display:flex;flex-direction:column;gap:1px}
+.toc .cap{font-size:12px;font-weight:500;color:var(--ink-3);padding:0 8px 6px}
+.toc a{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 8px;border-radius:6px;color:var(--ink-2);font-size:13px;text-decoration:none}
+.toc a:hover{background:var(--hover);color:var(--ink)}
+.toc a.on{background:var(--select);color:var(--ink)}
+.toc a .n{font-family:var(--font-mono);font-size:11px;color:var(--ink-3)}
+.toc .frs{display:flex;flex-direction:column;gap:1px;margin:2px 0 4px}
+.toc .frs a{padding-left:20px;font-family:var(--font-mono);font-size:12px}
+.toc .frs a .tx{font-family:var(--font-sans);color:var(--ink-3);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toc .cov{margin-top:14px;padding:10px 8px 0;border-top:1px solid var(--line);font-size:12px;color:var(--ink-2);display:flex;flex-direction:column;gap:4px}
+.doc{flex:999 1 640px;min-width:0;max-width:960px}
+.dhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.dhead .grow{flex:1}
+.dhead .hint{font-size:12px;color:var(--ink-3)}
+.row{display:grid;grid-template-columns:56px minmax(0,640px) minmax(150px,220px);column-gap:18px}
+.sec{position:relative;border-radius:8px;padding:0 0 4px}
+.sec.hov{background:var(--hover)}
+.sh{display:flex;align-items:baseline;gap:10px;margin:34px 0 10px}
+.sh h2{margin:0;font-size:18px;font-weight:600;letter-spacing:-.005em;text-wrap:balance}
+.sh .ed{opacity:0}
+.sec.hov .sh .ed{opacity:1}
+.rd{font-size:var(--fs-read);line-height:1.65;color:var(--ink);text-wrap:pretty}
+.rd p{margin:0 0 12px}
+.rd ul,.rd ol{margin:0 0 12px;padding-left:20px}
+.rd li{margin:0 0 6px}
+.rd li::marker{color:var(--ink-3)}
+.rd b{font-weight:600}
+.rd code{font-family:var(--font-mono);font-size:13px;background:var(--well);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.rd .ref{font-family:var(--font-mono);font-size:13px}
+.req{padding:9px 0;border-top:1px solid var(--line)}
+.req:last-child{border-bottom:1px solid var(--line)}
+.req:hover{background:var(--hover)}
+.rid{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);padding:3px 0 0 4px;text-decoration:none}
+.rid:hover{color:var(--ink);text-decoration:none}
+.mg{display:flex;flex-direction:column;gap:3px;font-family:var(--font-mono);font-size:12px;padding-top:3px;color:var(--ink-2)}
+.mg span{display:inline-flex;gap:6px;align-items:baseline}
+.mg .s{color:var(--ink-3);font-family:var(--font-sans)}
+.mg .gap{color:var(--st-wait);font-family:var(--font-sans)}
+.mg .gap a{font-size:12px}
+.qs li{list-style:none;position:relative}
+.qs li::before{content:"?";position:absolute;left:-20px;top:0;font-family:var(--font-mono);font-size:13px;color:var(--ink-3)}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.toc{display:none}.row{grid-template-columns:44px minmax(0,1fr);column-gap:10px}.row .mg{grid-column:2;padding-top:6px}.row>.sp{display:none}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+<section>
+<div class="sec-head"><h2>Сейчас</h2><span class="sec-count t-wait">ждут 1 · идут 2</span></div>
+<ul class="list">
+<li class="lrun"><span class="dot wait"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-14 · Шаблон выгрузки для 1С</a><span class="lrun-s t-wait">ждёт ответа · фаза «code»</span></div><span class="lrun-it">1/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-12 · Выгрузка счетов за период</a><span class="lrun-s">фаза «code»</span></div><span class="lrun-it">2/3</span></li>
+</ul>
+</section>
+</aside>
+
+<main class="main" id="main">
+<p class="crumbs"><a href="#">Teamwork</a> › <a href="#">Платёжная команда</a></p>
+<div class="head">
+<div><h1>Экспорт счетов</h1><p class="sub">Бухгалтерия выгружает счета за период в CSV и 1С</p></div>
+<span class="sync"><span class="dot ok s6"></span>синхронизировано · 20 с назад</span>
+</div>
+<nav class="tabs" aria-label="Проект"><a class="tab" href="#">Обзор</a><a class="tab active" href="#" aria-current="page">ТЗ</a><a class="tab" href="#">Архитектура</a><a class="tab" href="#">Дизайн</a><a class="tab" href="#">Документы<span class="n">4</span></a><a class="tab" href="#">Бэклог<span class="n">14</span></a><a class="tab" href="#">Доска</a><a class="tab" href="#">Спринты</a></nav>
+
+<div class="wrap">
+<nav class="toc" aria-label="Содержание ТЗ">
+<span class="cap">Содержание</span>
+<a href="#s1">Цель и проблема</a>
+<a href="#s2">Для кого</a>
+<a href="#s3">Сценарии</a>
+<a href="#s4" class="on" aria-current="true">Требования<span class="n">8</span></a>
+<div class="frs">
+<a href="#fr1">FR-1<span class="tx">Выгрузка за период</span></a>
+<a href="#fr2">FR-2<span class="tx">Колонки по шаблону</span></a>
+<a href="#fr3">FR-3<span class="tx">Кодировка</span></a>
+<a href="#fr4">FR-4<span class="tx">Пустой период</span></a>
+<a href="#fr5">FR-5<span class="tx">Деление на части</span></a>
+<a href="#fr6">FR-6<span class="tx">По расписанию</span><span class="dot wait s6" aria-label="без задач"></span></a>
+<a href="#fr7">FR-7<span class="tx">Фильтр контрагента</span></a>
+<a href="#fr8">FR-8<span class="tx">Журнал выгрузок</span></a>
+</div>
+<a href="#s5">Нефункциональные<span class="n">3</span></a>
+<a href="#s6">Вне рамок</a>
+<a href="#s7">Как поймём, что готово</a>
+<a href="#s8">Открытые вопросы<span class="n">2</span></a>
+<div class="cov"><span>Задачи есть у 10 из 11 требований</span><span class="t-wait">FR-6 без задач</span></div>
+</nav>
+
+<article class="doc" aria-label="ТЗ проекта">
+<div class="dhead">
+<span class="meta">prd.md · обновлено вчера, Мария · 11 требований · ≈4 мин чтения</span>
+<span class="grow"></span>
+<span class="hint">Нажмите на раздел, чтобы править</span>
+<button class="btn ghost small" type="button">История</button>
+<button class="btn ghost small" type="button">Исходник</button>
+<button class="btn small" type="button">Черновик с моделью…</button>
+</div>
+
+<section class="sec" id="s1">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Цель и проблема</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><p>Бухгалтерия каждый месяц вручную собирает счета за период из админки и переносит их в 1С. На это уходит 3–4 часа, и каждый месяц всплывают ошибки в НДС.</p><p>Нужна выгрузка счетов за период в файл, который 1С и Excel открывают без правок руками.</p></div><span class="sp"></span></div>
+</section>
+
+<section class="sec" id="s2">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Для кого</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul><li><b>Бухгалтер на аутсорсе</b> — выгружает месяц для 5–20 клиентов подряд.</li><li><b>Главный бухгалтер</b> — сверяет НДС перед отчётностью.</li><li><b>Админ</b> — смотрит, кто и что выгружал.</li></ul></div><span class="sp"></span></div>
+</section>
+
+<section class="sec hov" id="s3">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Сценарии</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ol><li>Бухгалтер открывает «Счета → Выгрузка», выбирает период и кодировку, получает файл.</li><li>Если счетов больше 50 000, получает архив из нескольких файлов с номером части в имени.</li><li>Админ открывает журнал и видит, кто выгружал октябрь и когда.</li></ol></div><span class="sp"></span></div>
+</section>
+
+<section class="sec" id="s4">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Требования</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="mg" style="padding-top: 40px"><span class="s">задачи</span></span></div>
+<div>
+<div class="row req" id="fr1"><a class="rid" href="#fr1">FR-1</a><div class="rd">Выгрузка счетов за выбранный период в CSV. Период включает обе границы.</div><div class="mg"><span><a href="#">PAY-11</a><span class="s">ревью</span></span><span><a href="#">PAY-12</a><span class="s">в работе</span></span></div></div>
+<div class="row req" id="fr2"><a class="rid" href="#fr2">FR-2</a><div class="rd">Колонки и их порядок — как в шаблоне бухгалтерии <a class="ref" href="#">docs/columns.md</a>.</div><div class="mg"><span><a href="#">PAY-10</a><span class="s">ревью</span></span></div></div>
+<div class="row req" id="fr3"><a class="rid" href="#fr3">FR-3</a><div class="rd">Кодировка на выбор в форме: CP1251 для 1С, UTF-8 с BOM для Excel.</div><div class="mg"><span><a href="#">PAY-14</a><span class="s">в работе</span></span></div></div>
+<div class="row req" id="fr4"><a class="rid" href="#fr4">FR-4</a><div class="rd">Пустой период даёт файл только со строкой заголовков, а не ошибку.</div><div class="mg"><span><a href="#">PAY-12</a><span class="s">в работе</span></span><span><a href="#">PAY-16</a><span class="s">к работе</span></span></div></div>
+<div class="row req" id="fr5"><a class="rid" href="#fr5">FR-5</a><div class="rd">Файл больше 50 000 строк делится на части: <code>invoices_2026-10_part2.csv</code>.</div><div class="mg"><span><a href="#">PAY-13</a><span class="s">в работе</span></span></div></div>
+<div class="row req" id="fr6"><a class="rid" href="#fr6">FR-6</a><div class="rd">Выгрузка по расписанию раз в месяц на почту бухгалтерии.</div><div class="mg"><span class="gap">нет задач</span><span class="gap"><a href="#">Создать задачу</a></span></div></div>
+<div class="row req" id="fr7"><a class="rid" href="#fr7">FR-7</a><div class="rd">Фильтр по контрагенту: один или несколько.</div><div class="mg"><span><a href="#">PAY-15</a><span class="s">к работе</span></span></div></div>
+<div class="row req" id="fr8"><a class="rid" href="#fr8">FR-8</a><div class="rd">Журнал выгрузок: кто, когда и за какой период выгружал. Видит роль «Админ».</div><div class="mg"><span><a href="#">PAY-23</a><span class="s">бэклог</span></span><span><a href="#">PAY-28</a><span class="s">бэклог</span></span></div></div>
+</div>
+</section>
+
+<section class="sec" id="s5">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Нефункциональные требования</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div>
+<div class="row req"><a class="rid" href="#">NFR-1</a><div class="rd">Месяц, около 20 000 счетов, выгружается быстрее 10 секунд.</div><div class="mg"><span><a href="#">PAY-27</a><span class="s">бэклог</span></span></div></div>
+<div class="row req"><a class="rid" href="#">NFR-2</a><div class="rd">Выгрузка не блокирует админку: идёт фоном, по готовности — уведомление.</div><div class="mg"><span><a href="#">PAY-12</a><span class="s">в работе</span></span></div></div>
+<div class="row req"><a class="rid" href="#">NFR-3</a><div class="rd">Выгружать могут только роли «Бухгалтер» и «Админ».</div><div class="mg"><span><a href="#">PAY-22</a><span class="s">спринт 3</span></span></div></div>
+</div>
+</section>
+
+<section class="sec" id="s6">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Вне рамок</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul><li>Выгрузка в XLSX и загрузка в 1С через API: отдаём только файл.</li><li>Правка счетов из выгрузки.</li></ul></div><span class="sp"></span></div>
+</section>
+
+<section class="sec" id="s7">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Как поймём, что готово</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul><li>Бухгалтерия закрыла октябрь выгрузкой, без ручного переноса.</li><li>Файл за октябрь открылся в 1С и в Excel без правок.</li></ul></div><span class="sp"></span></div>
+</section>
+
+<section class="sec" id="s8">
+<div class="row"><span class="sp"></span><div class="sh"><h2>Открытые вопросы</h2><button class="btn ghost small ed" type="button">Править</button></div><span class="sp"></span></div>
+<div class="row"><span class="sp"></span><div class="rd"><ul class="qs"><li>Кому уходит письмо с выгрузкой по расписанию: один адрес или список?</li><li>Сколько хранить журнал выгрузок: 12 месяцев или дольше?</li></ul></div><span class="sp"></span></div>
+</section>
+</article>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

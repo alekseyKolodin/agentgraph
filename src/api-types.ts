@@ -1489,3 +1489,244 @@ export type RunAnalysis = {
   facts: AnalysisFacts;
   error?: string;
 };
+
+// ---------- Teamwork: команда, её проекты, задачи и спринты в общем git-репо (docs/teamwork/spec.md, src/teamwork*.ts)
+// Контракт между сервером и UI. Файлы в репо команды — markdown и YAML (spec §5); здесь то, что отдаёт API.
+
+export type TeamTaskStatus = 'todo' | 'in_progress' | 'review' | 'done';
+export type TeamTaskType = 'feature' | 'bug' | 'chore';
+export type TeamSprintStatus = 'planned' | 'active' | 'closed';
+export type TeamProjectStatus = 'active' | 'archived';
+/** Документ проекта: три основных и любой файл в docs/ проекта (`docs/<имя>`). */
+export type TeamDocName = 'prd' | 'architecture' | 'design' | `docs/${string}`;
+
+/** Участник из teamwork.yaml. Узнаём «себя» по email из git config. */
+export type TeamMember = { name: string; email: string; github?: string; gitlab?: string };
+
+/** Названия колонок доски из teamwork.yaml; набор статусов фиксирован. */
+export type TeamColumns = Record<TeamTaskStatus, string>;
+
+/**
+ * Синхронизация клона с репо команды (spec §7). ok — всё отправлено; pushing — идёт отправка или получение;
+ * pending — есть неотправленные коммиты (почему — в error); conflict — есть нерешённые конфликты; readonly — формат новее.
+ */
+export type TeamSync = {
+  state: 'ok' | 'pushing' | 'pending' | 'conflict' | 'readonly';
+  /** Локальные коммиты, которых нет в репо команды. */
+  unpushed: number;
+  conflicts: number;
+  lastFetchAt?: string;
+  lastPushAt?: string;
+  error?: string;
+};
+
+/** Я по git config клона: inTeam — есть ли email среди участников. Без user.email — пусто. */
+export type TeamMe = { name?: string; email?: string; inTeam: boolean };
+
+/** Проект в списке команды: активный спринт кратко и размер бэклога. */
+export type TeamProjectBrief = {
+  slug: string;
+  title: string;
+  summary: string;
+  status: TeamProjectStatus;
+  sprint?: { number: number; title: string; done: number; total: number; counts: Record<TeamTaskStatus, number> };
+  backlog: number;
+};
+
+/** Элемент GET /api/teams. */
+export type TeamSummary = {
+  slug: string;
+  title: string;
+  prefix: string;
+  remote: string;
+  members: number;
+  projects: TeamProjectBrief[];
+  sync: TeamSync;
+};
+
+/** GET /api/teams/:t. */
+export type TeamDetail = TeamSummary & {
+  format: number;
+  columns: TeamColumns;
+  memberList: TeamMember[];
+  defaultFlow?: string;
+  me: TeamMe;
+  /** Имена flow команды из flows/ репо команды. */
+  flows: string[];
+  /** Папка клона на этом компьютере. */
+  dir: string;
+};
+
+/** Ответ проверки ссылки перед созданием или подключением (POST /api/teams/check). */
+export type TeamRemoteCheck =
+  | { kind: 'empty'; writable?: boolean }
+  | { kind: 'team'; title: string; prefix: string; format: number; members: TeamMember[]; projects: { slug: string; title: string; repos: string[] }[] }
+  | { kind: 'not_empty' }
+  | { kind: 'error'; error: string };
+
+/** Репо кода проекта и где оно лежит у меня (local.json → repoPaths, иначе найдено среди проектов дашборда по origin). */
+export type TeamRepoRef = { key: string; url: string; defaultBranch?: string; local?: string };
+
+export type TeamDocBrief = { name: TeamDocName; title: string; size: number; updatedAt?: string; updatedBy?: string };
+
+/** GET /api/teams/:t/projects/:p. */
+export type TeamProject = {
+  slug: string;
+  title: string;
+  summary: string;
+  status: TeamProjectStatus;
+  repos: TeamRepoRef[];
+  createdAt?: string;
+  createdBy?: string;
+  /** Привязанное у меня пространство (local.json → projectSpaces). */
+  space?: string;
+  /** Папка проекта в клоне: агенты читают её как дополнительную папку. */
+  dir: string;
+  docs: TeamDocBrief[];
+  sprints: TeamSprint[];
+};
+
+/** Раздел документа по заголовку `## `: hash — для сохранения раздела с проверкой параллельной правки. */
+export type TeamDocSection = { heading: string; hash: string };
+
+/** GET /api/teams/:t/projects/:p/docs/:name. base — хэш всего файла. */
+export type TeamDoc = {
+  name: TeamDocName;
+  text: string;
+  base: string;
+  sections: TeamDocSection[];
+  updatedAt?: string;
+  updatedBy?: string;
+};
+
+/** Требование ТЗ: FR-N или NFR-N, номер никогда не переиспользуется (spec §8.4). */
+export type TeamRequirement = { id: string; text: string; section: string };
+
+export type TeamPr = { url: string; state: 'open' | 'merged' | 'closed' };
+
+/** Запуск или сессия по задаче на этом компьютере (local.json → work). */
+export type TeamTaskWork = { kind: 'run' | 'session'; id: string; at: string; status?: string; title?: string };
+
+/** Задача из tasks/<ID>.md. error — файл не разобрался: карточка «не читается». */
+export type TeamTask = {
+  id: string;
+  title: string;
+  type: TeamTaskType;
+  status: TeamTaskStatus;
+  /** Нет — задача в бэклоге. */
+  sprint?: number;
+  rank: string;
+  assignee?: string;
+  estimate?: number;
+  repo?: string;
+  branch?: string;
+  pr?: TeamPr;
+  blockedBy: string[];
+  /** Требования ТЗ, которые закрывает задача. */
+  covers: string[];
+  createdAt?: string;
+  createdBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  /** Markdown под frontmatter: описание, критерии приёмки. */
+  body: string;
+  /** Критерии приёмки: выполнено и всего (чек-лист в разделе «Критерии приёмки»). */
+  acceptance: { done: number; total: number };
+  comments: number;
+  /** Хэш файла: PATCH с ним отвечает 409, если задачу успели поменять. */
+  base: string;
+  file: string;
+  error?: string;
+  work?: TeamTaskWork[];
+};
+
+/** PATCH задачи: только изменённые поля; null снимает необязательное поле. */
+export type TeamTaskPatch = {
+  base?: string;
+  title?: string;
+  type?: TeamTaskType;
+  status?: TeamTaskStatus;
+  sprint?: number | null;
+  assignee?: string | null;
+  estimate?: number | null;
+  repo?: string | null;
+  branch?: string | null;
+  blockedBy?: string[];
+  covers?: string[];
+  body?: string;
+};
+
+/** POST …/tasks/:id/move: статус, спринт и место между соседями одной операцией. */
+export type TeamTaskMove = { status?: TeamTaskStatus; sprint?: number | null; before?: string; after?: string };
+
+export type TeamComment = { id: string; author: string; at: string; text: string; mine: boolean };
+
+export type TeamSprint = {
+  number: number;
+  title: string;
+  goal?: string;
+  status: TeamSprintStatus;
+  startedAt?: string;
+  startedBy?: string;
+  closedAt?: string;
+  closedBy?: string;
+  result?: { done: string[]; carried: string[]; returned: string[] };
+};
+
+/** Нерешённый конфликт синхронизации (spec §7.4): моё значение не вошло, в репо — значение команды. */
+export type TeamConflict = {
+  id: string;
+  file: string;
+  project?: string;
+  task?: string;
+  doc?: TeamDocName;
+  kind: 'field' | 'text' | 'deleted' | 'sprint';
+  field?: string;
+  ours: unknown;
+  theirs: unknown;
+  theirsBy?: string;
+  at: string;
+};
+
+/** Строка истории документа или ленты проекта (git log). */
+export type TeamHistoryItem = { hash: string; author: string; email: string; at: string; message: string };
+
+/** Задача из tasks.json черновика разбивки (spec §9.1): key — ключ внутри предложения. */
+export type TeamProposedTask = {
+  key: string;
+  title: string;
+  type: TeamTaskType;
+  description: string;
+  acceptance: string[];
+  estimate?: number;
+  repo?: string;
+  /** Ключи других предложенных задач или номера существующих задач проекта. */
+  dependsOn: string[];
+  covers: string[];
+};
+
+/** Разбор зависимостей предложения: ошибки по задачам, волны и самая длинная цепочка по очкам. */
+export type TeamDependencyReport = {
+  errors: { key: string; error: string }[];
+  /** Цикл целиком, если он есть: ["3", "5", "3"]. */
+  cycle?: string[];
+  /** Волна каждой задачи с 1; существующие незавершённые задачи, от которых зависит предложение, — в волне 1. */
+  waves: Record<string, number>;
+  chain: { keys: string[]; points: number };
+};
+
+export type TeamDraftKind = 'prd' | 'architecture' | 'split';
+
+/** Причина правки черновика документа из notes.json. */
+export type TeamDraftNote = { at: string; why: string };
+
+/** Черновик агента по проекту: обычный локальный запуск flow команды. */
+export type TeamDraft = {
+  run: string;
+  kind: TeamDraftKind;
+  status: string;
+  startedAt: string;
+  /** Раздел, если правка «С агентом» шла только по нему. */
+  section?: string;
+  brief?: string;
+};

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · состояния синхронизации</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}.dot.off{background:transparent;box-shadow:inset 0 0 0 1px var(--ink-3)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:3px 9px;font-size:12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%)}
+.btn:active{transform:scale(.97)}
+.row{display:grid;grid-template-columns:150px minmax(0,1fr);align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
+.row:first-of-type{border-top:1px solid var(--line)}
+.lbl{font-size:12px;font-weight:500;color:var(--ink-3)}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2);flex-wrap:wrap}
+.sync.wait{color:var(--st-wait)}
+.sync.off{color:var(--ink-3)}
+</style>
+</helmet>
+<div style="width: 760px; height: 440px; box-sizing: border-box; padding: 26px 30px; background: var(--deck); display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 style="margin: 0; font-size: 18px; font-weight: 600">Строка синхронизации</h1>
+<p style="margin: 0; font-size: 13px; color: var(--ink-2)">В шапке команды и проекта. Клик по строке синхронизирует сейчас.</p>
+</div>
+<div>
+<div class="row"><span class="lbl">Всё отправлено</span><span class="sync"><span class="dot ok"></span>синхронизировано · 12 с назад</span></div>
+<div class="row"><span class="lbl">Отправка</span><span class="sync"><span class="dot"></span>отправляется · 2 изменения</span></div>
+<div class="row"><span class="lbl">Нет сети или доступа</span><span class="sync wait"><span class="dot wait"></span>не отправлено: 3 изменения — нет доступа к репо<button class="btn" type="button">Повторить</button></span></div>
+<div class="row"><span class="lbl">Конфликт</span><span class="sync wait"><span class="dot wait"></span>конфликт в PAY-12<button class="btn" type="button">Разобрать</button></span></div>
+<div class="row"><span class="lbl">Формат новее</span><span class="sync off"><span class="dot off"></span>только чтение: формат 2 новее этой версии agentgraph<a href="#" style="font-family: var(--font-sans)">Обновить agentgraph</a></span></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":760,"height":440}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

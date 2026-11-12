@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · подключиться по ссылке</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--scrim:rgba(0,0,0,.55);--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 8px 28px rgba(0,0,0,.45);--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck);position:relative}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 40px}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2);max-width:640px}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3);margin:0 0 8px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+.bg-row{height:76px;border-bottom:1px solid var(--line)}
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+.dlg{position:absolute;top:72px;left:50%;transform:translateX(-50%);width:min(580px,calc(100% - 32px));background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-pop);padding:20px 22px;display:flex;flex-direction:column;gap:16px}
+.dlg h2{margin:0;font-size:18px;font-weight:600}
+.dlg p{margin:0;color:var(--ink-2)}
+.f{display:flex;flex-direction:column;gap:5px}
+.f label{font-size:12px;font-weight:500;color:var(--ink-3)}
+.f input{background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:6px 10px;color:var(--ink);width:100%;font-family:var(--font-mono);font-size:13px}
+.found{background:var(--well);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.found-h{display:flex;align-items:center;gap:8px}
+.found-h b{font-weight:600}
+.found-h .ok{color:var(--st-ok);font-family:var(--font-mono)}
+.mem{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.mem span{display:inline-flex;align-items:center;gap:6px}
+.chk{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.chk input{margin:3px 0 0;accent-color:var(--ink-2);width:14px;height:14px;flex:none}
+.chk b{font-weight:500}
+.chk small{display:block;font-size:12px;color:var(--ink-2)}
+.repos{border-top:1px solid var(--line)}
+.repo{display:grid;grid-template-columns:8px 150px minmax(0,1fr);align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.repo b{font-family:var(--font-mono);font-size:13px;font-weight:500}
+.repo .p{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);overflow-wrap:anywhere}
+.repo .miss{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--st-wait)}
+.later{font-size:12px;color:var(--ink-3);margin:6px 0 0}
+.foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.foot .grow{flex:1}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.dlg{top:16px;padding:16px}.repo{grid-template-columns:8px minmax(0,1fr)}.repo .p,.repo .miss{grid-column:2}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#">Главная</a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+</aside>
+<main class="main" id="main" aria-hidden="true">
+<h1>Teamwork</h1>
+<p class="sub">Команда ведёт проекты в общем git-репо: ТЗ, архитектура, задачи и спринты.</p>
+<div style="margin-top: 22px; border-top: 1px solid var(--line); max-width: 760px"><div class="bg-row"></div></div>
+</main>
+<div class="scrim" aria-hidden="true"></div>
+
+<section class="dlg" role="dialog" aria-modal="true" aria-labelledby="jt">
+<h2 id="jt">Подключиться к команде</h2>
+<p>Вставьте ссылку на репо команды. agentgraph склонирует его к себе и покажет проекты.</p>
+<div class="f">
+<label for="ju">Ссылка на репо команды</label>
+<input id="ju" value="git@github.com:acme/payments-team.git">
+</div>
+
+<div class="found" aria-live="polite">
+<div class="found-h"><span class="ok">✓</span><b>Платёжная команда</b><span class="meta">PAY · формат 1 · 2 проекта</span></div>
+<div class="mem"><span><span class="who">МС</span>Мария</span><span><span class="who">ИВ</span>Иван</span><span><span class="who">ОП</span>Ольга</span></div>
+</div>
+
+<label class="chk"><input type="checkbox" checked><span><b>Добавить меня в участники</b><small>Алексей · alex@example.com — из git config, отдельным коммитом</small></span></label>
+
+<div>
+<h3 class="cap">Репо кода проектов на этом компьютере</h3>
+<div class="repos">
+<div class="repo"><span class="dot ok s6"></span><b>billing</b><span class="p">~/code/billing</span></div>
+<div class="repo"><span class="dot wait s6"></span><b>billing-1c-adapter</b><span class="miss">не найден<button class="btn small" type="button">Указать папку</button><button class="btn ghost small" type="button">Клонировать</button></span></div>
+<div class="repo"><span class="dot ok s6"></span><b>bank-sync</b><span class="p">~/work/bank-sync</span></div>
+</div>
+<p class="later">Можно и позже: на обзоре проекта. Без папки задачи этого репо нельзя отправить агенту.</p>
+</div>
+
+<div class="foot"><span class="meta">клон: ~/.agentgraph/teams/payments-team</span><span class="grow"></span><button class="btn ghost" type="button">Отмена</button><button class="btn primary" type="button">Подключиться</button></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
