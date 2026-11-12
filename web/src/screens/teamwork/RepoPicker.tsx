@@ -11,7 +11,7 @@ import { PickDirButton } from '../../components/PickDirButton';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
-import { cloneCommand, draftFromInfo, draftState, typedDraft, type DraftState, type RepoDraft } from '../../lib/teamwork/repos';
+import { cloneCommand, draftFromInfo, draftState, typedDraft, withUrl, type DraftState, type RepoDraft } from '../../lib/teamwork/repos';
 import { useIntegrations } from '../home/Dash';
 import { cx } from './parts';
 import styles from './Teamwork.module.css';
@@ -76,7 +76,7 @@ export function RepoChooser({ team, taken, onAdd, onClose }: { team: string; tak
                 >
                   <b>{p.name}</b>
                   <span className={styles.meta}>{tildePath(p.path, home)}</span>
-                  <span className={cx(styles.origin, !p.remote && styles.none)}>
+                  <span className={cx(styles.origin, !p.remote && !isTaken && styles.none)}>
                     {isTaken ? t('уже в проекте') : busy === p.path ? t('читаю git…') : p.remote ? `${p.remote.host}/${p.remote.path}` : t('нет origin')}
                   </span>
                 </button>
@@ -127,13 +127,14 @@ const HINT: Partial<Record<DraftState, () => string>> = {
 };
 
 /** Строка репо: ключ (правится) и ссылка с веткой и моей папкой; у ручной строки ссылка — поле. */
-export function RepoDraftRow({ draft, all, existing, onChange, onRemove }: {
+export function RepoDraftRow({ draft, all, existing = [], onChange, onRemove }: {
   draft: RepoDraft;
   all: readonly RepoDraft[];
   existing?: readonly { key: string; url: string }[];
   onChange: (patch: Partial<RepoDraft>) => void;
   onRemove: () => void;
 }) {
+  const takenKeys = [...existing.map((x) => x.key), ...all.filter((x) => x.id !== draft.id).map((x) => x.key.trim())].filter(Boolean);
   const home = useConfig().data?.home;
   const state = draftState(draft, all, existing);
   // подсказку «нужна ссылка» не показываем у только что открытой пустой ручной строки
@@ -144,7 +145,7 @@ export function RepoDraftRow({ draft, all, existing, onChange, onRemove }: {
       <input className={styles.mono} value={draft.key} placeholder={t('ключ: billing')} spellCheck={false} autoComplete="off" aria-label={t('Ключ репо')} aria-invalid={badKey || undefined} title={t('Короткое имя репо в задачах и у агента')} onChange={(e) => onChange({ key: e.target.value })} />
       <div className={styles.repoCell}>
         {draft.typed ? (
-          <input className={styles.mono} value={draft.url} autoFocus={!draft.url} placeholder="git@github.com:acme/billing.git" spellCheck={false} autoComplete="off" aria-label={t('Ссылка на репо кода')} onChange={(e) => onChange({ url: e.target.value })} />
+          <input className={styles.mono} value={draft.url} autoFocus={!draft.url} placeholder="git@github.com:acme/billing.git" spellCheck={false} autoComplete="off" aria-label={t('Ссылка на репо кода')} onChange={(e) => onChange(withUrl(draft, e.target.value, takenKeys))} />
         ) : (
           <span className={styles.u} title={t('Ссылка — origin этой папки')}>{draft.url}</span>
         )}

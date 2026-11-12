@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cloneCommand, draftFromInfo, draftState, freeKey, reposBody, typedDraft, type RepoDraft } from './repos';
+import { cloneCommand, draftFromInfo, draftState, freeKey, keyFromUrl, keyOf, reposBody, typedDraft, withUrl, type RepoDraft } from './repos';
 
 test('репо из папки: с origin — готовая строка со ссылкой, веткой и папкой; без origin — ручная строка с папкой', () => {
   const d = draftFromInfo({ path: '/u/code/billing', key: 'billing', url: 'git@github.com:acme/billing.git', defaultBranch: 'main' }, []);
@@ -40,4 +40,20 @@ test('строки формы: пустая ручная пропускаетс�
 test('подсказка клонирования: обычная ссылка как есть, с пробелом — в кавычках', () => {
   assert.equal(cloneCommand('git@github.com:acme/billing.git'), 'git clone git@github.com:acme/billing.git');
   assert.equal(cloneCommand('/Volumes/My Drive/repo.git'), "git clone '/Volumes/My Drive/repo.git'");
+});
+
+test('ключ по ссылке: последний сегмент без .git; следует за ссылкой, пока его не правили руками', () => {
+  assert.equal(keyFromUrl('git@github.com:acme/billing.git'), 'billing');
+  assert.equal(keyFromUrl('https://gitlab.example/group/Sub Group/My.Repo.git/'), 'my-repo');
+  assert.equal(keyFromUrl(''), '');
+  assert.equal(keyOf('---'), '');
+  let d = withUrl(typedDraft(), 'git@github.com:acme/adapter', ['ledger']);
+  assert.equal(d.key, 'adapter');
+  d = withUrl(d, 'git@github.com:acme/adapter.git', []);
+  assert.equal(d.key, 'adapter');
+  d = withUrl(d, 'git@github.com:acme/ledger.git', ['ledger']);
+  assert.equal(d.key, 'ledger-2');
+  // правленый руками ключ ссылка не трогает
+  d = withUrl({ ...d, key: 'mine' }, 'git@github.com:acme/other.git', []);
+  assert.equal(d.key, 'mine');
 });

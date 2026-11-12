@@ -16,6 +16,8 @@ export type RepoDraft = {
   local?: string;
   /** Ссылка вводится руками («Ввести ссылку»), а не взята из origin папки. */
   typed: boolean;
+  /** Ключ, выведенный из ссылки (withUrl): пока ключ равен ему, он следует за ссылкой. */
+  autoKey?: string;
 };
 
 /** Репо в теле create/update проекта. */
@@ -26,6 +28,29 @@ export type DraftState = 'ready' | 'empty' | 'no_url' | 'no_key' | 'bad_key' | '
 
 let seq = 0;
 const nextId = () => ++seq;
+
+/** Ключ из имени папки или репо, как repoKeyFrom на сервере: латиница в нижнем регистре, цифры, дефис, подчёркивание; пусто — ''. */
+export function keyOf(name: string): string {
+  const k = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 41).replace(/[-_]+$/, '');
+  return REPO_KEY_RE.test(k) ? k : '';
+}
+
+/** Ключ по ссылке: последний сегмент пути без .git (git@github.com:acme/billing.git → billing). */
+export function keyFromUrl(url: string): string {
+  const tail = url.trim().replace(/[/\\]+$/, '').split(/[/:\\]/).pop() ?? '';
+  return keyOf(tail.replace(/\.git$/i, ''));
+}
+
+/**
+ * Правка ссылки ручной строки: ключ следует за ссылкой, пока его не трогали (пустой или выведенный из прежней ссылки).
+ */
+export function withUrl(d: RepoDraft, url: string, takenKeys: Iterable<string>): RepoDraft {
+  const auto = !d.key.trim() || d.key === keyFromUrl(d.url) || d.key === d.autoKey;
+  if (!auto) return { ...d, url };
+  const derived = keyFromUrl(url);
+  const key = derived ? freeKey(derived, takenKeys) : '';
+  return { ...d, url, key, autoKey: key };
+}
 
 /** Ключ, которого ещё нет: billing → billing-2 → billing-3. */
 export function freeKey(key: string, taken: Iterable<string>): string {
