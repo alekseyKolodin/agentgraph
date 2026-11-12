@@ -14,6 +14,7 @@ import type { SessionPermissionMode, SessionStatus, Space, Tag } from './api-typ
 import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
 import { existingSpacePaths, META_FILE, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
+import { teamsDir } from './teamwork.js';
 
 /** Имя MCP-сервера в конфиге claude: не knowledge, чтобы не столкнуться с сервером пользователя. */
 export const SESSION_MCP_SERVER = 'agentgraph';
@@ -193,7 +194,8 @@ export function mapLoadedAt(spaceDir: string, cwd: string): boolean {
 /**
  * --add-dir и запрет записи. --add-dir открывает и запись, поэтому всё, что он открыл, вся папка тегов
  * (~/.agentgraph/tags), вся папка пространств (~/.agentgraph/spaces: карты, состояния, документы — документ пишется только
- * инструментом space_write с подтверждением) и артефакты прошлых запусков закрыты правилом Edit (оно же запрещает Write).
+ * инструментом space_write с подтверждением), вся папка команд Teamwork (~/.agentgraph/teams: клоны репо команд) и
+ * артефакты прошлых запусков закрыты правилом Edit (оно же запрещает Write).
  * Пути внутри cwd или содержащие его не трогаем: это сам проект, запрет закрыл бы его; папки тегов, пространств и
  * артефакты закрываем и внутри проекта — не закрываем, только если в них лежит сам cwd. Сессия, открытая в папке
  * пространства, правит его карту и документы как обычный проект, но space.json (его пути станут --add-dir других сессий)
@@ -208,7 +210,8 @@ export function launchDirs(
 ): { addDirs: string[]; denyDirs: string[]; denyFiles: string[]; askDirs: string[] } {
   const add = readDirs.filter((d) => !isInside(cwd, d) && !isInside(d, cwd) && plainPath(d));
   const spaces = spacesDir();
-  const guard = [tagsDir(), spaces, ...protectedDirs].filter((d) => !isInside(cwd, d) && plainPath(d));
+  // папка команд Teamwork (клоны репо команд) закрыта так же, как теги и пространства: данные команды меняет только API
+  const guard = [tagsDir(), spaces, teamsDir(), ...protectedDirs].filter((d) => !isInside(cwd, d) && plainPath(d));
   let denyFiles: string[] = [];
   let askDirs: string[] = [];
   const inSpace: string[] = [];

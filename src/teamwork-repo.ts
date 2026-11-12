@@ -69,6 +69,8 @@ export const defaultRepoDeps = (): RepoDeps => ({
 });
 
 export type ChangeEvent = { team: string; projects: string[] };
+/** Сообщение коммита: тема или тема с телом. */
+export type CommitMessage = string | { subject: string; body?: string };
 
 export const LOCAL_FILE = 'local.json';
 export const REPO_DIR = 'repo';
@@ -290,10 +292,11 @@ export class TeamRepo {
 
   /**
    * Одна запись API — один коммит: правки руками коммитятся отдельно до неё, mutate меняет файлы клона, итог коммитится с
-   * message (автор — git config, или author). Бросила mutate — рабочая копия возвращается к HEAD, коммита нет.
-   * После коммита — событие team и отправка через pushDelayMs.
+   * message (строка или функция, которую зовут после mutate: номера задач известны только тогда; автор — git config, или
+   * author). Бросила mutate — рабочая копия возвращается к HEAD, коммита нет. После коммита — событие team и отправка
+   * через pushDelayMs.
    */
-  write(message: string, mutate: (repo: TeamRepo) => void | Promise<void>, o: { author?: { name: string; email: string } } = {}): Promise<void> {
+  write(message: CommitMessage | (() => CommitMessage), mutate: (repo: TeamRepo) => void | Promise<void>, o: { author?: { name: string; email: string } } = {}): Promise<void> {
     return this.enqueue(async () => {
       if (this.readonly()) throw new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его, пока команда только для чтения', 'readonly');
       await this.commitManual();
@@ -308,7 +311,9 @@ export class TeamRepo {
       const files = (await this.git(['diff', '--cached', '--name-only'])).split('\n').filter(Boolean);
       if (!files.length) return;
       const author = o.author ? ['--author', `${o.author.name} <${o.author.email}>`] : [];
-      await this.git(['commit', '-q', '--no-verify', ...author, '-m', message]);
+      const msg = typeof message === 'function' ? message() : message;
+      const { subject, body } = typeof msg === 'string' ? { subject: msg, body: undefined } : msg;
+      await this.git(['commit', '-q', '--no-verify', ...author, '-m', subject, ...(body ? ['-m', body] : [])]);
       this.emit(files);
       this.schedulePush();
     });

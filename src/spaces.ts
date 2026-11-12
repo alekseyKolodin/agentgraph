@@ -19,6 +19,7 @@ import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
 import { canonical, isInside, toolPath, WRITE_TOOLS, type PathProbe } from './artifacts.js';
 import { ATTACHMENT_EXTS, ATTACHMENTS_TOTAL_MAX, dedupeNames, safeAttachmentName, validateAttachments } from './attachments.js';
 import { defuseMarkers, foreignFolder, readTag, stripTagBlock, summaryPreview, tagsDir, TAG_SLUG_RE } from './tags.js';
+import { teamsDir } from './teamwork.js';
 import { readHead, readRegular, tooBroadPath, writeAtomic } from './safe-fs.js';
 import type { ApiReply } from './artifact-api.js';
 
@@ -784,12 +785,13 @@ export type ProtectedRoot = { dir: string; why: string; reason: DenialReason; fo
 const SPACES_READONLY = `Папка пространств только для чтения: карту (${MAP_FILE}), состояние (${STATE_FILE}) и документы правит пользователь, а состояние после запуска запишет agentgraph. Результат работы пиши в проект или в артефакты запуска.`;
 const TAGS_READONLY = 'Папка тегов знаний только для чтения: теги правит пользователь на странице «Знания». Результат работы пиши в проект или в артефакты запуска.';
 const RUNS_READONLY = 'Папка запусков agentgraph только для чтения: артефакты прошлых запусков читаются, но не пишутся. Результат работы пиши в проект.';
+const TEAMS_READONLY = 'Папка команд Teamwork только для чтения: документы, задачи и спринты команды меняются через её экран, а правки агентов — через принятие черновика. Результат работы пиши в проект или в артефакты запуска.';
 const spaceDirReadonly = (d: string) => `${d} — папка пространства только для чтения (так обещает контекст): её содержимое правит пользователь. Результат работы пиши в проект или в артефакты запуска.`;
 
 /**
  * Что этап запуска не пишет (Edit, Write, MultiEdit, NotebookEdit): папки, откуда Claude Code и agentgraph берут
- * инструкции и контекст следующих сессий и этапов. Папка пространств (карта — память всех следующих сессий) и папка
- * тегов знаний — всегда; папка запусков — у flow без артефактов (там артефакты прошлых запусков: они уходят доп.
+ * инструкции и контекст следующих сессий и этапов. Папка пространств (карта — память всех следующих сессий), папка
+ * тегов знаний и папка команд Teamwork — всегда; папка запусков — у flow без артефактов (там артефакты прошлых запусков: они уходят доп.
  * директориями пространства, и их CLAUDE.md грузится памятью; у flow с артефактами папку запусков сторожит guard
  * артефактов, он же пускает этап в свои артефакты); папки чтения пространства вне проекта — контекст обещает «только
  * чтение». Папка внутри проекта или содержащая его — сам проект: его этап правит.
@@ -801,6 +803,8 @@ export function phaseProtectedRoots(o: { runsDir: string; artifacts: boolean; sp
   const roots: ProtectedRoot[] = [
     { dir: spacesDir(), why: SPACES_READONLY, reason: 'space-readonly', fold: true },
     { dir: tagsDir(), why: TAGS_READONLY, reason: 'knowledge-readonly', fold: true },
+    // клоны репо команд (spec §14): агент меняет данные команды только через API после подтверждения человека
+    { dir: teamsDir(), why: TEAMS_READONLY, reason: 'team-readonly', fold: true },
   ];
   const cwd = canonical(o.cwd, '/', probe);
   // проект внутри папки запусков (тесты, странная раскладка): закрыть её — закрыть сам проект

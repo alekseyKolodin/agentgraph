@@ -193,6 +193,9 @@ export type HomeEvent<T extends string = string> = {
   parent?: RunParent;
   /** Только у session: сессия терминала закончила ход и ждёт тебя; runId и flow у него пустые. */
   session?: HomeSessionWait;
+  /** Только у team: в клоне команды что-то поменялось (запись или pull); runId и flow пустые. UI сбрасывает кэш команды и перечисленных проектов (пусто — менялся корень репо). */
+  team?: string;
+  projects?: string[];
 };
 
 /** Сессия терминала в событии session общего потока: её экран, имя и пространство для уведомления. */
@@ -767,7 +770,7 @@ export type ArtifactMeta = {
  * space-readonly — запись этапа в папку пространств или в папку чтения пространства вне проекта, knowledge-readonly — в папку
  * тегов знаний, runs-dir — в папку запусков (guard папок данных, spaces.ts; у flow с артефактами — и guard артефактов).
  */
-export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation' | 'space-readonly' | 'knowledge-readonly';
+export type DenialReason = 'artifact-readonly' | 'not-artifact' | 'outside-artifacts' | 'runs-dir' | 'isolation' | 'space-readonly' | 'knowledge-readonly' | 'team-readonly';
 export type Denial = { tool: string; reason: DenialReason; count: number };
 
 /** report.artifacts: артефакты запуска, откуда взяты при продолжении, предупреждения уровня запуска. */
@@ -1589,7 +1592,10 @@ export type TeamProject = {
 /** Раздел документа по заголовку `## `: hash — для сохранения раздела с проверкой параллельной правки. */
 export type TeamDocSection = { heading: string; hash: string };
 
-/** GET /api/teams/:t/projects/:p/docs/:name. base — хэш всего файла. */
+/**
+ * GET /api/teams/:t/projects/:p/docs/:name. base — хэш всего файла. PUT принимает { text, base } для всего документа или
+ * { text, section, hash } для одного раздела (text — раздел целиком, со строкой «## »; 409 conflict только если менялся он).
+ */
 export type TeamDoc = {
   name: TeamDocName;
   text: string;
@@ -1597,6 +1603,10 @@ export type TeamDoc = {
   sections: TeamDocSection[];
   updatedAt?: string;
   updatedBy?: string;
+  /** Требования FR/NFR документа по строкам «- FR-3. …». */
+  requirements?: TeamRequirement[];
+  /** Следующие свободные номера: больше всех в тексте и выданных раньше (project.yaml → lastRequirement). */
+  nextRequirement?: { FR: string; NFR: string };
 };
 
 /** Требование ТЗ: FR-N или NFR-N, номер никогда не переиспользуется (spec §8.4). */
@@ -1656,7 +1666,10 @@ export type TeamTaskPatch = {
   body?: string;
 };
 
-/** POST …/tasks/:id/move: статус, спринт и место между соседями одной операцией. */
+/**
+ * POST …/tasks/:id/move: статус, спринт и место между соседями одной операцией. after — номер задачи, после которой
+ * встать (новый предшественник), before — перед которой (новый последователь); rank берётся строго между их rank.
+ */
 export type TeamTaskMove = { status?: TeamTaskStatus; sprint?: number | null; before?: string; after?: string };
 
 export type TeamComment = { id: string; author: string; at: string; text: string; mine: boolean };
