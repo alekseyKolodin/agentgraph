@@ -330,7 +330,7 @@ export function layoutGraph(tasks: readonly TeamProposedTask[], existing: readon
   const edges: GraphEdge[] = links.map((l) => ({ from: l.from, to: l.to, existing: info.get(l.from)!.existing, path: edgePath(pos.get(l.from)!, pos.get(l.to)!, o) }));
   const columns: GraphColumn[] = ordered.map((_, ci) => {
     const wave = ci < n ? ci + 1 : undefined;
-    const col: GraphColumn = { col: ci, wave, x: o.left + ci * (o.nodeW + o.colGap), label: wave === undefined ? t('Цикл') : t('Волна {n}', { n: wave }) };
+    const col: GraphColumn = { col: ci, wave, x: o.left + ci * (o.nodeW + o.colGap), label: wave === undefined ? t('Цикл', undefined, 'deps') : t('Волна {n}', { n: wave }) };
     if (wave === 1) col.note = t('сейчас');
     return col;
   });
