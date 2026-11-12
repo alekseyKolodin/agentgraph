@@ -13,7 +13,8 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, SpaceSession,
+  RunTeamworkLink, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, SpaceSession,
+  TeamTask, TeamTaskWork,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { nothingToName, pickSessionTitle } from './session-title.js';
@@ -29,10 +30,13 @@ import { dedupeNames, validateAttachments } from './attachments.js';
 import { configDir } from './settings.js';
 import {
   findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
-  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_WRITE_FULL, TRUST_PROMPT_RE,
-  type Delivered, type HookState, type SessionCtx,
+  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL,
+  TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState, type SessionCtx,
 } from './sessions.js';
-import { mcpReply, parseSessionNewArgs, type McpReply, type SessionNewArgs } from './sessions-mcp.js';
+import { mcpReply, parseSessionNewArgs, parseTeamTaskArgs, type McpReply, type SessionNewArgs, type TeamTaskUpdateArgs } from './sessions-mcp.js';
+import { parseTeamworkLink } from './teamwork-status.js';
+
+export type { TeamTaskUpdateArgs } from './sessions-mcp.js';
 import type { DraftSession } from './space-draft.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
@@ -80,6 +84,24 @@ export type SessionRecord = {
   stateUpdate?: SessionStateUpdate;
   /** Состояние при выходе не записано: приложение закрыли (Cmd+Q) или сервер остановился, пока сессия шла. */
   statePending?: 'app-closed';
+  /** Сессия открыта из задачи Teamwork (spec §8.9): инструменты задачи в MCP, старт и конец — в статусы задачи. */
+  teamwork?: RunTeamworkLink;
+};
+
+/**
+ * Teamwork для сессий (teamwork-work.ts → sessionTeamwork): проверка связи до старта, старт и конец сессии для автоматики
+ * статусов, инструменты team_task_update и team_doc_write. Ставит server.ts (setSessionTeamwork); без него связь
+ * с задачей — 501.
+ */
+export type SessionTeamwork = {
+  /** Задача по связи; нет команды, проекта или задачи — TeamError с кодом. */
+  check: (link: RunTeamworkLink) => TeamTask | undefined;
+  started: (link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'>) => Promise<void>;
+  ended: (link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'>) => Promise<void>;
+  /** Подпись задачи для вопроса PreToolUse: «PAY-12 «…» (team/project)». */
+  label: (link: RunTeamworkLink) => string;
+  updateTask: (link: RunTeamworkLink, args: TeamTaskUpdateArgs) => Promise<string>;
+  writeDoc: (link: RunTeamworkLink, name: string, text: string) => Promise<string>;
 };
 
 /**
@@ -361,6 +383,7 @@ export class SessionManager {
       ...(r.statePending ? { statePending: r.statePending } : {}),
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
       ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
+      ...(r.teamwork ? { teamwork: r.teamwork } : {}),
     };
   }
 
@@ -402,6 +425,7 @@ export class SessionManager {
     let space: string | undefined;
     let flags: ReturnType<typeof sessionFlags>;
     let prompt: string | undefined;
+    let teamwork: RunTeamworkLink | undefined;
     try {
       if (body.saveTag !== undefined) throw new Error('Теги задач заменены пространствами: space и saveState вместо тега задачи и saveTag');
       // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
@@ -411,8 +435,19 @@ export class SessionManager {
       flags = sessionFlags(body);
       prompt = sessionPrompt(body.prompt);
       if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
+      teamwork = parseTeamworkLink(body.teamwork);
     } catch (err) {
       throw new SessionError(400, errMsg(err));
+    }
+    // связь с задачей Teamwork: команда, проект и задача должны быть — до запуска claude (их коды: 404, 400)
+    if (teamwork) {
+      if (!teamworkHooks) throw new SessionError(501, 'Teamwork недоступен в этом сервере');
+      try {
+        teamworkHooks.check(teamwork);
+      } catch (err) {
+        const status = (err as { status?: unknown }).status;
+        throw new SessionError(typeof status === 'number' && status >= 400 && status < 600 ? status : 400, errMsg(err));
+      }
     }
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
@@ -435,6 +470,7 @@ export class SessionManager {
       lastActivityAt: now,
       turns: 0,
       ...(space ? { turnSpaces: [{ from: 0, space, ...(at ? { at } : {}) }] } : {}),
+      ...(teamwork ? { teamwork } : {}),
     };
     if (typeof body.name !== 'string' || !body.name.trim()) rec.defaultName = rec.name;
     const s = newLive(rec, 'starting');
@@ -445,6 +481,9 @@ export class SessionManager {
       this.sessions.delete(id);
       throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
     }
+    // сессия начата из задачи (spec §10): «К работе» → «В работе», исполнитель, запись в local.json — до ответа, чтобы
+    // доска обновилась вместе с ним; сбой — в лог внутри started
+    if (teamwork?.task && teamworkHooks) await teamworkHooks.started(teamwork, { kind: 'session', id, status: s.status, title: rec.name });
     return this.view(s);
   }
 
@@ -537,6 +576,8 @@ export class SessionManager {
     this.changed(s);
     this.save(s);
     this.saveScreen(s);
+    // конец сессии по задаче Teamwork — статус в local.json → work (переходов по концу сессии нет, spec §10)
+    if (s.rec.teamwork?.task && teamworkHooks && !s.restarting) void teamworkHooks.ended(s.rec.teamwork, { kind: 'session', id: s.rec.id, status: 'ended', title: s.rec.name });
   }
 
   // --- правки
@@ -886,12 +927,21 @@ export class SessionManager {
     return r.reply;
   }
 
-  /** MCP дочернего claude: пространство и теги знаний на момент вызова, документ пространства, новая сессия рядом. */
+  /**
+   * MCP дочернего claude: пространство и теги знаний на момент вызова, документ пространства, новая сессия рядом; у сессии
+   * из задачи Teamwork — её задача и документы проекта.
+   */
   mcp(s: Live, body: unknown, port: number): Promise<McpReply> {
+    const link = s.rec.teamwork;
+    const team = link?.task && teamworkHooks ? { link, hooks: teamworkHooks } : undefined;
     return mcpReply(body, {
       scope: () => {
         const c = this.ctx(s.rec);
-        return { ...(c.space ? { space: c.space.slug } : {}), knowledge: c.knowledge.map((x) => x.slug) };
+        return {
+          ...(c.space ? { space: c.space.slug } : {}),
+          knowledge: c.knowledge.map((x) => x.slug),
+          ...(team ? { task: { id: team.link.task!, team: team.link.team, project: team.link.project } } : {}),
+        };
       },
       open: (args) => this.openFrom(s, args, port),
       writeDoc: (name, text) => {
@@ -900,6 +950,7 @@ export class SessionManager {
         const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
         return path.join(space.dir, 'docs', doc.name);
       },
+      ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text) } : {}),
     });
   }
 
@@ -991,6 +1042,23 @@ export class SessionManager {
       const size = typeof input.text === 'string' ? Buffer.byteLength(input.text) : 0;
       const old = space.docs.find((d) => d.name === input.name);
       return `${path.join(space.dir, 'docs', name)}: ${old ? `перезапишет документ (${kb(old.size)} → ${kb(size)})` : `новый документ, ${kb(size)}`}`;
+    }
+    if (tool === TEAM_TASK_UPDATE_FULL || tool === TEAM_DOC_WRITE_FULL) {
+      const link = s.rec.teamwork;
+      if (!link?.task || !teamworkHooks) return 'Сессия не открыта из задачи Teamwork: вызов вернёт ошибку';
+      const label = teamworkHooks.label(link);
+      if (tool === TEAM_DOC_WRITE_FULL) {
+        const name = typeof input.name === 'string' ? cleanLine(input.name, 80) : '';
+        const size = typeof input.text === 'string' ? Buffer.byteLength(input.text) : 0;
+        return `Задача ${label}: документ проекта ${name || '(без имени)'}, ${kb(size)} — перезапишет файл целиком`;
+      }
+      try {
+        const a = parseTeamTaskArgs(input);
+        const parts = [...(a.status ? [`статус → ${a.status}`] : []), ...(a.pr ? [`PR → ${cleanLine(a.pr, 120)}`] : []), ...(a.comment ? [`комментарий «${cleanLine(a.comment, 120)}»`] : [])];
+        return `Задача ${label}: ${parts.join('; ')}`;
+      } catch (err) {
+        return `Вызов не пройдёт: ${errMsg(err)}`;
+      }
     }
     return undefined;
   }
@@ -1479,11 +1547,25 @@ let manager: SessionManager | null = null;
  * модуля, а не менеджера: подмена менеджера (тесты) их не теряет, а подписка сама менеджер не создаёт.
  */
 const waitSubs = new Set<(v: SessionView) => void>();
+/** Teamwork для сессий из задачи; на уровне модуля по той же причине, что waitSubs. null — связь с задачей недоступна (501). */
+let teamworkHooks: SessionTeamwork | null = null;
 
 /** Реестр сессий процесса; тесты подставляют свои зависимости (поддельный pty). */
 export function sessionManager(deps?: Partial<SessionDeps>): SessionManager {
   if (deps) manager = new SessionManager({ ...defaultSessionDeps(), ...deps });
   return (manager ??= new SessionManager(defaultSessionDeps()));
+}
+
+/** server.ts: Teamwork для сессий из задачи (startServer ставит, stopServer снимает). */
+export function setSessionTeamwork(hooks: SessionTeamwork | null): void {
+  teamworkHooks = hooks;
+}
+
+/** Живой статус сессии по задаче Teamwork (TeamTask.work): нет сессии или менеджера — как записано в local.json. */
+export function sessionWorkStatus(id: string): { status: string; title: string } | undefined {
+  const s = manager && ID_RE.test(id) ? manager.sessions.get(id) : undefined;
+  if (!s) return undefined;
+  return { status: s.pty?.alive ? s.status : 'ended', title: s.rec.name };
 }
 
 export type SessionsCtx = {

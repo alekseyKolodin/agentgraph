@@ -2,19 +2,23 @@
 // Свой обработчик JSON-RPC: knowledgeToolsServer из knowledge-tools.ts построен на createSdkMcpServer и работает
 // только внутри query() Agent SDK, а здесь клиент — отдельный процесс claude. Инструменты: knowledge_read — полный
 // текст тега знаний (только чтение); space_write — записать документ в docs/ пространства сессии; session_new — открыть
-// рядом новую сессию agentgraph. Двух последних нет в allowedTools, и хук PreToolUse велит claude спрашивать
-// пользователя о каждом их вызове. Слаги и пространство берутся в момент вызова: выбранное на ходу доступно сразу.
-import type { SessionView } from './api-types.js';
+// рядом новую сессию agentgraph; у сессии из задачи Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий
+// её задачи, и team_doc_write — документ проекта команды. Кроме knowledge_read ничего нет в allowedTools, и хук PreToolUse
+// велит claude спрашивать пользователя о каждом вызове. Слаги и пространство берутся в момент вызова: выбранное на ходу доступно сразу.
+import type { SessionView, TeamTaskStatus } from './api-types.js';
 import { knowledgeReadText } from './knowledge-tools.js';
 import { KNOWLEDGE_READ_TOOL } from './tags.js';
 import { DOCS_DIR, SPACE_DOC_TEXT_MAX, SPACE_WRITE_TOOL, WRITE_DOC_EXTS } from './spaces.js';
-import { SESSION_NEW_TOOL } from './sessions.js';
+import { SESSION_NEW_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL } from './sessions.js';
 
-/** Что у сессии на момент вызова: пространство (слаг) и теги знаний. */
-export type McpScope = () => { space?: string; knowledge: string[] };
+/** Что у сессии на момент вызова: пространство (слаг), теги знаний и задача Teamwork, если сессия открыта из неё. */
+export type McpScope = () => { space?: string; knowledge: string[]; task?: { id: string; team: string; project: string } };
 
 /** Параметры session_new: чего нет — берётся у сессии, из которой вызвали; space: null — без пространства. */
 export type SessionNewArgs = { prompt?: string; tags?: string[]; space?: string | null; cwd?: string; name?: string; model?: string };
+
+/** Параметры team_task_update: статус, ссылка на PR и комментарий к задаче сессии — что задано, то и меняется. */
+export type TeamTaskUpdateArgs = { status?: TeamTaskStatus; pr?: string; comment?: string };
 
 export type McpCtx = {
   scope: McpScope;
@@ -22,7 +26,13 @@ export type McpCtx = {
   open: (args: SessionNewArgs) => Promise<SessionView>;
   /** Документ в docs/ пространства сессии; ответ — его путь. Ошибка (нет пространства, имя, размер) — текстом модели. */
   writeDoc: (name: string, text: string) => string;
+  /** Задача Teamwork сессии: ответ — что изменилось. Нет у сессии без задачи. */
+  teamTask?: (args: TeamTaskUpdateArgs) => Promise<string>;
+  /** Документ проекта Teamwork (architecture, design, docs/<имя>.md); ответ — путь файла в клоне. Нет у сессии без задачи. */
+  teamDoc?: (name: string, text: string) => Promise<string>;
 };
+
+const TASK_STATUSES: readonly TeamTaskStatus[] = ['todo', 'in_progress', 'review', 'done'];
 
 export type McpReply = { status: number; body?: unknown };
 
@@ -86,10 +96,49 @@ function tools(scope: ReturnType<McpScope>) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
+    // инструменты задачи Teamwork — только у сессии, открытой из задачи: остальным они ни к чему
+    ...(scope.task
+      ? [
+          {
+            name: TEAM_TASK_UPDATE_TOOL,
+            description:
+              `Изменить задачу Teamwork ${scope.task.id} (команда ${scope.task.team}, проект ${scope.task.project}), из которой открыта эта сессия: статус на доске, ссылка на PR или MR, комментарий. ` +
+              'Задано — меняется, не задано — остаётся. Изменение уходит коммитом в репо команды и видно всем участникам. Вызывай, когда пользователь просит отметить задачу или когда PR открыт; пользователь подтверждает вызов.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                status: { type: 'string', enum: [...TASK_STATUSES], description: 'Новый статус: todo — к работе, in_progress — в работе, review — ревью, done — готово.' },
+                pr: str('Ссылка на открытый PR или MR по ветке задачи (https://…).'),
+                comment: str('Комментарий к задаче от имени пользователя: что сделано, что открыто.'),
+              },
+              additionalProperties: false,
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true },
+          },
+          {
+            name: TEAM_DOC_WRITE_TOOL,
+            description:
+              `Записать новую версию документа проекта Teamwork ${scope.task.project} (команда ${scope.task.team}): architecture, design или файл в docs/ проекта. ` +
+              'Файл пишется целиком (сначала прочитай текущий инструментом Read из папки проекта во входе). ТЗ (prd) так не меняется — только через черновик и принятие. ' +
+              'Документ уходит коммитом в репо команды и виден всем участникам; пользователь подтверждает вызов.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                name: str('architecture, design или docs/<имя>.md.'),
+                text: str(`Текст документа целиком, до ${SPACE_DOC_TEXT_MAX / 1024} КБ.`),
+              },
+              required: ['name', 'text'],
+              additionalProperties: false,
+            },
+            annotations: { readOnlyHint: false, destructiveHint: true },
+          },
+        ]
+      : []),
   ];
 }
 
 const NEW_KEYS = ['prompt', 'space', 'tags', 'cwd', 'name', 'model'];
+const TASK_KEYS = ['status', 'pr', 'comment'];
 /** Управляющие символы, кроме \t и \n: ESC и BEL из текста модели дошли бы до экрана (OSC 52, заголовок окна). */
 const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
@@ -117,6 +166,26 @@ export function parseSessionNewArgs(args: Record<string, unknown>): SessionNewAr
     if (typeof args.space !== 'string') throw new Error('space — слаг пространства или null');
     if (args.space.trim()) out.space = args.space.trim();
   }
+  return out;
+}
+
+/** Аргументы team_task_update: лишнее и не строки — ошибка; пустая строка — как не задано; статус — из четырёх. */
+export function parseTeamTaskArgs(args: Record<string, unknown>): TeamTaskUpdateArgs {
+  const extra = Object.keys(args).filter((k) => !TASK_KEYS.includes(k));
+  if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только ${TASK_KEYS.join(', ')}`);
+  const out: TeamTaskUpdateArgs = {};
+  for (const k of TASK_KEYS as (keyof TeamTaskUpdateArgs)[]) {
+    const v = args[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== 'string') throw new Error(`${k} — строка`);
+    const clean = v.replace(CONTROL_RE, '').trim();
+    if (!clean) continue;
+    if (k === 'status') {
+      if (!TASK_STATUSES.includes(clean as TeamTaskStatus)) throw new Error(`status: ${TASK_STATUSES.join(' | ')}`);
+      out.status = clean as TeamTaskStatus;
+    } else out[k] = k === 'comment' ? v.replace(CONTROL_RE, '') : clean;
+  }
+  if (!Object.keys(out).length) throw new Error('Нечего менять: укажи status, pr или comment');
   return out;
 }
 
@@ -150,6 +219,15 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
       const slug = args.slug;
       if (typeof slug !== 'string') throw new Error('Нужен параметр slug — строка');
       return { content: [{ type: 'text', text: knowledgeReadText(ctx.scope().knowledge, slug, 'session') }] };
+    }
+    if (name === TEAM_TASK_UPDATE_TOOL || name === TEAM_DOC_WRITE_TOOL) {
+      if (!ctx.scope().task || !ctx.teamTask || !ctx.teamDoc) throw new Error('Эта сессия не открыта из задачи Teamwork: инструмент недоступен');
+      if (name === TEAM_TASK_UPDATE_TOOL) return { content: [{ type: 'text', text: await ctx.teamTask(parseTeamTaskArgs(args)) }] };
+      const extra = Object.keys(args).filter((k) => k !== 'name' && k !== 'text');
+      if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только name и text`);
+      if (typeof args.name !== 'string' || typeof args.text !== 'string') throw new Error('Нужны параметры name и text — строки');
+      const file = await ctx.teamDoc(args.name.replace(CONTROL_RE, '').trim(), args.text);
+      return { content: [{ type: 'text', text: `Документ записан: ${file}. Коммит в репо команды уйдёт участникам.` }] };
     }
     throw new Error(`Нет инструмента ${String(name)}`);
   } catch (err) {

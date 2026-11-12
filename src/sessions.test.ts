@@ -66,8 +66,8 @@ test('sessionArgs: новый разговор — --session-id, названи�
     const h = settings.hooks[e][0].hooks[0];
     assert.deepEqual([h.type, h.url, h.headers], ['http', 'http://127.0.0.1:4755/api/sessions/11111111-2222-4333-8444-555555555555/hook', { 'X-Agentgraph-Session': 'tok123' }]);
   }
-  // PreToolUse — только на session_new и space_write: остальные инструменты хук не задерживает
-  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write']);
+  // PreToolUse — только на session_new, space_write и инструменты задачи Teamwork: остальные инструменты хук не задерживает
+  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write']);
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
@@ -254,8 +254,8 @@ test(
   }),
 );
 
-test('sessionSettings: session_new и space_write — в permissions.ask (вопрос и без хука); onFailure: block у хука — только claude 2.1.295+', () => {
-  const ask = ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write'];
+test('sessionSettings: session_new, space_write и инструменты задачи Teamwork — в permissions.ask (вопрос и без хука); onFailure: block у хука — только claude 2.1.295+', () => {
+  const ask = ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write'];
   const hooksOf = (v?: string) => (sessionSettings(launch(v ? { claudeVersion: v } : {})) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> }; permissions: { ask: string[] } });
   for (const v of [undefined, '2.1.285', '2.1.317']) assert.deepEqual(hooksOf(v).permissions.ask, ask, String(v));
   assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), ask.map((m) => [m, 'block']));
@@ -435,12 +435,12 @@ test(
   }),
 );
 
-test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new и space_write', () => {
+test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new, space_write и инструменты задачи Teamwork', () => {
   assert.equal(handleHook(state(), { hook_event_name: 'UserPromptSubmit', prompt: 'x', permission_mode: 'plan' }, deps()).patch.permissionMode, 'plan');
   assert.equal(handleHook(state({ permissionMode: 'plan' }), { hook_event_name: 'Stop', permission_mode: 'plan' }, deps()).patch.permissionMode, undefined);
   assert.equal(handleHook(state(), { hook_event_name: 'PostToolBatch', agent_id: 'a1', permission_mode: 'auto' }, deps()).patch.permissionMode, undefined);
   assert.deepEqual(parseHookInput({ hook_event_name: 'Stop', permission_mode: 'auto' }), { hook_event_name: 'Stop', permission_mode: 'auto' });
-  for (const tool of ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write']) {
+  for (const tool of ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write']) {
     const ask = handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, permission_mode: 'auto' }, deps()).reply;
     assert.equal((ask.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask', tool);
   }

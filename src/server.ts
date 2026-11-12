@@ -8,6 +8,7 @@ import { APP_DIR, FLOWS_DIR, RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import {
   assertFlowName,
   blankFlowYaml,
+  checkCalls,
   deleteFlow,
   flowCallers,
   flowExists,
@@ -37,6 +38,9 @@ import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
+import { parseTeamworkLink, statusService, stopTeamworkStatus, teamworkStatus } from './teamwork-status.js';
+import { sessionTeamwork, teamworkWorkRoute } from './teamwork-work.js';
+import { TeamError } from './teamwork-repo.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
 import { modelContextReply, spaceContextReply } from './model-context.js';
@@ -45,7 +49,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { loadSettings, updateSettings, type Settings } from './settings.js';
@@ -97,7 +101,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -246,7 +250,14 @@ export function startServer(opts: ServerOptions): Promise<string> {
     notifySession(opts, session);
   });
   // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
-  teamChanges ??= teamService({ hasSubscribers: () => homeClients.size > 0, ...opts.teamwork }).onChange((e) => homeBroadcast({ type: 'team', runId: '', flow: '', team: e.team, projects: e.projects }));
+  if (!teamChanges) {
+    const service = teamService({ hasSubscribers: () => homeClients.size > 0, workStatus: teamWorkStatus, ...opts.teamwork });
+    teamChanges = service.onChange((e) => homeBroadcast({ type: 'team', runId: '', flow: '', team: e.team, projects: e.projects }));
+    // автоматика статусов задач (teamwork-status.ts): старт и конец запусков по задаче, опрос PR по таймеру; сессии из задачи
+    const status = teamworkStatus({ service: statusService(service), timers: opts.teamwork?.timers, exec: opts.teamwork?.repo?.exec });
+    status.start();
+    setSessionTeamwork(sessionTeamwork(service, status));
+  }
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -270,9 +281,11 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   await sessionsStopped;
   sessionWaits?.();
   sessionWaits = null;
-  // клоны команд: таймеры снимаются, текущая запись или push дожидается
+  // клоны команд: таймеры снимаются, текущая запись или push дожидается; опрос PR — тоже
   teamChanges?.();
   teamChanges = null;
+  setSessionTeamwork(null);
+  await stopTeamworkStatus();
   await stopTeamwork();
   await Promise.all(
     [...servers].map(
@@ -367,9 +380,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (r) return sendJson(res, r.status, r.body);
   }
 
-  // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts)
+  // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts); задача в работу —
+  // intake и worktree (teamwork-work.ts)
   if (p === '/api/teams' || p.startsWith('/api/teams/')) {
-    const r = await teamworkRoute(method, url, () => readJson(req), { service: teamService(opts.teamwork) });
+    const service = teamService(opts.teamwork);
+    const r = (await teamworkRoute(method, url, () => readJson(req), { service })) ?? (await teamworkWorkRoute(method, url, () => readJson(req), { service, exec: opts.teamwork?.repo?.exec }));
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -698,13 +713,29 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       /** Поля тегов задач до пространств: 400 с подсказкой, а не молча без пространства. */
       saveTag?: unknown;
       autoTag?: unknown;
+      /** Flow команды Teamwork вместо flow: читается из репо команды, запуск разовый со снимком flow.yaml (spec §12). */
+      teamFlow?: unknown;
+      /** Связь с задачей или черновиком Teamwork: в run.json, статусы задачи по запуску (spec §10). */
+      teamwork?: unknown;
     };
     let spec: FlowSpec;
     let adhoc: boolean;
+    let teamwork: RunTeamworkLink | undefined;
     try {
-      ({ spec, adhoc } = specFromRunBody(body));
+      teamwork = parseTeamworkLink(body.teamwork);
+      ({ spec, adhoc } = teamFlowSpec(body, opts) ?? specFromRunBody(body));
     } catch (err) {
-      throw new HttpError(400, errMsg(err));
+      throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err));
+    }
+    // задача Teamwork: команда, проект и задача должны быть — до создания папки запуска; источник запуска — сама задача
+    let teamSource: RunSource | undefined;
+    if (teamwork?.task) {
+      try {
+        const task = teamworkStatus().check(teamwork);
+        if (task) teamSource = { type: 'teamwork', key: task.id, title: task.title };
+      } catch (err) {
+        throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err));
+      }
     }
     if (body.input?.trim()) spec.input = body.input.trim();
     // блоки тегов старых версий — не задача: ввод из одних блоков — та же ошибка
@@ -732,6 +763,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       throw new HttpError(400, errMsg(err));
     }
     const links = runLinks(body, cwd);
+    // источник из задачи Teamwork — поверх присланного; project — основной checkout репо кода, как у ветки
+    if (teamSource) links.source = { ...teamSource, ...(typeof (body.source as { project?: unknown } | undefined)?.project === 'string' ? { project: (body.source as { project: string }).project.slice(0, 500) } : {}) };
     let saveState = body.saveState !== false;
     // пространство заводится последним: ошибка 400 выше не оставит пустое пространство на диске
     let space: Space | undefined;
@@ -756,6 +789,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       maxBudgetUsd: numOrUndefined(body.maxBudgetUsd),
       model: body.model || undefined,
       ...links,
+      ...(teamwork ? { teamwork } : {}),
       addDirs,
       attachments,
       adhoc,
@@ -1051,6 +1085,8 @@ function startRun(
     model?: string;
     continueFrom?: Continuation;
     source?: RunSource;
+    /** Связь с Teamwork: в run.json; по задаче — статусы задачи на старте и в конце (teamwork-status.ts). */
+    teamwork?: RunTeamworkLink;
     worktree?: RunWorktree;
     addDirs?: string[];
     /** Новые вложения из формы. */
@@ -1086,7 +1122,10 @@ function startRun(
   const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
-  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined).id;
+  const { id } = launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined);
+  // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json
+  if (o.teamwork?.task) void teamworkStatus().started(o.teamwork, { kind: 'run', id, status: 'running', ...(o.title ? { title: o.title } : {}) });
+  return id;
 }
 
 /**
@@ -1209,6 +1248,9 @@ function launchRun(
       for (const client of lr.clients) client.end();
       lr.clients.clear();
       live.delete(id);
+      // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
+      // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
+      if (opts.teamwork?.task && !parent) void teamworkStatus().ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
   };
   lr.broadcast = broadcast;
@@ -1249,6 +1291,8 @@ function launchRun(
       runDir,
       startedAt: new Date().toISOString(),
       ...(opts.adhoc ? { adhoc: true as const } : {}),
+      ...(opts.source ? { source: opts.source } : {}),
+      ...(opts.teamwork ? { teamwork: opts.teamwork } : {}),
       ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       ...(opts.space ? { space: opts.space, saveState: opts.saveState !== false } : {}),
@@ -2339,6 +2383,38 @@ function numOrUndefined(v: unknown): number | undefined {
   if (v === undefined || v === null || v === '') return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * POST /api/runs с teamFlow: { team, name } — flow из репо команды Teamwork вместо flow (spec §12): невалидный — 400, нет —
+ * 404 (TeamError). Запуск разовый: единственная копия flow — снимок flow.yaml в папке запуска, как у черновика. Без
+ * teamFlow — undefined, и flow берётся как обычно.
+ */
+function teamFlowSpec(body: { teamFlow?: unknown; flow?: unknown; spec?: unknown; yaml?: unknown }, opts: ServerOptions): { spec: FlowSpec; adhoc: boolean } | undefined {
+  if (body.teamFlow === undefined || body.teamFlow === null || body.teamFlow === '') return undefined;
+  const tf = body.teamFlow as { team?: unknown; name?: unknown };
+  if (typeof tf !== 'object' || typeof tf.team !== 'string' || typeof tf.name !== 'string' || !tf.team.trim() || !tf.name.trim()) throw new Error('teamFlow — { team, name }: слаг команды и имя flow из её репо');
+  if ([body.flow, body.spec, body.yaml].some((v) => v !== undefined && v !== null && v !== '')) throw new Error('Передай что-то одно из teamFlow, flow, spec и yaml');
+  const spec = teamService(opts.teamwork).readTeamFlow(tf.team.trim(), tf.name.trim()).spec;
+  // блоки-вызовы flow команды зовут только сохранённые flow этого компьютера: проверка — до папки запуска
+  checkCalls(spec);
+  return { spec, adhoc: true };
+}
+
+/**
+ * Живой статус запуска или сессии по задаче Teamwork (TeamTask.work из local.json): идущий здесь запуск — из памяти
+ * (ждёт ответа, на паузе), завершённый — из run.json (оборвавшийся — interrupted); сессия — у менеджера сессий. Чужой
+ * или удалённый запуск — запись как есть.
+ */
+function teamWorkStatus(w: TeamTaskWork): TeamTaskWork {
+  if (w.kind === 'run') {
+    const lr = live.get(w.id);
+    const r = lr?.report ?? readReport(w.id);
+    if (!r) return w;
+    return { ...w, status: lr ? liveStatus(lr) : r.status, ...(r.title ? { title: r.title } : {}) };
+  }
+  const s = sessionWorkStatus(w.id);
+  return s ? { ...w, status: s.status, title: s.title } : w;
 }
 
 const JSON_BODY_MAX = 5 * 1024 * 1024;

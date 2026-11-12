@@ -36,6 +36,8 @@ export type TeamServiceDeps = {
   timers?: boolean;
   /** Локальная папка репо кода по ссылке: по умолчанию среди проектов дашборда по origin. */
   findLocal?: (url: string) => Promise<string | undefined>;
+  /** Живой статус запуска или сессии по задаче (TeamTask.work): сервер сверяет запись local.json с идущими запусками и сессиями. */
+  workStatus?: (work: TeamTaskWork) => TeamTaskWork;
 };
 
 /** Новая задача (POST …/tasks): dependsOn — ключи соседей по пачке или номера существующих задач, становятся blockedBy. */
@@ -390,7 +392,7 @@ export class TeamService {
         const rel = `${dir}/${name}`;
         const t = parseTask(repo.read(rel) ?? '', rel);
         t.comments = repo.list(`projects/${slug}/comments/${t.id}`, (n) => /\.md$/i.test(n)).length;
-        if (work[t.id]?.length) t.work = work[t.id];
+        if (work[t.id]?.length) t.work = this.deps.workStatus ? work[t.id].map(this.deps.workStatus) : work[t.id];
         return t;
       }),
     );
@@ -787,6 +789,20 @@ export class TeamService {
         if (key) next.repo = key;
         else delete next.repo;
         if (key !== cur.repo) changes.push(key ? `репо → ${key}` : 'репо снято');
+      }
+      if (patch.pr !== undefined) {
+        // ссылка на PR и его состояние (spec §10): пишут автоматика статусов и team_task_update; без state — open
+        let pr: TaskFile['pr'];
+        if (patch.pr !== null) {
+          if (!isRecord(patch.pr)) bad('Поле pr — { url, state? } или null');
+          const url = reqStr(patch.pr.url, 'pr.url', 'Укажи ссылку на PR');
+          const state = patch.pr.state ?? 'open';
+          if (!['open', 'merged', 'closed'].includes(state)) bad('Поле pr.state: open | merged | closed');
+          pr = { url, state };
+        }
+        if (pr) next.pr = pr;
+        else delete next.pr;
+        if (pr?.url !== cur.pr?.url || pr?.state !== cur.pr?.state) changes.push(pr ? `PR ${pr.state === 'open' ? 'открыт' : pr.state === 'merged' ? 'смёржен' : 'закрыт'}: ${pr.url}` : 'PR снят');
       }
       if (patch.branch !== undefined) {
         const br = patch.branch === null ? undefined : optStr(patch.branch, 'branch') || undefined;
