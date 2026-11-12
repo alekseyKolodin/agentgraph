@@ -47,6 +47,7 @@ Dark theme only (`color-scheme: dark`). Surfaces differ only in lightness; there
 
 - System sans, a ~1.2 scale from 14px:
   `--fs-cap 11 · --fs-meta 12 · --fs-small 13 · --fs-body 14 · --fs-h3 16 · --fs-h2 18 · --fs-h1 22`.
+- **Reading text** — `--fs-read 15`, line-height 1.65, a column up to 640px: Teamwork project documents (PRD, architecture, design) are read as documents, not as source.
 - Hierarchy is carried by weight and color, not just size. Value — 500–600 and `--ink`, caption — 500 and `--ink-3`, meta — 400 and `--ink-2`. Data set in mono (time, $, `2/5`, counters) is meta, not a caption: `--ink-2`.
 - **Section headings are quiet captions**: `--fs-meta`, 500, `--ink-3`, normal case. Letter-spaced all caps isn't used.
 - **Mono** (`--font-mono`, tabular figures): cost, time, iteration counters, phase ids, paths, log. Live numbers must not jump.

@@ -1742,6 +1742,9 @@ export type TeamConflict = {
 /** Строка истории документа или ленты проекта (git log). */
 export type TeamHistoryItem = { hash: string; author: string; email: string; at: string; message: string };
 
+/** GET …/history/:hash?doc=<имя>: документ до коммита (у родителя) и после него — дифф в «Истории»; файла нет — пустая строка. */
+export type TeamDocRevision = { name: TeamDocName; hash: string; before: string; after: string };
+
 /** Задача из tasks.json черновика разбивки (spec §9.1): key — ключ внутри предложения. */
 export type TeamProposedTask = {
   key: string;

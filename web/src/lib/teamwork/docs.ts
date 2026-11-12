@@ -4,7 +4,7 @@
 import type { TeamDoc, TeamDocName, TeamMember, TeamProposedTask, TeamRequirement, TeamTask } from '@server/api-types';
 import { plural, t } from '../i18n';
 import { clock } from '../format';
-import { memberLabel } from './board';
+import { memberByEmail, memberLabel } from './board';
 
 /** Строка требования: «- FR-3. Текст», строго как на сервере (src/teamwork.ts). Группы: вид, номер, текст. */
 export const REQ_RE = /^- (FR|NFR)-(\d+)\.\s+(.*)$/;
@@ -225,7 +225,7 @@ export function relativeDay(iso: string, now: Date = new Date()): string {
 /** «обновлено вчера, Мария»; без даты — пусто. */
 export function updatedText(doc: Pick<TeamDoc, 'updatedAt' | 'updatedBy'>, members: readonly TeamMember[] = [], now: Date = new Date()): string {
   if (!doc.updatedAt) return '';
-  const m = doc.updatedBy ? members.find((x) => x.email === doc.updatedBy) : undefined;
+  const m = memberByEmail(members, doc.updatedBy);
   const who = m ? memberLabel(m) : doc.updatedBy?.split('@')[0];
   const when = relativeDay(doc.updatedAt, now);
   return who ? t('обновлено {when}, {who}', { when, who }) : t('обновлено {when}', { when });
