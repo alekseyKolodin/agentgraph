@@ -109,7 +109,11 @@ export function reposBody(drafts: readonly RepoDraft[], existing: readonly { key
   return out;
 }
 
-/** Команда для репо, которого нет на этом компьютере: склонировать самому (agentgraph не клонирует). */
+/**
+ * Команда для репо, которого нет на этом компьютере: склонировать самому (agentgraph не клонирует). Ссылка — из чужого
+ * project.yaml: в кавычках, если в ней что-то кроме обычных символов ссылки, и после «--», если начинается с дефиса.
+ */
 export function cloneCommand(url: string): string {
-  return `git clone ${/^[\w@%+=:,./~-]+$/.test(url) ? url : `'${url.replace(/'/g, `'\\''`)}'`}`;
+  const arg = /^[\w@%+=:,./~-]+$/.test(url) ? url : `'${url.replace(/'/g, `'\\''`)}'`;
+  return `git clone ${url.startsWith('-') ? '-- ' : ''}${arg}`;
 }

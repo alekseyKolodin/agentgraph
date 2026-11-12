@@ -39,7 +39,8 @@ export function OverviewTab({ team, project, tasks }: { team: TeamDetail; projec
         <DocsBlock team={team} project={project} />
       </div>
       <div className={styles.colR}>
-        <ReposBlock team={team} project={project} />
+        {/* key: черновик нового репо не переезжает в другой проект при переходе без перемонтирования */}
+        <ReposBlock key={project.slug} team={team} project={project} />
         <SpaceBlock team={team} project={project} />
         <FeedBlock team={team} project={project} />
       </div>

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts,
+  acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts, shareableUrl,
   nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, rankNear, remoteProblem,
   replaceSection, requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections,
   teamSlugFromUrl, updateYaml, validRank, type TaskFile,
@@ -364,4 +364,13 @@ test('ссылка на репо: допустимые формы, отказ н
   assert.equal(teamSlugFromUrl('https://gitlab.com/g/sub/x.git/'), 'x');
   assert.equal(teamSlugFromUrl('/tmp/bare.git'), 'bare');
   assert.equal(teamSlugFromUrl('///'), 'team');
+});
+
+test('ссылка для репо команды: у https без логина и токена, у ssh без пароля, остальное как есть', () => {
+  assert.equal(shareableUrl('https://alex:ghp_secret@github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
+  assert.equal(shareableUrl('https://ghp_secret@github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
+  assert.equal(shareableUrl('ssh://git:pw@host:2222/a/b.git'), 'ssh://git@host:2222/a/b.git');
+  assert.equal(shareableUrl('ssh://git@host:2222/a/b.git'), 'ssh://git@host:2222/a/b.git');
+  assert.equal(shareableUrl('git@github.com:acme/billing.git'), 'git@github.com:acme/billing.git');
+  assert.equal(shareableUrl('https://github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
 });

@@ -445,6 +445,17 @@ test('папка репо кода: repo-info берёт origin, ветку и �
   git(home, 'init', '-q', '-b', 'main', odd);
   git(odd, 'config', 'remote.origin.url', 'not a link');
   assert.equal((await info(odd)).body.problem, 'bad_origin');
+  // локальный путь как origin: коллеги по нему репо не найдут
+  git(odd, 'config', 'remote.origin.url', '/srv/git/odd.git');
+  assert.equal((await info(odd)).body.problem, 'bad_origin');
+  // origin с токеном: в ссылку — без логина и токена, она уйдёт в репо команды
+  const tokened = path.join(home, 'tokened');
+  git(home, 'init', '-q', '-b', 'main', tokened);
+  git(tokened, 'remote', 'add', 'origin', 'https://alex:ghp_secret@github.com/acme/tokened.git');
+  assert.deepEqual((await info(tokened)).body, { path: tokened, key: 'tokened', defaultBranch: 'main', url: 'https://github.com/acme/tokened.git' });
+  const leak = await call<Err>('POST', '/api/teams/team/projects', { slug: 'leak', title: 'Утечка', repos: [{ key: 'x', url: 'https://alex:ghp_secret@github.com/acme/x.git' }] });
+  assert.equal(leak.status, 400);
+  assert.match(leak.body.error, /токен/);
   // проект с папкой репо: ссылка и ветка — в project.yaml, папка — только в local.json
   assert.equal((await call('POST', '/api/teams/team/projects', { slug: 'ledger-ui', title: 'Счета', repos: [{ key: 'ledger', url: ledger, local: 'relative' }] })).status, 400);
   assert.equal((await call('GET', '/api/teams/team/projects/ledger-ui')).status, 404);

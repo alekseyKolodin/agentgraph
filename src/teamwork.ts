@@ -712,6 +712,23 @@ export function remoteProblem(url: string): string | undefined {
   return 'Ссылка на репо: https://, ssh://, user@host:path, file:// или абсолютный путь';
 }
 
+/**
+ * Ссылка, которую можно положить в репо команды: у http(s) — без логина и токена (https://user:ghp_…@host), у других схем —
+ * без пароля. Не URL или без учётных данных — как есть.
+ */
+export function shareableUrl(url: string): string {
+  if (!/^[a-z+]+:\/\//i.test(url)) return url;
+  try {
+    const u = new URL(url);
+    if (!u.username && !u.password) return url;
+    if (/^https?:$/i.test(u.protocol)) u.username = '';
+    u.password = '';
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 /** Слаг папки команды из ссылки на репо: последний сегмент пути без .git. */
 export function teamSlugFromUrl(url: string): string {
   const tail = url.replace(/[/\\]+$/, '').split(/[/:\\]/).pop() ?? '';

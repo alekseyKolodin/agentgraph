@@ -3,7 +3,7 @@
 // (POST …/repo-info): ссылка — origin, ветка — origin/HEAD; они уходят в project.yaml, а сама папка — только в мой local.json
 // (repos[].local). Ничего не скачивается: у коллег agentgraph находит их папку этого репо по origin. Строка формы — RepoDraftRow,
 // подсказка для ненайденного репо — CloneHint.
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { TeamRepoInfo } from '@server/api-types';
 import { errorText, useConfig, useFeature } from '../../api';
 import { fetchRepoInfo } from '../../api/teamwork';
@@ -31,20 +31,33 @@ export function RepoChooser({ team, taken, onAdd, onClose }: { team: string; tak
   const [err, setErr] = useState('');
   const [noOrigin, setNoOrigin] = useState<TeamRepoInfo | undefined>();
   const [typedPath, setTypedPath] = useState('');
+  // одно чтение папки за раз; ответ после «Отмены» (выбор закрыт) отбрасывается
+  const reading = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const choose = async (path: string) => {
+    if (reading.current) return;
+    reading.current = true;
     setBusy(path);
     setErr('');
     setNoOrigin(undefined);
     try {
       const r = await fetchRepoInfo(team, path);
+      if (!alive.current) return;
       if (r.problem === 'not_git') setErr(t('{path} — не git-репозиторий', { path: tildePath(r.path, home) }));
       else if (taken.paths.has(r.path) || (r.url && taken.urls.has(r.url))) setErr(t('Это репо уже есть в проекте'));
       else if (r.problem) setNoOrigin(r);
       else onAdd(draftFromInfo(r, taken.keys));
     } catch (e) {
-      setErr(errorText(e));
+      if (alive.current) setErr(errorText(e));
     } finally {
-      setBusy('');
+      reading.current = false;
+      if (alive.current) setBusy('');
     }
   };
   const projects = info.data?.projects ?? [];
@@ -96,17 +109,23 @@ export function RepoChooser({ team, taken, onAdd, onClose }: { team: string; tak
         </div>
       )}
       {err && <p className="msg err" role="alert">{err}</p>}
+      {/* не <form>: выбор стоит внутри формы нового проекта, и Enter отправил бы её */}
       {!canPick && (
-        <form
-          className={styles.repoPick}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (typedPath.trim()) void choose(typedPath.trim());
-          }}
-        >
-          <input value={typedPath} placeholder={t('/path/to/repo')} spellCheck={false} aria-label={t('Папка репо кода')} onChange={(e) => setTypedPath(e.target.value)} />
-          <button type="submit" className="btn small" disabled={busy !== '' || !typedPath.trim()}>{t('Взять папку')}</button>
-        </form>
+        <div className={styles.repoPick}>
+          <input
+            value={typedPath}
+            placeholder={t('/path/to/repo')}
+            spellCheck={false}
+            aria-label={t('Папка репо кода')}
+            onChange={(e) => setTypedPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              e.preventDefault();
+              if (typedPath.trim()) void choose(typedPath.trim());
+            }}
+          />
+          <button type="button" className="btn small" disabled={busy !== '' || !typedPath.trim()} onClick={() => void choose(typedPath.trim())}>{t('Взять папку')}</button>
+        </div>
       )}
       <div className={styles.chooserFoot}>
         <PickDirButton className="btn small" prompt={t('Папка репо кода')} title={t('Выбрать папку репо в Finder')} start={() => ''} onPick={(p) => void choose(p)}>{t('Другая папка…')}</PickDirButton>

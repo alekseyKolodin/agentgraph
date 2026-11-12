@@ -40,6 +40,8 @@ test('строки формы: пустая ручная пропускаетс�
 test('подсказка клонирования: обычная ссылка как есть, с пробелом — в кавычках', () => {
   assert.equal(cloneCommand('git@github.com:acme/billing.git'), 'git clone git@github.com:acme/billing.git');
   assert.equal(cloneCommand('/Volumes/My Drive/repo.git'), "git clone '/Volumes/My Drive/repo.git'");
+  // ссылка из чужого YAML с дефисом в начале — не флаг git
+  assert.equal(cloneCommand('-uevil'), 'git clone -- -uevil');
 });
 
 test('ключ по ссылке: последний сегмент без .git; следует за ссылкой, пока его не правили руками', () => {

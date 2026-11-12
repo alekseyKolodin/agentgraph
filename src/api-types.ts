@@ -1594,10 +1594,11 @@ export type TeamRepoRef = { key: string; url: string; defaultBranch?: string; lo
 /**
  * POST /api/teams/:t/repo-info { path }: что git знает о моей папке репо кода — для добавления репо в проект выбором папки.
  * path — корень репо (или присланная папка, если это не git), key — из имени папки по правилам ключа, url — origin (общая
- * ссылка в project.yaml), defaultBranch — origin/HEAD, иначе текущая ветка. problem: not_git — не git-репозиторий;
- * no_origin — нет origin, участники не найдут репо автоматически, ссылку нужно ввести; bad_origin — origin не годится как
- * ссылка в project.yaml. Папка в project.yaml не попадает: её принимает create/update проекта полем repos[].local и
- * хранит только в local.json → repoPaths.
+ * ссылка в project.yaml; у https — без логина и токена), defaultBranch — origin/HEAD, иначе текущая ветка. problem:
+ * not_git — не git-репозиторий; no_origin — нет origin, участники не найдут репо автоматически, ссылку нужно ввести;
+ * bad_origin — origin не годится как общая ссылка (не проходит проверку или это локальный путь и file://, по которым коллеги
+ * репо не найдут). Папка в project.yaml не попадает: её принимает create/update проекта полем repos[].local и хранит только
+ * в local.json → repoPaths. create/update отклоняют ссылку с логином или токеном (400).
  */
 export type TeamRepoInfo = { path: string; key: string; url?: string; defaultBranch?: string; problem?: 'not_git' | 'no_origin' | 'bad_origin' };
 

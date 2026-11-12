@@ -396,14 +396,15 @@ export class TeamRepo {
 
   /**
    * Внутри очереди: правки руками, fetch, слияние, push при push и неотправленных коммитах. Ошибка сети — в local.sync.error
-   * и повтор. Событие team — одно на вызов: fetch принёс изменения, коммиты ушли или сменилась ошибка синхронизации (UI не
-   * опрашивает сервер, пока идёт отправка, а ждёт этого события).
+   * и повтор. Событие team — одно на вызов: fetch принёс изменения, коммиты ушли, ошибка синхронизации появилась или
+   * снялась (UI не опрашивает сервер, пока идёт отправка, а ждёт этого события). Смена одного текста ошибки на другой
+   * («…after 3 ms» → «…after 4 ms») события не даёт: иначе событие → GET команды → фоновый pull → новая ошибка → событие.
    */
   private async syncNow(push: boolean): Promise<string[]> {
     this.busy = true;
     let changed: string[] = [];
     let pushed = false;
-    const errorBefore = this.local().sync.error ?? null;
+    const failedBefore = Boolean(this.local().sync.error);
     try {
       await this.commitManual();
       await this.fetch();
@@ -429,7 +430,7 @@ export class TeamRepo {
       throw err;
     } finally {
       this.busy = false;
-      this.emit(changed, pushed || (this.local().sync.error ?? null) !== errorBefore);
+      this.emit(changed, pushed || Boolean(this.local().sync.error) !== failedBefore);
     }
     return changed;
   }

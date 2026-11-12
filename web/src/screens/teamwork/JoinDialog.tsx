@@ -96,7 +96,8 @@ export function JoinDialog({ initialUrl = '', onClose, onJoined }: { initialUrl?
                   <b>{p.slug}</b>
                   <span className={styles.jrepoList}>
                     {p.repos.map((url) => {
-                      const local = found.localRepos?.[url];
+                      // ссылка — из чужого project.yaml: только своё поле объекта, не из прототипа
+                      const local = found.localRepos && Object.hasOwn(found.localRepos, url) ? found.localRepos[url] : undefined;
                       return (
                         <span key={url} className={styles.jrepoItem}>
                           <span className={styles.jrepoH}>

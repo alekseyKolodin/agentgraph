@@ -469,6 +469,24 @@ test('событие team после отправки: одно на push, с п
   await b.pull();
 });
 
+test('ошибка сети с меняющимся текстом: событие только когда ошибка появилась и когда снялась', async () => {
+  let n = 0;
+  let offline = true;
+  const x: Exec = (cmd, args, opts) =>
+    offline && args.includes('fetch') ? Promise.reject(new Error(`Failed to connect to github.com port 443 after ${++n} ms`)) : alice.deps.exec(cmd, args, opts);
+  const r = track(TeamRepo.open(a.slug, { ...alice.deps, exec: x }, alice.root)!);
+  const seen: ChangeEvent[] = [];
+  r.onChange((e) => seen.push(e));
+  // иначе: событие → GET команды → фоновый pull → новый текст ошибки → событие, и так по кругу
+  for (let i = 0; i < 3; i++) await assert.rejects(r.pull());
+  assert.equal(seen.length, 1);
+  assert.match(r.local().sync.error ?? '', /after 3 ms/);
+  offline = false;
+  await r.push();
+  assert.deepEqual(seen, [{ team: 'team', projects: [] }, { team: 'team', projects: [] }]);
+  assert.equal(r.local().sync.error, null);
+});
+
 test('два активных спринта после одновременного запуска: активным остаётся более ранний, второй снова запланирован', async () => {
   await a.pull();
   await b.pull();
