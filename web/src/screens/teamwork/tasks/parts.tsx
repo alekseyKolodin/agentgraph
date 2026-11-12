@@ -48,6 +48,8 @@ export function MenuButton({ label, text, items, className, right, up, onOpen, t
       btn.current?.focus();
       return;
     }
+    // стрелки (и с ⌥) в открытом меню — только меню: до карточки или строки они не доходят и её не двигают
+    if (e.key.startsWith('Arrow')) e.stopPropagation();
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     const all = [...(menu.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [])];

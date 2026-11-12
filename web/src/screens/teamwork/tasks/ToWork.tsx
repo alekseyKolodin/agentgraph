@@ -84,6 +84,9 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
   /** Заметка worktree (скопированные файлы и т. п.): видна в тексте задачи до запуска, как в форме вкладки «Запуск». */
   const wtNote = useRef('');
   const mine = useFlows().data ?? [];
+  /** Свои flow на момент вызова: prepare и смена flow идут асинхронно, список мог прийти позже первой отрисовки. */
+  const mineRef = useRef(mine);
+  mineRef.current = mine;
   const spacesOn = useFeature('spaces');
   const spaces = useSpaces(spacesOn);
   const session = mode === 'session';
@@ -101,6 +104,25 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
   const [loadingFlow, setLoadingFlow] = useState(false);
   const [err, setErr] = useState('');
 
+  // закрытие формы возвращает фокус туда, откуда её открыли (кнопка «В работу ▸»); элемент запомнен до showModal, а
+  // фокус возвращается, только когда диалога уже нет в документе (StrictMode «размонтирует» понарошку, DOM остаётся)
+  const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  useEffect(() => {
+    const el = dlg.current;
+    return () => {
+      setTimeout(() => {
+        if (!el?.isConnected && opener.current?.isConnected) opener.current.focus();
+      });
+    };
+  }, []);
+  // у команды нет своих flow, а список «Мои flow» пришёл после intake — flow по умолчанию из него
+  useEffect(() => {
+    if (session || flow || !intake || phase.kind !== 'form') return;
+    const f = defaultWorkFlow(intake, mine);
+    if (!f) return;
+    setFlow(f);
+    setInput(inputFor(f, intake));
+  }, [mine.length, phase.kind]);
   /** Подготовка worktree стартует один раз: в StrictMode эффект монтирования идёт дважды, второй POST гонялся бы с первым. */
   const started = useRef(false);
   useEffect(() => {
@@ -118,7 +140,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
     const note = (text: string) => (wtNote.current ? withWorktreeNote(text, wtNote.current) : text);
     if (session || !f) return note(it.context);
     if (f.kind === 'team') return note(it.input);
-    const summary = mine.find((x) => x.name === f.name);
+    const summary = mineRef.current.find((x) => x.name === f.name);
     return note(myFlowInput(summary?.input, { task: `${it.source.key} — ${it.source.title ?? task.title}`, branch: it.branch }, it.context));
   };
 
@@ -133,7 +155,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
       const it = await fetchIntake(team, project, task.id, { repo: w.repo.key });
       if (!alive.current) return;
       setIntake(it);
-      const f = defaultWorkFlow(it, mine);
+      const f = defaultWorkFlow(it, mineRef.current);
       setFlow(f);
       setInput(inputFor(f, it));
       setSpace(it.space ?? '');
@@ -153,6 +175,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
     const f = parseWorkFlow(key);
     if (!f || !intake) return;
     const seq = ++flowSeq.current;
+    const before = flow;
     setFlow(f);
     setErr('');
     if (f.kind === 'mine') {
@@ -169,6 +192,8 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: TeamDetail; p
     } catch (e) {
       if (seq !== flowSeq.current) return;
       setLoadingFlow(false);
+      // текст и intake остались от прежнего flow — выбор возвращается к нему, чтобы не уйти с чужой анкетой
+      setFlow(before);
       setErr(errorText(e));
     }
   };

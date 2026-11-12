@@ -9,10 +9,10 @@ import type { TeamColumns, TeamConflict, TeamDetail, TeamMember, TeamProject, Te
 import { useTeamConflicts } from '../../../api/teamwork';
 import { t } from '../../../lib/i18n';
 import { LS } from '../../../lib/storage';
-import { plannedSprint } from '../../../lib/teamwork/backlog';
+import { backlogTasks, plannedSprint } from '../../../lib/teamwork/backlog';
 import {
   acceptanceText, activeSprint, assigneeChips, blockedLabel, boardColumns, DEFAULT_FILTER, dropMove, filterColumns, keyboardMove, noSprintText, openBlockers, parseFilter, prLabel,
-  sameWho, sprintStrip, STATUSES, taskIndex, TASK_TYPES, toggleType, without, workBadge, workSignals, type BoardFilter, type Drop,
+  sameWho, sprintStrip, STATUSES, taskIndex, TASK_TYPES, toggleType, without, workBadge, workSignals, type BoardColumns, type BoardFilter, type Drop,
 } from '../../../lib/teamwork/board';
 import { columnMoves, dropIndex, samePlace, sideMove } from '../../../lib/teamwork/task';
 import { Loading } from '../../sessions/Loading';
@@ -42,7 +42,9 @@ export function BoardTab({ team, project }: BoardTabProps) {
     LS.set(filterKey(team, project), f);
   };
   const active = p ? activeSprint(p.sprints) : undefined;
-  const cols = active ? boardColumns(tasks, active.number) : undefined;
+  const allCols = active ? boardColumns(tasks, active.number) : undefined;
+  // переносы считаются только по читаемым задачам: у битого файла rank пустой, сервер его соседом не принимает
+  const cols = allCols ? mapCols(allCols, (l) => l.filter((x) => !x.error)) : undefined;
   const dnd = useDnd((id, from, at) => {
     if (!cols) return;
     const to = at.list as TeamTaskStatus;
@@ -68,10 +70,11 @@ export function BoardTab({ team, project }: BoardTabProps) {
     );
   }
 
-  const sprintList = STATUSES.flatMap((s) => cols[s]);
+  const sprintList = STATUSES.flatMap((s) => allCols![s]);
   const strip = sprintStrip(sprintList);
   const chips = assigneeChips(sprintList, members, me);
-  const shown = filterColumns(cols, filter, me);
+  // нечитаемые карточки — в конце колонки, индексы перетаскивания читаемых совпадают с cols
+  const shown = filterColumns(mapCols(cols, (l, s) => [...l, ...allCols![s].filter((x) => x.error)]), filter, me);
   const filtered = filter.who !== 'all' || filter.types.length > 0;
   const sig = workSignals(sprintList);
   const byId = taskIndex(tasks);
@@ -88,11 +91,20 @@ export function BoardTab({ team, project }: BoardTabProps) {
     items.push({ sep: 'c' });
     for (const m of columnMoves(cols, task.status, td.columns)) items.push({ key: m.key, label: m.label, onSelect: () => apply(task.id, m.drop) });
     items.push({ sep: 'b' });
-    items.push({ key: 'backlog', label: t('Убрать из спринта в бэклог'), onSelect: () => void ops.move(task.id, { move: { sprint: null }, rank: task.rank }) });
+    items.push({ key: 'backlog', label: t('Убрать из спринта в бэклог'), small: t('в начало бэклога'), onSelect: () => toBacklog(task) });
     return items;
   };
+  /** Из спринта — в начало бэклога, как «В бэклог» в бэклоге; карточка уходит с доски, фокус — на соседнюю в колонке. */
+  const toBacklog = (task: TeamTask) => {
+    const col = cols[task.status];
+    const i = col.findIndex((x) => x.id === task.id);
+    const near = col[i + 1] ?? col[i - 1];
+    void ops.move(task.id, dropMove(backlogTasks(tasks).filter((x) => !x.error), 0, { sprint: null }));
+    if (near) keep.focus(near.id);
+    else keep.focus(`tw-col-${task.status}`, true);
+  };
   const onCardKey = (e: KeyboardEvent, task: TeamTask) => {
-    if (!e.altKey || readonly) return;
+    if (!e.altKey || readonly || task.error) return;
     let drop: Drop | undefined;
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') drop = keyboardMove(cols[task.status], task.id, e.key === 'ArrowUp' ? -1 : 1);
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') drop = sideMove(cols, STATUSES, task.id, e.key === 'ArrowLeft' ? -1 : 1)?.drop;
@@ -167,7 +179,7 @@ function Column({ status, columns, list, full, dnd, readonly, render, footer }: 
   return (
     <section className={styles.col} aria-labelledby={`tw-col-${status}`}>
       <div className={styles.colH}>
-        <h3 id={`tw-col-${status}`}>{name}</h3>
+        <h3 id={`tw-col-${status}`} tabIndex={-1}>{name}</h3>
         <span className={styles.n}>{list.length !== full.length ? `${list.length}/${full.length}` : full.length}</span>
       </div>
       <ul className={cx(styles.cards, over && styles.over)} aria-labelledby={`tw-col-${status}`} {...(readonly ? {} : dnd.zone(status, full.length))}>
@@ -199,7 +211,7 @@ function Card({ task: x, index, status, td, p, members, href, byId, conflicts, d
       aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight"
       className={cx(styles.card, tone, x.status === 'done' && styles.done, x.error && styles.broken, open && styles.open, dnd.dragging === x.id && styles.dragging, mark === 'before' && styles.before, mark === 'after' && styles.after)}
       onKeyDown={(e) => onKey(e, x)}
-      {...(readonly || dragOff ? {} : dnd.item(x.id, status, index))}
+      {...(readonly || dragOff || x.error ? {} : dnd.item(x.id, status, index))}
     >
       <div className={styles.cardTop}>
         <span className={styles.id}>{x.id}</span>
@@ -234,12 +246,15 @@ function Card({ task: x, index, status, td, p, members, href, byId, conflicts, d
           {badge?.state === 'waiting' && <Link className="btn small" to={workHref} draggable={false}>{t('Ответить')}</Link>}
           {badge?.state === 'failed' && <Link className="btn ghost small" to={workHref} draggable={false}>{t('Открыть запуск')}</Link>}
           <span className={styles.grow} />
-          <MenuButton label={t('Переместить {id}', { id: x.id })} title={t('Переместить… (или перетащите карточку, ⌥-стрелки)')} text="⋯" className="btn ghost small" right items={() => moveItems(x)} onOpen={setOpen} />
+          {!x.error && <MenuButton label={t('Переместить {id}', { id: x.id })} title={t('Переместить… (или перетащите карточку, ⌥-стрелки)')} text="⋯" className="btn ghost small" right items={() => moveItems(x)} onOpen={setOpen} />}
         </div>
       )}
     </li>
   );
 }
+
+const mapCols = (c: BoardColumns, fn: (list: TeamTask[], s: TeamTaskStatus) => TeamTask[]): BoardColumns =>
+  ({ todo: fn(c.todo, 'todo'), in_progress: fn(c.in_progress, 'in_progress'), review: fn(c.review, 'review'), done: fn(c.done, 'done') });
 
 /** «PR #41 открыт» → ссылка «PR #41» и состояние отдельно. */
 const prParts = (label: string): { name: string; state: string } => {

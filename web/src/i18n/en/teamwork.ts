@@ -490,4 +490,5 @@ export const teamwork: Record<string, string> = {
   'В начало': 'To the top',
   'В конец': 'To the bottom',
   'В колонку «{name}»': 'To “{name}”',
+  'ждёт задачу {key}, а она не отмечена': 'waits for task {key}, which is not checked',
 };

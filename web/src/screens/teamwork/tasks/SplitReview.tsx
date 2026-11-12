@@ -206,8 +206,10 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
     );
   }
 
+  /** Связь на задачу предложения без галочки — для сервера «неизвестная задача»; человеку — что она не отмечена. */
+  const offText = new Map(off.map((k) => [t('неизвестная задача «{dep}»', { dep: k }), t('ждёт задачу {key}, а она не отмечена', { key: keyLabel(k) })]));
   const errorsOf = (key: string): string[] => [
-    ...new Set([...rep.errors, ...(serverReport?.errors ?? [])].filter((e) => e.key === key).map((e) => labelKeys(e.error))),
+    ...new Set([...rep.errors, ...(serverReport?.errors ?? [])].filter((e) => e.key === key).map((e) => labelKeys(offText.get(e.error) ?? e.error))),
   ];
   const edit = (key: string, patch: Partial<TeamProposedTask>) => setProposal((list) => (list ?? []).map((x) => (x.key === key ? { ...x, ...patch } : x)));
   const link = (key: string, dep: string) => setProposal((list) => addDependency(list ?? [], existing, key, dep).tasks);
@@ -433,6 +435,8 @@ export function DepsGraphView({ graph, focus, chain, off, errorsOf, members, sel
     const move = (e: PointerEvent) => {
       const r = box.current?.getBoundingClientRect();
       if (!r) return;
+      // кнопку отпустили вне окна (pointerup не пришёл) — связь не тянется дальше
+      if (e.pointerType === 'mouse' && e.buttons === 0) return setDrag(undefined);
       setDrag((d) => (d ? { ...d, x2: e.clientX - r.left, y2: e.clientY - r.top, over: target(e) } : d));
     };
     const up = (e: PointerEvent) => {
@@ -444,12 +448,16 @@ export function DepsGraphView({ graph, focus, chain, off, errorsOf, members, sel
     const esc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setDrag(undefined);
     };
+    // касание отменил браузер (прокрутка, жест) — линия не должна висеть до следующего pointerup
+    const cancel = () => setDrag(undefined);
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
     window.addEventListener('keydown', esc);
     return () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('keydown', esc);
     };
   }, [drag?.from]);

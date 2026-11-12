@@ -13,7 +13,7 @@ import { useToast } from '../../../components/Toast';
 import { t } from '../../../lib/i18n';
 import { backlogHint, backlogTasks, nextSprintNote, nextSprintTasks, orderWarnings, orderWarningText, plannedSprint, selectedText, tasksAndPoints } from '../../../lib/teamwork/backlog';
 import { activeSprint, dropMove, statusText, without, type Drop } from '../../../lib/teamwork/board';
-import { dropIndex, listMoves, samePlace } from '../../../lib/teamwork/task';
+import { dropIndex, dropRank, listMoves, samePlace } from '../../../lib/teamwork/task';
 import { Loading } from '../../sessions/Loading';
 import { cx } from '../parts';
 import { MenuButton, useTaskHref, Assignee, type MenuEntry } from './parts';
@@ -39,8 +39,13 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
   const [creating, setCreating] = useState(false);
   const planned = p ? plannedSprint(p.sprints) : undefined;
   const active = p ? activeSprint(p.sprints) : undefined;
-  const backlog = backlogTasks(tasks);
-  const next = nextSprintTasks(tasks, planned);
+  // нечитаемые задачи (битый файл, rank пустой) — в конце списка и не соседи при переносе: сервер их соседями не принимает
+  const readable = (list: TeamTask[]) => list.filter((x) => !x.error);
+  const broken = (list: TeamTask[]) => list.filter((x) => x.error);
+  const backlogAll = backlogTasks(tasks);
+  const nextAll = nextSprintTasks(tasks, planned);
+  const backlog = readable(backlogAll);
+  const next = readable(nextAll);
   const lists: Record<ListKey, TeamTask[]> = { next, backlog };
   const sprintOf = (l: ListKey): number | null => (l === 'next' ? planned?.number ?? null : null);
 
@@ -81,7 +86,7 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
   };
 
   const toggle = (id: string) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
-  const chosen = [...next, ...backlog].filter((x) => sel.includes(x.id));
+  const chosen = [...nextAll, ...backlogAll].filter((x) => sel.includes(x.id));
   const chosenNext = chosen.filter((x) => x.sprint !== undefined);
 
   const create = async () => {
@@ -106,21 +111,24 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
         return;
       }
     }
+    // запросы по одному: сосед каждой следующей задачи — предыдущая, на сервере у неё уже новый ранг
     let tail = next.filter((x) => !sel.includes(x.id));
-    for (const x of chosen.filter((y) => y.sprint === undefined)) {
+    let last: Promise<unknown> | undefined;
+    for (const x of chosen.filter((y) => y.sprint === undefined && !y.error)) {
       const d = dropMove(tail, tail.length, { sprint: n });
-      void ops.move(x.id, d);
-      tail = [...tail, { ...x, rank: d.rank }];
+      last = ops.move(x.id, d, last);
+      tail = [...tail, { ...x, rank: dropRank(d, x.rank) }];
     }
     setSel([]);
   };
   /** Выбранные из следующего спринта — в начало бэклога по порядку. */
   const toBacklog = () => {
     let head = backlog.filter((x) => !sel.includes(x.id));
-    chosenNext.forEach((x, i) => {
+    let last: Promise<unknown> | undefined;
+    chosenNext.filter((x) => !x.error).forEach((x, i) => {
       const d = dropMove(head, i, { sprint: null });
-      void ops.move(x.id, d);
-      head = [...head.slice(0, i), { ...x, rank: d.rank }, ...head.slice(i)];
+      last = ops.move(x.id, d, last);
+      head = [...head.slice(0, i), { ...x, rank: dropRank(d, x.rank) }, ...head.slice(i)];
     });
     setSel([]);
   };
@@ -152,7 +160,7 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
             {!readonly && <StartSprintButton team={td} project={p} tasks={tasks} small />}
           </div>
           <TaskRows
-            list="next" tasks={next} dnd={dnd} sel={sel} onToggle={toggle} members={members} href={href} readonly={readonly}
+            list="next" tasks={next} broken={broken(nextAll)} dnd={dnd} sel={sel} onToggle={toggle} members={members} href={href} readonly={readonly}
             warns={warnNext} moveItems={moveItems} onKey={onRowKey} empty={t('Перетащите сюда задачи из бэклога или выберите их и нажмите «В следующий спринт»')}
           />
           <Warns list={warnNext} />
@@ -167,7 +175,7 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
       <section className={styles.sec} aria-label={t('Бэклог')}>
         <div className={styles.secH}>
           <h2>{t('Бэклог')}</h2>
-          <span className={styles.meta}>{backlog.length}</span>
+          <span className={styles.meta}>{backlogAll.length}</span>
           <span className={styles.grow} />
           <span className={styles.hint}>{backlogHint()}</span>
         </div>
@@ -190,7 +198,7 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
           </div>
         )}
         <TaskRows
-          list="backlog" tasks={backlog} dnd={dnd} sel={sel} onToggle={toggle} members={members} href={href} readonly={readonly}
+          list="backlog" tasks={backlog} broken={broken(backlogAll)} dnd={dnd} sel={sel} onToggle={toggle} members={members} href={href} readonly={readonly}
           warns={warnBacklog} moveItems={moveItems} onKey={onRowKey} empty={t('В бэклоге пусто')} noTopBorder={!readonly}
         />
         <Warns list={warnBacklog} />
@@ -254,7 +262,10 @@ function PlanSprint({ team, project }: { team: string; project: TeamProject }) {
 
 type RowsProps = {
   list: ListKey;
+  /** Читаемые задачи по рангу: их можно двигать, индексы перетаскивания — по ним. */
   tasks: TeamTask[];
+  /** Нечитаемые — в конце, без перетаскивания и меню. */
+  broken: TeamTask[];
   dnd: Dnd;
   sel: string[];
   onToggle: (id: string) => void;
@@ -268,13 +279,14 @@ type RowsProps = {
   noTopBorder?: boolean;
 };
 
-function TaskRows({ list, tasks, dnd, sel, onToggle, members, href, readonly, warns, moveItems, onKey, empty, noTopBorder }: RowsProps) {
+function TaskRows({ list, tasks, broken, dnd, sel, onToggle, members, href, readonly, warns, moveItems, onKey, empty, noTopBorder }: RowsProps) {
   const zone = readonly ? {} : dnd.zone(list, tasks.length);
   return (
     <ul className={cx(styles.rows, styles.dropZone)} style={noTopBorder ? { borderTop: 0 } : undefined} {...zone}>
-      {tasks.map((x, i) => {
+      {[...tasks, ...broken].map((x, i) => {
+        const fixed = readonly || Boolean(x.error);
         const warn = warns.find((w) => w.id === x.id);
-        const mark = dnd.mark(list, i);
+        const mark = x.error ? undefined : dnd.mark(list, i);
         return (
           <li
             key={x.id}
@@ -282,10 +294,10 @@ function TaskRows({ list, tasks, dnd, sel, onToggle, members, href, readonly, wa
             tabIndex={0}
             aria-label={`${x.id} ${x.title}`}
             className={cx(styles.brow, sel.includes(x.id) && styles.sel, dnd.dragging === x.id && styles.dragging, mark === 'before' && styles.before, mark === 'after' && styles.after)}
-            onKeyDown={readonly ? undefined : (e) => onKey(e, x, list)}
-            {...(readonly ? {} : dnd.item(x.id, list, i))}
+            onKeyDown={fixed ? undefined : (e) => onKey(e, x, list)}
+            {...(fixed ? {} : dnd.item(x.id, list, i))}
           >
-            {readonly ? <span /> : <MenuButton label={t('Переместить {id}', { id: x.id })} title={t('Переместить… (или перетащите строку, ⌥↑ ⌥↓)')} text="⋮⋮" className={styles.grip} items={() => moveItems(x, list)} />}
+            {fixed ? <span /> : <MenuButton label={t('Переместить {id}', { id: x.id })} title={t('Переместить… (или перетащите строку, ⌥↑ ⌥↓)')} text="⋮⋮" className={styles.grip} items={() => moveItems(x, list)} />}
             <input type="checkbox" aria-label={t('Выбрать {id}', { id: x.id })} checked={sel.includes(x.id)} disabled={readonly} onChange={() => onToggle(x.id)} />
             <span className={styles.id}>{x.id}</span>
             <Link className={styles.t} to={href(x.id)} title={x.error ? t('Не читается: {why}', { why: x.error }) : x.title} draggable={false}>
@@ -299,7 +311,7 @@ function TaskRows({ list, tasks, dnd, sel, onToggle, members, href, readonly, wa
           </li>
         );
       })}
-      {!tasks.length && <li className={styles.rowsEmpty}>{empty}</li>}
+      {!tasks.length && !broken.length && <li className={styles.rowsEmpty}>{empty}</li>}
     </ul>
   );
 }

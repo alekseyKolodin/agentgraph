@@ -4,7 +4,7 @@
 import type { FlowSummary, TeamProject, TeamTask, TeamTaskIntake, TeamTaskStatus, TeamTaskWorktree } from '@server/api-types';
 import { t } from '../i18n';
 import { dropMove, statusText, without, type Drop } from './board';
-import { splitLines } from './docs';
+import { fencedLines, splitLines } from './docs';
 
 // ---------- тело задачи: описание и критерии приёмки
 
@@ -12,29 +12,28 @@ const ACC_HEAD = /^(критерии приёмки|критерии прием�
 const DESC_HEAD = /^(описание|description)$/i;
 const H2 = /^##\s+(.*?)\s*#*\s*$/;
 const CHECK = /^(\s*[-*+]\s+\[)([ xX])(\]\s+)(.*)$/;
-const FENCE = /^\s*(```|~~~)/;
 
 export type Criterion = { text: string; done: boolean };
 
-type Parts = { lines: string[]; acc?: { head: number; end: number }; desc?: { head: number; end: number } };
+type Parts = { lines: string[]; fenced: boolean[]; acc?: { head: number; end: number }; desc?: { head: number; end: number } };
 
-/** Строки тела, границы раздела критериев и раздела описания (заголовки «## » вне оград кода). */
+/**
+ * Строки тела, строки внутри оград кода (fencedLines — как у сервера), границы разделов критериев и описания. Хвостовые
+ * переводы строк в lines не входят: правка возвращает их как были (rebuild), остальной текст не трогается.
+ */
 function parts(body: string): Parts {
   const lines = splitLines(body.replace(/\n+$/, ''));
+  const fenced = fencedLines(lines);
   const heads: { at: number; heading: string }[] = [];
-  let fence = false;
   lines.forEach((l, i) => {
-    if (FENCE.test(l)) fence = !fence;
-    else if (!fence) {
-      const m = l.match(H2);
-      if (m) heads.push({ at: i, heading: m[1]!.trim() });
-    }
+    const m = fenced[i] ? null : l.match(H2);
+    if (m) heads.push({ at: i, heading: m[1]!.trim() });
   });
   const range = (re: RegExp) => {
     const i = heads.findIndex((h) => re.test(h.heading));
     return i < 0 ? undefined : { head: heads[i]!.at, end: heads[i + 1]?.at ?? lines.length };
   };
-  return { lines, acc: range(ACC_HEAD), desc: range(DESC_HEAD) };
+  return { lines, fenced, acc: range(ACC_HEAD), desc: range(DESC_HEAD) };
 }
 
 /** Номера строк с галочками критериев: в разделе «Критерии приёмки», без раздела — во всём теле (как считает сервер). */
@@ -42,12 +41,7 @@ function criterionLines(p: Parts): number[] {
   const from = p.acc ? p.acc.head + 1 : 0;
   const to = p.acc ? p.acc.end : p.lines.length;
   const out: number[] = [];
-  let fence = false;
-  for (let i = from; i < to; i++) {
-    const l = p.lines[i]!;
-    if (FENCE.test(l)) fence = !fence;
-    else if (!fence && CHECK.test(l)) out.push(i);
-  }
+  for (let i = from; i < to; i++) if (!p.fenced[i] && CHECK.test(p.lines[i]!)) out.push(i);
   return out;
 }
 
@@ -59,18 +53,26 @@ export function criteriaOf(body: string): Criterion[] {
   });
 }
 
-const join = (lines: readonly string[]): string => {
-  const s = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+/** Тело после точечной правки строк: пустые строки и отступы как были, хвост — как в исходном теле (или один перевод строки). */
+const rebuild = (body: string, lines: readonly string[]): string => {
+  const text = lines.join('\n');
+  if (!text.trim()) return '';
+  return `${text}${body.match(/\n+$/)?.[0] ?? '\n'}`;
+};
+
+/** Сборка нового тела из кусков: лишние пустые строки только по краям. */
+const assemble = (lines: readonly string[]): string => {
+  const s = lines.join('\n').replace(/^\n+|\s+$/g, '');
   return s ? `${s}\n` : '';
 };
 
-/** Галочка критерия с номером index; номера — по порядку criteriaOf. */
+/** Галочка критерия с номером index; номера — по порядку criteriaOf. Меняется одна строка. */
 export function toggleCriterion(body: string, index: number, done: boolean): string {
   const p = parts(body);
   const at = criterionLines(p)[index];
   if (at === undefined) return body;
   p.lines[at] = p.lines[at]!.replace(CHECK, (_m, a: string, _x: string, b: string, text: string) => `${a}${done ? 'x' : ' '}${b}${text}`);
-  return join(p.lines);
+  return rebuild(body, p.lines);
 }
 
 export function removeCriterion(body: string, index: number): string {
@@ -78,7 +80,7 @@ export function removeCriterion(body: string, index: number): string {
   const at = criterionLines(p)[index];
   if (at === undefined) return body;
   p.lines.splice(at, 1);
-  return join(p.lines);
+  return rebuild(body, p.lines);
 }
 
 export function editCriterion(body: string, index: number, text: string): string {
@@ -88,16 +90,23 @@ export function editCriterion(body: string, index: number, text: string): string
   const at = criterionLines(p)[index];
   if (at === undefined) return body;
   p.lines[at] = p.lines[at]!.replace(CHECK, (_m, a: string, x: string, b: string) => `${a}${x}${b}${clean}`);
-  return join(p.lines);
+  return rebuild(body, p.lines);
 }
 
-/** Новый критерий в конец раздела «Критерии приёмки»; раздела нет — он появляется в конце тела. */
+/**
+ * Новый критерий в конец раздела «Критерии приёмки». Раздела нет — он появляется в конце тела, и галочки, которые до этого
+ * считались критериями (без раздела — все в теле), переезжают в него же: иначе они перестали бы быть критериями.
+ */
 export function addCriterion(body: string, text: string): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return body;
   const p = parts(body);
   const line = `- [ ] ${clean}`;
-  if (!p.acc) return join([...p.lines, '', '## Критерии приёмки', '', line]);
+  if (!p.acc) {
+    const ids = new Set(criterionLines(p));
+    const rest = p.lines.filter((_, i) => !ids.has(i));
+    return assemble([...rest, '', '## Критерии приёмки', '', ...[...ids].map((i) => p.lines[i]!), line]);
+  }
   const ids = criterionLines(p);
   let at = ids.length ? ids[ids.length - 1]! + 1 : p.acc.head + 1;
   if (!ids.length) {
@@ -106,25 +115,31 @@ export function addCriterion(body: string, text: string): string {
     at++;
   }
   p.lines.splice(at, 0, line);
-  return join(p.lines);
+  return rebuild(body, p.lines);
 }
 
-/** Описание для чтения и правки: тело без раздела критериев и без строки «## Описание». */
-export function descriptionOf(body: string): string {
-  const p = parts(body);
-  if (!p.acc && !p.desc) return body.trim();
+/** Строки, которые не относятся к описанию: раздел критериев (без раздела — сами галочки) и строка «## Описание». */
+function notDescription(p: Parts): Set<number> {
   const drop = new Set<number>();
   if (p.acc) for (let i = p.acc.head; i < p.acc.end; i++) drop.add(i);
+  else for (const i of criterionLines(p)) drop.add(i);
   if (p.desc) drop.add(p.desc.head);
-  return p.lines.filter((_, i) => !drop.has(i)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return drop;
 }
 
-/** Тело с новым описанием: «## Описание» сверху, раздел критериев как был — следом. */
+/** Описание для чтения и правки: тело без критериев и без строки «## Описание»; код и пустые строки внутри — как были. */
+export function descriptionOf(body: string): string {
+  const p = parts(body);
+  const drop = notDescription(p);
+  return p.lines.filter((_, i) => !drop.has(i)).join('\n').replace(/^\s*\n/, '').trimEnd();
+}
+
+/** Тело с новым описанием: «## Описание» сверху, критерии — следом (раздел как был, без раздела — галочки в новый раздел). */
 export function withDescription(body: string, text: string): string {
   const p = parts(body);
   const acc = p.acc ? p.lines.slice(p.acc.head, p.acc.end) : criterionLines(p).length ? ['## Критерии приёмки', '', ...criterionLines(p).map((i) => p.lines[i]!)] : [];
-  const desc = text.trim();
-  return join([...(desc ? ['## Описание', '', desc] : []), ...(acc.length ? ['', ...acc] : [])]);
+  const desc = text.replace(/^\s*\n/, '').trimEnd();
+  return assemble([...(desc.trim() ? ['## Описание', '', desc] : []), ...(acc.length ? ['', ...acc] : [])]);
 }
 
 /** «Критерии приёмки · 2 из 5». */
@@ -168,6 +183,12 @@ export function sideMove(
   const index = cols[order[from]!].findIndex((x) => x.id === id);
   return { status: to, drop: dropMove(cols[to], Math.min(index, cols[to].length), { status: to }) };
 }
+
+/**
+ * Ранг задачи после переноса так, как его поставит сервер: без соседей (пустой список) ранг не меняется, с соседом —
+ * ранг из dropMove. Мгновенная перерисовка с другим рангом прыгала бы, когда придёт ответ.
+ */
+export const dropRank = (drop: Drop, current: string): string => (drop.move.after || drop.move.before ? drop.rank : current);
 
 /**
  * Место вставки при перетаскивании: index — строка под курсором в списке с переносимой задачей, after — курсор в нижней

@@ -1,13 +1,14 @@
 // Общее экранов задач: данные проекта из кэша оболочки, правки задач с мгновенной перерисовкой и очередью на задачу,
 // перетаскивание нативным HTML5 drag and drop (без зависимостей) и возврат фокуса на карточку после переноса.
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { TeamTask, TeamTaskPatch } from '@server/api-types';
 import { ApiError, errorText } from '../../../api';
 import { createTask, deleteTask, moveTask, teamKeys, updateTask, useProject, useTasks, useTeam, type NewTask } from '../../../api/teamwork';
 import { useToast } from '../../../components/Toast';
 import { t } from '../../../lib/i18n';
 import type { Drop } from '../../../lib/teamwork/board';
+import { dropRank } from '../../../lib/teamwork/task';
 
 /** Команда, проект и задачи: те же запросы, что держит экран проекта, — без лишних обращений к серверу. */
 export function useProjectData(team: string, project: string) {
@@ -19,98 +20,140 @@ export function useProjectData(team: string, project: string) {
 
 export type TaskOps = ReturnType<typeof useTaskOps>;
 
+type Overlay = (x: TeamTask) => TeamTask;
+/**
+ * Очереди записей задач одного проекта — общие для всех экранов (бэклог, доска, панель задачи): запись из панели встаёт
+ * за переносом с доски той же задачи и берёт base из его ответа. server — версия задачи с сервера, пока у неё есть
+ * очередь; pending — мгновенные правки, ещё не подтверждённые сервером.
+ */
+type Store = { queue: Map<string, Promise<unknown>>; server: Map<string, TeamTask>; pending: Map<string, Overlay[]> };
+const stores = new Map<string, Store>();
+const storeOf = (team: string, project: string): Store => {
+  const k = `${team}/${project}`;
+  let st = stores.get(k);
+  if (!st) {
+    st = { queue: new Map(), server: new Map(), pending: new Map() };
+    stores.set(k, st);
+  }
+  return st;
+};
+const overlay = (st: Store, x: TeamTask): TeamTask => (st.pending.get(x.id) ?? []).reduce((y, f) => f(y), x);
+
+/** Ключ списка задач проекта: ['teams', 'one', team, 'project', project, 'tasks'] (teamKeys.tasks). */
+const isTasksKey = (k: readonly unknown[]): boolean => k.length === 6 && k[0] === 'teams' && k[1] === 'one' && k[3] === 'project' && k[5] === 'tasks';
+
+const watched = new WeakSet<QueryClient>();
+/**
+ * Перечитанный список задач (событие `team`, фоновый опрос) не затирает мгновенные правки, что ещё ждут очереди: после
+ * каждого ответа сервера на список они ложатся сверху. Подписка одна на клиент запросов.
+ */
+function watchTasks(qc: QueryClient): void {
+  if (watched.has(qc)) return;
+  watched.add(qc);
+  qc.getQueryCache().subscribe((e) => {
+    if (e.type !== 'updated' || e.action.type !== 'success' || e.action.manual) return;
+    const k = e.query.queryKey;
+    if (!isTasksKey(k)) return;
+    const st = stores.get(`${String(k[2])}/${String(k[4])}`);
+    if (!st?.pending.size) return;
+    qc.setQueryData<TeamTask[]>(k, (all) => all?.map((x) => overlay(st, x)));
+  });
+}
+
 /**
  * Правки задач: перенос и PATCH сразу правят кэш (ранг, статус, спринт, тело), потом уходят на сервер по очереди на
  * задачу. Запрос строится по последней версии с сервера, а не по кэшу с мгновенными правками: иначе «+ критерий» лёг бы
  * дважды. Ответ сервера заменяет задачу в кэше, сверху снова ложатся ещё не отправленные правки; base — из ответа
- * предыдущего запроса, поэтому две быстрые галочки подряд не дают 409. Ошибка — всплывашка и перечитка.
+ * предыдущего запроса, поэтому две быстрые галочки подряд не дают 409. Ошибка — всплывашка; версия с сервера остаётся
+ * прежней (409 — версия команды из ответа), упавшая правка снимается с кэша, следующие строятся без неё.
  */
 export function useTaskOps(team: string, project: string) {
   const qc = useQueryClient();
   const toast = useToast();
   const key = teamKeys.tasks(team, project);
-  const queue = useRef(new Map<string, Promise<unknown>>());
-  /** Версия задачи с сервера, пока у неё есть очередь записей. */
-  const server = useRef(new Map<string, TeamTask>());
-  /** Мгновенные правки, ещё не подтверждённые сервером, по задаче. */
-  const pending = useRef(new Map<string, ((x: TeamTask) => TeamTask)[]>());
+  const st = storeOf(team, project);
+  watchTasks(qc);
 
   const list = () => qc.getQueryData<TeamTask[]>(key) ?? [];
   const put = (task: TeamTask) => qc.setQueryData<TeamTask[]>(key, (all) => (all ?? []).map((x) => (x.id === task.id ? task : x)));
-  const local = (id: string, fn: (x: TeamTask) => TeamTask) => qc.setQueryData<TeamTask[]>(key, (all) => (all ?? []).map((x) => (x.id === id ? fn(x) : x)));
-  /** После записи: строка синхронизации, счётчики вкладок и обзор — заново (событие `team` придёт тоже). */
+  const local = (id: string, fn: Overlay) => qc.setQueryData<TeamTask[]>(key, (all) => (all ?? []).map((x) => (x.id === id ? fn(x) : x)));
+  /**
+   * После записи: строка синхронизации, счётчики команды и спринты проекта — заново, точно по ключам: префикс захватил бы
+   * и список задач, а его перечитка посреди очереди дёргает карточки (событие `team` придёт тоже — его гасит watchTasks).
+   */
   const touched = () => {
-    void qc.invalidateQueries({ queryKey: teamKeys.team(team) });
-    void qc.invalidateQueries({ queryKey: teamKeys.project(team, project) });
+    void qc.invalidateQueries({ queryKey: teamKeys.team(team), exact: true });
+    void qc.invalidateQueries({ queryKey: teamKeys.project(team, project), exact: true });
   };
   const failed = (err: unknown) => {
     toast(err instanceof ApiError && err.code === 'conflict' ? t('Задачу успели изменить: показана версия команды') : errorText(err));
-    if (err instanceof ApiError && err.code === 'conflict') {
-      const cur = (err.data as { current?: TeamTask } | undefined)?.current;
-      if (cur) put(cur);
-    }
-    void qc.invalidateQueries({ queryKey: key });
+    void qc.invalidateQueries({ queryKey: key, exact: true });
   };
 
   /**
    * Запись задачи в очередь: optimistic — сразу в кэш; job получает версию с сервера и отдаёт ответ сервера, поверх
    * которого в кэш снова ложатся правки, что ещё ждут очереди.
    */
-  const run = (id: string, optimistic: ((x: TeamTask) => TeamTask) | undefined, job: (cur: TeamTask) => Promise<TeamTask | undefined>): Promise<TeamTask | undefined> => {
+  const run = (id: string, optimistic: Overlay | undefined, job: (cur: TeamTask) => Promise<TeamTask | undefined>, after?: Promise<unknown>): Promise<TeamTask | undefined> => {
     const cached = list().find((x) => x.id === id);
-    if (cached && !server.current.has(id)) server.current.set(id, cached);
-    const mine = pending.current.get(id) ?? [];
+    if (cached && !st.server.has(id)) st.server.set(id, cached);
     if (optimistic) {
       local(id, optimistic);
-      mine.push(optimistic);
-      pending.current.set(id, mine);
+      st.pending.set(id, [...(st.pending.get(id) ?? []), optimistic]);
     }
     const forget = () => {
-      const left = (pending.current.get(id) ?? []).filter((f) => f !== optimistic);
-      pending.current.set(id, left);
-      return left;
+      const left = (st.pending.get(id) ?? []).filter((f) => f !== optimistic);
+      if (left.length) st.pending.set(id, left);
+      else st.pending.delete(id);
     };
     const step = async () => {
-      const cur = server.current.get(id) ?? list().find((x) => x.id === id);
+      const cur = st.server.get(id) ?? list().find((x) => x.id === id);
       if (!cur) return undefined;
       try {
         const r = await job(cur);
+        forget();
         if (!r) {
-          forget();
+          put(overlay(st, cur));
           return cur;
         }
-        server.current.set(id, r);
-        put(forget().reduce((x, f) => f(x), r));
+        st.server.set(id, r);
+        put(overlay(st, r));
         touched();
         return r;
       } catch (err) {
         forget();
-        server.current.delete(id);
+        const current = err instanceof ApiError && err.code === 'conflict' ? (err.data as { current?: TeamTask } | undefined)?.current : undefined;
+        if (current) st.server.set(id, current);
+        const base = st.server.get(id);
+        if (base) put(overlay(st, base));
         throw err;
       }
     };
-    const prev = queue.current.get(id) ?? Promise.resolve();
+    const prev = Promise.all([st.queue.get(id), after?.catch(() => undefined)]);
     const next = prev.then(step, step).catch((err: unknown) => {
       failed(err);
       return undefined;
     });
-    queue.current.set(id, next);
+    st.queue.set(id, next);
     void next.finally(() => {
-      if (queue.current.get(id) !== next) return;
-      queue.current.delete(id);
-      server.current.delete(id);
-      pending.current.delete(id);
+      if (st.queue.get(id) !== next) return;
+      st.queue.delete(id);
+      st.server.delete(id);
+      st.pending.delete(id);
     });
     return next;
   };
 
-  /** Перенос: статус, спринт и место между соседями. */
-  const move = (id: string, drop: Drop) => {
-    const { move: m, rank } = drop;
+  /**
+   * Перенос: статус, спринт и место между соседями. after — запись, после которой отправлять запрос (групповой перенос:
+   * сосед следующей задачи — предыдущая, её ранг на сервере должен быть уже новым); в кэше перенос виден сразу.
+   */
+  const move = (id: string, drop: Drop, after?: Promise<unknown>) => {
+    const { move: m } = drop;
     return run(
       id,
       (x) => {
-        const next: TeamTask = { ...x, rank };
+        const next: TeamTask = { ...x, rank: dropRank(drop, x.rank) };
         if (m.status) next.status = m.status;
         if (m.sprint !== undefined) {
           if (m.sprint === null) delete next.sprint;
@@ -119,11 +162,12 @@ export function useTaskOps(team: string, project: string) {
         return next;
       },
       () => moveTask(team, project, id, m),
+      after,
     );
   };
 
   /** PATCH с base последней версии с сервера; make получает эту версию (правки тела — по свежему тексту). */
-  const patch = (id: string, make: TeamTaskPatch | ((cur: TeamTask) => TeamTaskPatch | undefined), optimistic?: (x: TeamTask) => TeamTask) =>
+  const patch = (id: string, make: TeamTaskPatch | ((cur: TeamTask) => TeamTaskPatch | undefined), optimistic?: Overlay) =>
     run(id, optimistic, async (cur) => {
       const p = typeof make === 'function' ? make(cur) : make;
       return p ? updateTask(team, project, id, { ...p, base: cur.base }) : undefined;
@@ -152,7 +196,7 @@ export function useTaskOps(team: string, project: string) {
         break;
       }
     }
-    void qc.invalidateQueries({ queryKey: key });
+    void qc.invalidateQueries({ queryKey: key, exact: true });
     touched();
     return n;
   };
@@ -171,18 +215,29 @@ export type Dnd = {
   /** Обработчики строки или карточки: тянуть можно за всю строку. */
   item: (id: string, list: string, index: number) => {
     draggable: true;
+    'data-dnd': string;
     onDragStart: (e: DragEvent) => void;
     onDragEnd: () => void;
     onDragOver: (e: DragEvent) => void;
     onDrop: (e: DragEvent) => void;
   };
-  /** Обработчики пустого места списка: бросок туда — в конец. */
+  /** Обработчики пустого места списка: бросок в зазор между строками — по высоте курсора, ниже всех — в конец. */
   zone: (list: string, length: number) => { onDragOver: (e: DragEvent) => void; onDrop: (e: DragEvent) => void; onDragLeave: (e: DragEvent) => void };
   /** Класс-подсказка для строки: черта сверху или снизу. */
   mark: (list: string, index: number) => 'before' | 'after' | undefined;
 };
 
 const MIME = 'application/x-agentgraph-task';
+
+/** Место броска в зоне списка: перед первой строкой, чья середина ниже курсора; ниже всех — length. */
+function zoneIndex(zone: HTMLElement, y: number, length: number): number {
+  const items = [...zone.querySelectorAll<HTMLElement>(':scope > [data-dnd]')];
+  const i = items.findIndex((it) => {
+    const r = it.getBoundingClientRect();
+    return y < r.top + r.height / 2;
+  });
+  return i < 0 ? length : i;
+}
 
 /** Нативный drag and drop списков задач: onDrop(id, from, to) получает место вставки в списке с переносимой задачей. */
 export function useDnd(onDrop: (id: string, from: string, at: DropAt) => void): Dnd {
@@ -207,6 +262,7 @@ export function useDnd(onDrop: (id: string, from: string, at: DropAt) => void): 
   };
   const item: Dnd['item'] = (id, list, index) => ({
     draggable: true,
+    'data-dnd': id,
     onDragStart: (e) => {
       e.dataTransfer.setData(MIME, JSON.stringify({ id, list }));
       e.dataTransfer.setData('text/plain', id);
@@ -236,9 +292,10 @@ export function useDnd(onDrop: (id: string, from: string, at: DropAt) => void): 
       if (!ours(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      setOver((o) => (o && o.list === list && o.index === length ? o : { list, index: length, after: false }));
+      const index = zoneIndex(e.currentTarget as HTMLElement, e.clientY, length);
+      setOver((o) => (o && o.list === list && o.index === index && !o.after ? o : { list, index, after: false }));
     },
-    onDrop: (e) => finish(e, { list, index: length, after: false }),
+    onDrop: (e) => finish(e, { list, index: zoneIndex(e.currentTarget as HTMLElement, e.clientY, length), after: false }),
     onDragLeave: (e) => {
       if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) setOver((o) => (o?.list === list ? undefined : o));
     },
@@ -253,21 +310,22 @@ export function useDnd(onDrop: (id: string, from: string, at: DropAt) => void): 
 
 /**
  * Фокус на карточке после переноса: карточку с другой колонки React создаёт заново, фокус пропадает. focus(id) — после
- * следующей отрисовки найти [data-task="id"] в контейнере и вернуть фокус.
+ * следующей отрисовки найти [data-task="id"] в контейнере и вернуть фокус; focus(id, true) — элемент с этим id (заголовок
+ * колонки, когда соседней карточки нет).
  */
 export function useKeepFocus() {
   const box = useRef<HTMLElement | null>(null);
-  const want = useRef<string | undefined>(undefined);
+  const want = useRef<{ id: string; byId: boolean } | undefined>(undefined);
   const [seq, setSeq] = useState(0);
   useEffect(() => {
-    const id = want.current;
-    if (!id || !box.current) return;
-    const el = box.current.querySelector<HTMLElement>(`[data-task="${CSS.escape(id)}"]`);
+    const w = want.current;
+    if (!w || !box.current) return;
+    const el = w.byId ? box.current.querySelector<HTMLElement>(`#${CSS.escape(w.id)}`) : box.current.querySelector<HTMLElement>(`[data-task="${CSS.escape(w.id)}"]`);
     if (el && document.activeElement !== el) el.focus();
     want.current = undefined;
   });
-  const focus = useCallback((id: string) => {
-    want.current = id;
+  const focus = useCallback((id: string, byId = false) => {
+    want.current = { id, byId };
     setSeq((n) => n + 1);
   }, []);
   return { box, focus, seq };

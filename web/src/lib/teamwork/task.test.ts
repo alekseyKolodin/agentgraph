@@ -4,7 +4,7 @@ import type { TeamTaskIntake } from '@server/api-types';
 import { boardColumns } from './board';
 import { task } from './fixtures';
 import {
-  addCriterion, columnMoves, criteriaOf, criteriaTitle, defaultWorkFlow, descriptionOf, dropIndex, editCriterion, listMoves, myFlowInput, needsRepo, parseWorkFlow,
+  addCriterion, columnMoves, criteriaOf, dropRank, criteriaTitle, defaultWorkFlow, descriptionOf, dropIndex, editCriterion, listMoves, myFlowInput, needsRepo, parseWorkFlow,
   removeCriterion, samePlace, sideMove, taskRepo, toggleCriterion, withDescription, workFlowKey, workRunBody, workSessionBody,
 } from './task';
 
@@ -58,6 +58,31 @@ test('тело задачи: новое описание встаёт под «#
   assert.equal(withDescription('старое\n- [ ] пункт', 'новое'), '## Описание\n\nновое\n\n## Критерии приёмки\n\n- [ ] пункт\n');
 });
 
+test('тело задачи: правка галочки не трогает остальной текст — код с пустыми строками, отступы, хвост', () => {
+  const body = '  отступ первой строки\n\n```ts\nfunction a() {}\n\n\nfunction b() {}\n```\n\n## Критерии приёмки\n\n- [ ] один\n- [ ] два\n\n';
+  const next = toggleCriterion(body, 1, true);
+  assert.equal(next, body.replace('- [ ] два', '- [x] два'));
+  assert.equal(removeCriterion(body, 0), body.replace('- [ ] один\n', ''));
+  assert.equal(editCriterion(body, 0, 'ноль'), body.replace('- [ ] один', '- [ ] ноль'));
+  // галочки внутри ограды кода не считаются и не правятся
+  assert.deepEqual(criteriaOf('```\n- [ ] нет\n```\n- [ ] да\n'), [{ text: 'да', done: false }]);
+});
+
+test('тело без раздела критериев: галочки — критерии, не описание; правка описания и новый критерий их не теряют и не дублируют', () => {
+  const body = 'Сделать X\n- [ ] a\n- [x] b\n';
+  assert.equal(descriptionOf(body), 'Сделать X');
+  const edited = withDescription(body, 'Сделать Y');
+  assert.equal(edited, '## Описание\n\nСделать Y\n\n## Критерии приёмки\n\n- [ ] a\n- [x] b\n');
+  assert.deepEqual(criteriaOf(edited), criteriaOf(body));
+  const added = addCriterion(body, 'c');
+  assert.equal(added, 'Сделать X\n\n## Критерии приёмки\n\n- [ ] a\n- [x] b\n- [ ] c\n');
+  assert.deepEqual(criteriaOf(added).map((c) => c.text), ['a', 'b', 'c']);
+  // «## Описание» без раздела критериев — то же
+  const withHead = '## Описание\n\nТекст\n- [ ] a\n';
+  assert.equal(descriptionOf(withHead), 'Текст');
+  assert.deepEqual(criteriaOf(withDescription(withHead, 'Новый')), [{ text: 'a', done: false }]);
+});
+
 test('«Переместить…»: выше, ниже, в начало, в конец — соседи для сервера', () => {
   const list = [task({ id: 'A', rank: 'a' }), task({ id: 'B', rank: 'b' }), task({ id: 'C', rank: 'c' }), task({ id: 'D', rank: 'd' })];
   const m = listMoves(list, 'C');
@@ -79,6 +104,11 @@ test('доска: «В колонку…» — в конец чужих коло
   assert.equal(side?.status, 'in_progress');
   assert.deepEqual(side?.drop.move, { status: 'in_progress', after: 'C' });
   assert.equal(sideMove(cols, ['todo', 'in_progress', 'review', 'done'], 'A', -1), undefined);
+});
+
+test('перенос: ранг как у сервера — без соседей прежний, с соседом из dropMove', () => {
+  assert.equal(dropRank({ move: { sprint: 3 }, rank: 'V' }, 'zV'), 'zV');
+  assert.equal(dropRank({ move: { sprint: 3, after: 'PAY-9' }, rank: 'zl' }, 'a'), 'zl');
 });
 
 test('перетаскивание: место без переносимой задачи и перенос на своё же место', () => {
