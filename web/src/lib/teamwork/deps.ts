@@ -185,7 +185,9 @@ const joinAnd = (parts: string[]): string => (parts.length <= 1 ? parts.join('')
 
 /**
  * Когда задачу можно начать: «Можно начать сейчас.», «Начать можно, когда PAY-14 будет в «Готово». Сейчас её делает Алексей.»,
- * «Начать можно после задачи 1 из этого предложения.»
+ * «Начать можно после задачи 1 из этого предложения.» Ждёт одной существующей задачи и задач предложения — обе части в
+ * первой фразе, а строка об исполнителе называет существующую задачу по номеру, а не «её»: «Начать можно, когда PAY-14
+ * будет в «Готово» и после задачи 1 из этого предложения. PAY-14 сейчас делает Алексей.»
  */
 export function startNote(key: string, tasks: readonly TeamProposedTask[], existing: readonly ExistingTask[], report: TeamDependencyReport, members: readonly TeamMember[] = []): string {
   const rows = waitsOn(key, tasks, existing, report).filter((r) => !(r.existing && r.status === 'done'));
@@ -202,7 +204,9 @@ export function startNote(key: string, tasks: readonly TeamProposedTask[], exist
     const r = ext[0]!;
     const m = members.find((x) => x.email === r.assignee);
     const who = m ? memberLabel(m) : r.assignee?.split('@')[0];
-    text += ` ${who ? t('Сейчас её делает {who}.', { who }) : t('Исполнителя у неё пока нет.')}`;
+    // ждёт и задач предложения: «её» читалось бы как о них, поэтому существующая задача — по номеру
+    if (!own.length) text += ` ${who ? t('Сейчас её делает {who}.', { who }) : t('Исполнителя у неё пока нет.')}`;
+    else text += ` ${who ? t('{id} сейчас делает {who}.', { id: r.id, who }) : t('У {id} пока нет исполнителя.', { id: r.id })}`;
   }
   return text;
 }
@@ -295,9 +299,23 @@ export function orderRows(cols: readonly (readonly string[])[], links: readonly 
   return best;
 }
 
-/** Раскладка графа: колонки по волнам слева направо, существующие задачи пунктиром в волне 1, задачи из цикла — в последней колонке. */
+/**
+ * Раскладка графа: колонки по волнам слева направо, существующие незавершённые задачи пунктиром в волне 1, задачи из цикла —
+ * в последней колонке. Предшественник задачи из цикла волны в отчёте не получает (обход цикл пропускает), но на графе он
+ * всё равно стоит в волне 1 со стрелкой к своей задаче.
+ */
 export function layoutGraph(tasks: readonly TeamProposedTask[], existing: readonly ExistingTask[], report: TeamDependencyReport, o: GraphOptions = GRAPH_DEFAULTS): DepsGraph {
-  const n = wavesCount(report);
+  const own = new Set(tasks.map((x) => x.key));
+  const refs = new Map<string, { wave: number; ref: ExistingTask }>();
+  for (const x of tasks) {
+    for (const d of x.dependsOn) {
+      const e = existing.find((y) => y.id === d);
+      if (!e || own.has(d) || refs.has(d)) continue;
+      const wave = report.waves[d] ?? (e.status !== 'done' ? 1 : undefined);
+      if (wave !== undefined) refs.set(d, { wave, ref: e });
+    }
+  }
+  const n = Math.max(wavesCount(report), ...[...refs.values()].map((r) => r.wave));
   const cyclic = tasks.filter((x) => report.waves[x.key] === undefined);
   const colCount = n + (cyclic.length ? 1 : 0);
   const byCol: string[][] = Array.from({ length: colCount }, () => []);
@@ -307,13 +325,9 @@ export function layoutGraph(tasks: readonly TeamProposedTask[], existing: readon
     byCol[w === undefined ? colCount - 1 : w - 1]!.push(x.key);
     info.set(x.key, { existing: false, wave: w, task: x });
   }
-  for (const x of tasks) {
-    for (const d of x.dependsOn) {
-      const e = existing.find((y) => y.id === d);
-      if (!e || info.has(d) || report.waves[d] === undefined) continue;
-      byCol[report.waves[d]! - 1]!.push(d);
-      info.set(d, { existing: true, wave: report.waves[d], ref: e });
-    }
+  for (const [d, { wave, ref }] of refs) {
+    byCol[wave - 1]!.push(d);
+    info.set(d, { existing: true, wave, ref });
   }
   const links: Link[] = tasks.flatMap((x) => x.dependsOn.filter((d) => info.has(d)).map((d) => ({ from: d, to: x.key })));
   const ordered = orderRows(byCol, links);

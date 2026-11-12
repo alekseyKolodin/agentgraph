@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts, shareableUrl,
+  acceptanceOf, addedRequirementRepeats, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts, shareableUrl,
   nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, rankNear, remoteProblem,
   replaceSection, requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections,
   teamSlugFromUrl, updateYaml, validRank, type TaskFile,
@@ -178,6 +178,18 @@ test('номера задач: максимум плюс один по всем 
   assert.equal(nextTaskId(['PAY-3', 'PAY-12', 'OPS-40', 'PAY-x'], 'PAY'), 'PAY-13');
 });
 
+test('номера задач: последний выданный (lastTask) не даёт вернуться номеру удалённой задачи; в teamwork.yaml он сохраняется', () => {
+  assert.equal(nextTaskId(['PAY-3', 'PAY-7'], 'PAY', 8), 'PAY-9', 'PAY-8 удалена — номер не возвращается');
+  assert.equal(nextTaskId(['PAY-3', 'PAY-12'], 'PAY', 8), 'PAY-13', 'задачи больше счётчика — по задачам');
+  assert.equal(nextTaskId([], 'PAY', 4), 'PAY-5');
+  const cfg = parseTeamConfig('format: 1\nprefix: PAY\nlastTask: 8\n');
+  assert.equal(cfg.lastTask, 8);
+  assert.deepEqual(cfg.extra, {});
+  assert.match(serializeTeamConfig(cfg), /lastTask: 8/);
+  assert.equal(parseTeamConfig('format: 1\nprefix: PAY\nlastTask: x\n').lastTask, undefined, 'не число — как нет');
+  assert.equal(parseTeamConfig('format: 1\nprefix: PAY\n').lastTask, undefined);
+});
+
 const PRD = `# ТЗ
 
 Вводный абзац.
@@ -233,6 +245,19 @@ test('требования: строки FR/NFR в любом разделе, н
   assert.equal(nextRequirementId(PRD, 'FR', { FR: 7 }), 'FR-8');
   assert.equal(nextRequirementId(PRD, 'NFR', { FR: 7 }), 'NFR-3');
   assert.equal(nextRequirementId('', 'NFR'), 'NFR-1');
+});
+
+test('требования: запись не добавляет повторов номеров — второй FR-8 виден, старый повтор и номера в коде не считаются', () => {
+  const two = `${PRD}\n## Ещё\n\n- FR-3. Повтор номера\n- NFR-2. И этот\n- FR-5. Новый\n`;
+  assert.deepEqual(addedRequirementRepeats(two, PRD), ['FR-3', 'NFR-2']);
+  assert.deepEqual(addedRequirementRepeats(two), ['FR-3', 'NFR-2'], 'новый документ');
+  assert.deepEqual(addedRequirementRepeats(PRD, ''), []);
+  // FR-9 в блоке кода — не требование
+  assert.deepEqual(addedRequirementRepeats(`${PRD}\n- FR-9. Настоящий\n`, PRD), []);
+  // повтор уже был в документе (слияние двух правок): запись соседнего раздела проходит, третий такой же — нет
+  const merged = `${PRD}\n## Ещё\n\n- FR-3. Из другой правки\n`;
+  assert.deepEqual(addedRequirementRepeats(merged.replace('Текст цели.', 'Новая цель.'), merged), []);
+  assert.deepEqual(addedRequirementRepeats(`${merged}- FR-3. Третий\n`, merged), ['FR-3']);
 });
 
 const proposed = (key: string, dependsOn: string[], estimate?: number): TeamProposedTask => ({ key, title: key, type: 'feature', description: '', acceptance: [], dependsOn, covers: [], ...(estimate !== undefined ? { estimate } : {}) });
@@ -301,6 +326,26 @@ test('слияние файлов задачи и YAML: поля по отдел
   const yc = mergeYamlTexts('status: planned\n', 'status: active\n', 'status: closed\n');
   assert.deepEqual(yc.conflicts, [{ field: 'status', ours: 'active', theirs: 'closed' }]);
   assert.match(yc.text, /status: closed/);
+});
+
+test('слияние YAML: счётчики номеров (lastTask, lastRequirement) — большее значение, не конфликт', () => {
+  const t = mergeYamlTexts('format: 1\nlastTask: 5\n', 'format: 1\nlastTask: 9\n', 'format: 1 # версия\nlastTask: 7\n');
+  assert.deepEqual(t.conflicts, []);
+  assert.match(t.text, /lastTask: 9/);
+  assert.match(t.text, /# версия/);
+  assert.match(mergeYamlTexts('lastTask: 5\n', 'lastTask: 6\n', 'lastTask: 8\n').text, /lastTask: 8/);
+  // у одной стороны счётчика ещё не было
+  assert.match(mergeYamlTexts('format: 1\n', 'format: 1\nlastTask: 4\n', 'format: 1\ntitle: x\n').text, /lastTask: 4/);
+  // счётчик только растёт: и правка руками вниз с одной стороны его не опускает
+  assert.match(mergeYamlTexts('lastTask: 5\n', 'lastTask: 5\n', 'lastTask: 2\n').text, /lastTask: 5/);
+  // lastRequirement — по каждому виду; настоящий конфликт рядом остаётся
+  const r = mergeYamlTexts(
+    'title: a\nlastRequirement:\n  FR: 3\n',
+    'title: b\nlastRequirement:\n  FR: 5\n  NFR: 1\n',
+    'title: c\nlastRequirement:\n  FR: 4\n  NFR: 2\n',
+  );
+  assert.deepEqual(r.conflicts, [{ field: 'title', ours: 'b', theirs: 'c' }]);
+  assert.deepEqual(parseProject(r.text, 'p').lastRequirement, { FR: 5, NFR: 2 });
 });
 
 test('слияние задачи: updatedAt и updatedBy без конфликта — более поздняя правка со своим автором, настоящий конфликт остаётся', async () => {

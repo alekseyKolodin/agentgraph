@@ -13,8 +13,8 @@ import { exec, type Exec } from './git.js';
 import { writeAtomic } from './safe-fs.js';
 import { copyTemplate, renderTeamConfig, TEMPLATE_DIR } from './teamwork-template.js';
 import {
-  mergeTaskTexts, mergeYamlTexts, nextTaskId, parseProject, parseSprint, parseTask, parseTeamConfig, remoteProblem, serializeTask, TEAM_FORMAT, TEAM_SLUG_RE,
-  teamSlugFromUrl, teamsDir, updateYaml, type FieldConflict, type TeamConfig,
+  maxTaskNumber, mergeTaskTexts, mergeYamlTexts, nextTaskId, parseProject, parseSprint, parseTask, parseTeamConfig, remoteProblem, serializeTask, TEAM_FORMAT,
+  TEAM_SLUG_RE, taskNumber, teamSlugFromUrl, teamsDir, updateYaml, type FieldConflict, type TeamConfig,
 } from './teamwork.js';
 import type { TeamConflict, TeamDocName, TeamHistoryItem, TeamMember, TeamRemoteCheck, TeamSync, TeamTaskWork } from './api-types.js';
 
@@ -108,6 +108,15 @@ function readLocal(file: string): LocalData | undefined {
     sync: rec(r.sync),
     conflicts: Array.isArray(r.conflicts) ? r.conflicts : [],
   };
+}
+
+/** teamwork.yaml → lastTask по тексту файла; файла нет или он не читается — 0. */
+function lastTaskOf(text: string | undefined): number {
+  try {
+    return text === undefined ? 0 : (parseTeamConfig(text).lastTask ?? 0);
+  } catch {
+    return 0;
+  }
 }
 
 /** Что менялось в клоне: projects/<slug> → slug; корень (teamwork.yaml, flows/) — пустой список проектов, но событие есть. */
@@ -319,8 +328,10 @@ export class TeamRepo {
       if (this.stopped) throw new TeamError(409, 'Команда отключается', 'busy');
       if (this.readonly()) throw new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его, пока команда только для чтения', 'readonly');
       await this.commitManual();
+      let gone: string[];
       try {
         await mutate(this);
+        gone = await this.rememberTaskNumbers();
       } catch (err) {
         await this.git(['checkout', '-q', '--', '.']).catch(() => undefined);
         await this.git(['clean', '-qfd']).catch(() => undefined);
@@ -341,6 +352,7 @@ export class TeamRepo {
         await this.git(['clean', '-qfd']).catch(() => undefined);
         throw new TeamError(500, `Коммит в репо команды не удался: ${scrub(errMsg(err))}. Проверь настройки git (user.email, подпись коммитов)`);
       }
+      this.forgetWork(gone);
       this.emit(files);
       this.schedulePush();
     });
@@ -350,6 +362,7 @@ export class TeamRepo {
   private async commitManual(): Promise<boolean> {
     const status = (await this.git(['status', '--porcelain', '--untracked-files=all'])).trim();
     if (!status) return false;
+    const gone = await this.rememberTaskNumbers().catch(() => []);
     await this.git(['add', '-A']);
     try {
       await this.git(['commit', '-q', '--no-verify', '-m', MANUAL_MESSAGE]);
@@ -358,7 +371,45 @@ export class TeamRepo {
       if (!/nothing to commit|nothing added/.test(errMsg(err))) throw err;
       return false;
     }
+    this.forgetWork(gone);
     return true;
+  }
+
+  /** Номера задач в рабочей копии, по всем проектам (номер сквозной, spec §5.7). */
+  taskIds(): string[] {
+    return this.dirs('projects').flatMap((p) => this.list(`projects/${p}/tasks`, (n) => /\.md$/i.test(n)).map((n) => n.replace(/\.md$/i, '')));
+  }
+
+  /**
+   * Файл задачи исчез из рабочей копии относительно HEAD (удаление через API, руками в папке): наибольший номер команды на
+   * этот момент запоминается в teamwork.yaml → lastTask тем же коммитом, и номер удалённой задачи больше не выдаётся
+   * (spec §5.7). Создание задачи счётчик не трогает: её номер и так виден среди задач, а teamwork.yaml не становится местом
+   * конфликтов при одновременном создании задач. Формат новее известного — файл не трогаем. Возвращает номера исчезнувших.
+   */
+  private async rememberTaskNumbers(): Promise<string[]> {
+    const gone = (await this.git(['diff', '--name-only', '--no-renames', '--diff-filter=D', 'HEAD'])).split('\n').map((f) => f.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x));
+    if (!gone.length || this.readonly()) return gone;
+    const text = this.read('teamwork.yaml');
+    if (text === undefined) return gone;
+    let prefix: string;
+    try {
+      prefix = parseTeamConfig(text).prefix;
+    } catch {
+      // teamwork.yaml правлен руками и не читается: счётчик не пишем, файл не трогаем
+      return gone;
+    }
+    const top = maxTaskNumber([...gone, ...this.taskIds()], prefix);
+    if (top > lastTaskOf(text)) this.writeFile('teamwork.yaml', updateYaml(text, { lastTask: top }));
+    return gone;
+  }
+
+  /**
+   * Запуски и сессии удалённых задач (local.json → work) забываются: номер мог совпасть с задачей, которую команда завела
+   * одновременно, и чужая задача не должна получить мою работу.
+   */
+  private forgetWork(ids: string[]): void {
+    const known = ids.filter((id) => this.local().work[id]);
+    if (known.length) this.saveLocal((l) => known.forEach((id) => delete l.work[id]));
   }
 
   // ---------- отправка и получение (spec §7.2–7.5)
@@ -544,6 +595,8 @@ export class TeamRepo {
     // не совпал и с моей же новой задачей
     const idsIn = async (ref: string) => new Set((await this.git(['ls-tree', '-r', '--name-only', ref])).split('\n').map((n) => n.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x)));
     const remoteIds = await idsIn(remote);
+    // свободный номер — и за последним выданным с обеих сторон (lastTask): номер удалённой задачи не возвращается
+    const last = Math.max(lastTaskOf(await this.show(remote, 'teamwork.yaml')), lastTaskOf(await this.show(head, 'teamwork.yaml')));
     let knownIds: Set<string> | undefined;
     const allKnownIds = async () => (knownIds ??= new Set([...remoteIds, ...(await idsIn(head))]));
     for (const [file, st] of mine) {
@@ -555,7 +608,7 @@ export class TeamRepo {
         // номер, её ещё никто не видел
         const prefix = task[2].split('-')[0];
         const ids = await allKnownIds();
-        const fresh = nextTaskId(ids, prefix);
+        const fresh = nextTaskId(ids, prefix, last);
         ids.add(fresh);
         renames.set(task[2], fresh);
         const t = parseTask(mineText, file);
@@ -631,8 +684,9 @@ export class TeamRepo {
   }
 
   /**
-   * Один номер у задач разных проектов после чистого rebase (общий путь дал бы конфликт и переименование в replay):
-   * переименовывается та, что добавлена моими неотправленными коммитами, — её ещё никто не видел.
+   * После слияния своя неотправленная задача получает свободный номер (§5.7), если её номер уже занят в команде: задачей
+   * другого проекта (после чистого rebase; общий путь дал бы конфликт и переименование в replay) или выдан там и удалён —
+   * файла у команды нет, но её lastTask этот номер помнит. Мою задачу ещё никто не видел, ссылок на неё нет.
    */
   private async renameDuplicateIds(): Promise<void> {
     const byId = new Map<string, string[]>();
@@ -643,30 +697,38 @@ export class TeamRepo {
         if (id) byId.set(id, [...(byId.get(id) ?? []), file]);
       }
     }
-    const dups = [...byId].filter(([, files]) => files.length > 1);
-    if (!dups.length) return;
     const remoteRef = `origin/${this.branch()}`;
-    const range = (await this.rev(remoteRef)) ? `${remoteRef}..HEAD` : 'HEAD';
-    const mineAdded = new Set((await this.git(['diff', '--name-only', '--diff-filter=A', ...(range === 'HEAD' ? [await this.emptyTree(), 'HEAD'] : [remoteRef, 'HEAD'])])).split('\n').filter(Boolean));
+    const hasRemote = Boolean(await this.rev(remoteRef));
+    // последний номер, выданный командой: моя задача с номером не больше него создана до того, как я его получил
+    const teamLast = hasRemote ? lastTaskOf(await this.show(remoteRef, 'teamwork.yaml')) : 0;
+    const dups = [...byId].filter(([, files]) => files.length > 1);
+    if (!dups.length && !teamLast) return;
+    const mineAdded = new Set((await this.git(['diff', '--name-only', '--diff-filter=A', ...(hasRemote ? [remoteRef, 'HEAD'] : [await this.emptyTree(), 'HEAD'])])).split('\n').filter(Boolean));
     const ids = new Set(byId.keys());
-    const renames = new Map<string, string>();
-    const subjects: string[] = [];
+    const last = Math.max(lastTaskOf(this.read('teamwork.yaml')), teamLast);
+    const wanted: { id: string; file: string; why: string }[] = [];
     for (const [id, files] of dups) {
       const mine = files.filter((f) => mineAdded.has(f));
       // все мои — оставляем первую; ничья — не трогаем (чужие задачи, их починит автор)
-      const toRename = mine.length === files.length ? mine.slice(1) : mine;
-      for (const file of toRename) {
-        const fresh = nextTaskId(ids, id.split('-')[0]);
-        ids.add(fresh);
-        const slug = file.match(TASK_FILE_RE)![1];
-        const newFile = `projects/${slug}/tasks/${fresh}.md`;
-        const text = this.read(file) ?? '';
-        const t = parseTask(text, file);
-        this.writeFile(newFile, t.error ? text.replace(new RegExp(`^id: ${id}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
-        this.remove(file);
-        renames.set(id, fresh);
-        subjects.push(`${id} → ${fresh}: номер уже занят`);
-      }
+      for (const file of mine.length === files.length ? mine.slice(1) : mine) wanted.push({ id, file, why: 'номер уже занят' });
+    }
+    for (const [id, files] of byId) {
+      // один файл и он мой: у команды такой задачи нет — номер выдан и удалён там, если он не больше её lastTask
+      if (files.length === 1 && mineAdded.has(files[0]) && taskNumber(id) <= teamLast) wanted.push({ id, file: files[0], why: 'номер уже выдавался в команде' });
+    }
+    const renames = new Map<string, string>();
+    const subjects: string[] = [];
+    for (const { id, file, why } of wanted) {
+      const fresh = nextTaskId(ids, id.split('-')[0], last);
+      ids.add(fresh);
+      const slug = file.match(TASK_FILE_RE)![1];
+      const newFile = `projects/${slug}/tasks/${fresh}.md`;
+      const text = this.read(file) ?? '';
+      const t = parseTask(text, file);
+      this.writeFile(newFile, t.error ? text.replace(new RegExp(`^id: ${id}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
+      this.remove(file);
+      renames.set(id, fresh);
+      subjects.push(`${id} → ${fresh}: ${why}`);
     }
     if (!renames.size) return;
     for (const file of mineAdded) {

@@ -21,6 +21,7 @@ import {
   serializeProject, serializeSprint, serializeTask, sortTasks, splitSections, sprintSummary, sprintView, TASK_ID_RE, TASK_STATUSES, TASK_TYPES, taskChangeMessage,
   taskFrontmatter, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
 } from './teamwork.js';
+import { addedRequirementRepeats, compareTasks, validRank, type RequirementKind } from './teamwork.js';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
   TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
@@ -58,6 +59,9 @@ export type NewTask = {
   blockedBy?: string[];
   dependsOn?: string[];
   covers?: string[];
+  /** Место в своём списке (спринт или бэклог): after — сразу после этой задачи, before — сразу перед ней; без них — в конец. */
+  after?: string;
+  before?: string;
 };
 
 export type WriteDocOptions = { base?: string; section?: string; hash?: string; message?: string };
@@ -450,11 +454,6 @@ export class TeamService {
     );
   }
 
-  /** Все номера задач команды, по всем проектам: номер сквозной (spec §5.7). */
-  private allTaskIds(repo: TeamRepo): string[] {
-    return repo.dirs('projects').flatMap((p) => repo.list(`projects/${p}/tasks`, (n) => /\.md$/i.test(n)).map((n) => n.replace(/\.md$/i, '')));
-  }
-
   /** Следующий номер спринта — по именам файлов, не по разобранным: битый sprints/3.yaml номер не освобождает. */
   private nextSprintNumberIn(repo: TeamRepo, slug: string): number {
     return repo.list(`projects/${slug}/sprints`, (n) => /^\d+\.ya?ml$/.test(n)).reduce((m, n) => Math.max(m, Number(n.split('.')[0])), 0) + 1;
@@ -704,9 +703,18 @@ export class TeamService {
         if (o.base && textHash(current ?? '') !== o.base) throw new TeamError(409, 'Документ уже изменил кто-то другой', 'conflict', { current: await this.docView(r, slug, name) });
         next = text.endsWith('\n') || !text ? text : `${text}\n`;
       }
+      const cfg = name === 'prd' ? this.readProjectConfig(r, slug) : undefined;
+      if (cfg) {
+        // номер требования — идентификатор (spec §8.4): запись не добавляет второй FR-8 ни из UI, ни из черновика агента
+        const repeats = addedRequirementRepeats(next, current ?? '');
+        if (repeats.length) {
+          const kinds = [...new Set(repeats.map((id) => id.split('-')[0] as RequirementKind))];
+          const free = kinds.map((k) => nextRequirementId(next, k, cfg.lastRequirement)).join(', ');
+          bad(`В ТЗ повторяются номера требований: ${repeats.join(', ')}. У каждого требования свой номер — следующий свободный: ${free}`);
+        }
+      }
       r.writeFile(rel, next);
-      if (name === 'prd') {
-        const cfg = this.readProjectConfig(r, slug);
+      if (cfg) {
         const max = requirementMax(next);
         const last = { FR: Math.max(cfg.lastRequirement?.FR ?? 0, max.FR), NFR: Math.max(cfg.lastRequirement?.NFR ?? 0, max.NFR) };
         if (last.FR !== (cfg.lastRequirement?.FR ?? 0) || last.NFR !== (cfg.lastRequirement?.NFR ?? 0)) {
@@ -762,7 +770,11 @@ export class TeamService {
     return t;
   }
 
-  /** Пачка задач одним коммитом: номера сквозные по команде, порядок — в конец бэклога или спринта, dependsOn → blockedBy. */
+  /**
+   * Пачка задач одним коммитом: номера сквозные по команде и не возвращаются после удаления (teamwork.yaml → lastTask),
+   * dependsOn → blockedBy. Место — в своём списке (спринт или бэклог): after — сразу после этой задачи, before — сразу
+   * перед ней, оба — между ними, без них — в конец; соседа нет в этом списке — 400.
+   */
   async createTasks(team: string, slug: string, items: NewTask[], o: TaskWriteOptions = {}): Promise<TeamTask[]> {
     const repo = this.repo(team);
     const project = this.readProjectConfig(repo, slug);
@@ -774,12 +786,13 @@ export class TeamService {
     await repo.write(message, async (r) => {
       const existing = this.readTasks(r, slug);
       const sprints = this.readSprints(r, slug);
-      const ids = new Set(this.allTaskIds(r));
+      const ids = new Set(r.taskIds());
+      const last = r.config().lastTask;
       const keys = new Map<string, string>();
       const drafts: { item: NewTask; id: string }[] = [];
       for (const item of items) {
         if (!isRecord(item)) bad('Задача — объект');
-        const id = nextTaskId(ids, prefix);
+        const id = nextTaskId(ids, prefix, last);
         ids.add(id);
         if (item.key !== undefined) {
           const k = reqStr(item.key, 'key');
@@ -788,8 +801,14 @@ export class TeamService {
         }
         drafts.push({ item, id });
       }
-      const lastRank = (sprint: number | undefined) => existing.filter((t) => !t.error && t.sprint === sprint).map((t) => t.rank).sort().pop();
-      const ranks = new Map<number | undefined, string | undefined>();
+      // списки по спринту (undefined — бэклог) в порядке rank; задачи пачки встают в них по мере создания
+      const lists = new Map<number | undefined, { id: string; rank: string }[]>();
+      const batch = new Set<string>();
+      const listOf = (sprint: number | undefined) => {
+        let list = lists.get(sprint);
+        if (!list) lists.set(sprint, (list = sortTasks(existing.filter((t) => !t.error && t.sprint === sprint)).map((t) => ({ id: t.id, rank: t.rank }))));
+        return list;
+      };
       const now = this.repoDeps.now().toISOString();
       for (const { item, id } of drafts) {
         const title = reqStr(item.title, 'title', 'У задачи нужен заголовок');
@@ -805,9 +824,38 @@ export class TeamService {
         const blockedBy = [...new Set(deps.map((d) => keys.get(d) ?? d))];
         for (const d of blockedBy) if (d === id || (!existing.some((t) => t.id === d) && ![...keys.values()].includes(d))) bad(`Неизвестная зависимость: ${d}`);
         const body = typeof item.body === 'string' ? item.body : composeBody(item);
-        const prev = ranks.has(sprint) ? ranks.get(sprint) : lastRank(sprint);
-        const rank = rankNear(prev);
-        ranks.set(sprint, rank);
+        const list = listOf(sprint);
+        const at = (ref: unknown, what: string): number | undefined => {
+          const want = optStr(ref, what) || undefined;
+          if (want === undefined) return undefined;
+          const i = list.findIndex((x) => x.id === want);
+          if (i < 0) bad(`Задачи ${want} (${what}) нет ${sprint === undefined ? 'в бэклоге' : `в спринте ${sprint}`}: новая задача встаёт рядом с задачей своего списка`);
+          return i;
+        };
+        const bi = at(item.before, 'before');
+        let ai = at(item.after, 'after');
+        // задачи пачки, уже вставшие сразу за after, остаются перед новой: пачка с одним after идёт в своём порядке
+        if (ai !== undefined) while (ai + 1 < list.length && ai + 1 !== bi && batch.has(list[ai + 1].id)) ai++;
+        // границы — ближайшие допустимые rank строго по разные стороны: у соседей бывает один rank (двое одновременно
+        // добавили в конец) или rank, правленный руками, — тогда задача встаёт сразу за группой (перед группой у before),
+        // а не уезжает за чужие задачи. before без after — после предыдущей; иначе — после after (или в конец), до
+        // before или следующей задачи; соседи наоборот — после after
+        const ranks = list.map((x) => validRank(x.rank));
+        const left = (from: number, below?: string) => ranks.slice(0, from + 1).filter((x): x is string => x !== undefined && (below === undefined || x < below)).pop();
+        const right = (from: number, above?: string) => ranks.slice(from).find((x): x is string => x !== undefined && (above === undefined || x > above));
+        let lo: string | undefined;
+        let hi: string | undefined;
+        if (ai === undefined && bi !== undefined) {
+          hi = right(bi);
+          lo = left(bi - 1, hi);
+        } else {
+          lo = left(ai ?? list.length - 1);
+          hi = bi !== undefined ? right(bi, lo) : ai !== undefined ? right(ai + 1, lo) : undefined;
+        }
+        const rank = rankNear(lo, hi);
+        const pos = list.findIndex((x) => compareTasks({ id, rank }, x) < 0);
+        list.splice(pos < 0 ? list.length : pos, 0, { id, rank });
+        batch.add(id);
         const file = `projects/${slug}/tasks/${id}.md`;
         const assignee = optStr(item.assignee, 'assignee') || undefined;
         const t: TaskFile = {

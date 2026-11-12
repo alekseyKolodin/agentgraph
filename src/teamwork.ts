@@ -90,12 +90,14 @@ export type TeamConfig = {
   columns: TeamColumns;
   members: TeamMember[];
   defaultFlow?: string;
+  /** Наибольший выданный номер задачи, которого может не быть среди задач (удалена): номер не возвращается (spec §5.7). */
+  lastTask?: number;
   /** Неизвестные поля: сохраняются при записи. */
   extra: Record<string, unknown>;
 };
 
 export function parseTeamConfig(text: string): TeamConfig {
-  const { format, title, prefix, columns, members, defaultFlow, ...extra } = parseYamlRecord(text, 'teamwork.yaml');
+  const { format, title, prefix, columns, members, defaultFlow, lastTask, ...extra } = parseYamlRecord(text, 'teamwork.yaml');
   const fmt = typeof format === 'number' && Number.isInteger(format) && format > 0 ? format : undefined;
   if (!fmt) throw new Error('teamwork.yaml: нет поля format');
   const pfx = str(prefix)?.trim().toUpperCase() ?? '';
@@ -107,6 +109,7 @@ export function parseTeamConfig(text: string): TeamConfig {
     columns: parseColumns(columns),
     members: parseMembers(members),
     ...(str(defaultFlow)?.trim() ? { defaultFlow: str(defaultFlow)!.trim() } : {}),
+    ...(typeof lastTask === 'number' && Number.isInteger(lastTask) && lastTask > 0 ? { lastTask } : {}),
     extra,
   };
 }
@@ -144,6 +147,7 @@ export function serializeTeamConfig(cfg: TeamConfig): string {
     columns: cfg.columns,
     members: cfg.members,
     ...(cfg.defaultFlow ? { defaultFlow: cfg.defaultFlow } : {}),
+    ...(cfg.lastTask ? { lastTask: cfg.lastTask } : {}),
     ...cfg.extra,
   });
 }
@@ -384,15 +388,23 @@ export function acceptanceOf(body: string): { done: number; total: number } {
   return { done, total };
 }
 
-/** Следующий номер задачи: максимум среди известных плюс один (spec §5.7). */
-export function nextTaskId(ids: Iterable<string>, prefix: string): string {
+/** Наибольший номер среди задач с этим префиксом; нет таких — 0. */
+export function maxTaskNumber(ids: Iterable<string>, prefix: string): number {
   const re = new RegExp(`^${prefix}-(\\d+)$`);
   let max = 0;
   for (const id of ids) {
     const m = id.match(re);
     if (m) max = Math.max(max, Number(m[1]));
   }
-  return `${prefix}-${max + 1}`;
+  return max;
+}
+
+/**
+ * Следующий номер задачи: больше всех известных и последнего выданного (teamwork.yaml → lastTask), чтобы номер удалённой
+ * задачи не вернулся (spec §5.7).
+ */
+export function nextTaskId(ids: Iterable<string>, prefix: string, last = 0): string {
+  return `${prefix}-${Math.max(maxTaskNumber(ids, prefix), last) + 1}`;
 }
 
 export const taskNumber = (id: string): number => Number(id.split('-').pop() ?? 0);
@@ -543,6 +555,21 @@ export function requirementMax(md: string): Record<RequirementKind, number> {
     max[kind] = Math.max(max[kind], Number(n));
   }
   return max;
+}
+
+/**
+ * Номера требований, которых в next больше одного и больше, чем было в current: запись не добавляет повторов (spec §8.4,
+ * номер — идентификатор). Повтор, который уже был в документе (слияние двух правок, правка руками), запись не блокирует —
+ * иначе не сохранить и соседний раздел. Порядок — как в документе.
+ */
+export function addedRequirementRepeats(next: string, current = ''): string[] {
+  const count = (md: string) => {
+    const n = new Map<string, number>();
+    for (const r of parseRequirements(md)) n.set(r.id, (n.get(r.id) ?? 0) + 1);
+    return n;
+  };
+  const was = count(current);
+  return [...count(next)].filter(([id, n]) => n > 1 && n > (was.get(id) ?? 0)).map(([id]) => id);
 }
 
 /** Следующий номер: больше всех в тексте и последнего выданного (project.yaml → lastRequirement), чтобы удалённый не вернулся. */
@@ -823,7 +850,27 @@ export async function mergeTaskTexts(base: string | undefined, mine: string, the
   return { text: composeTask(merged, body), conflicts };
 }
 
-/** Слияние YAML-файла (проект, спринт, teamwork.yaml) по полям; итог пишется поверх текста команды, чтобы остались её комментарии. */
+/**
+ * Счётчики выданных номеров: teamwork.yaml → lastTask, project.yaml → lastRequirement. Номер только растёт, поэтому при
+ * слиянии берётся большее значение (у объекта — по каждому ключу), и это не конфликт.
+ */
+const COUNTER_FIELDS = new Set(['lastTask', 'lastRequirement']);
+function maxCounter(mine: unknown, theirs: unknown): unknown {
+  if (isRecord(mine) && isRecord(theirs)) {
+    const out: Record<string, unknown> = { ...theirs };
+    for (const k of Object.keys(mine)) out[k] = maxCounter(mine[k], theirs[k]);
+    return out;
+  }
+  const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+  if (num(mine) && num(theirs)) return Math.max(mine as number, theirs as number);
+  if (num(mine)) return mine;
+  return theirs ?? mine;
+}
+
+/**
+ * Слияние YAML-файла (проект, спринт, teamwork.yaml) по полям; итог пишется поверх текста команды, чтобы остались её
+ * комментарии. Счётчики номеров — большее из двух значений.
+ */
 export function mergeYamlTexts(base: string | undefined, mine: string, theirs: string): { text: string; conflicts: FieldConflict[] } {
   let b: Record<string, unknown> | undefined;
   let m: Record<string, unknown>;
@@ -835,7 +882,9 @@ export function mergeYamlTexts(base: string | undefined, mine: string, theirs: s
   } catch {
     return { text: theirs, conflicts: [{ field: 'text', ours: mine, theirs }] };
   }
-  const { merged, conflicts } = mergeRecords(b, m, t);
+  const { merged, conflicts: all } = mergeRecords(b, m, t);
+  for (const k of COUNTER_FIELDS) if (m[k] !== undefined || t[k] !== undefined) merged[k] = maxCounter(m[k], t[k]);
+  const conflicts = all.filter((c) => !COUNTER_FIELDS.has(c.field));
   const patch: Record<string, unknown> = {};
   for (const k of new Set([...Object.keys(t), ...Object.keys(merged)])) patch[k] = merged[k];
   return { text: updateYaml(theirs, patch), conflicts };
