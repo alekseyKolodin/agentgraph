@@ -24,7 +24,8 @@ export function hasPlaceholders(template: string | undefined): boolean {
 }
 
 /**
- * Шаблон анкеты сверху (строки «Тикет: <...>» и «Ветка: <...>» заполняются), под ним — контекст источника.
+ * Шаблон анкеты сверху, под ним — контекст источника. Заполняются строки «Тикет: <...>» и «Задача: <...>» (номер из
+ * трекера или задачи Teamwork, одно значение) и «Ветка: <...>»; остальные строки анкеты остаются как есть.
  * Шаблон без плейсхолдеров (промпт генерации у сгенерированных флоу) не вставляется.
  */
 export function composeInput(template: string | undefined, fill: { ticket?: string; branch?: string }, context: string): string {
@@ -34,9 +35,9 @@ export function composeInput(template: string | undefined, fill: { ticket?: stri
       template!
         .split('\n')
         .map((line) => {
-          const m = line.match(/^(\s*)(Тикет|Ticket|Ветка|Branch)(\s*:\s*)<[^<>\n]*>\s*$/i);
+          const m = line.match(/^(\s*)(Тикет|Ticket|Задача|Task|Ветка|Branch)(\s*:\s*)<[^<>\n]*>\s*$/i);
           if (!m) return line;
-          const v = /^(Тикет|Ticket)$/i.test(m[2]) ? fill.ticket : fill.branch;
+          const v = /^(Тикет|Ticket|Задача|Task)$/i.test(m[2]) ? fill.ticket : fill.branch;
           return v ? `${m[1]}${m[2]}${m[3]}${v}` : line;
         })
         .join('\n')
