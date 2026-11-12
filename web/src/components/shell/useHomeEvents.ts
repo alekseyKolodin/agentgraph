@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { HomeEvent } from '@server/api-types';
 import { keys, useEventStream, useFeature } from '../../api';
 import { sessionKeys } from '../../api/sessions';
+import { teamKeys } from '../../api/teamwork';
 import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
@@ -97,6 +98,11 @@ export function useHomeEvents(): void {
       if (feedOn) soon(keys.feed);
     },
     onEvent: (e) => {
+      // в клоне команды Teamwork что-то поменялось (запись или pull): все запросы команд — заново; запусков это не касается
+      if (e.type === 'team') {
+        soon(teamKeys.all);
+        return;
+      }
       // событие сессии терминала — не запуска: главную, запуски и ленту оно не меняет
       if (e.type === 'session') {
         if (e.session) announceSession(e);
