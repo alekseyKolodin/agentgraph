@@ -1,0 +1,62 @@
+// Строка синхронизации (spec §7, §11; макет SyncStates.dc.html): текст, тон и действие по TeamSync. Без React и DOM.
+import type { TeamConflict, TeamSync } from '@server/api-types';
+import { plural, t } from '../i18n';
+import { clock } from '../format';
+
+export type SyncTone = 'ok' | 'live' | 'wait' | 'off';
+export type SyncAction = { kind: 'retry' | 'resolve' | 'update'; label: string };
+export type SyncLine = { text: string; tone: SyncTone; action?: SyncAction };
+
+/** «12 с назад», «3 мин назад», «2 ч назад», старше суток — дата и время. */
+export function agoShort(iso: string, now: number = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+  if (s < 60) return t('{s} с назад', { s });
+  if (s < 3600) return t('{m} мин назад', { m: Math.floor(s / 60) });
+  if (s < 86400) return t('{h} ч назад', { h: Math.floor(s / 3600) });
+  return clock(iso, new Date(now));
+}
+
+export const changesWord = (n: number): string => `${n} ${plural(n, 'изменение', 'изменения', 'изменений')}`;
+
+/** «конфликт в PAY-12», «конфликт в prd.md», несколько — «конфликтов: 3». */
+export function conflictText(sync: Pick<TeamSync, 'conflicts'>, conflicts?: readonly TeamConflict[]): string {
+  const n = conflicts?.length ?? sync.conflicts;
+  if (n === 1 && conflicts?.[0]) {
+    const c = conflicts[0];
+    return t('конфликт в {what}', { what: c.task ?? (c.doc ? (c.doc.startsWith('docs/') ? c.doc : `${c.doc}.md`) : c.file) });
+  }
+  return n <= 1 ? t('конфликт') : t('конфликтов: {n}', { n });
+}
+
+/**
+ * Строка синхронизации в шапке команды и проекта. Клик по строке синхронизирует сейчас; action — кнопка в строке.
+ * Тон: ok — зелёная точка, live — идёт, wait — янтарная, off — только чтение.
+ */
+export function syncLine(sync: TeamSync, o: { conflicts?: readonly TeamConflict[]; format?: number; now?: number } = {}): SyncLine {
+  switch (sync.state) {
+    case 'pushing':
+      return { text: sync.unpushed ? `${t('отправляется')} · ${changesWord(sync.unpushed)}` : t('отправляется…'), tone: 'live' };
+    case 'pending': {
+      const head = sync.unpushed ? t('не отправлено: {changes}', { changes: changesWord(sync.unpushed) }) : t('не отправлено');
+      return { text: sync.error ? `${head} — ${sync.error}` : head, tone: 'wait', action: { kind: 'retry', label: t('Повторить') } };
+    }
+    case 'conflict':
+      return { text: conflictText(sync, o.conflicts), tone: 'wait', action: { kind: 'resolve', label: t('Разобрать') } };
+    case 'readonly':
+      return {
+        text: o.format !== undefined ? t('только чтение: формат {n} новее этой версии agentgraph', { n: o.format }) : t('только чтение: формат новее этой версии agentgraph'),
+        tone: 'off', action: { kind: 'update', label: t('Обновить agentgraph') },
+      };
+    default: {
+      const at = sync.lastPushAt && sync.lastFetchAt ? (sync.lastPushAt > sync.lastFetchAt ? sync.lastPushAt : sync.lastFetchAt) : sync.lastPushAt ?? sync.lastFetchAt;
+      return { text: at ? `${t('синхронизировано')} · ${agoShort(at, o.now)}` : t('синхронизировано'), tone: 'ok' };
+    }
+  }
+}
+
+/** Несохранённая правка раздела документа вместо строки синхронизации: «не сохранено: раздел «Требования»». */
+export function unsavedLine(sections: readonly string[]): SyncLine | undefined {
+  if (!sections.length) return undefined;
+  const list = sections.map((s) => `«${s}»`).join(', ');
+  return { text: t('не сохранено: {word} {list}', { word: plural(sections.length, 'раздел', 'разделы', 'разделы'), list }), tone: 'wait' };
+}
