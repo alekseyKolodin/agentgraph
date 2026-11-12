@@ -21,6 +21,14 @@ for (const d of [path.join(home, 'flows'), path.join(home, 'runs'), proj]) fs.mk
 const { startServer, stopServer } = await import('./server.js');
 const { exec } = await import('./git.js');
 const { teamsDir } = await import('./teamwork.js');
+const { templateFiles } = await import('./teamwork-template.js');
+
+/** Flow шаблона репо команды: тесты не зависят от того, какие flow в нём лежат. */
+const TEMPLATE_FLOWS = templateFiles().flatMap((f) => (f.match(/^flows\/([a-z0-9-]+)\.ya?ml$/)?.[1] ? [f.match(/^flows\/([a-z0-9-]+)\.ya?ml$/)![1]] : [])).sort();
+/** Имя flow, которого в шаблоне точно нет. */
+const NO_FLOW = 'tw-nope';
+/** Flow, который тест добавляет сам. */
+const MY_FLOW = 'tw-custom';
 
 const bare = path.join(home, 'team.git');
 const gitcfg = path.join(home, 'me.gitconfig');
@@ -86,7 +94,7 @@ test('фича teamwork и пустой список команд; провер�
   assert.deepEqual(t.memberList, [{ name: 'Алексей', email: 'alex@example.com' }]);
   assert.deepEqual(t.me, { name: 'Алексей', email: 'alex@example.com', inTeam: true });
   assert.equal(t.sync.state, 'ok');
-  assert.deepEqual(t.flows, []);
+  assert.deepEqual(t.flows, TEMPLATE_FLOWS);
   assert.equal(t.dir, path.join(teamsDir(), 'team', 'repo'));
   assert.equal(t.columns.in_progress, 'В работе');
   const list = await call<TeamSummary[]>('GET', '/api/teams');
@@ -116,7 +124,7 @@ test('настройки команды: названия колонок, уча
   assert.equal((await call('PUT', '/api/teams/team', { prefix: 'NEW' })).status, 400);
   assert.equal((await call('PUT', '/api/teams/team', { prefix: 'pay' })).status, 200);
   assert.equal((await call('PUT', '/api/teams/team', { members: [] })).status, 400);
-  const noFlow = await call<Err>('PUT', '/api/teams/team', { defaultFlow: 'teamwork-task' });
+  const noFlow = await call<Err>('PUT', '/api/teams/team', { defaultFlow: NO_FLOW });
   assert.equal(noFlow.status, 400);
   assert.match(noFlow.body.error, /нет в репо команды/);
   // %E0 в пути — 400, а не 500
@@ -332,18 +340,24 @@ test('спринты: один planned и один active, запуск пере
 });
 
 test('flow команды: нет — 404, невалидный YAML — 400, валидный сохраняется и появляется в списке; местные папки и привязки; синхронизация', async () => {
-  assert.equal((await call('GET', '/api/teams/team/flows/teamwork-task')).status, 404);
+  assert.equal((await call('GET', `/api/teams/team/flows/${NO_FLOW}`)).status, 404);
   assert.equal((await call('GET', '/api/teams/team/flows/Bad_Name')).status, 400);
-  const bad = await call<Err>('PUT', '/api/teams/team/flows/teamwork-task', { yaml: 'name: teamwork-task\nphases: []\n' });
+  const bad = await call<Err>('PUT', `/api/teams/team/flows/${MY_FLOW}`, { yaml: `name: ${MY_FLOW}\nphases: []\n` });
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /flow/i);
-  const yaml = 'name: teamwork-task\ndescription: Задача в работу\nphases:\n  - name: work\n    tools: [Read, Edit]\n    prompt: "{{input}}"\n';
-  const saved = await call<{ name: string; yaml: string; spec: { name: string } }>('PUT', '/api/teams/team/flows/teamwork-task', { yaml });
+  const yaml = `name: ${MY_FLOW}\ndescription: Задача в работу\nphases:\n  - name: work\n    tools: [Read, Edit]\n    prompt: "{{input}}"\n`;
+  const saved = await call<{ name: string; yaml: string; spec: { name: string } }>('PUT', `/api/teams/team/flows/${MY_FLOW}`, { yaml });
   assert.equal(saved.status, 200);
-  assert.equal(saved.body.spec.name, 'teamwork-task');
-  assert.equal((await call<{ yaml: string }>('GET', '/api/teams/team/flows/teamwork-task')).body.yaml, yaml);
-  assert.deepEqual((await call<TeamDetail>('GET', '/api/teams/team')).body.flows, ['teamwork-task']);
-  assert.equal((await call<TeamDetail>('PUT', '/api/teams/team', { defaultFlow: 'teamwork-task' })).body.defaultFlow, 'teamwork-task');
+  assert.equal(saved.body.spec.name, MY_FLOW);
+  assert.equal((await call<{ yaml: string }>('GET', `/api/teams/team/flows/${MY_FLOW}`)).body.yaml, yaml);
+  assert.deepEqual((await call<TeamDetail>('GET', '/api/teams/team')).body.flows, [...TEMPLATE_FLOWS, MY_FLOW].sort());
+  assert.equal((await call<TeamDetail>('PUT', '/api/teams/team', { defaultFlow: MY_FLOW })).body.defaultFlow, MY_FLOW);
+  // flow шаблона читается и проходит схему
+  for (const name of TEMPLATE_FLOWS) {
+    const f = await call<{ spec?: unknown; error?: string }>('GET', `/api/teams/team/flows/${name}`);
+    assert.equal(f.status, 200, name);
+    assert.ok(f.body.spec, `${name}: ${f.body.error}`);
+  }
   // local.json: пути репо кода и привязки пространств
   assert.equal((await call('PUT', '/api/teams/team/local', { repoPaths: { 'git@github.com:acme/billing.git': 'relative' } })).status, 400);
   const local = await call<{ repoPaths: Record<string, string>; projectSpaces: Record<string, string> }>('PUT', '/api/teams/team/local', { repoPaths: { 'git@github.com:acme/billing.git': proj }, projectSpaces: { export: 'billing-export' } });
@@ -361,7 +375,7 @@ test('flow команды: нет — 404, невалидный YAML — 400, в
   assert.equal(sync.status, 200);
   assert.equal(sync.body.state, 'ok');
   assert.equal(sync.body.unpushed, 0);
-  assert.deepEqual(git(bare, 'log', '-2', '--format=%s', 'main').split('\n'), ['Настройки команды: flow по умолчанию', 'flow teamwork-task: добавлен']);
+  assert.deepEqual(git(bare, 'log', '-2', '--format=%s', 'main').split('\n'), ['Настройки команды: flow по умолчанию', `flow ${MY_FLOW}: добавлен`]);
 });
 
 test('конфликты: после sync одно поле с двух сторон даёт запись в списке, «взять моё» пишет коммит, «оставить команды» снимает запись', async () => {
