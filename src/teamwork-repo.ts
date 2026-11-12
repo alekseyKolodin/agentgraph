@@ -2,7 +2,7 @@
 // репо из шаблона, подключение, отключение; очередь записей с коммитом на каждую запись API; отправка через 3 с после
 // последнего коммита (pull --rebase, затем push), получение по таймеру; конфликты: ребейз с конфликтом всегда откатывается,
 // локальные коммиты применяются заново как слияние полей (задачи, YAML) и текстов (git merge-file), нерешённое — в
-// local.json → conflicts; совпавшие номера задач переименовываются (§5.7); нет сети — повторы с нарастающей паузой (§7.5);
+// local.json → conflicts (список, «оставить команды» и «взять моё» — в teamwork-server.ts); совпавшие номера задач переименовываются (§5.7); нет сети — повторы с нарастающей паузой (§7.5);
 // правки руками в клоне коммитятся перед pull (§7.6); формат новее — только чтение. Git только через execFile с массивом
 // аргументов и GIT_TERMINAL_PROMPT=0 (exec из git.ts).
 import fs from 'node:fs';
@@ -74,13 +74,15 @@ export type CommitMessage = string | { subject: string; body?: string };
 
 export const LOCAL_FILE = 'local.json';
 export const REPO_DIR = 'repo';
-const TASK_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\/tasks\/([A-Z]{2,6}-\d+)\.md$/;
+export const TASK_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\/tasks\/([A-Z]{2,6}-\d+)\.md$/;
 const PROJECT_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\//;
 const MANUAL_MESSAGE = 'Правки в папке команды';
 const GIT_TIMEOUT = 60_000;
 const NET_TIMEOUT = 120_000;
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/** Текст ошибки git без учётных данных из ссылки (https://user:token@host/…). */
+export const scrub = (s: string): string => s.replace(/(\/\/)[^/@\s]+@/g, '$1***@');
 
 function emptyLocal(remote: string): LocalData {
   return { remote, repoPaths: {}, projectSpaces: {}, work: {}, sync: {}, conflicts: [] };
@@ -177,10 +179,24 @@ export class TeamRepo {
 
   // ---------- файлы клона
 
-  /** Абсолютный путь файла клона по относительному; выход за клон — ошибка. */
+  /**
+   * Абсолютный путь файла клона по относительному; выход за клон — ошибка, в том числе через ссылку: клон делается с
+   * core.symlinks=false, но файл внутри него писали другие участники, поэтому ближайший существующий предок сверяется по realpath.
+   */
   abs(rel: string): string {
     const p = path.resolve(this.repoDir, rel);
-    if (p !== this.repoDir && !p.startsWith(this.repoDir + path.sep)) throw new TeamError(400, `Путь вне репо команды: ${rel}`);
+    const inside = (x: string, root: string) => x === root || x.startsWith(root + path.sep);
+    if (!inside(p, this.repoDir)) throw new TeamError(400, `Путь вне репо команды: ${rel}`);
+    let probe = p;
+    while (!fs.existsSync(probe) && probe !== this.repoDir) probe = path.dirname(probe);
+    try {
+      const realRoot = fs.realpathSync(this.repoDir);
+      const real = fs.realpathSync(probe);
+      if (!inside(real, realRoot)) throw new TeamError(400, `Путь ведёт за пределы репо команды: ${rel}`);
+    } catch (err) {
+      if (err instanceof TeamError) throw err;
+      // клона ещё нет (создание) — сверять нечего
+    }
     return p;
   }
 
@@ -253,8 +269,9 @@ export class TeamRepo {
 
   // ---------- git
 
+  /** git в клоне: имена файлов без экранирования не-ASCII (core.quotePath), сообщения git — на английском (разбор ошибок). */
   git(args: string[], timeoutMs = GIT_TIMEOUT): Promise<string> {
-    return this.deps.exec('git', args, { cwd: this.repoDir, timeoutMs });
+    return this.deps.exec('git', ['-c', 'core.quotePath=false', ...args], { cwd: this.repoDir, timeoutMs, env: { LC_ALL: 'C' } });
   }
 
   /** Я по git config клона (глобальный конфиг тоже действует). */
@@ -298,6 +315,7 @@ export class TeamRepo {
    */
   write(message: CommitMessage | (() => CommitMessage), mutate: (repo: TeamRepo) => void | Promise<void>, o: { author?: { name: string; email: string } } = {}): Promise<void> {
     return this.enqueue(async () => {
+      if (this.stopped) throw new TeamError(409, 'Команда отключается', 'busy');
       if (this.readonly()) throw new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его, пока команда только для чтения', 'readonly');
       await this.commitManual();
       try {
@@ -313,7 +331,15 @@ export class TeamRepo {
       const author = o.author ? ['--author', `${o.author.name} <${o.author.email}>`] : [];
       const msg = typeof message === 'function' ? message() : message;
       const { subject, body } = typeof msg === 'string' ? { subject: msg, body: undefined } : msg;
-      await this.git(['commit', '-q', '--no-verify', ...author, '-m', subject, ...(body ? ['-m', body] : [])]);
+      try {
+        await this.git(['commit', '-q', '--no-verify', ...author, '-m', subject, ...(body ? ['-m', body] : [])]);
+      } catch (err) {
+        // коммит не удался (подпись коммитов без ключа, нет user.email): рабочая копия возвращается к HEAD, иначе
+        // «применённая» правка висела бы без коммита и ломала бы каждую следующую запись
+        await this.git(['reset', '-q', '--hard', 'HEAD']).catch(() => undefined);
+        await this.git(['clean', '-qfd']).catch(() => undefined);
+        throw new TeamError(500, `Коммит в репо команды не удался: ${scrub(errMsg(err))}. Проверь настройки git (user.email, подпись коммитов)`);
+      }
       this.emit(files);
       this.schedulePush();
     });
@@ -337,7 +363,8 @@ export class TeamRepo {
   // ---------- отправка и получение (spec §7.2–7.5)
 
   schedulePush(delayMs = this.deps.pushDelayMs): void {
-    if (this.stopped) return;
+    // Infinity — автоматической отправки нет (тесты): push только явный
+    if (this.stopped || !Number.isFinite(delayMs)) return;
     if (this.pushTimer) clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => {
       this.pushTimer = undefined;
@@ -385,7 +412,7 @@ export class TeamRepo {
       }
       this.retryMs = 0;
     } catch (err) {
-      const msg = errMsg(err);
+      const msg = scrub(errMsg(err));
       this.saveLocal((l) => (l.sync.error = msg));
       if (push) {
         this.retryMs = Math.min(Math.max(this.retryMs * 2, this.deps.retryMinMs), this.deps.retryMaxMs);
@@ -504,17 +531,30 @@ export class TeamRepo {
       });
     };
     const fieldConflicts = (file: string, list: FieldConflict[], kind: TeamConflict['kind'] = 'field') => Promise.all(list.map((c) => conflict(file, c.field === 'body' || c.field === 'text' ? 'text' : kind, c.ours, c.theirs, c.field)));
-    // занятые номера — в дереве команды и в моём: свободный номер не должен совпасть и с моей же новой задачей
+    // номера задач сквозные по команде (§5.7): занятые — в дереве команды (любой проект) и в моём, чтобы свободный номер
+    // не совпал и с моей же новой задачей
+    const idsIn = async (ref: string) => new Set((await this.git(['ls-tree', '-r', '--name-only', ref])).split('\n').map((n) => n.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x)));
+    const remoteIds = await idsIn(remote);
     let knownIds: Set<string> | undefined;
-    const allKnownIds = async () => {
-      if (knownIds) return knownIds;
-      const names = [...(await this.git(['ls-tree', '-r', '--name-only', remote])).split('\n'), ...(await this.git(['ls-tree', '-r', '--name-only', head])).split('\n')];
-      knownIds = new Set(names.map((n) => n.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x)));
-      return knownIds;
-    };
+    const allKnownIds = async () => (knownIds ??= new Set([...remoteIds, ...(await idsIn(head))]));
     for (const [file, st] of mine) {
       const ts = theirs.get(file);
       const mineText = st === 'D' ? undefined : await this.show(head, file);
+      const task = file.match(TASK_FILE_RE);
+      if (task && st === 'A' && mineText !== undefined && remoteIds.has(task[2]) && mineText !== (ts ? await this.show(remote, file) : undefined)) {
+        // мой номер уже занят в репо команды (тем же путём или задачей другого проекта): моя задача получает свободный
+        // номер, её ещё никто не видел
+        const prefix = task[2].split('-')[0];
+        const ids = await allKnownIds();
+        const fresh = nextTaskId(ids, prefix);
+        ids.add(fresh);
+        renames.set(task[2], fresh);
+        const t = parseTask(mineText, file);
+        const newFile = `projects/${task[1]}/tasks/${fresh}.md`;
+        results.set(newFile, t.error ? mineText.replace(new RegExp(`^id: ${task[2]}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
+        subjects.push(`${task[2]} → ${fresh}: номер уже занят`);
+        continue;
+      }
       if (!ts) {
         results.set(file, mineText ?? null);
         continue;
@@ -527,20 +567,6 @@ export class TeamRepo {
         continue;
       }
       if (mineText === theirText) continue;
-      const task = file.match(TASK_FILE_RE);
-      if (task && st === 'A' && ts === 'A') {
-        // один номер с двух сторон: моя задача получает свободный номер, её ещё никто не видел
-        const prefix = task[2].split('-')[0];
-        const ids = await allKnownIds();
-        const fresh = nextTaskId(ids, prefix);
-        ids.add(fresh);
-        renames.set(task[2], fresh);
-        const t = parseTask(mineText, file);
-        const newFile = `projects/${task[1]}/tasks/${fresh}.md`;
-        results.set(newFile, t.error ? mineText.replace(new RegExp(`^id: ${task[2]}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
-        subjects.push(`${task[2]} → ${fresh}: номер уже занят`);
-        continue;
-      }
       if (task) {
         const r = await mergeTaskTexts(baseText, mineText, theirText, file, (b, m, t) => this.mergeText(b, m, t));
         results.set(file, r.text);
@@ -589,20 +615,88 @@ export class TeamRepo {
     }
   }
 
-  /** Два активных спринта в проекте после слияния — активным остаётся более ранний, второй снова запланирован (spec §7.4.4). */
+  /** После слияния: совпавшие номера задач между проектами (§5.7) и два активных спринта (§7.4.4). */
   private async afterIntegrate(): Promise<void> {
+    await this.renameDuplicateIds();
+    await this.demoteSecondSprint();
+  }
+
+  /**
+   * Один номер у задач разных проектов после чистого rebase (общий путь дал бы конфликт и переименование в replay):
+   * переименовывается та, что добавлена моими неотправленными коммитами, — её ещё никто не видел.
+   */
+  private async renameDuplicateIds(): Promise<void> {
+    const byId = new Map<string, string[]>();
+    for (const slug of this.dirs('projects')) {
+      for (const name of this.list(`projects/${slug}/tasks`, (n) => /\.md$/i.test(n))) {
+        const file = `projects/${slug}/tasks/${name}`;
+        const id = file.match(TASK_FILE_RE)?.[2];
+        if (id) byId.set(id, [...(byId.get(id) ?? []), file]);
+      }
+    }
+    const dups = [...byId].filter(([, files]) => files.length > 1);
+    if (!dups.length) return;
+    const remoteRef = `origin/${this.branch()}`;
+    const range = (await this.rev(remoteRef)) ? `${remoteRef}..HEAD` : 'HEAD';
+    const mineAdded = new Set((await this.git(['diff', '--name-only', '--diff-filter=A', ...(range === 'HEAD' ? [await this.emptyTree(), 'HEAD'] : [remoteRef, 'HEAD'])])).split('\n').filter(Boolean));
+    const ids = new Set(byId.keys());
+    const renames = new Map<string, string>();
+    const subjects: string[] = [];
+    for (const [id, files] of dups) {
+      const mine = files.filter((f) => mineAdded.has(f));
+      // все мои — оставляем первую; ничья — не трогаем (чужие задачи, их починит автор)
+      const toRename = mine.length === files.length ? mine.slice(1) : mine;
+      for (const file of toRename) {
+        const fresh = nextTaskId(ids, id.split('-')[0]);
+        ids.add(fresh);
+        const slug = file.match(TASK_FILE_RE)![1];
+        const newFile = `projects/${slug}/tasks/${fresh}.md`;
+        const text = this.read(file) ?? '';
+        const t = parseTask(text, file);
+        this.writeFile(newFile, t.error ? text.replace(new RegExp(`^id: ${id}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
+        this.remove(file);
+        renames.set(id, fresh);
+        subjects.push(`${id} → ${fresh}: номер уже занят`);
+      }
+    }
+    if (!renames.size) return;
+    for (const file of mineAdded) {
+      if (!TASK_FILE_RE.test(file) || !this.exists(file)) continue;
+      const t = parseTask(this.read(file) ?? '', file);
+      if (t.error || !t.blockedBy.some((b) => renames.has(b))) continue;
+      this.writeFile(file, serializeTask({ ...t, blockedBy: t.blockedBy.map((b) => renames.get(b) ?? b) }));
+    }
+    await this.git(['add', '-A']);
+    await this.git(['commit', '-q', '--no-verify', '-m', subjects.length === 1 ? subjects[0] : 'Номера задач заняты', ...(subjects.length > 1 ? ['-m', subjects.map((x) => `- ${x}`).join('\n')] : [])]);
+    this.saveLocal((l) => {
+      for (const [from, to] of renames) {
+        if (l.work[from]) {
+          l.work[to] = [...(l.work[to] ?? []), ...l.work[from]];
+          delete l.work[from];
+        }
+      }
+    });
+  }
+
+  private emptyTree(): Promise<string> {
+    return this.git(['hash-object', '-t', 'tree', '/dev/null']).then((s) => s.trim());
+  }
+
+  /** Два активных спринта в проекте после слияния — активным остаётся более ранний, второй снова запланирован (spec §7.4.4). */
+  private async demoteSecondSprint(): Promise<void> {
     const at = this.deps.now().toISOString();
-    let changed = false;
+    const me = (await this.identity()).email;
+    const demoted: string[] = [];
     const conflicts: TeamConflict[] = [];
     for (const slug of this.dirs('projects')) {
       const dir = `projects/${slug}/sprints`;
-      const active: { file: string; text: string; number: number; startedAt: string }[] = [];
+      const active: { file: string; text: string; number: number; startedAt: string; startedBy?: string }[] = [];
       for (const name of this.list(dir, (n) => /^\d+\.ya?ml$/.test(n))) {
         const text = this.read(`${dir}/${name}`);
         if (text === undefined) continue;
         try {
           const s = parseSprint(text, Number(name.split('.')[0]));
-          if (s.status === 'active') active.push({ file: `${dir}/${name}`, text, number: s.number, startedAt: s.startedAt ?? '' });
+          if (s.status === 'active') active.push({ file: `${dir}/${name}`, text, number: s.number, startedAt: s.startedAt ?? '', startedBy: s.startedBy });
         } catch {
           // битый спринт пропускаем: его покажет экран
         }
@@ -612,14 +706,17 @@ export class TeamRepo {
       const keep = active[0];
       for (const s of active.slice(1)) {
         this.writeFile(s.file, updateYaml(s.text, { status: 'planned', startedAt: undefined, startedBy: undefined }));
-        conflicts.push({ id: randomBytes(6).toString('hex'), file: s.file, project: slug, kind: 'sprint', ours: s.number, theirs: keep.number, at });
-        changed = true;
+        demoted.push(`спринт ${s.number} → запланирован, активен спринт ${keep.number} (${slug})`);
+        // в панель «Конфликты» — только участникам этих спринтов; остальные клоны делают тот же детерминированный фикс молча
+        if (me && (s.startedBy === me || keep.startedBy === me)) {
+          conflicts.push({ id: randomBytes(6).toString('hex'), file: s.file, project: slug, kind: 'sprint', ours: s.number, theirs: keep.number, at });
+        }
       }
     }
-    if (!changed) return;
+    if (!demoted.length) return;
     await this.git(['add', '-A']);
-    await this.git(['commit', '-q', '--no-verify', '-m', `Два активных спринта: остался ${conflicts.map((c) => `спринт ${c.theirs}`).join(', ')}`]);
-    this.saveLocal((l) => l.conflicts.push(...conflicts));
+    await this.git(['commit', '-q', '--no-verify', '-m', `Два активных спринта: ${demoted.join('; ')}`]);
+    if (conflicts.length) this.saveLocal((l) => l.conflicts.push(...conflicts));
   }
 
   /** Локальные коммиты, которых нет в репо команды. Нет origin-ветки (пустой репо до первого push) — все коммиты. */
@@ -653,7 +750,7 @@ export class TeamRepo {
 
   /** Последние коммиты по файлу или папке клона (spec §8.4 «История», обзор проекта). */
   async history(o: { path?: string; limit?: number } = {}): Promise<TeamHistoryItem[]> {
-    const limit = Math.min(Math.max(o.limit ?? 20, 1), 200);
+    const limit = Math.min(Math.max(Number.isFinite(o.limit) ? Math.trunc(o.limit!) : 20, 1), 200);
     const out = await this.git(['log', `-n${limit}`, '--format=%H%x00%an%x00%ae%x00%aI%x00%s', ...(o.path ? ['--', o.path] : [])]).catch(() => '');
     return out
       .split('\n')
@@ -745,7 +842,7 @@ export async function checkRemote(url: string, deps: RepoDeps = defaultRepoDeps(
   const branch = pickBranch(heads)!;
   const tmp = fs.mkdtempSync(path.join(deps.tmpDir, 'agentgraph-team-check-'));
   try {
-    await deps.exec('git', ['clone', '-q', '--depth', '1', '--single-branch', '--branch', branch, '--', u, tmp], { timeoutMs: NET_TIMEOUT });
+    await deps.exec('git', ['clone', '-q', '-c', 'core.symlinks=false', '--depth', '1', '--single-branch', `--branch=${branch}`, '--', u, tmp], { timeoutMs: NET_TIMEOUT });
     const cfgText = fs.readFileSync(path.join(tmp, 'teamwork.yaml'), 'utf8');
     const cfg = parseTeamConfig(cfgText);
     const projects: { slug: string; title: string; repos: string[] }[] = [];
@@ -784,10 +881,11 @@ async function cloneInto(url: string, teamDir: string, deps: RepoDeps): Promise<
   fs.mkdirSync(teamDir, { recursive: true });
   const repoDir = path.join(teamDir, REPO_DIR);
   try {
-    await deps.exec('git', ['clone', '-q', '--', url, repoDir], { timeoutMs: NET_TIMEOUT });
+    // core.symlinks=false: ссылка, закоммиченная кем-то в репо команды, станет обычным файлом, а не выходом за клон
+    await deps.exec('git', ['clone', '-q', '-c', 'core.symlinks=false', '--', url, repoDir], { timeoutMs: NET_TIMEOUT });
   } catch (err) {
     fs.rmSync(teamDir, { recursive: true, force: true });
-    throw new TeamError(400, `Не удалось клонировать репо: ${errMsg(err)}`);
+    throw new TeamError(400, `Не удалось клонировать репо: ${scrub(errMsg(err))}`);
   }
 }
 
@@ -814,9 +912,9 @@ export async function createTeam(req: CreateTeamRequest, deps: RepoDeps = defaul
   try {
     const me = await repo.requireIdentity();
     await repo.git(['symbolic-ref', 'HEAD', 'refs/heads/main']);
-    copyTemplate(repo.repoDir, deps.templateDir);
+    if (!copyTemplate(repo.repoDir, deps.templateDir).includes('teamwork.yaml')) throw new TeamError(500, `Шаблон репо команды не найден: ${deps.templateDir}`);
     const member: TeamMember = { name: me.name, email: me.email };
-    repo.writeFile('teamwork.yaml', renderTeamConfig(repo.read('teamwork.yaml') ?? 'format: 1\n', { title, prefix, member }));
+    repo.writeFile('teamwork.yaml', renderTeamConfig(repo.read('teamwork.yaml')!, { title, prefix, member }));
     await repo.git(['add', '-A']);
     await repo.git(['commit', '-q', '--no-verify', '-m', `Команда «${title}» создана`]);
     repo.saveLocal((l) => {

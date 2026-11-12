@@ -114,7 +114,13 @@ test('настройки команды: названия колонок, уча
   assert.equal(bad.status, 400);
   assert.match(bad.body.error, /фиксированы/);
   assert.equal((await call('PUT', '/api/teams/team', { prefix: 'NEW' })).status, 400);
+  assert.equal((await call('PUT', '/api/teams/team', { prefix: 'pay' })).status, 200);
   assert.equal((await call('PUT', '/api/teams/team', { members: [] })).status, 400);
+  const noFlow = await call<Err>('PUT', '/api/teams/team', { defaultFlow: 'teamwork-task' });
+  assert.equal(noFlow.status, 400);
+  assert.match(noFlow.body.error, /нет в репо команды/);
+  // %E0 в пути — 400, а не 500
+  assert.equal((await call('GET', '/api/teams/%E0')).status, 400);
   const r = await call<TeamDetail>('PUT', '/api/teams/team', { title: 'Платежи', columns: { todo: 'Очередь' }, defaultFlow: null, members: [{ name: 'Алексей', email: 'alex@example.com', github: 'alex' }, { email: 'Bob@Example.com' }] });
   assert.equal(r.status, 200);
   assert.equal(r.body.title, 'Платежи');
@@ -258,9 +264,12 @@ test('задачи: создание одной и пачкой с dependsOn →
   assert.equal((await call('GET', `${P}/tasks/PAY-9`)).status, 404);
   assert.equal((await call('GET', `${P}/tasks/bad`)).status, 400);
   assert.equal((await call('PATCH', `${P}/tasks/PAY-9`, { title: 'x' })).status, 404);
+  // удаление снимает ссылки blockedBy у соседей тем же коммитом
+  await call('PATCH', `${P}/tasks/PAY-2`, { blockedBy: ['PAY-1', 'PAY-3'] });
   assert.equal((await call('DELETE', `${P}/tasks/PAY-3`)).status, 200);
   assert.equal((await call('DELETE', `${P}/tasks/PAY-3`)).status, 404);
-  assert.deepEqual((await call<TeamTask[]>('GET', `${P}/tasks`)).body.map((t) => t.id), ['PAY-1', 'PAY-2']);
+  assert.deepEqual((await call<TeamTask[]>('GET', `${P}/tasks`)).body.map((t) => [t.id, t.blockedBy]), [['PAY-1', []], ['PAY-2', ['PAY-1']]]);
+  assert.equal((await call<unknown[]>('GET', `${P}/history?limit=abc`)).status, 200);
   // битый файл задачи — карточка с error, а не 500
   fs.writeFileSync(path.join(teamsDir(), 'team', 'repo', 'projects', 'export', 'tasks', 'PAY-4.md'), 'мусор');
   const broken = (await call<TeamTask[]>('GET', `${P}/tasks`)).body.find((t) => t.id === 'PAY-4');
@@ -334,6 +343,7 @@ test('flow команды: нет — 404, невалидный YAML — 400, в
   assert.equal(saved.body.spec.name, 'teamwork-task');
   assert.equal((await call<{ yaml: string }>('GET', '/api/teams/team/flows/teamwork-task')).body.yaml, yaml);
   assert.deepEqual((await call<TeamDetail>('GET', '/api/teams/team')).body.flows, ['teamwork-task']);
+  assert.equal((await call<TeamDetail>('PUT', '/api/teams/team', { defaultFlow: 'teamwork-task' })).body.defaultFlow, 'teamwork-task');
   // local.json: пути репо кода и привязки пространств
   assert.equal((await call('PUT', '/api/teams/team/local', { repoPaths: { 'git@github.com:acme/billing.git': 'relative' } })).status, 400);
   const local = await call<{ repoPaths: Record<string, string>; projectSpaces: Record<string, string> }>('PUT', '/api/teams/team/local', { repoPaths: { 'git@github.com:acme/billing.git': proj }, projectSpaces: { export: 'billing-export' } });
@@ -351,7 +361,46 @@ test('flow команды: нет — 404, невалидный YAML — 400, в
   assert.equal(sync.status, 200);
   assert.equal(sync.body.state, 'ok');
   assert.equal(sync.body.unpushed, 0);
-  assert.equal(git(bare, 'log', '-1', '--format=%s', 'main'), 'flow teamwork-task: добавлен');
+  assert.deepEqual(git(bare, 'log', '-2', '--format=%s', 'main').split('\n'), ['Настройки команды: flow по умолчанию', 'flow teamwork-task: добавлен']);
+});
+
+test('конфликты: после sync одно поле с двух сторон даёт запись в списке, «взять моё» пишет коммит, «оставить команды» снимает запись', async () => {
+  // коллега: отдельный клон bare меняет оценку PAY-2 и отправляет
+  const work = path.join(home, 'colleague');
+  git(home, 'clone', '-q', bare, work);
+  const file = path.join(work, 'projects', 'export', 'tasks', 'PAY-2.md');
+  const edit = (from: RegExp, to: string, msg: string) => {
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(from, to));
+    git(work, '-c', 'user.name=Боб', '-c', 'user.email=bob@example.com', 'commit', '-q', '-am', msg);
+    git(work, 'push', '-q', 'origin', 'main');
+  };
+  edit(/^status: todo$/m, 'status: review', 'PAY-2: статус ревью');
+  await call('PATCH', `${P}/tasks/PAY-2`, { status: 'in_progress' });
+  const sync = await call<TeamSync>('POST', '/api/teams/team/sync');
+  assert.equal(sync.body.state, 'conflict');
+  assert.equal(sync.body.conflicts, 1);
+  assert.equal((await call<TeamTask>('GET', `${P}/tasks/PAY-2`)).body.status, 'review');
+  const list = await call<{ id: string; kind: string; field?: string; task?: string; ours: unknown; theirs: unknown; theirsBy?: string }[]>('GET', '/api/teams/team/conflicts');
+  assert.equal(list.body.length, 1);
+  const c = list.body[0];
+  assert.deepEqual([c.kind, c.field, c.task, c.ours, c.theirs, c.theirsBy], ['field', 'status', 'PAY-2', 'in_progress', 'review', 'bob@example.com']);
+  assert.equal((await call('POST', '/api/teams/team/conflicts/ffffff/mine')).status, 404);
+  const mine = await call<unknown[]>('POST', `/api/teams/team/conflicts/${c.id}/mine`);
+  assert.equal(mine.status, 200);
+  assert.deepEqual(mine.body, []);
+  assert.equal((await call<TeamTask>('GET', `${P}/tasks/PAY-2`)).body.status, 'in_progress');
+  assert.equal((await call<{ message: string }[]>('GET', `${P}/history?limit=1`)).body[0].message, 'PAY-2: взято моё (status)');
+  assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
+  // второй конфликт — «оставить версию команды»: запись снимается, задача как у команды
+  git(work, 'pull', '-q', '--rebase', 'origin', 'main');
+  edit(/^title: .*$/m, 'title: От Боба', 'PAY-2: имя');
+  await call('PATCH', `${P}/tasks/PAY-2`, { title: 'От меня' });
+  await call('POST', '/api/teams/team/sync');
+  const second = (await call<{ id: string }[]>('GET', '/api/teams/team/conflicts')).body;
+  assert.equal(second.length, 1);
+  assert.deepEqual((await call<unknown[]>('DELETE', `/api/teams/team/conflicts/${second[0].id}`)).body, []);
+  assert.equal((await call<TeamTask>('GET', `${P}/tasks/PAY-2`)).body.title, 'От Боба');
+  assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
 });
 
 test('событие team в /api/events после записи; отключение с неотправленными — 409 unpushed, с force — удаление', async () => {
@@ -368,8 +417,9 @@ test('событие team в /api/events после записи; отключе
       if (m) return JSON.parse(m[1]) as Record<string, unknown>;
     }
   };
-  const pending = next();
-  await call('PATCH', `${P}/tasks/PAY-2`, { title: 'Экспорт в 1С (CP1251)' });
+  const pending = Promise.race([next(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('события team не было 10 с')), 10_000).unref())]);
+  const patched = await call<TeamTask>('PATCH', `${P}/tasks/PAY-2`, { title: 'Экспорт в 1С (CP1251)' });
+  assert.equal(patched.status, 200);
   assert.deepEqual(await pending, { type: 'team', runId: '', flow: '', team: 'team', projects: ['export'] });
   await reader.cancel();
   const refused = await call<Err & { unpushed: number; commits: string[] }>('DELETE', '/api/teams/team');

@@ -18,6 +18,7 @@ export const ART_DENIAL: Record<string, string> = {
   isolation: t('сабагент с изоляцией'),
   'space-readonly': t('запись в папку пространства'),
   'knowledge-readonly': t('запись в папку тегов знаний'),
+  'team-readonly': t('запись в папку команд Teamwork'),
 };
 
 /** Отказы записи этапа одной строкой: «Write: запись в папку пространства ×2; Edit: …». */

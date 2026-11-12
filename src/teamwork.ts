@@ -421,6 +421,22 @@ export function rankBetween(a?: string, b?: string): string {
   return midpoint(lo, b);
 }
 
+const RANK_OK_RE = /^(?:[0-9A-Za-z]*[1-9A-Za-z])?$/;
+
+/** rank соседа для rankBetween: правленный руками (хвостовой 0, лишние символы) не годится — считается пустым. */
+export const validRank = (r: string | undefined): string | undefined => (r && RANK_OK_RE.test(r) ? r : undefined);
+
+/** rankBetween по соседям из файлов: битые rank и перевёрнутые соседи (одновременные переносы) не роняют запись — встаём после a. */
+export function rankNear(a?: string, b?: string): string {
+  const lo = validRank(a);
+  const hi = validRank(b);
+  try {
+    return rankBetween(lo, hi);
+  } catch {
+    return rankBetween(lo);
+  }
+}
+
 function midpoint(a: string, b: string | undefined): string {
   const zero = RANK_DIGITS[0];
   if (b !== undefined) {
@@ -549,7 +565,8 @@ export function checkDependencies(tasks: TeamProposedTask[], existing: { id: str
       if (!byKey.has(d) && !existingById.has(d)) errors.push({ key: t.key, error: `Неизвестная зависимость: ${d}` });
     }
   }
-  // цикл — обходом в глубину по предложенным задачам
+  // цикл — обходом в глубину по предложенным задачам; цепочка отдаётся по направлению стрелок графа, от предшественника
+  // к зависимой задаче (как в web/src/lib/teamwork/deps.ts), а не по dependsOn
   const color = new Map<string, 1 | 2>();
   const stack: string[] = [];
   let cycle: string[] | undefined;
@@ -561,7 +578,7 @@ export function checkDependencies(tasks: TeamProposedTask[], existing: { id: str
       if (!byKey.has(d)) continue;
       const c = color.get(d);
       if (c === 1) {
-        cycle = [...stack.slice(stack.indexOf(d)), d];
+        cycle = [...stack.slice(stack.indexOf(d)), d].reverse();
         return;
       }
       if (!c) visit(d);
@@ -680,6 +697,8 @@ export function remoteProblem(url: string): string | undefined {
   if (!url) return 'Укажи ссылку на репо';
   if (/\s/.test(url)) return 'Ссылка не может содержать пробелы и переводы строк';
   if (url.startsWith('-')) return 'Ссылка не может начинаться с «-»';
+  // ext:: и fd:: запускают команду или читают дескриптор: git их по умолчанию запрещает, но и мы не пропускаем
+  if (/^(ext|fd)::/i.test(url)) return 'Ссылки ext:: и fd:: не поддерживаются';
   if (/^(https?|ssh|file):\/\//i.test(url)) {
     try {
       new URL(url);

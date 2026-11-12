@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   acceptanceOf, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts,
-  nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, remoteProblem, replaceSection,
-  requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections, teamSlugFromUrl,
-  updateYaml, type TaskFile,
+  nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, rankNear, remoteProblem,
+  replaceSection, requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections,
+  teamSlugFromUrl, updateYaml, validRank, type TaskFile,
 } from './teamwork.js';
 import type { TeamProposedTask } from './api-types.js';
 
@@ -161,6 +161,12 @@ test('rank: общие с UI примеры, между любыми сосед�
   assert.throws(() => rankBetween('V', 'V'), /rank/);
   assert.throws(() => rankBetween('V0'), /хвостовой/);
   assert.throws(() => rankBetween('a b'), /символы/);
+  // rankNear: правленный руками rank соседа и перевёрнутые соседи не роняют запись
+  assert.equal(rankNear('V0', 'W'), rankBetween(undefined, 'W'));
+  assert.equal(rankNear('W', 'V'), rankBetween('W'));
+  assert.equal(rankNear('', ''), 'V');
+  assert.equal(rankNear('V', 'W'), 'VV');
+  assert.equal(validRank('a-b'), undefined);
   // одинаковые rank сортируются по номеру
   const sorted = sortTasks([{ id: 'PAY-10', rank: 'V' }, { id: 'PAY-2', rank: 'V' }, { id: 'PAY-5', rank: 'G' }]);
   assert.deepEqual(sorted.map((t) => t.id), ['PAY-5', 'PAY-2', 'PAY-10']);
@@ -245,6 +251,10 @@ test('зависимости: неизвестная ссылка — ошибк
   assert.match(cyc.errors[0].error, /3 → 5 → 3/);
   assert.equal(cyc.waves['7'], 1);
   assert.deepEqual(checkDependencies([], []), { errors: [], waves: {}, chain: { keys: [], points: 0 } });
+  // цепочка цикла идёт по стрелкам графа, от предшественника к зависимой задаче: a ждёт b, b ждёт c, c ждёт a → a → c → b → a
+  const three = checkDependencies([proposed('a', ['b']), proposed('b', ['c']), proposed('c', ['a'])], []);
+  assert.deepEqual(three.cycle, ['a', 'c', 'b', 'a']);
+  assert.match(three.errors[0].error, /a → c → b → a/);
   // самозависимость — цикл из одного ключа; повтор ключа — ошибка
   assert.deepEqual(checkDependencies([proposed('a', ['a'])], []).cycle, ['a', 'a']);
   assert.match(checkDependencies([proposed('a', []), proposed('a', [])], []).errors[0].error, /повторяется/);
@@ -323,6 +333,9 @@ test('ссылка на репо: допустимые формы, отказ н
   assert.match(remoteProblem('https://a b') ?? '', /пробелы/);
   assert.match(remoteProblem('x\ny') ?? '', /пробелы/);
   assert.match(remoteProblem('relative/path') ?? '', /Ссылка на репо/);
+  assert.match(remoteProblem('ext::sh -c evil') ?? '', /пробелы/);
+  assert.match(remoteProblem('ext::/tmp/evil') ?? '', /ext::/);
+  assert.match(remoteProblem('fd::3') ?? '', /fd::/);
   assert.equal(teamSlugFromUrl('git@github.com:acme/Payments-Team.git'), 'payments-team');
   assert.equal(teamSlugFromUrl('https://gitlab.com/g/sub/x.git/'), 'x');
   assert.equal(teamSlugFromUrl('/tmp/bare.git'), 'bare');

@@ -1567,6 +1567,12 @@ export type TeamRemoteCheck =
   | { kind: 'not_empty' }
   | { kind: 'error'; error: string };
 
+/** GET, PUT /api/teams/:t/local: мои папки репо кода (ссылка → папка) и привязанные к проектам пространства (slug → slug). PUT принимает те же поля, null или пустая строка снимает ключ. */
+export type TeamLocal = { repoPaths: Record<string, string>; projectSpaces: Record<string, string> };
+
+/** GET, PUT /api/teams/:t/flows/:name: flow команды как YAML; spec — FlowSpec из src/schema.ts, если YAML проходит схему, иначе error. PUT принимает { yaml } и отвечает 400 на невалидный. */
+export type TeamFlow<Spec = unknown> = { name: string; yaml: string; file: string; spec?: Spec; error?: string };
+
 /** Репо кода проекта и где оно лежит у меня (local.json → repoPaths, иначе найдено среди проектов дашборда по origin). */
 export type TeamRepoRef = { key: string; url: string; defaultBranch?: string; local?: string };
 
@@ -1686,7 +1692,11 @@ export type TeamSprint = {
   result?: { done: string[]; carried: string[]; returned: string[] };
 };
 
-/** Нерешённый конфликт синхронизации (spec §7.4): моё значение не вошло, в репо — значение команды. */
+/**
+ * Нерешённый конфликт синхронизации (spec §7.4): моё значение не вошло, в репо — значение команды. GET /api/teams/:t/conflicts —
+ * список; DELETE …/conflicts/:id — «оставить версию команды» (запись снимается); POST …/conflicts/:id/mine — «взять мою»
+ * (поле, текст или удалённый файл записываются коммитом; для sprint недоступно).
+ */
 export type TeamConflict = {
   id: string;
   file: string;

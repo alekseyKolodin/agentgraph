@@ -1,7 +1,9 @@
 // Teamwork: сервис команды и маршруты /api/teams (spec §12), по образцу integrationsRoute. Сервис читает клоны через
 // TeamRepo и пишет через его очередь (коммит на запись); ответы — типы Teamwork из src/api-types.ts; ошибки — { error } с
-// 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly). Черновики агентов (…/drafts*), текст
-// задачи для запуска (…/intake) и worktree задачи (…/worktree) добавляют сессии волны 2 — здесь их маршруты не заняты.
+// 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly). Конфликты синхронизации (spec §7.4) —
+// GET …/conflicts, DELETE …/conflicts/:id («оставить версию команды»), POST …/conflicts/:id/mine («взять мою»: поле, текст
+// или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*), текст задачи
+// для запуска (…/intake) и worktree задачи (…/worktree) добавляют сессии волны 2 — здесь их маршруты не заняты.
 import path from 'node:path';
 import { parseFlow } from './flows.js';
 import { exec, parseRemote, type Exec } from './git.js';
@@ -9,16 +11,17 @@ import { describeProjects } from './projects.js';
 import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
 import { PROJECT_TEMPLATE_DIR, projectDocs, TEMPLATE_DIR } from './teamwork-template.js';
-import { checkRemote, createTeam, defaultRepoDeps, joinTeam, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
+import { checkRemote, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import {
-  commentFileName, compareTasks, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextSprintNumber, nextTaskId,
-  parseComment, parseProject, parseRequirements, parseSprint, parseTask, PROJECT_STATUSES, rankBetween, remoteProblem, replaceSection, requirementMax, sectionHash,
-  serializeComment, serializeProject, serializeSprint, serializeTask, sortTasks, splitSections, sprintSummary, sprintView, TASK_ID_RE, TASK_STATUSES, TASK_TYPES,
-  taskChangeMessage, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
+  commentFileName, composeTask, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextTaskId, parseComment,
+  parseProject, parseRequirements, parseSprint, parseTask, PROJECT_STATUSES, rankNear, remoteProblem, replaceSection, requirementMax, sectionHash, serializeComment,
+  serializeProject, serializeSprint, serializeTask, sortTasks, splitSections, sprintSummary, sprintView, TASK_ID_RE, TASK_STATUSES, TASK_TYPES, taskChangeMessage,
+  taskFrontmatter, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
 } from './teamwork.js';
 import type {
-  TeamColumns, TeamComment, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamHistoryItem, TeamMe, TeamMember, TeamProject, TeamProjectBrief, TeamRemoteCheck,
-  TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType, TeamTaskWork,
+  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
+  TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
+  TeamTaskWork,
 } from './api-types.js';
 
 export type Reply = { status: number; body: unknown };
@@ -29,7 +32,7 @@ export type TeamServiceDeps = {
   repo?: Partial<RepoDeps>;
   /** Открыт ли UI (/api/events): получение каждые 30 с, иначе раз в 5 минут. */
   hasSubscribers?: () => boolean;
-  /** Таймеры отправки и получения и фоновый pull при открытии экрана; тесты выключают. */
+  /** Таймеры: отправка через 3 с после записи, получение по расписанию, фоновый pull при открытии экрана; false — только явный POST /sync (тесты). */
   timers?: boolean;
   /** Локальная папка репо кода по ссылке: по умолчанию среди проектов дашборда по origin. */
   findLocal?: (url: string) => Promise<string | undefined>;
@@ -56,8 +59,7 @@ export type WriteDocOptions = { base?: string; section?: string; hash?: string; 
 export type TaskWriteOptions = { message?: string; author?: { name: string; email: string } };
 export type NewSprint = { title?: string; goal?: string; start?: boolean; tasks?: string[] };
 export type CloseSprint = { next?: string[]; backlog?: string[] };
-export type LocalView = { repoPaths: Record<string, string>; projectSpaces: Record<string, string> };
-export type TeamFlow = { name: string; yaml: string; file: string; spec?: FlowSpec; error?: string };
+export type TeamFlow = TeamFlowOf<FlowSpec>;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -100,7 +102,7 @@ export class TeamService {
   private stopped = false;
 
   constructor(private readonly deps: TeamServiceDeps = {}) {
-    this.repoDeps = { ...defaultRepoDeps(), ...(deps.repo ?? {}) };
+    this.repoDeps = { ...defaultRepoDeps(), ...(deps.timers === false ? { pushDelayMs: Infinity } : {}), ...(deps.repo ?? {}) };
   }
 
   root(): string {
@@ -180,12 +182,14 @@ export class TeamService {
 
   async team(slug: string): Promise<TeamDetail> {
     const repo = this.repo(slug);
-    // при открытии экрана — получить в фоне, если давно не получали (spec §7.3)
+    const detail = await this.detail(repo);
+    // при открытии экрана — получить в фоне, если давно не получали (spec §7.3); после ответа, чтобы его чтение не шло
+    // поверх reset/rebase. Pull пришлёт событие team, и UI перечитает
     if (this.deps.timers !== false) {
       const last = Date.parse(repo.local().sync.lastFetchAt ?? '') || 0;
       if (Date.now() - last > 10_000) void repo.pull().catch(() => undefined);
     }
-    return this.detail(repo);
+    return detail;
   }
 
   async updateTeam(slug: string, body: unknown): Promise<TeamDetail> {
@@ -231,11 +235,12 @@ export class TeamService {
       else {
         const f = reqStr(b.defaultFlow, 'defaultFlow');
         if (!FLOW_NAME_RE.test(f)) bad(`Недопустимое имя flow: ${f}`);
+        if (!this.flowNames(repo).includes(f)) bad(`Flow ${f} нет в репо команды (flows/${f}.yaml)`);
         patch.defaultFlow = f;
       }
       changes.push('flow по умолчанию');
     }
-    if (b.prefix !== undefined && optStr(b.prefix, 'prefix') !== repo.config().prefix) bad('Префикс номеров задач после создания не меняется');
+    if (b.prefix !== undefined && optStr(b.prefix, 'prefix')?.toUpperCase() !== repo.config().prefix) bad('Префикс номеров задач после создания не меняется');
     if (!changes.length) return this.detail(repo);
     await repo.write(`Настройки команды: ${changes.join(', ')}`, (r) => r.writeFile('teamwork.yaml', updateYaml(r.read('teamwork.yaml') ?? '', patch)));
     return this.detail(repo);
@@ -251,12 +256,12 @@ export class TeamService {
     }
   }
 
-  local(slug: string): LocalView {
+  local(slug: string): TeamLocal {
     const l = this.repo(slug).local();
     return { repoPaths: l.repoPaths, projectSpaces: l.projectSpaces };
   }
 
-  updateLocal(slug: string, body: unknown): LocalView {
+  updateLocal(slug: string, body: unknown): TeamLocal {
     const repo = this.repo(slug);
     if (!isRecord(body)) bad('Тело запроса — объект');
     const b = body as Record<string, unknown>;
@@ -272,15 +277,14 @@ export class TeamService {
         }
       }
     };
-    const touched = new Set<string>();
     repo.saveLocal((l) => {
       merge(l.repoPaths, b.repoPaths, 'repoPaths', (_k, v) => {
         if (!path.isAbsolute(v)) bad(`Путь к репо кода должен быть абсолютным: ${v}`);
       });
-      merge(l.projectSpaces, b.projectSpaces, 'projectSpaces', (k) => touched.add(k));
-      if (isRecord(b.projectSpaces)) for (const k of Object.keys(b.projectSpaces as object)) touched.add(k);
+      merge(l.projectSpaces, b.projectSpaces, 'projectSpaces');
     });
-    this.emit({ team: slug, projects: [...touched].sort() });
+    // привязки пространств видны в проекте, пути репо — во всех проектах с этим репо: UI сбрасывает кэш команды целиком
+    this.emit({ team: slug, projects: isRecord(b.projectSpaces) && b.repoPaths === undefined ? Object.keys(b.projectSpaces as object).sort() : this.repo(slug).dirs('projects') });
     return this.local(slug);
   }
 
@@ -314,6 +318,51 @@ export class TeamService {
   private async me(repo: TeamRepo, cfg: TeamConfig): Promise<TeamMe> {
     const id = await repo.identity();
     return { ...id, inTeam: Boolean(id.email && cfg.members.some((m) => m.email === id.email)) };
+  }
+
+  // ---------- конфликты синхронизации (spec §7.4)
+
+  conflicts(slug: string): TeamConflict[] {
+    return this.repo(slug).local().conflicts;
+  }
+
+  /**
+   * Решить конфликт: theirs — оставить версию команды (запись просто снимается); mine — записать моё значение коммитом:
+   * поле задачи или YAML, тело задачи, текст документа, удалённый файл. Для двух активных спринтов «моё» нет: задачи
+   * переносятся в активный спринт руками.
+   */
+  async resolveConflict(slug: string, id: string, how: 'theirs' | 'mine'): Promise<TeamConflict[]> {
+    const repo = this.repo(slug);
+    const c = repo.local().conflicts.find((x) => x.id === id);
+    if (!c) throw new TeamError(404, 'Такого конфликта нет: он уже решён');
+    if (how === 'mine') {
+      if (c.kind === 'sprint') bad('Для двух активных спринтов «взять моё» нет: перенеси задачи в активный спринт');
+      const label = c.task ?? c.doc ?? c.file;
+      await repo.write(`${label}: взято моё${c.field ? ` (${c.field})` : ''}`, (r) => {
+        const current = r.read(c.file);
+        if (c.kind === 'deleted') {
+          if (c.ours === null || c.ours === undefined) r.remove(c.file);
+          else r.writeFile(c.file, String(c.ours));
+          return;
+        }
+        if (current === undefined) throw new TeamError(409, `Файла ${c.file} больше нет в репо команды`, 'conflict');
+        if (c.kind === 'text' && (!c.field || c.field === 'text')) return r.writeFile(c.file, String(c.ours));
+        if (TASK_FILE_RE.test(c.file)) {
+          const t = parseTask(current, c.file);
+          if (t.error) throw new TeamError(409, `Задача ${c.task} не читается (${t.error})`, 'conflict');
+          if (c.field === 'body') return r.writeFile(c.file, composeTask(taskFrontmatter(t), String(c.ours)));
+          const fm = taskFrontmatter(t);
+          if (c.ours === undefined || c.ours === null) delete fm[c.field!];
+          else fm[c.field!] = c.ours;
+          return r.writeFile(c.file, composeTask(fm, t.body));
+        }
+        if (/\.ya?ml$/.test(c.file) && c.field) return r.writeFile(c.file, updateYaml(current, { [c.field]: c.ours ?? undefined }));
+        r.writeFile(c.file, String(c.ours));
+      });
+    }
+    repo.saveLocal((l) => (l.conflicts = l.conflicts.filter((x) => x.id !== id)));
+    if (how === 'theirs') this.emit({ team: slug, projects: c.project ? [c.project] : [] });
+    return repo.local().conflicts;
   }
 
   // ---------- проекты (spec §8.3)
@@ -350,6 +399,11 @@ export class TeamService {
   /** Все номера задач команды, по всем проектам: номер сквозной (spec §5.7). */
   private allTaskIds(repo: TeamRepo): string[] {
     return repo.dirs('projects').flatMap((p) => repo.list(`projects/${p}/tasks`, (n) => /\.md$/i.test(n)).map((n) => n.replace(/\.md$/i, '')));
+  }
+
+  /** Следующий номер спринта — по именам файлов, не по разобранным: битый sprints/3.yaml номер не освобождает. */
+  private nextSprintNumberIn(repo: TeamRepo, slug: string): number {
+    return repo.list(`projects/${slug}/sprints`, (n) => /^\d+\.ya?ml$/.test(n)).reduce((m, n) => Math.max(m, Number(n.split('.')[0])), 0) + 1;
   }
 
   private readSprints(repo: TeamRepo, slug: string): SprintFile[] {
@@ -574,7 +628,7 @@ export class TeamService {
     const repo = this.repo(team);
     this.readProjectConfig(repo, slug);
     const p = o.doc ? this.docPath(slug, o.doc).rel : `projects/${slug}`;
-    return repo.history({ path: p, limit: o.limit });
+    return repo.history({ path: p, ...(Number.isFinite(o.limit) ? { limit: o.limit } : {}) });
   }
 
   // ---------- задачи (spec §8.5–8.7)
@@ -646,7 +700,7 @@ export class TeamService {
         for (const d of blockedBy) if (d === id || (!existing.some((t) => t.id === d) && ![...keys.values()].includes(d))) bad(`Неизвестная зависимость: ${d}`);
         const body = typeof item.body === 'string' ? item.body : composeBody(item);
         const prev = ranks.has(sprint) ? ranks.get(sprint) : lastRank(sprint);
-        const rank = rankBetween(prev || undefined);
+        const rank = rankNear(prev);
         ranks.set(sprint, rank);
         const file = `projects/${slug}/tasks/${id}.md`;
         const assignee = optStr(item.assignee, 'assignee') || undefined;
@@ -768,13 +822,8 @@ export class TeamService {
         };
         const after = neighbour(place.after, 'after');
         const before = neighbour(place.before, 'before');
-        let rank: string;
-        try {
-          rank = rankBetween(after?.rank || undefined, before?.rank || undefined);
-        } catch {
-          // соседи поменялись местами или совпали по rank (одновременные переносы): встаём после after
-          rank = rankBetween(after?.rank || undefined);
-        }
+        // соседи поменялись местами или совпали по rank (одновременные переносы), rank правлен руками — rankNear встаёт после after
+        const rank = rankNear(after?.rank, before?.rank);
         if (rank !== cur.rank) {
           next.rank = rank;
           changes.push('порядок');
@@ -798,6 +847,11 @@ export class TeamService {
       if (!r.exists(`projects/${slug}/tasks/${id}.md`)) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
       r.remove(`projects/${slug}/tasks/${id}.md`);
       r.remove(`projects/${slug}/comments/${id}`);
+      // ссылки на удалённую задачу в blockedBy соседей снимаются тем же коммитом
+      for (const t of this.readTasks(r, slug)) {
+        if (t.error || !t.blockedBy.includes(id)) continue;
+        r.writeFile(t.file, serializeTask({ ...t, blockedBy: t.blockedBy.filter((b) => b !== id) }));
+      }
     });
   }
 
@@ -872,7 +926,7 @@ export class TeamService {
       const sprints = this.readSprints(r, slug);
       if (!start && sprints.some((s) => s.status === 'planned')) throw new TeamError(409, 'Запланированный спринт уже есть: запусти его или перенеси задачи в него', 'busy');
       if (start && sprints.some((s) => s.status === 'active')) throw new TeamError(409, 'Активный спринт уже есть: сначала заверши его', 'busy');
-      const number = nextSprintNumber(sprints);
+      const number = this.nextSprintNumberIn(r, slug);
       const goal = optStr(body.goal, 'goal');
       out = { number, title: optStr(body.title, 'title') || `Спринт ${number}`, ...(goal ? { goal } : {}), status: 'planned', extra: {} };
       if (start) this.activate(r, slug, out, body.tasks, me.email);
@@ -946,7 +1000,7 @@ export class TeamService {
         const planned = sprints.find((x) => x.status === 'planned');
         if (planned) nextNumber = planned.number;
         else {
-          nextNumber = nextSprintNumber(sprints);
+          nextNumber = this.nextSprintNumberIn(r, slug);
           r.writeFile(`projects/${slug}/sprints/${nextNumber}.yaml`, serializeSprint({ number: nextNumber, title: `Спринт ${nextNumber}`, status: 'planned', extra: {} }));
         }
       }
@@ -1067,18 +1121,27 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
       const b = await body<{ url?: unknown; addMe?: unknown }>();
       return ok(await svc.joinTeam({ url: reqStr(b.url, 'url', 'Укажи ссылку на репо'), addMe: b.addMe !== false }), 201);
     }
-    const seg = (s: string) => decodeURIComponent(s);
+    const seg = (s: string) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return bad(`Неверный путь: ${s}`);
+      }
+    };
     if ((m = p.match(/^\/api\/teams\/([^/]+)$/))) {
       const t = seg(m[1]);
       if (method === 'GET') return ok(await svc.team(t));
       if (method === 'PUT') return ok(await svc.updateTeam(t, await readBody()));
       if (method === 'DELETE') {
-        const b = method === 'DELETE' ? await body<{ force?: unknown }>().catch(() => ({})) : {};
-        await svc.removeTeam(t, url.searchParams.get('force') === 'true' || (b as { force?: unknown }).force === true);
+        const b = await body<{ force?: unknown }>();
+        await svc.removeTeam(t, url.searchParams.get('force') === 'true' || b.force === true);
         return ok({ ok: true });
       }
     }
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/sync$/)) && method === 'POST') return ok(await svc.sync(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts$/)) && method === 'GET') return ok(svc.conflicts(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)$/)) && method === 'DELETE') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'theirs'));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)\/mine$/)) && method === 'POST') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'mine'));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/local$/))) {
       if (method === 'GET') return ok(svc.local(seg(m[1])));
       if (method === 'PUT') return ok(svc.updateLocal(seg(m[1]), await readBody()));
@@ -1146,6 +1209,8 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
     return undefined;
   } catch (err) {
     if (err instanceof TeamError) return { status: err.status, body: err.body() };
-    return { status: 500, body: { error: errMsg(err) } };
+    // ошибка чтения тела с кодом (413 от readJson сервера) — с её кодом
+    const status = (err as { status?: unknown }).status;
+    return { status: typeof status === 'number' && status >= 400 && status < 600 ? status : 500, body: { error: errMsg(err) } };
   }
 }

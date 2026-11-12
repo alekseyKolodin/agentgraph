@@ -14,7 +14,7 @@ import { composeTask, parseTask, parseTeamConfig, serializeTask, type TaskFile }
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-teamwork-')));
 const bare = path.join(tmp, 'team.git');
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(tmp, 'none.gitconfig') } }).trim();
+const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', stdio: 'pipe', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(tmp, 'none.gitconfig') } }).trim();
 
 type Actor = { name: string; root: string; deps: RepoDeps };
 
@@ -288,6 +288,86 @@ test('удалено с одной стороны, изменено с друг�
   assert.equal(b.exists(taskFile('PAY-5')), false);
   assert.deepEqual(b.local().conflicts.map((c) => [c.kind, c.task, c.theirs]), [['deleted', 'PAY-5', null]]);
   b.saveLocal((l) => (l.conflicts = []));
+});
+
+test('не-ASCII имя файла: перепроигрывание не теряет мой документ, событие знает проект', async () => {
+  await a.pull();
+  await b.pull();
+  const doc = 'projects/p/docs/Заметки встречи.md';
+  const seen: string[][] = [];
+  const off = a.onChange((e) => seen.push(e.projects));
+  await a.write('p: заметки', (r) => r.writeFile(doc, '# Заметки\n'));
+  off();
+  assert.deepEqual(seen, [['p']]);
+  // конфликт по полю рядом, чтобы rebase откатился и пошло перепроигрывание
+  await a.write('PAY-1: оценка 1', (r) => r.writeFile(taskFile('PAY-1'), serializeTask({ ...readTask(r, 'PAY-1'), estimate: 1 })));
+  await b.write('PAY-1: оценка 4', (r) => r.writeFile(taskFile('PAY-1'), serializeTask({ ...readTask(r, 'PAY-1'), estimate: 4 })));
+  await b.push();
+  await a.push();
+  assert.equal(a.read(doc), '# Заметки\n');
+  assert.equal(readTask(a, 'PAY-1').estimate, 4);
+  assert.deepEqual(a.local().conflicts.map((c) => [c.kind, c.field, c.ours]), [['field', 'estimate', 1]]);
+  a.saveLocal((l) => (l.conflicts = []));
+  await b.pull();
+  assert.equal(b.read(doc), '# Заметки\n');
+  assert.ok(git(bare, 'ls-tree', '-r', '--name-only', 'main').includes(doc));
+});
+
+test('совпадение номеров между проектами после чистого rebase: моя неотправленная задача получает свободный номер', async () => {
+  await a.pull();
+  await b.pull();
+  await a.write('PAY-9: создана в p', (r) => r.writeFile(taskFile('PAY-9'), serializeTask(task('PAY-9', { rank: 'w', title: 'в p' }))));
+  await b.write('PAY-9: создана в q', (r) => {
+    r.writeFile('projects/q/tasks/PAY-9.md', serializeTask({ ...task('PAY-9', { rank: 'w', title: 'в q' }), file: 'projects/q/tasks/PAY-9.md' }));
+    r.writeFile('projects/q/tasks/PAY-10.md', serializeTask({ ...task('PAY-10', { rank: 'x', blockedBy: ['PAY-9'] }), file: 'projects/q/tasks/PAY-10.md' }));
+  });
+  await a.push();
+  await b.push();
+  assert.equal(readTask(b, 'PAY-9').title, 'в p');
+  assert.equal(b.exists('projects/q/tasks/PAY-9.md'), false);
+  const renamed = parseTask(b.read('projects/q/tasks/PAY-11.md') ?? '', 'projects/q/tasks/PAY-11.md');
+  assert.equal(renamed.title, 'в q');
+  assert.equal(renamed.error, undefined);
+  assert.deepEqual(parseTask(b.read('projects/q/tasks/PAY-10.md') ?? '', 'projects/q/tasks/PAY-10.md').blockedBy, ['PAY-11']);
+  assert.equal(await b.unpushed(), 0);
+  await a.pull();
+  assert.ok(a.exists('projects/q/tasks/PAY-11.md'));
+});
+
+test('ссылка в репо команды становится обычным файлом (core.symlinks=false); путь через ссылку внутри клона отклоняется', async () => {
+  const work = path.join(tmp, 'work-symlink');
+  git(tmp, 'clone', '-q', bare, work);
+  fs.mkdirSync(path.join(work, 'projects', 'p', 'docs'), { recursive: true });
+  fs.symlinkSync('/etc/hosts', path.join(work, 'projects', 'p', 'docs', 'link.md'));
+  git(work, '-c', 'user.name=x', '-c', 'user.email=x@x', 'add', '.');
+  git(work, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'ссылка');
+  git(work, 'push', '-q', 'origin', 'main');
+  await a.pull();
+  const st = fs.lstatSync(path.join(a.repoDir, 'projects', 'p', 'docs', 'link.md'));
+  assert.ok(st.isFile() && !st.isSymbolicLink());
+  assert.equal(a.read('projects/p/docs/link.md'), '/etc/hosts');
+  fs.symlinkSync(tmp, path.join(a.repoDir, 'outside'));
+  assert.throws(() => a.writeFile('outside/x.md', 'x'), /за пределы/);
+  assert.throws(() => a.abs('../x'), /вне репо/);
+  fs.unlinkSync(path.join(a.repoDir, 'outside'));
+  await a.write('p: ссылка убрана', (r) => r.remove('projects/p/docs/link.md'));
+  await a.push();
+});
+
+test('коммит не удался (подпись без ключа): рабочая копия откатывается к HEAD, следующая запись проходит', async () => {
+  git(a.repoDir, 'config', 'commit.gpgsign', 'true');
+  git(a.repoDir, 'config', 'gpg.program', '/nonexistent/gpg');
+  await assert.rejects(
+    a.write('PAY-1: тип', (r) => r.writeFile(taskFile('PAY-1'), serializeTask({ ...readTask(r, 'PAY-1'), type: 'bug' }))),
+    (e: TeamError) => e.status === 500 && /Коммит в репо команды не удался/.test(e.message),
+  );
+  assert.equal(git(a.repoDir, 'status', '--porcelain'), '');
+  assert.equal(readTask(a, 'PAY-1').type, 'feature');
+  git(a.repoDir, 'config', '--unset', 'commit.gpgsign');
+  git(a.repoDir, 'config', '--unset', 'gpg.program');
+  await a.write('PAY-1: тип', (r) => r.writeFile(taskFile('PAY-1'), serializeTask({ ...readTask(r, 'PAY-1'), type: 'bug' })));
+  assert.equal(readTask(a, 'PAY-1').type, 'bug');
+  await a.push();
 });
 
 test('правки руками в клоне коммитятся перед pull отдельным коммитом', async () => {

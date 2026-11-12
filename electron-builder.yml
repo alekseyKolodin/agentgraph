@@ -8,6 +8,8 @@ directories:
 files:
   - package.json
   - dist/**/*
+  # шаблон репо команды Teamwork (src/teamwork-template.ts читает его из APP_DIR/templates)
+  - templates/**/*
   - "!dist/**/*.map"
   - "!dist/**/*.test.js"
   # node-pty (терминал вкладки «Сессии»): исходники и сборки под Windows (~60 МБ) приложению под macOS не нужны
