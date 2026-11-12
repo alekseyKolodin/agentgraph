@@ -29,7 +29,7 @@ const PRD = `# Экспорт счетов
 ## Нефункциональные требования
 
 - NFR-1. Месяц выгружается быстрее 10 секунд.
-- NFR-2: Выгрузка идёт фоном.
+- NFR-2: с двоеточием — не требование, как на сервере.
 
 \`\`\`md
 ## Не раздел
@@ -57,13 +57,12 @@ test('документы: разделы по «## » вне оград кода
 
 test('документы: требования FR-N и NFR-N с разделом, не из оград кода; следующий номер не меньше последнего выданного', () => {
   const reqs = parseRequirements(PRD);
-  assert.deepEqual(reqs.map((r) => r.id), ['FR-1', 'FR-2', 'FR-4', 'NFR-1', 'NFR-2'], 'после номера точка или двоеточие');
-  assert.equal(reqs[4]!.text, 'Выгрузка идёт фоном.');
+  assert.deepEqual(reqs.map((r) => r.id), ['FR-1', 'FR-2', 'FR-4', 'NFR-1'], 'только точка после номера, как на сервере');
   assert.equal(reqs[0]!.section, 'Требования');
   assert.equal(reqs[3]!.section, 'Нефункциональные требования');
   assert.equal(reqs[2]!.text, 'Пустой период даёт файл только со строкой заголовков,');
   assert.equal(nextRequirementId(PRD, 'FR'), 'FR-5');
-  assert.equal(nextRequirementId(reqs, 'NFR'), 'NFR-3');
+  assert.equal(nextRequirementId(reqs, 'NFR'), 'NFR-2');
   assert.equal(nextRequirementId(PRD, 'FR', 7), 'FR-8', 'удалённые номера не переиспользуются');
   assert.equal(nextRequirementId('', 'FR'), 'FR-1');
   assert.deepEqual(parseRequirementId('nfr-12'), { kind: 'NFR', n: 12 });
@@ -72,7 +71,7 @@ test('документы: требования FR-N и NFR-N с разделом
 
 test('документы: оглавление с подпунктами требований и короткими подписями; текущий раздел по прокрутке', () => {
   const toc = tocOf(PRD);
-  assert.deepEqual(toc.map((x) => [x.heading, x.count]), [['Цель и проблема', undefined], ['Требования', 3], ['Нефункциональные требования', 2], ['Открытые вопросы', undefined]]);
+  assert.deepEqual(toc.map((x) => [x.heading, x.count]), [['Цель и проблема', undefined], ['Требования', 3], ['Нефункциональные требования', 1], ['Открытые вопросы', undefined]]);
   assert.deepEqual(toc[1]!.items.map((i) => i.id), ['FR-1', 'FR-2', 'FR-4']);
   assert.equal(requirementShort('Выгрузка счетов за выбранный период в CSV. Период включает обе границы.'), 'Выгрузка счетов за выбранный период в CSV');
   assert.equal(requirementShort('Кодировка на выбор в форме: CP1251 для 1С, UTF-8 с BOM для Excel.'), 'Кодировка на выбор в форме');
@@ -85,16 +84,16 @@ test('документы: покрытие требований задачами
   const reqs = parseRequirements(PRD);
   const tasks = [task({ id: 'PAY-1', covers: ['FR-1', 'FR-2'] }), task({ id: 'PAY-2', covers: ['FR-1', 'FR-77'] })];
   const c = coverage(reqs, tasks);
-  assert.equal(c.text, 'Задачи есть у 2 из 5 требований');
-  assert.equal(c.missingText, 'FR-4, NFR-1, NFR-2 без задач');
+  assert.equal(c.text, 'Задачи есть у 2 из 4 требований');
+  assert.equal(c.missingText, 'FR-4, NFR-1 без задач');
   assert.deepEqual(c.byReq.get('FR-1')!.map((x) => x.id), ['PAY-1', 'PAY-2']);
-  assert.equal(coverage(reqs, [task({ id: 'a', covers: ['FR-1', 'FR-2', 'FR-4', 'NFR-1', 'NFR-2'] })]).missingText, '');
+  assert.equal(coverage(reqs, [task({ id: 'a', covers: ['FR-1', 'FR-2', 'FR-4', 'NFR-1'] })]).missingText, '');
   assert.equal(coverage([reqs[0]!], []).text, 'Задачи есть у 0 из 1 требования');
   const p = proposalCoverage(reqs, [{ covers: ['FR-4'] }], tasks);
-  assert.deepEqual(p.items.map((i) => i.state), ['existing', 'existing', 'proposed', 'none', 'none']);
-  assert.equal(p.text, 'Покрывают FR-4 · NFR-1, NFR-2 остаются без задач');
-  assert.equal(proposalCoverage(reqs, [{ covers: ['FR-4', 'NFR-2'] }], tasks).text, 'Покрывают FR-4, NFR-2 · NFR-1 остаётся без задач');
-  assert.equal(proposalCoverage(reqs, [], tasks).text, 'Не покрывают ни одного требования · FR-4, NFR-1, NFR-2 остаются без задач');
+  assert.deepEqual(p.items.map((i) => i.state), ['existing', 'existing', 'proposed', 'none']);
+  assert.equal(p.text, 'Покрывают FR-4 · NFR-1 остаётся без задач');
+  assert.equal(proposalCoverage(reqs, [{ covers: ['FR-4', 'NFR-1'] }], tasks).text, 'Покрывают FR-4, NFR-1');
+  assert.equal(proposalCoverage(reqs, [], tasks).text, 'Не покрывают ни одного требования · FR-4, NFR-1 остаются без задач');
 });
 
 test('документы: шапка — файл, кто и когда менял, требования, время чтения', () => {
@@ -108,7 +107,7 @@ test('документы: шапка — файл, кто и когда меня
   assert.equal(updatedText({}, members, now), '');
   assert.equal(readingMinutes('раз два три'), 1);
   assert.equal(readingMinutes(Array(720).fill('слово').join(' ')), 4);
-  assert.equal(docHeadLine({ name: 'prd', text: PRD, updatedAt: '2026-11-11T10:00:00', updatedBy: 'maria@x.io' }, members, now), 'prd.md · обновлено вчера, Мария · 5 требований · ≈1 мин чтения');
+  assert.equal(docHeadLine({ name: 'prd', text: PRD, updatedAt: '2026-11-11T10:00:00', updatedBy: 'maria@x.io' }, members, now), 'prd.md · обновлено вчера, Мария · 4 требования · ≈1 мин чтения');
   assert.equal(docHeadLine({ name: 'docs/notes.md', text: 'текст' }, [], now), 'docs/notes.md · ≈1 мин чтения');
   assert.equal(docFile('architecture'), 'architecture.md');
   assert.equal(docLabel('prd'), 'ТЗ');

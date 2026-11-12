@@ -6,11 +6,8 @@ import { plural, t } from '../i18n';
 import { clock } from '../format';
 import { memberLabel } from './board';
 
-/**
- * Строка требования: «- FR-3. Текст». Группы: вид, номер, текст. Разбор терпит и «- FR-3: Текст» — так пишет промпт
- * teamwork-prd; запись (serializeRequirementRows) всегда с точкой.
- */
-export const REQ_RE = /^- (FR|NFR)-(\d+)[.:]\s+(.*)$/;
+/** Строка требования: «- FR-3. Текст», строго как на сервере (src/teamwork.ts). Группы: вид, номер, текст. */
+export const REQ_RE = /^- (FR|NFR)-(\d+)\.\s+(.*)$/;
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const H2_RE = /^## (.*)$/;
 const H1_RE = /^# (.*)$/;
