@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamProposedTask } from '@server/api-types';
+import { setLangForTest } from '../i18n';
 import {
   acceptText, addDependency, canAccept, chainEdges, chainText, checkDependencies, countCrossings, depsSummary, edgePath, existingNote, focusGraph, keyLabel, layoutGraph, orderRows,
   removeDependency, startNote, unlocks, waitsOn, waveText, type ExistingTask,
@@ -145,4 +146,15 @@ test('граф: подсветка выбранной задачи — пред�
   assert.deepEqual(deep.before.sort(), ['1', '2']);
   const chain = g.edges.filter((_, i) => chainEdges(g, r)[i]).map((e) => `${e.from}→${e.to}`);
   assert.deepEqual(chain, ['1→2', '2→6']);
+});
+
+test('граф: колонка цикла по-английски — «Cycle», а не «Loop» из словаря flow', () => {
+  const tasks = [p('3', ['5']), p('5', ['3'])];
+  setLangForTest('en');
+  try {
+    const g = layoutGraph(tasks, [], checkDependencies(tasks, []));
+    assert.equal(g.columns.at(-1)?.label, 'Cycle');
+  } finally {
+    setLangForTest('ru');
+  }
 });
