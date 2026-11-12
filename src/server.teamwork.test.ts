@@ -417,7 +417,7 @@ test('конфликты: после sync одно поле с двух стор
   assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
 });
 
-test('событие team в /api/events после записи; отключение с неотправленными — 409 unpushed, с force — удаление', async () => {
+test('событие team в /api/events после записи и после отправки через POST /sync; отключение с неотправленными — 409 unpushed, с force — удаление', async () => {
   const res = await fetch(`${base}/api/events`);
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -431,15 +431,21 @@ test('событие team в /api/events после записи; отключе
       if (m) return JSON.parse(m[1]) as Record<string, unknown>;
     }
   };
-  const pending = Promise.race([next(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('события team не было 10 с')), 10_000).unref())]);
+  const within = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('события team не было 10 с')), 10_000).unref())]);
+  const pending = within(next());
   const patched = await call<TeamTask>('PATCH', `${P}/tasks/PAY-2`, { title: 'Экспорт в 1С (CP1251)' });
   assert.equal(patched.status, 200);
   assert.deepEqual(await pending, { type: 'team', runId: '', flow: '', team: 'team', projects: ['export'] });
-  await reader.cancel();
   const refused = await call<Err & { unpushed: number; commits: string[] }>('DELETE', '/api/teams/team');
   assert.equal(refused.status, 409);
   assert.equal(refused.body.code, 'unpushed');
   assert.deepEqual(refused.body.commits, ['PAY-2: переименована: Экспорт в 1С (CP1251)']);
+  // отправка: строка синхронизации сменилась — событие без проектов, UI не опрашивает сервер во время отправки
+  const pushed = within(next());
+  assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
+  assert.deepEqual(await pushed, { type: 'team', runId: '', flow: '', team: 'team', projects: [] });
+  await reader.cancel();
+  await call<TeamTask>('PATCH', `${P}/tasks/PAY-2`, { title: 'Экспорт в 1С' });
   assert.equal((await call('GET', '/api/teams/team')).status, 200);
   assert.equal((await call('DELETE', '/api/teams/team?force=true')).status, 200);
   assert.equal((await call('GET', '/api/teams/team')).status, 404);

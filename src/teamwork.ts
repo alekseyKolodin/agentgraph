@@ -748,6 +748,31 @@ export function mergeRecords(base: Record<string, unknown> | undefined, mine: Re
   return { merged, conflicts };
 }
 
+/** Поля-следы правки задачи: при расхождении сторон это не конфликт, а «кто правил последним». */
+const STAMP_FIELDS = new Set(['updatedAt', 'updatedBy']);
+const stampTime = (v: unknown): number => {
+  const t = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isNaN(t) ? -Infinity : t;
+};
+
+/**
+ * updatedAt и updatedBy при конфликте не уходят в диалог: остаётся более поздняя правка вместе со своим автором (при
+ * равенстве — команды). Меняет merged по месту, возвращает конфликты без этих полей.
+ */
+function mergeStamps(merged: Record<string, unknown>, conflicts: FieldConflict[], mine: Record<string, unknown>, theirs: Record<string, unknown>): FieldConflict[] {
+  const rest = conflicts.filter((c) => !STAMP_FIELDS.has(c.field));
+  if (rest.length === conflicts.length) return conflicts;
+  // updatedAt разошёлся — сторона с более поздним временем; иначе (разошёлся только автор) — сторона, чьё время осталось
+  const atConflict = conflicts.some((c) => c.field === 'updatedAt');
+  const mineWins = atConflict ? stampTime(mine.updatedAt) > stampTime(theirs.updatedAt) : eq(merged.updatedAt, mine.updatedAt) && !eq(merged.updatedAt, theirs.updatedAt);
+  const side = mineWins ? mine : theirs;
+  for (const k of STAMP_FIELDS) {
+    if (side[k] === undefined) delete merged[k];
+    else merged[k] = side[k];
+  }
+  return rest;
+}
+
 /** Слияние текстов: undefined — конфликт, не слилось. Реализация с git merge-file — в teamwork-repo.ts. */
 export type MergeText = (base: string, mine: string, theirs: string) => string | undefined | Promise<string | undefined>;
 
@@ -764,7 +789,10 @@ export async function mergeTaskTexts(base: string | undefined, mine: string, the
     const merged = await mergeText(base ?? '', mine, theirs);
     return merged !== undefined ? { text: merged, conflicts: [] } : { text: theirs, conflicts: [{ field: 'text', ours: mine, theirs }] };
   }
-  const { merged, conflicts } = mergeRecords(b ? taskFrontmatter(b) : undefined, taskFrontmatter(m), taskFrontmatter(t));
+  const mineFm = taskFrontmatter(m);
+  const theirsFm = taskFrontmatter(t);
+  const { merged, conflicts: fieldConflicts } = mergeRecords(b ? taskFrontmatter(b) : undefined, mineFm, theirsFm);
+  const conflicts = mergeStamps(merged, fieldConflicts, mineFm, theirsFm);
   let body = t.body;
   if (m.body !== t.body) {
     if (b && m.body === b.body) body = t.body;
