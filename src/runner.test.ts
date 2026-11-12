@@ -128,3 +128,21 @@ test('runFlow с adhoc пишет adhoc: true в run.json, без опции п�
     fs.rmSync(runsDir, { recursive: true, force: true });
   }
 });
+
+// --- связь с Teamwork: раннер только сохраняет её в run.json
+
+test('runFlow с teamwork пишет связь с задачей в run.json, без опции поля нет', async () => {
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-teamwork-'));
+  try {
+    const spec = { name: 'one', input: 'x', phases: [{ name: 'a', tools: [], prompt: 'p' }] } as unknown as FlowSpec;
+    const session = async (): Promise<SessionResult> => ({ ok: true, subtype: 'success', text: 'ok', costUsd: 0, turns: 1, durationMs: 1, errors: [] });
+    const read = (dir: string) => JSON.parse(fs.readFileSync(path.join(dir, 'run.json'), 'utf8'));
+    const link = { team: 'payments-team', project: 'invoice-export', task: 'PAY-12' };
+    const linked = await runFlow(spec, { cwd: runsDir, runsDir, session, teamwork: link });
+    assert.deepEqual(read(linked.runDir).teamwork, link);
+    const plain = await runFlow(spec, { cwd: runsDir, runsDir, session });
+    assert.equal('teamwork' in read(plain.runDir), false);
+  } finally {
+    fs.rmSync(runsDir, { recursive: true, force: true });
+  }
+});

@@ -125,6 +125,8 @@ export type RunSummary = {
   hidden: boolean;
   /** Задача Jira, MR или ветка, из которой запущен: по ней главная показывает связанные запуски. */
   source?: RunSource;
+  /** Связь с Teamwork: задача или черновик документа проекта (run.json → teamwork). */
+  teamwork?: RunTeamworkLink;
   worktree?: RunWorktree;
   /** Доп. директории запуска: из них и из cwd собираются недавние пути формы запуска. */
   addDirs?: string[];
@@ -1020,6 +1022,8 @@ export type RunReport = {
   /** Разовый запуск: flow берётся из снимка flow.yaml в папке запуска, а не из flows/ по имени. У обычных поля нет. */
   adhoc?: true;
   source?: RunSource;
+  /** Связь с Teamwork: задача, которую делает запуск, или черновик документа проекта. */
+  teamwork?: RunTeamworkLink;
   worktree?: RunWorktree;
   /** Доп. директории уровня запуска, абсолютными путями. */
   addDirs?: string[];
@@ -1753,3 +1757,9 @@ export type TeamDraft = {
   section?: string;
   brief?: string;
 };
+
+/**
+ * Связь запуска с Teamwork (run.json → teamwork): задача, которую он делает, или черновик документа проекта.
+ * Раннер только сохраняет её; статусы задач по запускам и черновики читают её на сервере.
+ */
+export type RunTeamworkLink = { team: string; project: string; task?: string; draft?: TeamDraftKind; section?: string };

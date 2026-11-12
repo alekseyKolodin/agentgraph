@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
+import type { RunTeamworkLink } from './api-types.js';
 import type {
   BlockNext, BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
   RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, SpaceStateReport, StateSkip,
@@ -62,6 +63,8 @@ export type RunOptions = {
   continueFrom?: Continuation;
   /** Откуда запуск: задача Jira, MR или ветка с главной. Раннер только сохраняет в отчёт. */
   source?: RunSource;
+  /** Связь с Teamwork: задача или черновик документа проекта. Раннер только сохраняет в отчёт. */
+  teamwork?: RunTeamworkLink;
   /** Запуск идёт в git worktree (cwd = path). Раннер только сохраняет в отчёт. */
   worktree?: RunWorktree;
   /** Шов для тестов: чем запускать сессии этапов и судьи. По умолчанию runSession. */
@@ -438,6 +441,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     ...(cont ? { continuedFrom: cont.runId } : {}),
     ...(opts.adhoc ? { adhoc: true as const } : {}),
     ...(opts.source ? { source: opts.source } : {}),
+    ...(opts.teamwork ? { teamwork: opts.teamwork } : {}),
     ...(opts.worktree ? { worktree: opts.worktree } : {}),
     ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
     ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
