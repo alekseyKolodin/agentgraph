@@ -98,9 +98,13 @@ export type SessionTeamwork = {
   check: (link: RunTeamworkLink) => TeamTask | undefined;
   started: (link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'>) => Promise<void>;
   ended: (link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'>) => Promise<void>;
-  /** Подпись задачи для вопроса PreToolUse: «PAY-12 «…» (team/project)». */
-  label: (link: RunTeamworkLink) => string;
-  updateTask: (link: RunTeamworkLink, args: TeamTaskUpdateArgs) => Promise<string>;
+  /**
+   * Подпись задачи для вопроса PreToolUse: «PAY-12 «…» (team/project)». session — id сессии: номер задачи — тот, у которой
+   * записана её работа (после переименования совпавшего номера он не тот, что в связи, D-14).
+   */
+  label: (link: RunTeamworkLink, session: string) => string;
+  /** session — id сессии: задача — та, у которой записана её работа, а не номер из связи (teamwork-work.ts, D-14). */
+  updateTask: (link: RunTeamworkLink, args: TeamTaskUpdateArgs, session: string) => Promise<string>;
   /** session — id сессии: запись сверяется с версией документа, которую эта сессия видела (teamwork-work.ts). */
   writeDoc: (link: RunTeamworkLink, name: string, text: string, session: string) => Promise<string>;
 };
@@ -957,7 +961,7 @@ export class SessionManager {
         const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
         return path.join(space.dir, 'docs', doc.name);
       },
-      ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
+      ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args, s.rec.id), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
     });
   }
 
@@ -1054,7 +1058,7 @@ export class SessionManager {
       const link = s.rec.teamwork;
       if (!link?.task || !teamworkHooks) return 'Сессия не открыта из задачи Teamwork: вызов вернёт ошибку';
       // заголовок задачи правят люди в репо команды: в терминал — одной строкой, без управляющих символов
-      const label = cleanLine(teamworkHooks.label(link), 160);
+      const label = cleanLine(teamworkHooks.label(link, s.rec.id), 160);
       if (tool === TEAM_DOC_WRITE_FULL) {
         const name = typeof input.name === 'string' ? cleanLine(input.name, 80) : '';
         const size = typeof input.text === 'string' ? Buffer.byteLength(input.text) : 0;

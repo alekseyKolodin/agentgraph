@@ -6,7 +6,7 @@ import { Link, useBlocker, useNavigate, useParams, useSearchParams } from 'react
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDetail, TeamProjectBrief, TeamTaskStatus } from '@server/api-types';
 import { ApiError, errorText, useConfig, useFeature } from '../../api';
-import { createProject, removeTeam, saveTeamFlow, teamKeys, updateTeam, useTeam, useTeamConflicts, useTeamFlow, type TeamPatch } from '../../api/teamwork';
+import { addTeamMe, createProject, removeTeam, saveTeamFlow, teamKeys, updateTeam, useTeam, useTeamConflicts, useTeamFlow, type TeamPatch } from '../../api/teamwork';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PathLink } from '../../components/PathLink';
 import { useToast } from '../../components/Toast';
@@ -15,6 +15,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { STATUSES, tasksWord } from '../../lib/teamwork/board';
 import { changedFields, failView, rebaseForm } from '../../lib/teamwork/form';
+import { disconnectQuestion } from '../../lib/teamwork/sync';
 import { YamlEditor, type YamlEditorHandle } from '../flow/YamlEditor';
 import { Loading } from '../sessions/Loading';
 import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
@@ -259,11 +260,12 @@ function MembersTab({ team }: { team: TeamDetail }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const me = team.me;
+  // отдельный путь сервера, а не PUT всего списка из кэша: участник, пришедший после загрузки экрана, не пропадёт
   const addMe = async () => {
     if (!me.email) return;
     setBusy(true);
     try {
-      await updateTeam(team.slug, { members: [...team.memberList, { name: me.name || me.email, email: me.email }] });
+      qc.setQueryData(teamKeys.team(team.slug), await addTeamMe(team.slug));
       await qc.invalidateQueries({ queryKey: teamKeys.all });
     } catch (err) {
       toast(errorText(err));
@@ -488,9 +490,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
         await removeTeam(team.slug);
       } catch (err) {
         if (!(err instanceof ApiError && err.code === 'unpushed')) throw err;
-        const d = err.data as { unpushed?: number; commits?: string[] };
-        const list = (d.commits ?? []).map((c) => `· ${c}`).join('\n');
-        const text = t('Не отправлено изменений: {n}. Они пропадут вместе с клоном.\n{list}\nВсё равно отключить?', { n: d.unpushed ?? d.commits?.length ?? 0, list });
+        const text = disconnectQuestion(err.data as { unpushed?: number; commits?: string[]; conflicts?: number });
         if (!(await askConfirm(text, { ok: t('Отключить и потерять изменения'), danger: true }))) return;
         await removeTeam(team.slug, true);
       }
@@ -544,7 +544,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
         <span className={styles.meta}><PathLink path={team.dir}>{tildePath(team.dir, home)}</PathLink> · {t('формат {n}', { n: team.format })}</span>
       </div>
       <div className={styles.dangerZone}>
-        <p>{t('Отключить команду — удалить её локальный клон. Репо команды останется, подключиться снова можно по ссылке. Если есть неотправленные изменения, agentgraph спросит ещё раз.')}</p>
+        <p>{t('Отключить команду — удалить её локальный клон. Репо команды останется, подключиться снова можно по ссылке. Если есть неотправленные изменения или нерешённые конфликты, agentgraph спросит ещё раз.')}</p>
         <button type="button" className="btn danger" style={{ alignSelf: 'flex-start' }} onClick={() => void disconnect()}>{t('Отключить команду…')}</button>
       </div>
     </section>

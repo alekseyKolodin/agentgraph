@@ -94,6 +94,30 @@ export function trustFlow(teamDir: string, name: string, yaml: string, via: Trus
 }
 
 /**
+ * Flow команды, текст которых совпадает с шаблоном agentgraph (с любым, под любым именем, как в untrustedFlow), — в
+ * trust.json как одобренные (via template), одной записью файла. Зовут при создании и подключении команды и при первом
+ * открытии клона: после обновления agentgraph с новой версией шаблона нетронутый flow остаётся одобренным, даже если его
+ * до обновления ни разу не открывали. Уже одобренная та же версия не переписывается (её `at` и `via` остаются). Возвращает
+ * имена запомненных сейчас.
+ */
+export function pinTemplateFlows(teamDir: string, flows: readonly { name: string; yaml: string }[], templateDir: string, now = new Date()): string[] {
+  const templates = new Set([...templateFlows(templateDir).values()].map(flowHash));
+  const data = readTrust(teamDir);
+  const pinned: string[] = [];
+  for (const f of flows) {
+    const hash = flowHash(f.yaml);
+    if (!templates.has(hash) || data.flows[f.name]?.sha256 === hash) continue;
+    data.flows[f.name] = { sha256: hash, yaml: f.yaml, at: now.toISOString(), via: 'template' };
+    pinned.push(f.name);
+  }
+  if (pinned.length) {
+    fs.mkdirSync(teamDir, { recursive: true });
+    writeAtomic(path.join(teamDir, TRUST_FILE), JSON.stringify(data, null, 2) + '\n');
+  }
+  return pinned;
+}
+
+/**
  * Что flow команде нельзя (spec §14), по строке на нарушение; пусто — можно. Всё это или ссылается на вещи этого
  * компьютера, которых автор flow не знает (плагины, add_dirs, теги знаний, локальные flow), или снимает с чужого flow
  * границы agentgraph (режимы без вопросов; инструменты вне KNOWN_TOOLS — MCP и коннекторы claude.ai, они разрешились бы
@@ -225,15 +249,16 @@ export function teamsCwdProblem(dir: string): string | undefined {
  * Папка из клона команды как дополнительная папка агента (папка проекта): Claude Code подхватывает из доп. папки
  * CLAUDE.md, а из её .claude/ — скиллы (.claude/skills, в том числе с командами shell), сабагентов (.claude/agents),
  * правила и включённые плагины (enabledPlugins в .claude/settings*.json). Их пишут участники команды мимо доверия к
- * flow, поэтому папку с .claude/ агенту не даём; CLAUDE.md проекта — описанный в шаблоне способ задать правила, он
- * остаётся. Папка вне папки команд — undefined.
+ * flow: из репо команды .claude в папках проектов в клон не выгружается (TeamRepo.ensureSparse), а папку, где она всё же
+ * есть на диске (положили руками, клон ещё не перешёл на правила), агенту не даём; CLAUDE.md проекта — описанный в
+ * шаблоне способ задать правила, он остаётся. Папка вне папки команд — undefined.
  */
 export function teamsAddDirProblem(dir: string): string | undefined {
   if (!insideTeamsDir(dir)) return undefined;
   const found = findClaudeDir(dir);
   if (!found) return undefined;
   if (found === TOO_MANY) return `В ${dir} (репо команды) слишком много файлов, чтобы проверить, нет ли в ней папки .claude/: агенту её не даём`;
-  return `В ${found} (репо команды) есть папка .claude/: агент подхватил бы из неё скиллы, сабагентов и плагины, а пишут их участники команды. Уберите .claude/ из репо команды — правила проекта задают в CLAUDE.md`;
+  return `В ${found} (репо команды) есть папка .claude/: агент подхватил бы из неё скиллы, сабагентов и плагины, а пишут их участники команды. Если она пришла из репо команды, синхронизируйте команду — agentgraph уберёт её из клона сам (в репо команды она останется); если её положили в клон руками — удалите её. Правила проекта задают в CLAUDE.md`;
 }
 
 const TOO_MANY = '\0too-many';

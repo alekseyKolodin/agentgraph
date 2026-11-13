@@ -20,7 +20,7 @@ export const fetchDrafts = (team: string, project: string) => api<TeamDraft[]>('
 export const fetchDraft = (team: string, project: string, run: string) => api<TeamDraftDetail>('GET', `${projectBase(team, project)}/drafts/${enc(run)}`);
 /** Запустить черновик: 201 со status 'running'; 400 — нет локальной папки репо кода или раздела. */
 export const startDraft = (team: string, project: string, body: TeamDraftStart) => api<TeamDraft>('POST', `${projectBase(team, project)}/drafts`, body);
-/** Записать принятые правки: 409 conflict (data.current) — документ менялся; 409 busy — черновик ещё идёт. */
+/** Записать принятые правки: 409 conflict (data.current) — документ менялся; 409 running — черновик ещё идёт. */
 export const acceptDraft = (team: string, project: string, run: string, body: TeamDraftAccept) =>
   api<TeamDraftAccepted>('POST', `${projectBase(team, project)}/drafts/${enc(run)}/accept`, body);
 export const fetchRevision = (team: string, project: string, doc: TeamDocName, hash: string) =>

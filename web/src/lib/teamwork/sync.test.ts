@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamConflict, TeamSync } from '@server/api-types';
-import { agoShort, changesWord, conflictText, fieldLabel, syncLine, unsavedLine } from './sync';
+import { agoShort, changesWord, conflictText, disconnectQuestion, fieldLabel, syncLine, unsavedLine } from './sync';
 
 const now = Date.parse('2026-11-12T12:00:00Z');
 const sync = (over: Partial<TeamSync>): TeamSync => ({ state: 'ok', unpushed: 0, conflicts: 0, ...over });
@@ -61,3 +61,26 @@ test('строка «не отправлено»: без ошибки кнопк
   assert.deepEqual(syncLine(sync({ state: 'pending', unpushed: 2 })).action, { kind: 'retry', label: 'Отправить сейчас' });
   assert.deepEqual(syncLine(sync({ state: 'pending', unpushed: 2, error: 'нет сети' })).action, { kind: 'retry', label: 'Повторить' });
 });
+
+test('синхронизация: ошибка без неотправленного (нет сети, история переписана, клон посреди rebase руками) — текстом сервера, а не «синхронизировано»', () => {
+  const rewritten = 'История репо команды переписана: у клона нет с ней общих коммитов. Отключи команду и подключись заново';
+  assert.deepEqual(syncLine(sync({ error: rewritten, lastFetchAt: new Date(now - 60_000).toISOString() }), { now }), {
+    text: `не синхронизировано — ${rewritten}`, tone: 'wait', action: { kind: 'retry', label: 'Повторить' },
+  });
+  // при конфликтах причина сбоя тоже видна, кнопка — «Разобрать»
+  assert.deepEqual(syncLine(sync({ state: 'conflict', conflicts: 2, error: 'Команду сейчас синхронизирует другой процесс agentgraph: попробуй позже' })), {
+    text: 'конфликтов: 2 — Команду сейчас синхронизирует другой процесс agentgraph: попробуй позже', tone: 'wait', action: { kind: 'resolve', label: 'Разобрать' },
+  });
+});
+
+test('отключение: вопрос называет и неотправленные коммиты, и нерешённые конфликты — «моё» в них пропадёт вместе с клоном', () => {
+  assert.equal(disconnectQuestion({ unpushed: 0, commits: [], conflicts: 2 }), 'Нерешённых конфликтов: 2 — ваши версии из них есть только в этом клоне.\nЭто пропадёт вместе с клоном. Всё равно отключить?');
+  assert.equal(
+    disconnectQuestion({ unpushed: 2, commits: ['PAY-12: статус → Ревью', 'PAY-13: создана'], conflicts: 1 }),
+    'Не отправлено изменений: 2.\n· PAY-12: статус → Ревью\n· PAY-13: создана\nНерешённых конфликтов: 1 — ваши версии из них есть только в этом клоне.\nЭто пропадёт вместе с клоном. Всё равно отключить?',
+  );
+  // старый сервер без conflicts и без unpushed — по числу коммитов
+  assert.equal(disconnectQuestion({ commits: ['PAY-1: x'] }), 'Не отправлено изменений: 1.\n· PAY-1: x\nЭто пропадёт вместе с клоном. Всё равно отключить?');
+  assert.doesNotMatch(disconnectQuestion({ unpushed: 0, conflicts: 3 }), /Не отправлено изменений: 0/);
+});
+

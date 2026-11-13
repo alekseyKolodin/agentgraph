@@ -450,7 +450,8 @@ test('идущий черновик: статус running, текст агент
   assert.deepEqual(live.notes, []);
   const busy = await call<Err>('POST', `${P}/drafts/${r.body.run}/accept`, { text: PRD_NEXT });
   assert.equal(busy.status, 409);
-  assert.equal(busy.body.code, 'busy');
+  // свой код: busy у записи в клон — другой процесс agentgraph синхронизирует команду или она отключается
+  assert.equal(busy.body.code, 'running');
   release();
   assert.equal((await finished(r.body.run)).status, 'done');
   assert.equal((await detail(r.body.run)).documents![0].changed, true);

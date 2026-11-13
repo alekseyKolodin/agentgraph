@@ -150,10 +150,7 @@ export function statusService(svc: TeamService): StatusService {
     task: (team, project, id) => svc.task(team, project, id),
     updateTask: (team, project, id, patch) => svc.updateTask(team, project, id, patch),
     recordWork: (team, id, work) => svc.recordWork(team, id, work),
-    workTask: (team, work) => {
-      const all = svc.repo(team).local().work;
-      return Object.keys(all).find((id) => all[id].some((w) => w.kind === work.kind && w.id === work.id));
-    },
+    workTask: (team, work) => svc.workTask(team, work),
   };
 }
 
@@ -209,10 +206,19 @@ export class TeamworkStatus {
   async started(link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'> & { at?: string }): Promise<void> {
     if (!link.task) return;
     const key = `${link.team}/${link.task}`;
+    // запись в local.json — сразу, а не в цепочке за прошлым стартом той же задачи (тот может ждать очередь клона): по ней
+    // инструменты сессии находят задачу (D-14)
+    let recorded = true;
+    try {
+      this.deps.service.recordWork(link.team, link.task, { ...work, at: work.at ?? this.now() });
+    } catch (err) {
+      recorded = false;
+      this.log(`${link.task}: старт работы не записан — ${errMsg(err)}`);
+    }
     const prev = this.starting.get(key) ?? Promise.resolve();
     const run = prev.then(async () => {
+      if (!recorded) return;
       try {
-        this.deps.service.recordWork(link.team, link.task!, { ...work, at: work.at ?? this.now() });
         const task = this.deps.service.task(link.team, link.project, link.task!);
         const patch = startPatch(task, await this.deps.service.me(link.team));
         if (patch) await this.deps.service.updateTask(link.team, link.project, link.task!, patch);

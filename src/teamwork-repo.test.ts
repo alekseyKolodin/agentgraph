@@ -487,6 +487,31 @@ test('ошибка сети с меняющимся текстом: событи
   assert.equal(r.local().sync.error, null);
 });
 
+test('получение без отправки снимает ошибку синхронизации, только если отправлять нечего', async () => {
+  let offline = false;
+  const x: Exec = (cmd, args, opts) => (offline && args.includes('fetch') ? Promise.reject(new Error('Could not resolve host: github.com')) : alice.deps.exec(cmd, args, opts));
+  const r = track(TeamRepo.open(a.slug, { ...alice.deps, exec: x }, alice.root)!);
+  await r.pull();
+  offline = true;
+  await assert.rejects(r.pull());
+  assert.match(r.local().sync.error ?? '', /resolve host/);
+  // сеть вернулась, отправлять нечего: открытие экрана (pull) снимает старую причину — строка снова «синхронизировано»
+  offline = false;
+  await r.pull();
+  assert.equal(r.local().sync.error, null);
+  assert.equal((await r.syncState()).state, 'ok');
+  // есть неотправленный коммит: получение без отправки ошибку не снимает — отправка ещё не удалась
+  offline = true;
+  await r.write('PAY-3: оценка 9', (t) => t.writeFile(taskFile('PAY-3'), serializeTask({ ...readTask(t, 'PAY-3'), estimate: 9 })));
+  await assert.rejects(r.pull());
+  offline = false;
+  await r.pull();
+  assert.match(r.local().sync.error ?? '', /resolve host/);
+  await r.push();
+  assert.equal(r.local().sync.error, null);
+  await b.pull();
+});
+
 test('два активных спринта после одновременного запуска: активным остаётся более ранний, второй снова запланирован', async () => {
   await a.pull();
   await b.pull();

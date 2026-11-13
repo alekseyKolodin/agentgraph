@@ -11,8 +11,10 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { exec, type Exec } from './git.js';
 import { defaultRepoDeps, TeamError } from './teamwork-repo.js';
-import { TeamService } from './teamwork-server.js';
+import { TeamService, teamworkRoute } from './teamwork-server.js';
 import { statusService, TeamworkStatus } from './teamwork-status.js';
+import { sessionTeamwork } from './teamwork-work.js';
+import type { TeamDetail } from './api-types.js';
 import { serializeTask, type TaskFile } from './teamwork.js';
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-tw-svc-sync-')));
@@ -32,6 +34,7 @@ function actor(name: string): TeamService {
 const alice = actor('alice');
 const bob = actor('bob');
 const carol = actor('carol');
+const frank = actor('frank');
 
 const sync = async (svc: TeamService) => {
   const s = await svc.sync(T);
@@ -55,6 +58,7 @@ after(async () => {
   await alice.stop();
   await bob.stop();
   await carol.stop();
+  await frank.stop();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -236,4 +240,69 @@ test('D-14: моя неотправленная задача переимено�
   assert.equal(bob.task(T, 'q', mine.id).status, 'todo');
   assert.equal(bob.repo(T).local().work[mine.id], undefined);
   assert.deepEqual(bob.repo(T).local().work[renamed.id]?.map((w) => w.status), ['done']);
+});
+
+test('D-14: сессия по моей задаче после переименования совпавшего номера — team_task_update и team_doc_write пишут в мою задачу, а не в чужую со старым номером', async () => {
+  const st = new TeamworkStatus({ service: statusService(bob), timers: false, log: () => {} });
+  const hooks = sessionTeamwork(bob, st);
+  const [mine] = await bob.createTasks(T, 'p', [{ title: 'сессия bob' }]);
+  const link = { team: T, project: 'p', task: mine.id };
+  await hooks.started(link, { kind: 'session', id: 's-1', status: 'running' });
+  // alice отправила свою задачу с тем же номером в том же проекте: старый номер в p теперь у неё
+  const file = `projects/p/tasks/${mine.id}.md`;
+  await alice.repo(T).write(`${mine.id}: от alice`, (r) => r.writeFile(file, serializeTask({ id: mine.id, title: 'чужая alice', type: 'feature', status: 'todo', rank: 'V', blockedBy: [], covers: [], body: '', acceptance: { done: 0, total: 0 }, comments: 0, base: '', file, extra: {} })));
+  await sync(alice);
+  // модель зовёт инструмент, пока идёт синхронизация, которая переименует задачу: номер ищется уже в очереди клона
+  const pulling = bob.sync(T);
+  const calling = hooks.updateTask(link, { status: 'review', comment: 'готово из сессии' }, 's-1');
+  assert.equal((await pulling).error ?? null, null);
+  const said = await calling;
+  const renamed = bob.tasks(T, 'p').find((x) => x.title === 'сессия bob')!;
+  assert.notEqual(renamed.id, mine.id);
+  assert.match(said, new RegExp(`^Задача ${renamed.id}:`));
+  // вопрос PreToolUse — о моей задаче под новым номером
+  assert.match(hooks.label(link, 's-1'), new RegExp(`^${renamed.id} «сессия bob»`));
+  assert.equal(bob.task(T, 'p', renamed.id).status, 'review');
+  assert.deepEqual((await bob.comments(T, 'p', renamed.id)).map((c) => c.text.trim()), ['готово из сессии']);
+  const theirs = bob.task(T, 'p', mine.id);
+  assert.deepEqual([theirs.title, theirs.status, theirs.comments], ['чужая alice', 'todo', 0]);
+  // документ — проекта; номер задачи в сообщении коммита — новый
+  await hooks.writeDoc(link, 'docs/session.md', '# Из сессии\n', 's-1');
+  assert.match(await bob.repo(T).git(['log', '-1', '--format=%s']), new RegExp(`по задаче ${renamed.id}$`, 'm'));
+  // сессии нет в работе задач (задачу удалили, старт не записался) — отказ, а не запись в задачу со старым номером
+  await assert.rejects(hooks.updateTask(link, { status: 'done' }, 's-unknown'), /больше нет среди работы этой сессии/);
+  assert.equal(bob.task(T, 'p', mine.id).status, 'todo');
+  await hooks.ended(link, { kind: 'session', id: 's-1', status: 'ended' });
+  await sync(bob);
+  await sync(alice);
+});
+
+test('«Добавить меня» — отдельный путь сервера: список участников не перезаписывается, повтор ничего не пишет', async () => {
+  await frank.joinTeam({ url: bare, addMe: false });
+  assert.equal((await frank.team(T)).me.inTeam, false);
+  // экран frank загрузил список, а потом alice добавила участника и поправила другого; клон frank это уже получил
+  await sync(alice);
+  const before = (await alice.team(T)).memberList;
+  await alice.updateTeam(T, { members: [...before.map((m) => (m.email === 'bob@example.com' ? { ...m, github: 'bob-new' } : m)), { name: 'erin', email: 'erin@example.com' }] });
+  // у erin поле новой версии agentgraph (D-9)
+  await editYaml(alice, 'teamwork.yaml', (t) => t.replace(/(    email: erin@example\.com\n)/, '$1    role: qa\n'));
+  await sync(alice);
+  await sync(frank);
+  const r = await teamworkRoute('POST', new URL('http://127.0.0.1/api/teams/team/members/me'), async () => ({}), { service: frank });
+  assert.equal(r?.status, 200);
+  const detail = r!.body as TeamDetail;
+  assert.equal(detail.me.inTeam, true);
+  const emails = detail.memberList.map((m) => m.email);
+  assert.deepEqual(emails.slice(-2), ['erin@example.com', 'frank@example.com']);
+  assert.equal(detail.memberList.find((m) => m.email === 'bob@example.com')?.github, 'bob-new');
+  // неизвестное поле участника из файла (D-9) на месте
+  assert.equal((raw(frank, 'teamwork.yaml').members as Record<string, unknown>[]).find((m) => m.email === 'erin@example.com')?.role, 'qa');
+  assert.equal(await frank.repo(T).unpushed(), 1);
+  // повтор: уже участник — ни коммита, ни второй записи
+  await frank.addMe(T);
+  assert.equal(await frank.repo(T).unpushed(), 1);
+  await sync(frank);
+  const remote = (remoteYaml('teamwork.yaml').members as Record<string, unknown>[]).map((m) => m.email);
+  assert.equal(remote.filter((e) => e === 'frank@example.com').length, 1);
+  assert.ok(remote.includes('erin@example.com'));
 });

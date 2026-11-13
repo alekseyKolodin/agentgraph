@@ -486,7 +486,7 @@ export class TeamDrafts {
     this.requireProject(team, slug);
     const { report, link } = this.draftReport(team, slug, run);
     // агент ещё пишет артефакты (или ждёт ответа): принимать нечего
-    if (['running', 'waiting', 'paused'].includes(this.deps.live(run) ?? report.status)) throw new TeamError(409, 'Черновик ещё идёт: дождись конца запуска', 'busy');
+    if (['running', 'waiting', 'paused'].includes(this.deps.live(run) ?? report.status)) throw new TeamError(409, 'Черновик ещё идёт: дождись конца запуска', 'running');
     if (!isRecord(body)) bad('Тело запроса — объект');
     const b = body as Record<string, unknown>;
     if (link.draft === 'split') {

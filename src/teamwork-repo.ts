@@ -93,6 +93,24 @@ const REGULAR_MODES = new Set(['100644', '100755']);
 const REBASE_MARKER = 'agentgraph-rebase';
 /** Служебные файлы ОС: не уходят команде (.gitignore новой команды и info/exclude каждого клона). */
 const OS_JUNK = ['.DS_Store', 'Thumbs.db'];
+/**
+ * .claude (файл или папка, в любом регистре, на любой глубине) в папках проектов: Claude Code подхватил бы из папки проекта —
+ * доп. папки агента — скиллы, сабагентов и плагины, а пишут их участники команды мимо доверия к flow (spec §14). В рабочую
+ * копию клона они не выгружаются (sparse-checkout без cone), а созданные здесь руками не коммитятся (info/exclude).
+ */
+const PROJECT_CLAUDE = '/[pP][rR][oO][jJ][eE][cC][tT][sS]/**/.[cC][lL][aA][uU][dD][eE]';
+/** Правила sparse-checkout клона: всё, кроме PROJECT_CLAUDE. */
+const SPARSE_RULES = `/*\n!${PROJECT_CLAUDE}\n`;
+/** Каждая строка info/exclude клона: служебные файлы ОС и PROJECT_CLAUDE. */
+const EXCLUDE_LINES = [...OS_JUNK, PROJECT_CLAUDE];
+/**
+ * add -A клона — мимо PROJECT_CLAUDE независимо от ignore-файлов: .gitignore из репо команды с «!.claude» главнее
+ * info/exclude, и тогда созданная руками .claude либо ушла бы команде, либо (путь вне правил sparse-checkout) уронила бы
+ * add -A и с ним каждую запись. В старых клонах так же не коммитятся правка и удаление выгруженных когда-то файлов .claude.
+ */
+const ADD_ALL = ['add', '-A', '--', '.', ':(exclude,glob,icase)projects/**/.claude', ':(exclude,glob,icase)projects/**/.claude/**'];
+/** Путь клона в .claude папки проекта (PROJECT_CLAUDE): в рабочую копию не выгружается, «взять моё» его не пишет. */
+export const isProjectClaude = (rel: string): boolean => /^projects\/(?:.*\/)?\.claude(?:\/|$)/i.test(rel);
 /** Текст больше этого как текст не сливается (буфер exec — 32 МБ): как двоичный, в конфликт с blob. */
 const MAX_MERGE_BYTES = 8 * 1024 * 1024;
 /** Жив ли процесс: signal 0 только проверяет; EPERM — жив, но чужой. */
@@ -188,6 +206,8 @@ export class TeamRepo {
   private closed = false;
   private timersOn = false;
   private gitDirPath?: string;
+  /** Правила sparse-checkout применены к рабочей копии в этом процессе (ensureSparse). */
+  private sparseApplied = false;
   private busy = false;
   private listeners = new Set<(e: ChangeEvent) => void>();
   private hasSubscribers: () => boolean = () => false;
@@ -404,6 +424,7 @@ export class TeamRepo {
       if (this.readonly()) throw new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его, пока команда только для чтения', 'readonly');
       await this.recover();
       await this.commitManual();
+      await this.ensureSparse().catch(() => undefined);
       let gone: string[];
       try {
         await mutate(this);
@@ -414,7 +435,7 @@ export class TeamRepo {
         await this.git(['clean', '-qfd']).catch(() => undefined);
         throw err;
       }
-      await this.git(['add', '-A']);
+      await this.git(ADD_ALL);
       const files = (await this.git(['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean);
       if (!files.length) return;
       const author = o.author ? ['--author', `${o.author.name} <${o.author.email}>`] : [];
@@ -448,11 +469,12 @@ export class TeamRepo {
   private async gitDir(): Promise<string> {
     if (this.gitDirPath) return this.gitDirPath;
     const dir = (await this.git(['rev-parse', '--absolute-git-dir'])).trim();
-    // служебные файлы ОС не уходят команде и у клонов команд, созданных до .gitignore в шаблоне (D-1): локальное исключение
+    // служебные файлы ОС не уходят команде и у клонов команд, созданных до .gitignore в шаблоне (D-1): локальное исключение;
+    // там же .claude в папках проектов, созданная здесь руками (spec §14): её не закоммитит add -A правок руками
     try {
       const exclude = path.join(dir, 'info', 'exclude');
       const text = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
-      const missing = OS_JUNK.filter((p) => !text.split(/\r?\n/).includes(p));
+      const missing = EXCLUDE_LINES.filter((p) => !text.split(/\r?\n/).includes(p));
       if (missing.length) {
         fs.mkdirSync(path.dirname(exclude), { recursive: true });
         fs.appendFileSync(exclude, `${text && !text.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
@@ -461,6 +483,72 @@ export class TeamRepo {
       // не записалось — не причина не синхронизировать
     }
     return (this.gitDirPath = dir);
+  }
+
+  /**
+   * .claude в папках проектов не выгружается в рабочую копию (spec §14): sparse-checkout без cone по SPARSE_RULES. В индексе
+   * и в репо команды файлы остаются (skip-worktree), поэтому rebase, перепроигрывание и отправка их не трогают, а pull,
+   * пришедший посреди идущей сессии агента, не кладёт их в папку проекта. Правила пишутся в клон один раз; применяются к
+   * рабочей копии раз за процесс — так убирается уже выгруженное у клонов, сделанных до этой версии. Не применилось
+   * (правка руками в такой папке, сбой git) — ошибка; запись и синхронизация её глотают и пробуют снова в следующий раз, а
+   * агенту такую папку проекта всё равно не дают (teamsAddDirProblem). Клон при подключении выгружается только здесь.
+   */
+  async ensureSparse(): Promise<void> {
+    if (this.sparseApplied) return;
+    const file = path.join(await this.gitDir(), 'info', 'sparse-checkout');
+    const conf = (key: string) => this.git(['config', '--get', key], 10_000).then((s) => s.trim(), () => '');
+    const ready = fs.existsSync(file) && fs.readFileSync(file, 'utf8') === SPARSE_RULES && (await conf('core.sparseCheckout')) === 'true' && (await conf('core.sparseCheckoutCone')) === 'false';
+    if (!ready) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, SPARSE_RULES);
+      // git sparse-checkout, запущенный в клоне руками, держит эти ключи в config.worktree, и он главнее .git/config
+      const scope = (await conf('extensions.worktreeConfig')) === 'true' ? ['--worktree'] : [];
+      await this.git(['config', ...scope, 'core.sparseCheckout', 'true']);
+      await this.git(['config', ...scope, 'core.sparseCheckoutCone', 'false']);
+    }
+    // пустой репо (создание команды) — выгружать нечего; не применилось — ошибка, флаг не ставится
+    if (await this.rev('HEAD')) await this.git(['read-tree', '-mu', 'HEAD']);
+    this.sparseApplied = true;
+  }
+
+  /** Клон ещё без правил sparse-checkout этой версии (сделан раньше): его стоит перевести сразу при открытии. */
+  needsSparse(): boolean {
+    try {
+      return fs.readFileSync(path.join(this.repoDir, '.git', 'info', 'sparse-checkout'), 'utf8') !== SPARSE_RULES;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Перевести клон на правила sparse-checkout в очереди, как это делает запись: откат своего прерванного rebase, правки
+   * руками — коммитом (до read-tree, иначе он вернул бы рабочую копию к HEAD), затем ensureSparse. Зовёт сервис при первом
+   * открытии клона, сделанного до этой версии, — не дожидаясь первой записи или опроса. Ошибку глотают: агенту папку с
+   * .claude на диске всё равно не дают.
+   */
+  prepareSparse(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.stopped) return;
+      await this.recover();
+      await this.commitManual();
+      await this.ensureSparse();
+    });
+  }
+
+  /**
+   * Папки и файлы .claude из репо команды в папке проекта (пути от неё, «docs/.claude»): в рабочую копию клона они не
+   * выгружаются (ensureSparse) — экран проекта говорит, что они есть и не применяются.
+   */
+  async projectClaude(project: string): Promise<string[]> {
+    // icase: на томе без различия регистра Projects/<p>/ из репо команды — та же папка проекта
+    const files = (await this.git(['ls-files', '-z', '--', `:(icase)projects/${project}/`]).catch(() => '')).split('\0').filter(Boolean);
+    const out = new Set<string>();
+    for (const f of files) {
+      const parts = f.split('/').slice(2);
+      const i = parts.findIndex((p) => p.toLowerCase() === '.claude');
+      if (i >= 0) out.add(parts.slice(0, i + 1).join('/'));
+    }
+    return [...out].sort();
   }
 
   /**
@@ -514,12 +602,14 @@ export class TeamRepo {
     const status = (await this.git(['status', '--porcelain', '--untracked-files=all'])).trim();
     if (!status) return false;
     const gone = await this.rememberTaskNumbers().catch(() => []);
-    await this.git(['add', '-A']);
+    await this.git(ADD_ALL);
+    // в индекс ничего не попало (только .claude в папке проекта) — коммитить нечего
+    if (!(await this.git(['diff', '--cached', '--name-only', '-z'])).replace(/\0/g, '')) return false;
     try {
       await this.git(['commit', '-q', '--no-verify', '-m', MANUAL_MESSAGE]);
     } catch (err) {
       // нечего коммитить после add (например, только игнорируемое) — не ошибка
-      if (!/nothing to commit|nothing added/.test(errMsg(err))) throw err;
+      if (!/nothing to commit|nothing added|no changes added/.test(errMsg(err))) throw err;
       return false;
     }
     this.forgetWork(gone);
@@ -624,6 +714,7 @@ export class TeamRepo {
     try {
       await this.recover();
       await this.commitManual();
+      await this.ensureSparse().catch(() => undefined);
       await this.fetch();
       const format = await this.remoteFormat();
       if (format !== this.local().sync.format) this.saveLocal((l) => (format === undefined ? delete l.sync.format : (l.sync.format = format)));
@@ -635,7 +726,9 @@ export class TeamRepo {
           l.sync.lastPushAt = this.deps.now().toISOString();
           l.sync.error = null;
         });
-      } else if (push) {
+      } else if (push || !(await this.unpushed())) {
+        // получение без отправки (открытие экрана) снимает ошибку, только если отправлять нечего: иначе строка
+        // синхронизации показывала бы старую причину сбоя при том, что всё уже получено
         this.saveLocal((l) => (l.sync.error = null));
       }
       this.retryMs = 0;
@@ -1099,7 +1192,7 @@ export class TeamRepo {
       const next = t.blockedBy.map((b) => (renames.has(b) && !theirsBlocked.includes(b) ? renames.get(b)! : b));
       if (next.join('\n') !== t.blockedBy.join('\n')) this.writeFile(file, updateTaskText(text, { blockedBy: next }));
     }
-    await this.git(['add', '-A']);
+    await this.git(ADD_ALL);
     await this.git(['commit', '-q', '--no-verify', '-m', subjects.length === 1 ? subjects[0] : 'Номера задач заняты', ...(subjects.length > 1 ? ['-m', subjects.map((x) => `- ${x}`).join('\n')] : [])]);
     this.saveLocal((l) => {
       for (const [from, to] of renames) moveWork(l, from, to);
@@ -1134,7 +1227,7 @@ export class TeamRepo {
       }
     }
     if (!moved.length) return;
-    await this.git(['add', '-A']);
+    await this.git(ADD_ALL);
     await this.git(['commit', '-q', '--no-verify', '-m', moved.length === 1 ? moved[0] : 'Задачи закрытых спринтов — в бэклог', ...(moved.length > 1 ? ['-m', moved.map((x) => `- ${x}`).join('\n')] : [])]);
   }
 
@@ -1174,7 +1267,7 @@ export class TeamRepo {
       }
     }
     if (!demoted.length) return;
-    await this.git(['add', '-A']);
+    await this.git(ADD_ALL);
     await this.git(['commit', '-q', '--no-verify', '-m', `Два активных спринта: ${demoted.join('; ')}`]);
     if (conflicts.length) this.saveLocal((l) => l.conflicts.push(...conflicts));
   }
@@ -1389,8 +1482,9 @@ async function cloneInto(url: string, teamDir: string, deps: RepoDeps): Promise<
   fs.mkdirSync(teamDir, { recursive: true });
   const repoDir = path.join(teamDir, REPO_DIR);
   try {
-    // core.symlinks=false: ссылка, закоммиченная кем-то в репо команды, станет обычным файлом, а не выходом за клон
-    await deps.exec('git', ['clone', '-q', '-c', 'core.symlinks=false', '--', url, repoDir], { timeoutMs: NET_TIMEOUT });
+    // core.symlinks=false: ссылка, закоммиченная кем-то в репо команды, станет обычным файлом, а не выходом за клон;
+    // --no-checkout: рабочую копию выгружает ensureSparse уже по правилам, без .claude в папках проектов (spec §14)
+    await deps.exec('git', ['clone', '-q', '--no-checkout', '-c', 'core.symlinks=false', '--', url, repoDir], { timeoutMs: NET_TIMEOUT });
   } catch (err) {
     fs.rmSync(teamDir, { recursive: true, force: true });
     throw new TeamError(400, `Не удалось клонировать репо: ${scrub(errMsg(err))}`);
@@ -1419,6 +1513,7 @@ export async function createTeam(req: CreateTeamRequest, deps: RepoDeps = defaul
   const repo = new TeamRepo(slug, dir, deps);
   try {
     const me = await repo.requireIdentity();
+    await repo.ensureSparse();
     await repo.git(['symbolic-ref', 'HEAD', 'refs/heads/main']);
     if (!copyTemplate(repo.repoDir, deps.templateDir).includes('teamwork.yaml')) throw new TeamError(500, `Шаблон репо команды не найден: ${deps.templateDir}`);
     // .gitignore — кодом, а не файлом шаблона: electron-builder не кладёт .gitignore в сборку приложения
@@ -1443,6 +1538,29 @@ export async function createTeam(req: CreateTeamRequest, deps: RepoDeps = defaul
   return repo;
 }
 
+/**
+ * Я — в участники teamwork.yaml, если меня там ещё нет (email без учёта регистра), внутри записи в очередь клона
+ * (подключение и «Добавить меня»). Участники — как в файле сейчас, с их неизвестными полями (spec §5.9, D-9), я — в конец
+ * списка: ничьё добавление или правка, пришедшие после того, как экран прочитал список, не теряются. Уже участник — файл
+ * не трогается, коммита нет. true — добавлен.
+ */
+export function addMember(r: TeamRepo, me: { name: string; email: string }): boolean {
+  const text = r.read('teamwork.yaml');
+  if (text === undefined) throw new TeamError(400, 'В репо команды нет teamwork.yaml');
+  let raw: unknown;
+  try {
+    raw = (parseYaml(text) as { members?: unknown } | null)?.members;
+  } catch (err) {
+    throw new TeamError(400, `teamwork.yaml не читается: ${errMsg(err)}`);
+  }
+  const list = Array.isArray(raw) ? raw : [];
+  const email = me.email.trim().toLowerCase();
+  const isMe = (m: unknown) => typeof m === 'object' && m !== null && typeof (m as { email?: unknown }).email === 'string' && (m as { email: string }).email.trim().toLowerCase() === email;
+  if (list.some(isMe)) return false;
+  r.writeFile('teamwork.yaml', updateYaml(text, { members: [...list, { name: me.name, email }] }));
+  return true;
+}
+
 export type JoinTeamRequest = { url: string; addMe?: boolean };
 
 /** Подключиться по ссылке: клон, проверка teamwork.yaml, при addMe — отдельный коммит с участником и push. */
@@ -1453,6 +1571,7 @@ export async function joinTeam(req: JoinTeamRequest, deps: RepoDeps = defaultRep
   await cloneInto(url, dir, deps);
   const repo = new TeamRepo(slug, dir, deps);
   try {
+    await repo.ensureSparse();
     // remote HEAD может указывать на несуществующую ветку (bare-репо с HEAD master, а команда в main): выгружаем ветку сами
     let branch = (await repo.git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']).catch(() => '')).trim().replace(/^origin\//, '');
     if (!branch || !(await repo.rev('HEAD'))) {
@@ -1482,13 +1601,9 @@ export async function joinTeam(req: JoinTeamRequest, deps: RepoDeps = defaultRep
       const me = await repo.requireIdentity();
       if (!cfg.members.some((m) => m.email === me.email)) {
         await repo.write(`Участник добавлен: ${me.name}`, (r) => {
-          // участники как в файле, с их неизвестными полями (spec §5.9, D-9): я — в конец списка
-          const text = r.read('teamwork.yaml') ?? '';
-          const raw = (parseYaml(text) as { members?: unknown } | null)?.members;
-          r.writeFile('teamwork.yaml', updateYaml(text, { members: [...(Array.isArray(raw) ? raw : []), { name: me.name, email: me.email }] }));
+          added = addMember(r, me);
         });
-        added = true;
-        await repo.push().catch(() => undefined);
+        if (added) await repo.push().catch(() => undefined);
       }
     }
     return { repo, added };

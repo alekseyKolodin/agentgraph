@@ -41,18 +41,36 @@ export function syncLine(sync: TeamSync, o: { conflicts?: readonly TeamConflict[
       // без ошибки отправка просто ждёт таймера: «Повторить» тут нечего — кнопка отправляет сейчас
       return { text: sync.error ? `${head} — ${sync.error}` : head, tone: 'wait', action: { kind: 'retry', label: sync.error ? t('Повторить') : t('Отправить сейчас') } };
     }
-    case 'conflict':
-      return { text: conflictText(sync, o.conflicts), tone: 'wait', action: { kind: 'resolve', label: t('Разобрать') } };
+    case 'conflict': {
+      const text = conflictText(sync, o.conflicts);
+      return { text: sync.error ? `${text} — ${sync.error}` : text, tone: 'wait', action: { kind: 'resolve', label: t('Разобрать') } };
+    }
     case 'readonly':
       return {
         text: o.format !== undefined ? t('только чтение: формат {n} новее этой версии agentgraph', { n: o.format }) : t('только чтение: формат новее этой версии agentgraph'),
         tone: 'off', action: { kind: 'update', label: t('Обновить agentgraph') },
       };
     default: {
+      // получить или отправить не вышло, а отправлять нечего (нет сети, история переписана, клон посреди rebase руками,
+      // другой процесс agentgraph): причина — текстом сервера, а не «синхронизировано»
+      if (sync.error) return { text: `${t('не синхронизировано')} — ${sync.error}`, tone: 'wait', action: { kind: 'retry', label: t('Повторить') } };
       const at = sync.lastPushAt && sync.lastFetchAt ? (sync.lastPushAt > sync.lastFetchAt ? sync.lastPushAt : sync.lastFetchAt) : sync.lastPushAt ?? sync.lastFetchAt;
       return { text: at ? `${t('синхронизировано')} · ${agoShort(at, o.now)}` : t('синхронизировано'), tone: 'ok' };
     }
   }
+}
+
+/**
+ * Вопрос перед отключением команды после 409 unpushed (spec §8.2): неотправленные коммиты списком и нерешённые конфликты, где
+ * есть моя версия, — она лежит только в этом клоне и пропадёт вместе с ним.
+ */
+export function disconnectQuestion(d: { unpushed?: number; commits?: readonly string[]; conflicts?: number }): string {
+  const lines: string[] = [];
+  const n = d.unpushed ?? d.commits?.length ?? 0;
+  if (n) lines.push(t('Не отправлено изменений: {n}.', { n }), ...(d.commits ?? []).map((c) => `· ${c}`));
+  if (d.conflicts) lines.push(t('Нерешённых конфликтов: {n} — ваши версии из них есть только в этом клоне.', { n: d.conflicts }));
+  lines.push(t('Это пропадёт вместе с клоном. Всё равно отключить?'));
+  return lines.join('\n');
 }
 
 /** Несохранённая правка раздела документа вместо строки синхронизации: «не сохранено: раздел «Требования»». */

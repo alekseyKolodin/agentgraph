@@ -24,7 +24,7 @@ export const startDraft = (team: string, project: string, body: TeamDraftStart) 
 export const acceptSplit = (team: string, project: string, run: string, tasks: TeamProposedTask[]) =>
   api<TeamDraftAccepted>('POST', `${projectBase(team, project)}/drafts/${enc(run)}/accept`, { tasks });
 
-/** Черновик идёт: агент ещё пишет артефакты (принятие — 409 busy). */
+/** Черновик идёт: агент ещё пишет артефакты (принятие — 409 running). */
 export const draftRunning = (status: string): boolean => status === 'running' || status === 'waiting' || status === 'paused' || status === 'pending' || status === 'starting';
 
 /** Черновики проекта; пока какой-то идёт — опрос раз в 3 с (событие `end` запуска сюда не доходит). */

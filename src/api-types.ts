@@ -1669,6 +1669,11 @@ export type TeamProject = {
   base?: string;
   docs: TeamDocBrief[];
   sprints: TeamSprint[];
+  /**
+   * .claude из репо команды в папке проекта (пути от неё: «.claude», «docs/.claude»): в клон agentgraph их не выгружает,
+   * скиллы, сабагенты и плагины оттуда агентам не применяются (spec §14). Нет таких — поля нет.
+   */
+  claudeSkipped?: string[];
 };
 
 /** Раздел документа по заголовку `## `: hash — для сохранения раздела с проверкой параллельной правки. */
