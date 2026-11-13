@@ -941,6 +941,7 @@ export class SessionManager {
       askDetail: (tool, args) => this.askDetail(s, tool, args),
       writeGuard: (tool, args, call) => this.writeGuard(s, tool, args, call),
       afterWrite: (tool, args, call) => this.afterWrite(s, tool, args, call),
+      claudeVersion: () => s.rec.claudeVersion,
     });
     const p = r.patch;
     if (p.claudeSessionIds) s.rec.claudeSessionIds = p.claudeSessionIds;
@@ -966,14 +967,13 @@ export class SessionManager {
     return r.reply;
   }
 
-  /** Что сессия правит с вопросом сейчас: её пространства на момент вызова, папка flow, режим и рабочая папка claude. */
+  /** Что сессия правит с вопросом сейчас: её пространства на момент вызова, папка flow и рабочая папка claude. */
   private editScope(s: Live, call: WriteCall): EditScope {
     return {
       cwd: s.rec.cwd,
       ...(call.cwd ? { toolCwd: call.cwd } : {}),
       spaces: ownSpaces(s.rec),
       ...(s.launched ? { launched: s.launched } : {}),
-      ...(call.mode ? { mode: call.mode } : {}),
       flowsDir: FLOWS_DIR,
     };
   }

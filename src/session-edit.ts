@@ -5,7 +5,8 @@
 //   вопрос   — своё пространство (выбранное сейчас, в том числе на ходу, и то, в папке которого сессия открыта) и папка
 //              flow; space.json, карта, состояние и файл flow проверяются до вопроса по тексту, который получится после
 //              записи (те же проверки, что у API), — не прошёл проверку — отказ с ошибками, человек его не видит;
-//              в bypassPermissions и dontAsk вопрос не задать — отказ;
+//              вопрос — в любом режиме, bypassPermissions и dontAsk тоже (у старого claude там вопрос заменяет
+//              отказом handleHook, sessions.ts: ASK_IN_ANY_MODE_SINCE);
 //   пусто    — проект и всё прочее: решают правила --settings и режим, как раньше.
 // Хук PostToolUse проверяет проверенный файл ещё раз на диске (сломался — откат на снимок до записи) и говорит
 // серверу, что обновить в UI. Чистая логика без HTTP: состояние сессии и события — sessions-server.ts.
@@ -23,7 +24,6 @@ import {
 } from './spaces.js';
 import { checkFlowText, plannedFlowFile } from './flows.js';
 import { readRegular, writeAtomic } from './safe-fs.js';
-import { NO_ASK_MODES } from './sessions.js';
 
 /** Файл, который правят целиком в памяти для проверки: space.json — 1 МБ, карта — 20 000 знаков; flow больше не бывает. */
 const EDIT_READ_MAX = 4 * 1024 * 1024;
@@ -41,8 +41,6 @@ export type EditScope = {
    * старте, и выбранное на ходу правится инструментами space_* или после «Перезапустить». Нет — не сверяется (тесты).
    */
   launched?: string[];
-  /** permission_mode из входа хука. */
-  mode?: string;
   /** Папка flow (FLOWS_DIR). */
   flowsDir: string;
 };
@@ -136,12 +134,6 @@ export function editDecision(scope: EditScope, tool: string, input: Record<strin
   if ('deny' in c) return { decision: 'deny', reason: c.deny };
   const t = c.target;
   const raw = String(toolPath(tool, input));
-  if (scope.mode && NO_ASK_MODES.includes(scope.mode)) {
-    return {
-      decision: 'deny',
-      reason: `В режиме ${scope.mode} claude не задаст вопрос, а ${what(t)} меняется только с разрешения пользователя: правка отклонена. Попроси пользователя переключить режим (Shift+Tab) или внести правку в agentgraph.`,
-    };
-  }
   if (!checked(t)) return { decision: 'ask', reason: askText(t), target: t };
   const before = readText(t.file) ?? null;
   let after: string;
@@ -265,11 +257,6 @@ function metaDiff(prev: SpaceMeta | undefined, next: SpaceMeta): string {
   if (removed.length) out.push(`уберёт из папок чтения: ${removed.join(', ')}`);
   if ((prev?.cwd ?? '') !== (next.cwd ?? '')) out.push(`рабочая папка → ${next.cwd ?? 'нет'}`);
   return out.length ? `${out.join('; ')}` : 'Заголовок, папки и рабочая папка не меняются';
-}
-
-function what(t: EditTarget): string {
-  if (t.kind === 'flow') return t.yaml ? 'flow' : 'папка flow';
-  return { map: 'карта пространства', state: 'состояние пространства', meta: 'space.json пространства', doc: 'документ пространства', claude: '.claude/ пространства', other: 'папка пространства' }[t.part];
 }
 
 function askText(t: EditTarget): string {

@@ -135,7 +135,7 @@ async function events(fn: () => Promise<void>): Promise<HomeEvent[]> {
   return got;
 }
 
-test('запуск: своё пространство и папка flow — в permissions.ask, чужие пространства — deny при любой версии claude, хук записи до и после — у каждой сессии; onFailure: block — с 2.1.295', async () => {
+test('запуск: своё пространство и папка flow — в permissions.ask, чужие пространства — deny при любой версии claude, хук записи до и после — у каждой сессии; onFailure: block — с 2.1.295; вопрос в bypassPermissions — с 2.1.285, у старого — отказ', async () => {
   createSpace('cart');
   createSpace('else');
   for (const b of ['/fake/new/claude', '/fake/old/claude']) {
@@ -148,6 +148,10 @@ test('запуск: своё пространство и папка flow — в 
     assert.deepEqual(st.hooks.PreToolUse.at(-1)!.matcher, 'Edit|Write|MultiEdit|NotebookEdit');
     assert.equal(st.hooks.PreToolUse.at(-1)!.hooks[0].onFailure, b.includes('new') ? 'block' : undefined);
     assert.deepEqual(st.hooks.PostToolUse.map((h) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
+    // версия — от claude --version этого бинарника: новый спрашивает и в bypassPermissions, старый там отказывает
+    const doc = path.join(spaceDir('cart'), 'docs', 'a.md');
+    assert.equal((await s.pre('Write', { file_path: doc, content: 'x' }, { permission_mode: 'bypassPermissions' })).permissionDecision, b.includes('new') ? 'ask' : 'deny', b);
+    assert.equal((await s.pre('Write', { file_path: doc, content: 'x' }, { permission_mode: 'default' })).permissionDecision, 'ask', b);
     await s.end();
   }
   bin = '/fake/new/claude';
@@ -166,8 +170,11 @@ test('правка файла своего пространства: вопро�
   assert.equal(ask.permissionDecision, 'ask');
   assert.match(ask.permissionDecisionReason, /^agentgraph: пространство shop — карта \(CLAUDE\.md\)/);
   assert.equal((await s.pre('Write', { file_path: path.join(spaceDir('blog'), 'CLAUDE.md'), content: 'x' })).permissionDecision, 'deny');
-  // режим, в котором claude вопрос не покажет
-  assert.equal((await s.pre('Write', { file_path: map, content: 'x' }, { permission_mode: 'bypassPermissions' })).permissionDecision, 'deny');
+  // bypassPermissions и dontAsk: claude показывает вопрос хука и там — тот же вопрос; чужое — отказ и там
+  for (const permission_mode of ['bypassPermissions', 'dontAsk']) {
+    assert.equal((await s.pre('Write', { file_path: map, content: 'x' }, { permission_mode })).permissionDecision, 'ask', permission_mode);
+    assert.equal((await s.pre('Write', { file_path: path.join(spaceDir('blog'), 'CLAUDE.md'), content: 'x' }, { permission_mode })).permissionDecision, 'deny', permission_mode);
+  }
   // человек ответил «да» — claude записал файл и прислал PostToolUse: UI получает событие
   const got = await events(async () => {
     fs.writeFileSync(map, '# магазин и склад\n');
@@ -187,8 +194,12 @@ test('правка файла своего пространства: вопро�
   assert.match(String(post.reason), /Возвращена версия до записи/);
   assert.equal(fs.readFileSync(meta, 'utf8'), good);
   assert.ok(readSpace('shop'));
-  // лишнее поле — отказ ещё до вопроса
+  // лишнее поле — отказ ещё до вопроса; папка / — тоже, в любом режиме: проверка идёт раньше вопроса
   assert.match((await s.pre('Write', { file_path: meta, content: JSON.stringify({ ...cur, owner: 'x' }) })).permissionDecisionReason, /лишние поля: owner/);
+  for (const permission_mode of ['default', 'acceptEdits', 'bypassPermissions', 'dontAsk']) {
+    const root = await s.pre('Write', { file_path: meta, content: JSON.stringify({ ...cur, dirs: ['/'] }) }, { permission_mode });
+    assert.deepEqual([root.permissionDecision, /корень диска/.test(root.permissionDecisionReason)], ['deny', true], permission_mode);
+  }
   // выбрали на ходу другое пространство: его папку правила этого процесса закрыли на старте — хук объясняет, что
   // писать инструментами space_* или после «Перезапустить»; прежнее — уже чужое
   await call('PUT', `/api/sessions/${s.v.id}/space`, { space: 'blog' });
