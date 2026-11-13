@@ -320,3 +320,9 @@
 `bashDecision` (как есть, `~/`, `$HOME/`, `${HOME}/`, регистр, рабочая папка внутри, проект и чужое — пусто), Bash через
 HTTP-хук сервера, `sessionSettings` (матчер `Bash` последним, без `onFailure`); сценарий проверен типами вместе с `src/`.
 Платный прогон не запускался.
+
+## Третий прогон (2026-11-13, `--only space-session,session-edit`, $0.77)
+
+74 ok, 2 «не воспроизведено» (`auto` на haiku недоступен). Все строки `dontAsk` — «отказ хука с причиной», `Bash cp в
+своё пространство` — с вопросом в `default`, `acceptEdits` и `bypassPermissions`, отказ в `dontAsk`; `хук Bash в
+--settings` — ok. После этого прогона ветка `teamwork` слита в `main`.
