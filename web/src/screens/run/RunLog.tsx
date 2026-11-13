@@ -3,16 +3,24 @@
 // только по последней пачке, а перерисовка страницы на каждое событие не перекладывает тысячи строк лога.
 // Строка — как в Claude Code (components/transcript/render.ts): текст агента markdown, вызов «● Имя(аргумент)», результат
 // под ним; «как текст» (общий выбор с окном файла) — исходные строки. Пути к файлам — ссылки «показать в Finder».
-import { useEffect, useLayoutEffect, useRef } from 'react';
-import { useConfig } from '../../api';
-import { setFileRaw, useFileRaw } from '../../components/file/FileDialog';
-import { appendPaths } from '../../components/PathLink';
+// Живого лога у запуска, который на момент открытия уже не шёл, нет (поток закрыт): его «Лог» собран из транскриптов
+// этапов (PhaseLogs) — тот же разбор и та же отрисовка, что у окна транскрипта.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { PhaseReport } from '@server/api-types';
+import { errorText, fetchRunFile, useConfig } from '../../api';
+import { openRunFile, setFileRaw, useFileRaw } from '../../components/file/FileDialog';
+import { appendPaths, PathText } from '../../components/PathLink';
 import { appendLog, tailLine, type TxCtx } from '../../components/transcript/render';
+import { Transcript } from '../../components/transcript/Transcript';
 import { t } from '../../lib/i18n';
 import { LOG_MAX_LINES, LOG_TALL_LINES, planLogChunks } from '../../lib/run/log';
+import { logPhases } from '../../lib/run/view';
 import type { LogState } from '../../lib/run/transcript';
+import type { RunView } from '../../lib/run/events';
 import { onLog, runLog, runState } from './store';
 import styles from './Run.module.css';
+
+const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 
 /** Окно лога: всегда в DOM (вкладка скрыта, а строки копятся), при показе вкладки — вниз. */
 export function LogBody({ shown }: { shown: boolean }) {
@@ -148,4 +156,82 @@ export function PhaseTail({ phase }: { phase: string }) {
     return onLog(() => fill(lines()));
   }, [phase, home]);
   return <div ref={box} className={styles.runTail} />;
+}
+
+/** Прочитанный транскрипт этапа: текст или текст ошибки чтения (err). */
+type Loaded = { text: string; err?: boolean };
+
+/**
+ * «Лог» запуска, который уже не шёл, когда его открыли: транскрипты этапов по порядку, каждый — под разделителем с этапом
+ * и кнопкой «транскрипт» (окно с `claude --resume`). Читаются, когда вкладку впервые показали, по одному и по порядку —
+ * лог растёт сверху; пока страница открыта, повторно не читаются. «как текст» — исходные строки, как в окне файла.
+ */
+export function PhaseLogs({ r, shown }: { r: RunView; shown: boolean }) {
+  const raw = useFileRaw();
+  const phases = logPhases(r);
+  const [texts, setTexts] = useState<ReadonlyMap<string, Loaded>>(new Map());
+  const started = useRef(false);
+  const alive = useRef(true);
+  const multi = (r.blocks?.length ?? 0) > 1;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  // чтение не обрывается сменой вкладки — только уходом со страницы
+  useEffect(() => {
+    if (!shown || started.current) return;
+    started.current = true;
+    void (async () => {
+      for (const p of phases) {
+        const file = p.files.transcript;
+        const got: Loaded = await fetchRunFile(r.id, file).then(
+          (res) => (res.ok ? { text: res.text } : { text: res.text, err: true }),
+          (err: unknown) => ({ text: errorText(err), err: true }),
+        );
+        if (!alive.current) return;
+        setTexts((m) => new Map(m).set(file, got));
+      }
+    })();
+  }, [shown]);
+
+  if (!phases.length) {
+    return (
+      <div className={cx(styles.logBody, styles.logFiles)}>
+        <p className="muted">{r.phases.length ? t('У этапов этого запуска нет транскриптов: их писали только новые версии agentgraph.') : t('Этапы не выполнялись: лога нет.')}</p>
+      </div>
+    );
+  }
+  return (
+    <div className={cx(styles.logBody, styles.logFiles)}>
+      {phases.map((p) => <PhaseLog key={p.files.transcript} p={p} runId={r.id} multi={multi} raw={raw} loaded={texts.get(p.files.transcript)} />)}
+    </div>
+  );
+}
+
+function PhaseLog({ p, runId, multi, raw, loaded }: { p: PhaseReport; runId: string; multi: boolean; raw: boolean; loaded: Loaded | undefined }) {
+  const file = p.files.transcript;
+  const where = [multi ? p.block : '', t('итерация {it}', { it: p.iteration })].filter(Boolean).join(' · ');
+  return (
+    <section className={styles.logPhase}>
+      <div className={styles.logPhaseHead}>
+        {!p.ok && <span className="warn" title={p.subtype}>!</span>}
+        <span className={styles.logPhaseName}>{p.title || p.phase}</span>
+        <span>{where}</span>
+        <button type="button" className="link-btn" title={t('Транскрипт этапа в окне: целиком, с claude --resume')} onClick={() => void openRunFile(runId, file, t('Транскрипт · {name}', { name: p.phase }), p.sessionId || '')}>
+          {t('транскрипт')}
+        </button>
+      </div>
+      {!loaded
+        ? <p className="muted small">{t('Загружаю…')}</p>
+        : loaded.err
+          ? <p className="warn small">{loaded.text}</p>
+          : !loaded.text.trim()
+            ? <p className="muted small">{t('Этап ничего не написал.')}</p>
+            : raw
+              ? <pre className={styles.logRaw}><PathText text={loaded.text} /></pre>
+              : <Transcript text={loaded.text} run={runId} />}
+    </section>
+  );
 }

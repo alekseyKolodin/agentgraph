@@ -36,6 +36,8 @@ test('имя вложения: без управляющих символов и
 
 test('CLAUDE.md и CLAUDE.local.md в любом регистре переименовываются, чтобы не стать инструкциями агентов', () => {
   assert.equal(safeAttachmentName('CLAUDE.md'), 'attached-CLAUDE.md');
+  assert.equal(safeAttachmentName('AGENTS.md'), 'attached-AGENTS.md');
+  assert.equal(safeAttachmentName('agents.MD'), 'attached-agents.MD');
   assert.equal(safeAttachmentName('claude.md'), 'attached-claude.md');
   assert.equal(safeAttachmentName('CLAUDE.local.md'), 'attached-CLAUDE.local.md');
   assert.equal(safeAttachmentName('x/claude.LOCAL.md'), 'attached-claude.LOCAL.md');

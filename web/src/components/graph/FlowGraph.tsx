@@ -3,6 +3,8 @@
 // (не двигаются, не выделяются), рёбра — его рёбра с готовыми ломаными, подписи рёбер — слой поверх узлов.
 // Масштаб и вписывание — как в старом: панель «− 100% + Вписать», ⌘/Ctrl+колесо, масштаб запоминается по месту
 // (agentgraph.graphZoom.<place>), пока его не выбрали руками, широкий граф один раз вписывается по ширине (не мельче 70%).
+// Конструктор (autoFit) вписывает не мельче своего порога, дальше — прокрутка холста, и вписывает заново, когда холст меняет
+// ширину (открылся или закрылся инспектор): вокруг блока выбранного узла.
 // Колесо без модификатора двигает холст, а когда двигать некуда — прокручивает страницу, как прокрутка старого холста.
 import '@xyflow/react/dist/base.css';
 import {
@@ -15,6 +17,7 @@ import {
 } from '@xyflow/react';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import { clampView, fitView, type FitMode } from '../../lib/graph/fit';
 import type { GraphEdge, GraphFrame, GraphModel, GraphNode } from '../../lib/graph/model';
 import { blockLoopNote, loopRunLabel, loopVerdict, nodeBadge, phaseNodeTitle, STATUSES, type GraphRunState } from '../../lib/graph/run-state';
 import { pathD } from '../../lib/graph/text';
@@ -72,13 +75,19 @@ export type FlowGraphProps = {
   reveal?: { key: string; seq: number } | null;
   /** Высота холста задаётся местом (вкладка «Граф» страницы запуска), а не высотой графа в масштабе. */
   fill?: boolean;
+  /**
+   * Конструктор: граф вписывается по ширине не мельче min (дальше — прокрутка холста), а когда холст меняет ширину
+   * (открылся или закрылся инспектор, окно) — заново: вокруг блока узла focus, без него — весь граф. «Вписать» после
+   * ручного масштаба возвращает это вписывание.
+   */
+  autoFit?: { min: number; focus: string | null };
 };
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 const statusClass = (status: string | undefined) => (status ? styles[`is${status[0]!.toUpperCase()}${status.slice(1)}`] : '');
 const statusClasses = (status: string | undefined) => STATUSES.map((st) => (st === status ? statusClass(st) : '')).filter(Boolean).join(' ');
 
-type Ctx = Omit<FlowGraphProps, 'model' | 'place' | 'host' | 'refitKey' | 'reveal' | 'fill'> & { markers: string; current: Set<string>; hl: string; setHl: (k: string) => void };
+type Ctx = Omit<FlowGraphProps, 'model' | 'place' | 'host' | 'refitKey' | 'reveal' | 'fill' | 'autoFit'> & { markers: string; current: Set<string>; hl: string; setHl: (k: string) => void };
 const GraphCtx = createContext<Ctx | null>(null);
 const useG = () => useContext(GraphCtx)!;
 
@@ -280,6 +289,31 @@ const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.6;
 const roundZoom = (s: number) => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s)) * 100) / 100;
 
+const forget = (key: string) => {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* приватный режим */
+  }
+};
+
+/**
+ * Масштаб, запомненный для места; null — не выбирали. Конструктор (min): прежняя «Вписать» запоминала то, что вписала, и
+ * обычно мельче нового порога — такое значение один раз забывается (метка <ключ>.v2), иначе новое вписывание до этих людей
+ * не дошло бы. Ручной масштаб, выбранный после, помнится как прежде.
+ */
+function storedZoom(key: string, min?: number): number | null {
+  const raw = LS.raw(key);
+  if (min !== undefined && LS.raw(`${key}.v2`) === null) {
+    LS.setRaw(`${key}.v2`, '1');
+    if (raw !== null && Number(raw) < min) {
+      forget(key);
+      return null;
+    }
+  }
+  return raw === null ? null : Number(raw) || 1;
+}
+
 export function FlowGraph(props: FlowGraphProps) {
   return (
     <ReactFlowProvider>
@@ -293,10 +327,11 @@ function Canvas(props: FlowGraphProps) {
   const rf = useReactFlow();
   const zoomKey = `agentgraph.graphZoom.${place}`;
   const scroll = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(() => Number(LS.raw(zoomKey)) || 1);
+  const [stored] = useState(() => storedZoom(zoomKey, props.autoFit?.min));
+  const [scale, setScale] = useState(stored ?? 1);
   // масштаб — и в ref: несколько событий колеса до перерисовки (жест трекпада) копят шаги, как fg.scale в старом
   const scaleRef = useRef(scale);
-  const manual = useRef(LS.raw(zoomKey) !== null);
+  const manual = useRef(stored !== null);
   const fitted = useRef(false);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [hl, setHl] = useState('');
@@ -313,10 +348,8 @@ function Canvas(props: FlowGraphProps) {
 
   // область, по которой можно двигать холст: граф, но не меньше окна — иначе xyflow поставил бы маленький граф по центру
   const extent = useCallback((s: number) => ({ w: Math.max(model.width, size.w / s), h: Math.max(model.height, size.h / s) }), [model.width, model.height, size]);
-  const clamp = useCallback((x: number, y: number, s: number) => {
-    const { w, h } = extent(s);
-    return { x: Math.min(0, Math.max(size.w - w * s, x)), y: Math.min(0, Math.max(size.h - h * s, y)) };
-  }, [extent, size]);
+  const { width, height } = model;
+  const clamp = useCallback((x: number, y: number, s: number) => clampView({ width, height }, x, y, s, size.w, size.h), [width, height, size]);
 
   /** save — масштаб выбран руками (кнопки, ⌘/Ctrl+колесо): запомнить его для этого места. Прокрутка в пикселях остаётся, как в старом. */
   const zoom = useCallback((next: number, save = true) => {
@@ -331,18 +364,99 @@ function Canvas(props: FlowGraphProps) {
     void rf.setViewport({ ...clamp(v.x, v.y, s), zoom: s });
   }, [rf, clamp, zoomKey]);
 
+  const autoFit = props.autoFit;
+  const focus = autoFit?.focus ?? null;
+  // ширина и выбор, по которым конструктор вписал граф в последний раз; вписывание, которое ждёт новый этап в модели
+  const lastW = useRef(0);
+  const lastFocus = useRef<string | null>(null);
+  const pending = useRef<{ key: string; to: FitMode } | null>(null);
+
   // другой flow или запуск — вписать заново
   useEffect(() => {
     fitted.current = false;
+    lastFocus.current = null;
+    pending.current = null;
   }, [refitKey]);
 
-  // пока масштаб не выбирали руками, широкий граф один раз вписывается по ширине (не мельче 70%); скрытый холст ширины не имеет — ждём
+  /** Высота холста при масштабе s: высота графа в пределах min- и max-height места; у fill её задаёт место. */
+  const heightAt = (el: HTMLElement, s: number) => {
+    if (props.fill) return el.clientHeight;
+    const cs = getComputedStyle(el);
+    const max = parseFloat(cs.maxHeight);
+    return Math.max(parseFloat(cs.minHeight) || 0, Math.min(Number.isNaN(max) ? Infinity : max, Math.ceil(model.height * s)));
+  };
+
+  /**
+   * Конструктор: вписать вокруг узла key (lib/graph/fit.ts, fitView). Ширина холста — живая: сюда приходят сразу после смены
+   * раскладки, раньше ResizeObserver. Её же сразу кладём в size, иначе эффект прижатия ниже по старой ширине вернул бы холст
+   * к краю. Ключа ещё нет в модели (новый этап, модель конструктора отложена) — вписывание ждёт её. false — холст скрыт.
+   */
+  const refocus = (key: string | null, to: FitMode): boolean => {
+    const el = scroll.current;
+    const w = el?.clientWidth ?? 0;
+    if (!el || !w || !autoFit) return false;
+    const next = fitView(model, key, typeof to === 'number' ? roundZoom(to) : to, {
+      w, heightAt: (s) => heightAt(el, s), view: rf.getViewport(), min: autoFit.min,
+    });
+    pending.current = next ? null : { key: key!, to };
+    if (!next) return true;
+    scaleRef.current = next.zoom;
+    setScale(next.zoom);
+    setSize({ w, h: heightAt(el, next.zoom) });
+    void rf.setViewport(next);
+    return true;
+  };
+
+  // пока масштаб не выбирали руками, широкий граф один раз вписывается по ширине (не мельче 70%, в конструкторе — autoFit.min);
+  // скрытый холст ширины не имеет — ждём
   useEffect(() => {
     if (manual.current || fitted.current || !size.w) return;
+    if (autoFit) {
+      fitted.current = refocus(focus, 'block');
+      return;
+    }
     fitted.current = true;
     const s = Math.floor(Math.max(0.7, Math.min(1, (size.w - 4) / model.width)) * 100) / 100;
     if (s !== scale) zoom(s, false);
   });
+
+  /**
+   * Фокус ниже холста — в ленте «Все поля списком» (или в липкой панели, когда холст уехал выше окна): новый масштаб сменил
+   * бы высоту холста и сдвинул ленту под курсором, поэтому граф только сдвигается к узлу.
+   */
+  const typingBelow = () => {
+    const a = document.activeElement;
+    const el = scroll.current;
+    return Boolean(a && el && a !== document.body && !el.contains(a) && a.getBoundingClientRect().top >= el.getBoundingClientRect().bottom);
+  };
+
+  // конструктор: холст сменил ширину — открылся или закрылся инспектор, окно. Выбран узел — вписать его блок; выбора нет —
+  // весь граф (после ручного масштаба — он), и в кадре блок, который был выбран. Другой узел при той же ширине — сдвиг к нему.
+  // Ширина — живая, а не size.w: эффект по focus приходит раньше ResizeObserver, и вписывание идёт сразу по новой ширине.
+  // Скрытая вкладка ширины не имеет: прошлые ширина и выбор остаются, и возврат с инспектором (клик по узлу на «Запуске»)
+  // сравнивается с ними
+  useEffect(() => {
+    const w = scroll.current?.clientWidth ?? 0;
+    if (!autoFit || !w) return;
+    const was = lastW.current;
+    const prev = lastFocus.current;
+    lastW.current = w;
+    lastFocus.current = focus;
+    if (!was) return;
+    const keep = typingBelow();
+    if (w !== was) {
+      if (focus) refocus(focus, keep ? 'keep' : 'block');
+      else refocus(prev, keep ? 'keep' : manual.current ? Number(LS.raw(zoomKey)) || 'keep' : 'graph');
+    } else if (focus && focus !== prev) refocus(focus, 'keep');
+  }, [size.w, focus]);
+
+  // новый этап («+», «Добавить этап», «⧉») уже выбран, а модель конструктора отложена и пришла только теперь
+  useEffect(() => {
+    const p = pending.current;
+    if (!p) return;
+    if (p.key === focus) refocus(p.key, p.to);
+    else pending.current = null;
+  }, [model]);
 
   // смена модели или окна: позиция остаётся в пределах графа
   useEffect(() => {
@@ -391,6 +505,13 @@ function Canvas(props: FlowGraphProps) {
   }, [reveal?.seq, reveal?.key]);
 
   const fit = () => {
+    // конструктор: снова вписывать самому, как до ручного масштаба
+    if (autoFit) {
+      manual.current = false;
+      forget(zoomKey);
+      refocus(focus, 'block');
+      return;
+    }
     zoom(Math.floor(Math.min(1, (size.w - 4) / model.width, Math.max(0.3, (size.h - 4) / model.height)) * 100) / 100);
   };
 

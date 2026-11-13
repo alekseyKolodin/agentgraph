@@ -67,7 +67,7 @@ export function ArtifactWindow({ onContinue }: { onContinue: (runId: string) => 
       art.focusBack = null;
       const target = back.opener?.isConnected
         ? back.opener
-        : document.querySelector<HTMLElement>(`[data-art-key="${CSS.escape(back.key)}"]`) || document.getElementById('art-toggle');
+        : document.querySelector<HTMLElement>(`[data-art-key="${CSS.escape(back.key)}"]`) || document.getElementById('art-head');
       target?.focus({ preventScroll: true });
     }
   });

@@ -1,0 +1,281 @@
+/* Teamwork (макеты docs/teamwork/design/*.dc.html, система «Пульт»): список команд с формой, шапка команды и проекта с
+   вкладками и строкой синхронизации, обзор проекта, диалоги подключения и конфликтов, панель задачи, заглушки волны 3.
+   Глубина — только рамками; цвет — только сигнал (ok/wait/fail/live); данные — моно. Тоновые перебивки — в конце файла. */
+.view { container-type: inline-size; }
+/* <Link className="btn"> — кнопка, а не ссылка: без подчёркивания браузера */
+.view :global(a.btn) { text-decoration: none; }
+.sub { margin: 4px 0 0; color: var(--ink-2); max-width: 640px; }
+.sub.mono { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.cap { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); margin: 0 0 8px; }
+.meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); flex: none; display: inline-block; }
+.dot.s6 { width: 6px; height: 6px; }
+.who { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-pill); background: var(--raised); border: 1px solid var(--line-strong); font-family: var(--font-mono); font-size: 10px; font-weight: 600; color: var(--ink-2); flex: none; }
+.who.none { background: transparent; border-style: dashed; color: var(--ink-3); }
+.people { display: flex; gap: 4px; }
+.grow { flex: 1; }
+.rows { border-top: 1px solid var(--line); }
+.note { font-size: var(--fs-meta); color: var(--ink-3); }
+.note:empty { display: none; }
+.empty-box { border: 1px dashed var(--line-strong); border-radius: var(--r-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.empty-box p { margin: 0; color: var(--ink-2); }
+.loading { margin: 12px 0; }
+
+/* --- команды: список слева, форма справа */
+.layout { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; margin-top: 22px; }
+.teams { flex: 999 1 480px; min-width: 0; }
+.trow { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 12px 8px; border-bottom: 1px solid var(--line); }
+.trow:hover { background: var(--hover); }
+.trow-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.trow-h a { font-weight: 600; color: var(--ink); text-decoration: none; }
+/* строка — ссылка целиком: ::after растянут на строку, остальное лежит ниже */
+.trow-h a::after { content: ''; position: absolute; inset: 0; }
+.trow-h a:focus-visible { box-shadow: none; }
+.trow-h a:focus-visible::after { box-shadow: var(--focus); border-radius: var(--r-sm); }
+.pr { font-size: var(--fs-small); color: var(--ink-2); }
+.pr b { font-weight: 500; color: var(--ink); }
+.panel-form { flex: 1 1 380px; min-width: 0; max-width: 460px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.seg { display: flex; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; align-self: flex-start; }
+.seg button { border: 0; background: transparent; color: var(--ink-3); padding: 4px 12px; font: inherit; font-size: var(--fs-small); font-weight: 500; cursor: pointer; border-radius: 0; }
+.seg button:hover { color: var(--ink-2); }
+.seg button.on { background: var(--raised); color: var(--ink); }
+/* рамка .seg режет внешнее кольцо фокуса (overflow: hidden) — кольцо внутри кнопки */
+.seg button:focus-visible { box-shadow: inset var(--focus); }
+.f { display: flex; flex-direction: column; gap: 5px; }
+.f label { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.f input, .f select, .f textarea { background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 6px 10px; color: var(--ink); width: 100%; font: inherit; }
+.f input:focus, .f select:focus, .f textarea:focus { outline: none; border-color: var(--live); }
+.f input.mono { font-family: var(--font-mono); font-size: var(--fs-small); }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; }
+/* ширина второй колонки — классом, а не style: на узком экране @media ниже складывает их в одну колонку */
+.two-slug { grid-template-columns: minmax(0, 1fr) 200px; }
+.two-prefix { grid-template-columns: minmax(0, 1fr) 160px; }
+.tree { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 12px; font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.7; color: var(--ink-2); margin: 0; white-space: pre; overflow-x: auto; }
+.go { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* --- шапка команды и проекта */
+.crumbs { font-size: var(--fs-meta); color: var(--ink-3); margin: 0 0 6px; }
+.crumbs a { color: var(--ink-2); text-decoration: none; }
+.crumbs a:hover { color: var(--ink); text-decoration: underline; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.head h1 { margin: 0; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.01em; }
+.head-r { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+/* на телефоне аватары участников уступают место строке синхронизации и «⋯»: иначе «⋯» уезжает одна на свою строку */
+@container (max-width: 520px) { .head-r .people { display: none; } }
+.tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); margin: 14px 0 16px; overflow-x: auto; }
+.tab { border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--ink-3); padding: 6px 0; font-weight: 500; white-space: nowrap; text-decoration: none; }
+.tab:hover { color: var(--ink-2); text-decoration: none; }
+.tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+.tab .n { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); margin-left: 4px; font-variant-numeric: tabular-nums; }
+.tab .mark { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--live); margin-left: 6px; vertical-align: middle; }
+
+/* --- строка синхронизации: клик по тексту синхронизирует сейчас, кнопка — действие состояния */
+.sync { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
+/* текст строки — кнопка «синхронизировать сейчас»: без рамки, но с отступами и подсветкой, как .btn.ghost.small */
+/* причина сбоя — текст сервера с подсказкой и путём: длинная строка переносится от левого края, путь — где угодно */
+.sync-text { border: 0; background: transparent; color: inherit; font: inherit; padding: 3px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-sm); text-align: left; overflow-wrap: anywhere; }
+.sync-text:hover:not([disabled]) { color: var(--ink); background: var(--hover); }
+.sync-text[disabled] { cursor: default; color: inherit; }
+.sync-link { font-family: var(--font-sans); color: var(--live); }
+
+/* --- проекты команды: строки с полосой спринта */
+.prow { display: grid; grid-template-columns: minmax(0, 1fr) 220px 180px; align-items: center; gap: 16px; padding: 12px 8px; border-bottom: 1px solid var(--line); }
+.prow:hover { background: var(--hover); }
+.prow .t { font-weight: 600; color: var(--ink); text-decoration: none; }
+.prow .t:hover { text-decoration: underline; }
+.prow .d { display: block; font-size: var(--fs-small); color: var(--ink-2); }
+.prow.archived .t, .prow.archived .d { color: var(--ink-3); }
+.strip { display: flex; gap: 2px; }
+.st { width: 8px; height: 14px; border-radius: 2px; flex: none; }
+.strip.big { gap: 4px; }
+.strip.big .st { flex: 1 1 0; width: auto; max-width: 44px; height: 22px; border-radius: 3px; }
+.new-project { background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; max-width: 640px; margin-bottom: 16px; }
+.repo-rows { display: flex; flex-direction: column; gap: 6px; }
+.repo-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) auto; gap: 4px 8px; align-items: start; }
+/* поля строки репо и вне формы .f (обзор проекта) — как поля формы */
+.repo-row input { background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 5px 8px; color: var(--ink); width: 100%; min-width: 0; font: inherit; font-family: var(--font-mono); font-size: var(--fs-small); }
+.repo-row input:focus { outline: none; border-color: var(--live); }
+.repo-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.repo-cell .u { font-family: var(--font-mono); font-size: var(--fs-small); color: var(--ink); overflow-wrap: anywhere; }
+.repo-cell .meta:empty { display: none; }
+.repo-hint { grid-column: 1 / -1; }
+/* выбор репо: мои проекты строками с разделителями (не карточка в карточке), снизу — другая папка и ссылка руками */
+.chooser { container-type: inline-size; display: flex; flex-direction: column; gap: 8px; padding: 8px 0 2px; border-top: 1px solid var(--line); }
+.chooser-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); max-height: 264px; overflow-y: auto; }
+.chooser-list button { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 2fr) minmax(0, 1fr); gap: 10px; align-items: baseline; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 7px 6px; color: var(--ink); font: inherit; font-size: var(--fs-small); cursor: pointer; }
+.chooser-list button:hover:not(:disabled) { background: var(--hover); }
+.chooser-list button:disabled { cursor: default; }
+.chooser-list button:focus-visible { box-shadow: inset var(--focus); }
+.chooser-list button:disabled b { color: var(--ink-3); }
+.chooser-list b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chooser-list .meta { overflow-wrap: anywhere; }
+.origin { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.chooser-warn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chooser-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* узкое место (правая колонка обзора): имя и origin строкой, папка под ними */
+@container (max-width: 520px) {
+  .chooser-list button { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; }
+  .chooser-list button .meta { grid-column: 1 / -1; grid-row: 2; }
+}
+.tab-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+
+/* --- участники */
+.mrow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+.mrow b { font-weight: 500; }
+.mrow .e { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.mrow .logins { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); }
+
+/* --- процесс: список flow и редактор YAML */
+.process { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+@container (max-width: 760px) { .process { grid-template-columns: minmax(0, 1fr); } }
+.flow-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.flow-list button { text-align: left; border: 0; background: transparent; color: var(--ink-2); padding: 6px 10px; border-radius: var(--r-sm); font: inherit; font-family: var(--font-mono); font-size: var(--fs-small); cursor: pointer; width: 100%; }
+.flow-list button:hover { background: var(--hover); color: var(--ink); }
+.flow-list button.on { background: var(--select); color: var(--ink); }
+.flow-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.flow-head h3 { margin: 0; font-size: var(--fs-h3); font-weight: 500; }
+.yaml { border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); overflow: hidden; margin-bottom: 12px; }
+.yaml:focus-within { border-color: var(--live); }
+
+/* --- настройки */
+.settings { display: flex; flex-direction: column; gap: 16px; max-width: 640px; }
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.danger-zone { border-top: 1px solid var(--line); padding-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+.danger-zone p { margin: 0; color: var(--ink-2); }
+
+/* --- обзор проекта */
+.grid { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+.col-l { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+.col-r { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 24px; max-width: 420px; }
+.sprint { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.sprint-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sprint-h b { font-size: var(--fs-h3); font-weight: 600; }
+.sprint-h .goal { color: var(--ink-2); }
+.stats { display: flex; gap: 22px; flex-wrap: wrap; }
+.stat { display: flex; flex-direction: column; }
+.stat b { font-family: var(--font-mono); font-size: var(--fs-h2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat span { font-size: var(--fs-meta); color: var(--ink-3); }
+.hrun { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.hrun:hover { background: var(--hover); }
+.hrun-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hrun-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.hrun-title { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; flex: 0 1 auto; }
+.hrun-title:hover { text-decoration: underline; }
+.hrun-sum { font-size: var(--fs-small); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.doc:hover { background: var(--hover); }
+.doc .n { font-weight: 500; color: var(--ink); text-decoration: none; }
+.doc .n:hover { text-decoration: underline; }
+.doc .d { font-size: var(--fs-small); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc .d.quiet { color: var(--ink-3); }
+.repo { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.repo-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.repo-h b { font-family: var(--font-mono); font-size: var(--fs-small); font-weight: 500; }
+.repo .p { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.repo .url { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); overflow-wrap: anywhere; }
+.repo-pick { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.repo-pick input { flex: 1 1 160px; min-width: 0; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 4px 8px; color: var(--ink); font: inherit; font-family: var(--font-mono); font-size: var(--fs-meta); }
+.repo-pick input:focus { outline: none; border-color: var(--live); }
+.cap-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.repo-add { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+/* «git clone <ссылка>» для ненайденного репо: команда моно в углублении, рядом «Копировать» */
+.clone { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.clone code { flex: 1 1 auto; min-width: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 2px 6px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; user-select: all; }
+.feed { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.feed li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.feed .x { font-size: var(--fs-small); color: var(--ink); overflow-wrap: anywhere; }
+.space { display: flex; flex-direction: column; gap: 8px; }
+.space-r { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.space p { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); }
+.space :global(.badge) { margin-left: 0; }
+.space-pick { width: 100%; max-width: 360px; }
+/* поле выбора пространства вне .form: как поля формы команды */
+.pick-input { background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 6px 10px; color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.pick-input:focus { outline: none; border-color: var(--live); }
+
+/* --- диалоги: подключение и конфликты */
+.dlg { width: min(640px, 92vw); display: flex; flex-direction: column; gap: 16px; }
+/* форма внутри диалога: та же колонка с зазором, без ширины диалога */
+.dlg-body { display: flex; flex-direction: column; gap: 16px; }
+.dlg p { margin: 0; color: var(--ink-2); }
+.dlg h2 { margin: 0; }
+.dlg .id { font-family: var(--font-mono); font-weight: 500; color: var(--ink-2); margin-right: 8px; }
+.found { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.found-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.found-h b { font-weight: 600; }
+/* длинное название переносится рядом с «✓», а не уезжает под него на узком экране */
+.found-h .okmark + b { flex: 1 1 12em; min-width: 0; }
+.found-h .okmark { color: var(--st-ok); font-family: var(--font-mono); }
+.mem { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--ink-2); }
+.mem span { display: inline-flex; align-items: center; gap: 6px; }
+.chk { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.chk input { margin: 3px 0 0; accent-color: var(--ink-2); width: 14px; height: 14px; flex: none; }
+.chk b { font-weight: 500; }
+.chk small { display: block; font-size: var(--fs-meta); color: var(--ink-2); }
+.jrepo { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.jrepo b { font-family: var(--font-mono); font-size: var(--fs-small); font-weight: 500; }
+.jrepo .p { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.jrepo-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.jrepo-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.jrepo-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.foot .hint { font-size: var(--fs-meta); color: var(--ink-3); }
+.cf { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cf-h { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cf-h b { font-weight: 500; }
+.opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: var(--r-md); cursor: pointer; background: transparent; }
+.opt:hover { background: var(--hover); }
+.opt.on { border-color: var(--ink); }
+.opt input { margin: 3px 0 0; accent-color: var(--ink); flex: none; }
+.opt .v { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.opt .v b { font-weight: 500; }
+.opt .v small { font-size: var(--fs-meta); color: var(--ink-2); font-family: var(--font-mono); }
+.val { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 10px; font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.6; white-space: pre-wrap; max-height: 120px; overflow: auto; margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.commits { margin: 0; padding: 6px 10px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.6; max-height: 160px; overflow: auto; white-space: pre-wrap; }
+
+/* --- панель задачи поверх вкладки (?task=ID) */
+.drawer-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 30; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 92vw); background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow-pop); z-index: 31; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; }
+
+/* --- заглушки волны 3 */
+
+@media (max-width: 800px) {
+  .prow { grid-template-columns: minmax(0, 1fr); }
+  .two, .two-slug, .two-prefix { grid-template-columns: minmax(0, 1fr); }
+  .col-r { max-width: none; }
+  .doc { grid-template-columns: 90px minmax(0, 1fr); }
+  .opts { grid-template-columns: minmax(0, 1fr); }
+  .tree { white-space: pre-wrap; }
+  .panel-form { max-width: none; }
+  .repo-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .repo-row > input { grid-column: 1; }
+  .repo-row .repo-cell { grid-column: 1; }
+  .repo-row > button { grid-column: 2; grid-row: 1; }
+  .jrepo { grid-template-columns: minmax(0, 1fr); }
+  .drawer { width: 100vw; border-left: 0; }
+}
+
+/* --- тоны: в конце, чтобы перебивать цвета выше. Полоса спринта: готово — ok, ревью — ink-2, в работе — ink-off, к работе — контур */
+.dot.ok { background: var(--st-ok); }
+.dot.wait { background: var(--st-wait); }
+.dot.fail { background: var(--st-fail); }
+.dot.off { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+.st.done { background: var(--st-ok); }
+.st.review { background: var(--ink-2); }
+.st.in_progress { background: var(--ink-off); }
+.st.todo { box-shadow: inset 0 0 0 1px var(--line-strong); }
+.stat.ok b { color: var(--st-ok); }
+.sync.wait { color: var(--st-wait); }
+.sync.off { color: var(--ink-3); }
+.hrun.wait .hrun-sum { color: var(--st-wait); }
+.hrun.fail .hrun-sum { color: var(--st-fail); }
+.repo .miss, .jrepo .miss { font-size: var(--fs-meta); color: var(--st-wait); }
+.origin.none { color: var(--st-wait); }
+.repo-row input[aria-invalid] { border-color: var(--st-fail); }
+.note.ok { color: var(--st-ok); }
+.note.warn { color: var(--st-wait); }
+.note.err { color: var(--st-fail); }
+.t-wait { color: var(--st-wait); }
+.t-ok { color: var(--st-ok); }
+.t-fail { color: var(--st-fail); }

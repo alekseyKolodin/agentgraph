@@ -1,0 +1,28 @@
+/* Диалог доверия к flow команды (FlowTrust.tsx): риски сверху, дифф от одобренной версии или шаблона, кнопки внизу */
+.dlg { width: min(780px, 94vw); }
+.body { display: flex; flex-direction: column; gap: 12px; }
+.body h2 { margin: 0; }
+.body p { margin: 0; color: var(--ink-2); font-size: var(--fs-small); }
+.f { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.lbl { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.stat { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 400; }
+.body p.hint { font-size: var(--fs-meta); color: var(--ink-3); }
+.grow { flex: 1; }
+.foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* shell-команды — главное, что человек должен увидеть: рамка цвета ожидания решения */
+.risk { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--st-wait) 55%, transparent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--st-wait) 8%, transparent); }
+.cmds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.cmds code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.body p.tools { color: var(--ink); }
+
+/* разница строк — как в черновике пространства (spaces/Draft.module.css) */
+.diff { margin: 0; padding: 6px 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.55; max-height: 46vh; overflow: auto; }
+.line { display: block; padding: 0 10px; white-space: pre-wrap; word-break: break-word; color: var(--ink-3); }
+.line.add { color: var(--ink); background: color-mix(in srgb, var(--st-ok) 12%, transparent); box-shadow: inset 3px 0 0 var(--st-ok); }
+.line.del { color: var(--ink-2); background: color-mix(in srgb, var(--st-fail) 12%, transparent); box-shadow: inset 3px 0 0 var(--st-fail); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--st-fail) 50%, transparent); }
+.skip { display: block; padding: 2px 10px; color: var(--ink-3); font-style: italic; }
+
+/* строка о неодобренной версии и о запретах на вкладке «Процесс» (TeamScreen.tsx) */
+.process { margin: 0 0 10px; }
+.process :global(.btn) { margin-left: 4px; vertical-align: baseline; }

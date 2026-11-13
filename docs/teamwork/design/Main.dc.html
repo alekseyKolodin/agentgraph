@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · доска спринта</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--scrim:rgba(0,0,0,.55);--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 8px 28px rgba(0,0,0,.45);--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 40px;position:relative}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.brand:hover{text-decoration:none;color:var(--ink-2)}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px;cursor:pointer}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a:hover{background:var(--hover);color:var(--ink)}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316;font-variant-numeric:tabular-nums}
+.sec-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 6px}
+.sec-head h2{margin:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.sec-count{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.list{list-style:none;margin:0;padding:0}
+.lrun{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:10px;padding:6px 8px;border-radius:6px}
+.lrun:hover{background:var(--hover)}
+.lrun-main{min-width:0;display:flex;flex-direction:column}
+.lrun-t{font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.lrun-t:hover{text-decoration:none}
+.lrun-s{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrun-it{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.hist{display:flex;flex-direction:column;padding:6px 8px;border-radius:6px}
+.hist:hover{background:var(--hover)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}.dot.fail{background:var(--st-fail)}.dot.off{background:transparent;box-shadow:inset 0 0 0 1px var(--ink-3)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}.t-fail{color:var(--st-fail)}.t-live{color:var(--live)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.btn.danger{color:var(--st-fail)}
+.btn.more{padding:3px 9px;letter-spacing:1px;color:var(--ink-2)}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2)}
+.head-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.people{display:flex;gap:4px}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+.who.none{background:transparent;border-style:dashed;color:var(--ink-3)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 16px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab:hover{color:var(--ink-2);text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-left:4px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.chip:hover{color:var(--ink);border-color:var(--line-strong)}
+.chip.on{background:var(--select);color:var(--ink);border-color:var(--line-strong)}
+.chip .n{font-family:var(--font-mono);color:var(--ink-3);margin-left:4px}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3);margin:0}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.ticks{display:flex;gap:2px;align-items:center}
+.tk{width:10px;height:12px;border-radius:2px;background:var(--line-strong);flex:none}
+.tk.ok{background:var(--st-ok)}.tk.fail{background:color-mix(in srgb,var(--st-fail) 75%,var(--panel))}.tk.live{background:var(--live)}.tk.empty{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong)}
+
+/* доска */
+.sprint{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.sprint-l{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1 1 280px}
+.sprint-l b{font-weight:600}
+.goal{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.strip{display:flex;gap:3px;align-items:center}
+.st{width:12px;height:16px;border-radius:2px;flex:none}
+.st.done{background:var(--st-ok)}.st.review{background:var(--ink-2)}.st.work{background:var(--ink-off)}.st.todo{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.filters{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:14px 0 14px}
+.vsep{width:1px;height:18px;background:var(--line)}
+.signals{margin-left:auto;display:flex;gap:16px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.signals span{display:inline-flex;align-items:center;gap:6px}
+.board-box{overflow-x:auto;padding-bottom:4px}
+.board{display:grid;grid-template-columns:repeat(4,minmax(250px,1fr));gap:14px;min-width:1060px}
+.col{display:flex;flex-direction:column;gap:8px;min-width:0}
+.col-h{display:flex;align-items:baseline;gap:8px;padding:0 2px 8px;border-bottom:1px solid var(--line);margin-bottom:2px}
+.col-h h3{margin:0;font-size:13px;font-weight:500;color:var(--ink-2)}
+.col-h .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3)}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.card:hover{border-color:var(--line-strong)}
+.card.hot{border-color:var(--line-strong);z-index:3}
+.card.live{border-color:color-mix(in srgb,var(--live) 40%,transparent)}
+.card.wait{background:color-mix(in srgb,var(--st-wait) 6%,var(--panel));border-color:color-mix(in srgb,var(--st-wait) 45%,transparent)}
+.card.done .card-t{color:var(--ink-2)}
+.card-top{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.card-top .id{font-family:var(--font-mono);color:var(--ink-2)}
+.card-top .grow{flex:1}
+.card-top .est{font-family:var(--font-mono);color:var(--ink-2)}
+.card-t{font-weight:500;color:var(--ink);line-height:1.35;text-decoration:none}
+.card-t:hover{text-decoration:underline}
+.card-m{display:flex;gap:10px;flex-wrap:wrap;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.card-m .q{color:var(--ink-3)}
+.agent{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:8px;row-gap:2px;border-top:1px solid var(--line);padding-top:8px;margin-top:2px;font-size:12px;color:var(--ink-2)}
+.agent .what{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent .why{grid-column:2 / 4;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent .ask{grid-column:2 / 4;color:var(--st-wait);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card-act{display:flex;gap:6px;align-items:center}
+.add{border:1px dashed var(--line);border-radius:8px;padding:8px 12px;color:var(--ink-3);background:transparent;text-align:left;cursor:pointer;font-size:13px}
+.add:hover{color:var(--ink-2);border-color:var(--line-strong)}
+.menu{position:absolute;left:10px;top:calc(100% - 6px);width:340px;display:flex;flex-direction:column;padding:4px;background:var(--panel);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-pop);z-index:5}
+.menu-cap{padding:6px 10px 4px;font-family:var(--font-mono);font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mi{display:flex;flex-direction:column;gap:1px;border:0;background:transparent;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer;color:var(--ink)}
+.mi:hover,.mi.on{background:var(--hover)}
+.mi b{font-weight:500}
+.mi span{font-size:12px;color:var(--ink-2)}
+.menu-sep{height:1px;background:var(--line);margin:4px 6px}
+.menu-hint{padding:4px 10px 6px;font-size:12px;color:var(--ink-3)}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.signals{margin-left:0}.menu{width:min(340px,calc(100vw - 64px))}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count" aria-label="Вопросов ждут ответа: 1">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+<section>
+<div class="sec-head"><h2>Сейчас</h2><span class="sec-count t-wait">ждут 1 · идут 2</span></div>
+<ul class="list">
+<li class="lrun"><span class="dot wait"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-14 · Шаблон выгрузки для 1С</a><span class="lrun-s t-wait">ждёт ответа · фаза «code»</span></div><span class="lrun-it">1/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-12 · Выгрузка счетов за период</a><span class="lrun-s">фаза «code»</span></div><span class="lrun-it">2/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-19 · Повтор при таймауте 1С</a><span class="lrun-s">◇ billing-export · работает · 4 мин</span></div><span class="lrun-it">›_</span></li>
+</ul>
+</section>
+<section>
+<div class="sec-head"><h2>Запуски</h2></div>
+<ul class="list">
+<li class="hist"><a class="lrun-t" href="#">Архитектура: экспорт счетов</a><span class="lrun-s"><span class="t-ok">готово</span> · 11:20 · teamwork-architecture · ≈$0.42</span></li>
+<li class="hist"><a class="lrun-t" href="#">PAY-11 · Выборка счетов за период</a><span class="lrun-s"><span class="t-ok">готово</span> · 10:05 · teamwork-task · ≈$1.10</span></li>
+<li class="hist"><a class="lrun-t" href="#">PAY-13 · Лимит 50 000 строк</a><span class="lrun-s"><span class="t-fail">бюджет</span> · 09:40 · teamwork-task · ≈$2.00</span></li>
+</ul>
+</section>
+</aside>
+
+<main class="main" id="main">
+<p class="crumbs"><a href="#">Teamwork</a> › <a href="#">Платёжная команда</a></p>
+<div class="head">
+<div><h1>Экспорт счетов</h1><p class="sub">Бухгалтерия выгружает счета за период в CSV и 1С</p></div>
+<div class="head-r">
+<span class="sync"><span class="dot ok s6"></span>синхронизировано · 12 с назад</span>
+<span class="people" aria-label="Участники: Алексей, Мария, Иван"><span class="who">АК</span><span class="who">МС</span><span class="who">ИВ</span></span>
+<button class="btn small" type="button">+ Задача</button>
+<button class="btn ghost more" type="button" aria-label="Ещё действия проекта">⋯</button>
+</div>
+</div>
+<nav class="tabs" aria-label="Проект">
+<a class="tab" href="#">Обзор</a><a class="tab" href="#">ТЗ</a><a class="tab" href="#">Архитектура</a><a class="tab" href="#">Дизайн</a><a class="tab" href="#">Документы<span class="n">4</span></a><a class="tab" href="#">Бэклог<span class="n">14</span></a><a class="tab active" href="#" aria-current="page">Доска</a><a class="tab" href="#">Спринты</a>
+</nav>
+
+<div class="sprint">
+<div class="sprint-l"><b>Спринт 2</b><span class="goal">Выгрузка CSV работает на проде</span></div>
+<div class="strip" role="img" aria-label="12 задач: 2 готово, 2 на ревью, 5 в работе, 3 к работе">
+<span class="st done"></span><span class="st done"></span><span class="st review"></span><span class="st review"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st todo"></span><span class="st todo"></span><span class="st todo"></span>
+</div>
+<span class="meta">2 из 12 готово</span>
+<button class="btn small" type="button">Завершить спринт</button>
+</div>
+
+<div class="filters">
+<div class="chips" role="group" aria-label="Исполнитель">
+<button class="chip on" type="button" aria-pressed="true">Все<span class="n">12</span></button>
+<button class="chip" type="button" aria-pressed="false">Мои<span class="n">5</span></button>
+<button class="chip" type="button" aria-pressed="false">Мария<span class="n">4</span></button>
+<button class="chip" type="button" aria-pressed="false">Иван<span class="n">2</span></button>
+<button class="chip" type="button" aria-pressed="false">Без исполнителя<span class="n">1</span></button>
+</div>
+<span class="vsep"></span>
+<div class="chips" role="group" aria-label="Тип">
+<button class="chip" type="button" aria-pressed="false">feature</button>
+<button class="chip" type="button" aria-pressed="false">bug</button>
+<button class="chip" type="button" aria-pressed="false">chore</button>
+</div>
+<div class="signals"><span><span class="dot"></span>агент работает · 2</span><span class="t-wait"><span class="dot wait"></span>ждёт тебя · 1</span></div>
+</div>
+
+<div class="board-box">
+<div class="board">
+
+<section class="col" aria-label="К работе">
+<div class="col-h"><h3>К работе</h3><span class="n">3</span></div>
+<article class="card hot">
+<div class="card-top"><span class="id">PAY-15</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 2">2</span><span class="who none" aria-label="Без исполнителя"></span></div>
+<a class="card-t" href="#">Фильтр по контрагенту в выгрузке</a>
+<div class="card-m"><span>☐ 0/3</span><span class="q">billing</span></div>
+<div class="card-act"><button class="btn small" type="button" aria-expanded="true" aria-haspopup="menu">В работу ▸</button><button class="btn ghost more" type="button" aria-label="Ещё действия задачи">⋯</button></div>
+<div class="menu" role="menu" aria-label="В работу">
+<div class="menu-cap">billing · ветка tw/PAY-15-counterparty-filter</div>
+<button class="mi on" type="button" role="menuitem"><b>Запустить teamwork-task</b><span>flow команды по умолчанию · реализация и проверка по критериям</span></button>
+<button class="mi" type="button" role="menuitem"><b>Другой flow…</b><span>flow команды и ваши</span></button>
+<button class="mi" type="button" role="menuitem"><b>Открыть сессию</b><span>Claude Code в терминале, в worktree задачи</span></button>
+<div class="menu-sep"></div>
+<div class="menu-hint">Задача перейдёт в «В работе», исполнитель — вы</div>
+</div>
+</article>
+<article class="card">
+<div class="card-top"><span class="id">PAY-16</span><span>bug</span><span class="grow"></span><span class="est" aria-label="Оценка 1">1</span><span class="who">ИВ</span></div>
+<a class="card-t" href="#">Пустой период даёт файл без заголовка</a>
+<div class="card-m"><span>☐ 0/2</span><span class="q">billing</span></div>
+</article>
+<article class="card">
+<div class="card-top"><span class="id">PAY-17</span><span>chore</span><span class="grow"></span><span class="est" aria-label="Оценка 1">1</span><span class="who">МС</span></div>
+<a class="card-t" href="#">Описать API выгрузки в docs</a>
+<div class="card-m"><span class="q">ждёт PAY-12</span></div>
+</article>
+<button class="add" type="button">+ Задача</button>
+</section>
+
+<section class="col" aria-label="В работе">
+<div class="col-h"><h3>В работе</h3><span class="n">5</span></div>
+<article class="card wait">
+<div class="card-top"><span class="id">PAY-14</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 3">3</span><span class="who">АК</span></div>
+<a class="card-t" href="#">Шаблон выгрузки для 1С</a>
+<div class="agent"><span class="dot wait"></span><span class="what t-wait">ждёт ответа · teamwork-task</span><span class="meta">1/3</span><span class="ask">«Какую кодировку ждёт 1С: CP1251 или UTF-8 с BOM?»</span></div>
+<div class="card-act"><a class="btn small" href="#">Ответить</a></div>
+</article>
+<article class="card live">
+<div class="card-top"><span class="id">PAY-12</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 3">3</span><span class="who">АК</span></div>
+<a class="card-t" href="#">Выгрузка счетов за период в CSV</a>
+<div class="card-m"><span>☑ 2/5</span><span class="q">tw/PAY-12-csv-export</span></div>
+<div class="agent"><span class="dot"></span><span class="what">фаза «code» · teamwork-task</span><span class="ticks" aria-label="Итерации: 1 не принята, 2 идёт, 3 впереди"><span class="tk fail"></span><span class="tk live"></span><span class="tk empty"></span></span><span class="why">судья: нет теста на пустой период</span></div>
+</article>
+<article class="card">
+<div class="card-top"><span class="id">PAY-13</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 2">2</span><span class="who">АК</span></div>
+<a class="card-t" href="#">Лимит 50 000 строк на файл</a>
+<div class="agent"><span class="dot fail"></span><span class="what t-fail">запуск остановлен: бюджет $2</span><span class="ticks" aria-label="Итерации: все три не приняты"><span class="tk fail"></span><span class="tk fail"></span><span class="tk fail"></span></span><span class="why">3 раза подряд: «файл не делится на части»</span></div>
+<div class="card-act"><a class="btn small" href="#">Открыть запуск</a></div>
+</article>
+<article class="card live">
+<div class="card-top"><span class="id">PAY-19</span><span>bug</span><span class="grow"></span><span class="est" aria-label="Оценка 1">1</span><span class="who">АК</span></div>
+<a class="card-t" href="#">Повтор запроса при таймауте 1С</a>
+<div class="agent"><span class="dot"></span><span class="what">сессия Claude Code · работает · 4 мин</span><span class="meta">›_</span></div>
+</article>
+<article class="card">
+<div class="card-top"><span class="id">PAY-20</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 2">2</span><span class="who">МС</span></div>
+<a class="card-t" href="#">Колонка НДС в CSV</a>
+<div class="card-m"><span>☐ 1/3</span><span class="q">tw/PAY-20-vat-column</span></div>
+</article>
+</section>
+
+<section class="col" aria-label="Ревью">
+<div class="col-h"><h3>Ревью</h3><span class="n">2</span></div>
+<article class="card">
+<div class="card-top"><span class="id">PAY-11</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 3">3</span><span class="who">МС</span></div>
+<a class="card-t" href="#">Выборка счетов за период из базы</a>
+<div class="card-m"><span>☑ 4/4</span><a href="#">PR #41</a><span class="q">открыт</span></div>
+</article>
+<article class="card">
+<div class="card-top"><span class="id">PAY-10</span><span>chore</span><span class="grow"></span><span class="est" aria-label="Оценка 1">1</span><span class="who">ИВ</span></div>
+<a class="card-t" href="#">Заголовки колонок CSV по ТЗ</a>
+<div class="card-m"><span>☑ 2/2</span><a href="#">PR #39</a><span class="q">открыт</span></div>
+</article>
+</section>
+
+<section class="col" aria-label="Готово">
+<div class="col-h"><h3>Готово</h3><span class="n">2</span></div>
+<article class="card done">
+<div class="card-top"><span class="id">PAY-9</span><span>feature</span><span class="grow"></span><span class="est" aria-label="Оценка 2">2</span><span class="who">АК</span></div>
+<a class="card-t" href="#">Модель данных экспорта</a>
+<div class="card-m"><a href="#">PR #37</a><span class="t-ok">смёржен</span></div>
+</article>
+<article class="card done">
+<div class="card-top"><span class="id">PAY-8</span><span>chore</span><span class="grow"></span><span class="est" aria-label="Оценка 1">1</span><span class="who">МС</span></div>
+<a class="card-t" href="#">Каркас модуля экспорта</a>
+<div class="card-m"><a href="#">PR #36</a><span class="t-ok">смёржен</span></div>
+</article>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { FlowSummary } from '@server/api-types';
 import { LS } from '../../lib/storage';
-import type { Attach, RunLink, TagInfo } from '../../lib/run-form';
+import type { Attach, RunLink } from '../../lib/run-form';
 import { NO_MSG, type Msg } from './store';
 
 export type RunFormState = {
@@ -18,13 +18,19 @@ export type RunFormState = {
   modelBase: string;
   /** «Дополнительно» раскрыто; запоминается (agentgraph.runMore). */
   more: boolean;
-  /** Вписанный, но ещё не добавленный тег. */
+  /** Пространство (слаг): выбранное или вписанное новое; пусто — без пространства. */
+  space: string;
+  /** Слаг пространства, которое подставило директорию проекта; правка директории руками — ''. */
+  cwdFrom: string;
+  /** Директорию задали руками (поле, недавние, «Выбрать…») или пришла из «Запустить…»: выбор пространства её не затирает. */
+  cwdTouched: boolean;
+  saveState: boolean;
+  /** «Завести пространство автоматически»: запоминается (agentgraph.autoSpace). */
+  autoSpace: boolean;
+  /** Вписанный, но ещё не добавленный тег знаний. */
   tagText: string;
   tags: string[];
-  tagInfo: Map<string, TagInfo>;
   tagMsg: Msg;
-  saveTag: boolean;
-  autoTag: boolean;
   attach: Attach[];
   addDirs: string;
   link: RunLink | null;
@@ -47,8 +53,8 @@ export type RunFormState = {
 };
 
 export const runForm: RunFormState = {
-  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), tagText: '', tags: [], tagInfo: new Map(), tagMsg: NO_MSG,
-  saveTag: true, autoTag: false, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
+  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', cwdFrom: '', cwdTouched: false, saveState: true, autoSpace: false,
+  tagText: '', tags: [], tagMsg: NO_MSG, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
   msg: NO_MSG, busy: false, formSeq: -1, extrasSeq: -1, tagSeq: 0, intakeKey: '', focusSeq: 0,
 };
 
@@ -80,9 +86,12 @@ export function resetExtras(extrasSeq: number = runForm.extrasSeq + 1): void {
   setForm({ attach: [], addDirs: '', extrasSeq });
 }
 
+/** Галочка автопространства: своя, а до пространств — галочка автотега (тот же смысл: завести по задаче). */
+export const autoSpaceSaved = (): boolean => (LS.raw('agentgraph.autoSpace') ?? LS.raw('agentgraph.autoTag')) === '1';
+
 /**
- * Форма заново по flow (renderFlow старого UI): задача по умолчанию, запомненные директория, бюджет и модель; теги, привязка
- * и сообщения сброшены. Тег не запоминается: это осознанный выбор на каждый запуск.
+ * Форма заново по flow (renderFlow старого UI): задача по умолчанию, запомненные директория, бюджет и модель;
+ * пространство, теги, привязка и сообщения сброшены. Пространство не запоминается: это осознанный выбор на каждый запуск.
  */
 export function resetForm(summary: FlowSummary | undefined, defaultCwd: string, formSeq: number): void {
   setForm({
@@ -92,13 +101,15 @@ export function resetForm(summary: FlowSummary | undefined, defaultCwd: string, 
     budget: LS.raw('agentgraph.budget') || '',
     model: LS.raw('agentgraph.model') || '',
     modelBase: LS.raw('agentgraph.model') || '',
+    space: '',
+    cwdFrom: '',
+    cwdTouched: false,
+    saveState: true,
+    // автопространство запоминается, как бюджет и модель; по умолчанию выключено: иначе пространство заводилось бы молча
+    autoSpace: autoSpaceSaved(),
     tagText: '',
     tags: [],
-    tagInfo: new Map(),
     tagMsg: NO_MSG,
-    saveTag: true,
-    // автотег запоминается, как бюджет и модель; по умолчанию выключен: иначе тег заводился бы на каждый запуск молча
-    autoTag: LS.raw('agentgraph.autoTag') === '1',
     tagSeq: runForm.tagSeq + 1,
     link: null,
     wtBranch: '',

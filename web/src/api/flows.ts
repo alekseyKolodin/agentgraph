@@ -51,6 +51,9 @@ async function flowAi<B>(url: string, body: unknown, onEvent: (e: FlowAiProgress
   return done;
 }
 
+/** Тот же поток ИИ-сессии — черновикам пространств (api/spaces.ts). */
+export { flowAi as aiStream };
+
 /** model: '' — модель по умолчанию (её назовёт событие progress). */
 export const generateFlow = (body: { task: string; cwd: string; model?: string; folder?: string; save?: false }, onEvent: (e: FlowAiProgressEvent) => void, signal?: AbortSignal) =>
   flowAi<FlowGenerated>('/api/flows/generate', body, onEvent, signal);

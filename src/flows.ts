@@ -262,6 +262,49 @@ export function saveFlowYaml(name: string, yamlText: string, folder = ''): { spe
   return { spec, file };
 }
 
+/** Где лежит файл flow по пути: имя и папка — как их видит listFlows; путь не годится (глубже папки, имя) — ошибка. */
+export function flowFileTarget(file: string): { name: string; folder: string } {
+  const rel = path.relative(FLOWS_DIR, path.resolve(file));
+  const parts = rel.split(path.sep);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`${file} — не в папке flow ${FLOWS_DIR}`);
+  if (parts.length > 2) throw new Error(`flow лежат в ${FLOWS_DIR} или в папке первого уровня: ${rel} agentgraph не увидит`);
+  const base = parts.at(-1)!;
+  if (!/\.ya?ml$/.test(base)) throw new Error(`${base} — не файл flow (.yaml)`);
+  const name = base.replace(/\.ya?ml$/, '');
+  assertFlowName(name);
+  if (parts.length === 2) assertFolderName(parts[0]);
+  return { name, folder: parts.length === 2 ? parts[0] : '' };
+}
+
+/**
+ * Проверка текста flow до записи мимо API (сессия терминала правит файл): путь (flowFileTarget), имя не занято другим
+ * файлом (иначе listFlows покажет второй ошибкой), схема (parseFlow) и вызовы (checkCalls) — как у PUT /api/flows/:name.
+ * Ответ — имя, папка, есть ли файл уже и разобранный flow.
+ */
+export function checkFlowText(file: string, text: string): { name: string; folder: string; exists: boolean; spec: FlowSpec } {
+  const { name, folder } = flowFileTarget(file);
+  const same = findFlowFile(name);
+  const fold = (p: string) => path.resolve(p).normalize('NFC').toLowerCase();
+  if (same && fold(same.file) !== fold(file)) throw new Error(`Имя ${name} уже занято flow ${same.folder ? `в папке ${same.folder}` : 'в корне flows/'}: выбери другое имя или правь тот файл`);
+  const spec = parseFlow(text);
+  checkCalls({ ...spec, name });
+  return { name, folder, exists: Boolean(same), spec };
+}
+
+/**
+ * Файл, в который saveFlowYaml запишет flow name: существующий — его файл (папка не меняется: folder у него — ошибка,
+ * а не тихий перенос), новый — в folder. Ничего не создаёт.
+ */
+export function plannedFlowFile(name: string, folder = ''): string {
+  assertFlowName(name);
+  const existing = findFlowFile(name);
+  if (existing) {
+    if (folder && folder.toLowerCase() !== existing.folder.toLowerCase()) throw new Error(`Flow ${name} лежит ${existing.folder ? `в папке ${existing.folder}` : 'в корне flows/'}: перенос в другую папку — на экране flow в agentgraph`);
+    return existing.file;
+  }
+  return path.join(folderDir(folder), `${name}.yaml`);
+}
+
 export function deleteFlow(name: string): void {
   assertFlowName(name);
   const file = resolveFlowFile(name);

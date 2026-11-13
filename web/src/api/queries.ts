@@ -14,8 +14,11 @@ export const keys = {
   runs: ['runs'] as const,
   feed: ['feed'] as const,
   flows: ['flows'] as const,
-  /** GET /api/tags: страница «Теги», подсказки тегов формы запуска и конструктора. */
+  /** GET /api/tags: страница «Знания», подсказки тегов знаний формы запуска, сессии и конструктора. */
   tags: ['tags'] as const,
+  /** GET /api/spaces: страница «Пространства», выбор пространства в формах запуска и сессии. */
+  spaces: ['spaces'] as const,
+  space: (slug: string) => ['spaces', slug] as const,
   integrations: ['integrations'] as const,
   jira: (preset: string, jql: string) => ['jira', preset, jql] as const,
   mrs: (path: string, mine: boolean) => ['project', path, 'mr', mine] as const,

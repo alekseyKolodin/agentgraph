@@ -1,7 +1,7 @@
 // Список запусков в сайдбаре без React и DOM (ui/app.js renderRunList, runFilterHtml): скрытые, фильтр по статусу, поиск,
 // группы по проектам с «ещё N» и живыми счётчиками, подписи строк.
 import type { RunSummary } from '@server/api-types';
-import { baseName, projectLabels, usd, when } from './format';
+import { baseName, clock, projectLabels, statusLabel, usd, when } from './format';
 import { t } from './i18n';
 import { LIVE_STATUSES } from './home';
 import { iterWord } from './graph/text';
@@ -140,14 +140,50 @@ export function runDepths(runs: RunSummary[]): Map<string, number> {
   return depth;
 }
 
-/** Подсказка строки: имя запуска и flow; без имени — flow. */
-export const runRowTitle = (r: RunSummary): string =>
-  `${r.title ? `${r.title}\nflow ${r.flow}` : r.flow}${r.parent ? `\n${t('вызван блоком {block} запуска {id}', { block: r.parent.block, id: r.parent.runId })}` : ''}`;
+/** Сигнал слова статуса в строке истории — по «Пульту»: идёт, готово, ждёт тебя (вопрос, пауза, лимит), сбой. */
+export type StatusTone = 'live' | 'ok' | 'wait' | 'fail' | '';
 
-/** Подстрока: flow (если есть имя, первым — чтобы многоточие его не съело), проект (в плоском списке), дата, итерации, цена. */
-export const runRowSub = (r: RunSummary, withProject: boolean): { flow: string; rest: string } => ({
-  flow: r.title ? r.flow : '',
-  rest: `${withProject && r.cwd ? `${baseName(r.cwd)} · ` : ''}${when(r.startedAt)} · ${iterWord(r.iterations)} · ≈${usd(r.totalCostUsd)}`,
+export function statusTone(status: string): StatusTone {
+  if (status === 'running') return 'live';
+  if (status === 'done') return 'ok';
+  if (['waiting', 'paused', 'max_iterations'].includes(status)) return 'wait';
+  if (['failed', 'budget_exceeded', 'aborted', 'interrupted'].includes(status)) return 'fail';
+  return '';
+}
+
+/**
+ * Подсказка строки — всё, что не влезло в две строки: имя и flow, статус, дата целиком, итерации, цена, пространство,
+ * теги знаний, папка проекта; у дочернего — откуда вызван.
+ */
+export const runRowTitle = (r: RunSummary): string =>
+  [
+    r.title ? `${r.title}\nflow ${r.flow}` : r.flow,
+    [statusLabel(r.status), when(r.startedAt), iterWord(r.iterations), `≈${usd(r.totalCostUsd)}`].join(' · '),
+    ...(r.space ? [`◇ ${r.space}`] : []),
+    ...(r.knowledge?.length ? [r.knowledge.map((k) => `#${k}`).join(' ')] : []),
+    ...(r.cwd ? [r.cwd] : []),
+    ...(r.parent ? [t('вызван блоком {block} запуска {id}', { block: r.parent.block, id: r.parent.runId })] : []),
+  ].join('\n');
+
+export type RunRowMeta = { status: string; tone: StatusTone; when: string; space: string; tail: string };
+
+/**
+ * Строка меты под именем (одна, с многоточием): статус словом (у истории пять конечных статусов — точкой их не
+ * различить), когда, пространство (ссылкой), затем flow (если у запуска своё имя), проект (в плоском списке), цена,
+ * теги знаний и «разовый». Порядок — по важности: хвост съедает многоточие.
+ */
+export const runRowMeta = (r: RunSummary, withProject: boolean, now: Date = new Date()): RunRowMeta => ({
+  status: statusLabel(r.status),
+  tone: statusTone(r.status),
+  when: clock(r.startedAt, now),
+  space: r.space ?? '',
+  tail: [
+    ...(r.title ? [r.flow] : []),
+    ...(withProject && r.cwd ? [baseName(r.cwd)] : []),
+    `≈${usd(r.totalCostUsd)}`,
+    ...(r.knowledge ?? []).map((k) => `#${k}`),
+    ...(r.adhoc ? [t('разовый')] : []),
+  ].join(' · '),
 });
 
 /** Текст подтверждения удаления: «flow» от даты, если запуск известен. */

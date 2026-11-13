@@ -4,7 +4,7 @@ import path from 'node:path';
 import { truncate } from './agent.js';
 import { WRITE_TOOLS, type Denial } from './artifacts.js';
 import { ARTIFACTS_DIR } from './artifact-store.js';
-import type { BlockReport, RunEvent, RunReport, RunStatus, TagSummaryReport } from './runner.js';
+import type { BlockReport, RunEvent, RunReport, RunStatus, SpaceStateReport } from './runner.js';
 import { c, fmtMs, fmtUsd } from './ui.js';
 import { NEXT_END } from './schema.js';
 
@@ -152,10 +152,10 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
       case 'answer':
         out.log(c.dim(`ответ принят, продолжаю этап ${e.question.phase}`));
         break;
-      case 'tag_summary_start':
-        out.write(`${c.cyan('✎')} Обновляю саммари тега ${e.tag} … `);
+      case 'space_state_start':
+        out.write(`${c.cyan('✎')} Обновляю состояние пространства ${e.space} … `);
         break;
-      case 'tag_summary':
+      case 'space_state':
         out.log(e.report.ok ? c.green(`ok ${c.dim(fmtUsd(e.report.costUsd))}`) : c.yellow('не вышло'));
         break;
       case 'title':
@@ -167,7 +167,7 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
         if (r.title) out.log(`\n${c.bold('Имя запуска:')} ${r.title}`);
         out.log(`${r.title ? '' : '\n'}${c.bold('Итог:')} ${colorStatus(r.status)}  ·  итераций: ${r.iterations}  ·  оценка по прайсу API: ${fmtUsd(r.totalCostUsd)}`);
         if (r.error) out.log(c.red(r.error));
-        for (const s of r.tagSummaries ?? []) out.log(tagLine(s));
+        if (r.stateUpdate) out.log(stateLine(r.stateUpdate));
         printFinal(r, out);
         out.log(c.dim(`Логи: ${r.runDir}`));
         if (r.artifacts) out.log(c.dim(`Артефакты: ${path.join(r.runDir, ARTIFACTS_DIR)}`));
@@ -178,10 +178,10 @@ export function consoleReporter(verbose: boolean, prefix = ''): (e: RunEvent) =>
 }
 
 /** Строка о теге в итоге: обновлено саммари или почему нет. */
-function tagLine(s: TagSummaryReport): string {
-  if (s.ok) return c.green(`Саммари тега ${s.tag} обновлено`) + c.dim(` · ${fmtUsd(s.costUsd)}`);
+function stateLine(s: SpaceStateReport): string {
+  if (s.ok) return c.green(`Состояние пространства ${s.space} обновлено`) + c.dim(` · ${fmtUsd(s.costUsd)}`);
   const why = s.error ?? s.skipped ?? 'нет данных';
-  return (s.error ? c.yellow : c.dim)(`Саммари тега ${s.tag} не обновлено: ${why}`);
+  return (s.error ? c.yellow : c.dim)(`Состояние пространства ${s.space} не обновлено: ${why}`);
 }
 
 /** «отказов записи: N · отказов чтения: M» по отказам guard этапа; пусто — отказов не было. */

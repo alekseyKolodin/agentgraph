@@ -2,11 +2,11 @@
 // итог завершённого запуска, сводка идущего, лента итераций, хвост живого лога, карточки этапов по итерациям, задача.
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { ConditionReport, PhaseReport, RunNote, RunReport } from '@server/api-types';
+import type { ConditionReport, Denial, PhaseReport, RunNote, RunReport } from '@server/api-types';
 import { fetchRunFile, setMaxIterations, errorText } from '../../api';
-import { Badge, TagBadge } from '../../components/Badge';
+import { Badge, SpaceBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { openRunFile, openTagSummary } from '../../components/file/FileDialog';
+import { openRunFile, openSpaceState } from '../../components/file/FileDialog';
 import { SafeMarkdown } from '../../components/MdText';
 import { PathText } from '../../components/PathLink';
 import { AnsweredCard } from '../../components/question/QuestionCard';
@@ -18,10 +18,11 @@ import { linkifyText } from '../../lib/md';
 import type { LiveState, PendingPhase } from '../../lib/run/events';
 import { runnerText } from '../../lib/run/runner-text';
 import {
-  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
-  runBlocks, runFinished, runPause, runSteps, stepKey, stepNotes, summaryView, tagFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
+  blockNextNote, COND_STEP, ctxChipInfo, feedbackIsMarkdown, phaseSpent, spentChipInfo, fileIsMarkdown, finalFacts, finalFeedback, isRestart, LIMIT_MAX, limitEditable, limitMin, phaseModelChip, ribbonRows,
+  runBlocks, runFinished, runPause, runSpaceOf, runSteps, runTask, stepKey, stepNotes, summaryView, stateFinalLines, type ChainStep, type Part, type RunBlockView, type SpecBlocks, type StepItem,
 } from '../../lib/run/view';
 import { Analysis } from './Analysis';
+import { denialText } from '../../lib/run/artifacts';
 import { art } from './artStore';
 import { ArtFinalLine, ArtIterMark, ArtStepLine } from './ArtifactsPanel';
 import { NoteBox, StepNotes } from './FixPanel';
@@ -42,6 +43,8 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
     for (const k of keys) runState.fold.over.set(k, open);
     bump();
   };
+  const task = runTask(r.input);
+  const space = runSpaceOf(r);
   return (
     <>
       {runFinished(r) && <RunFinal r={r} />}
@@ -69,8 +72,24 @@ export function Overview({ st, spec, graphNow, implicit }: Props) {
         {items.map((it, i) => <Step key={stepId(it, i)} item={it} st={st} implicit={implicit} noteBox={it === noteAt} />)}
       </div>
       <div className={styles.runSecHead}><span className={styles.runLabel}>{t('Задача')}</span></div>
-      {r.input && <p className={styles.runInput} dangerouslySetInnerHTML={{ __html: linkifyText(r.input) }} />}
+      {task && <p className={styles.runInput} dangerouslySetInnerHTML={{ __html: linkifyText(task) }} />}
+      {/* пространство — плашкой рядом с задачей, а не служебной разметкой в ней (старые запуски несли блок тега задачи) */}
+      {space && (
+        <p className={cx('row', styles.runSpace)}>
+          <SpaceBadge slug={space} link />
+          <span className="muted small">{t('пространство запуска: карта — памятью этапов, состояние — в их промптах')}</span>
+        </p>
+      )}
     </>
+  );
+}
+
+/** Отказы записи этапа у flow без артефактов (там строку отказов показывает строка артефактов): guard папок данных agentgraph. */
+function DenialLine({ denials }: { denials: Denial[] }) {
+  return (
+    <p className={cx('small', styles.denials)} title={t('Этап пытался писать туда, куда этапам нельзя: папки пространств, тегов знаний, запусков. Запись отклонена, этап продолжил работу')}>
+      {t('Отказано в записи: {list}', { list: denialText(denials) })}
+    </p>
   );
 }
 
@@ -196,7 +215,7 @@ function Step({ item, st, implicit, noteBox }: { item: StepItem; st: LiveState; 
       return <PhaseCard p={item.p} runId={r.id} implicit={implicit} notes={stepNotes(r, item.p.block, item.p.iteration, item.p.phase)} />;
     case 'running':
       return (
-        <RunningCard x={item.x} doing={item.doing} runId={r.id} implicit={implicit} notes={stepNotes(r, item.x.block, item.x.iteration, item.x.phase)}>
+        <RunningCard x={item.x} maxDone={Math.max(0, ...r.phases.map((p) => phaseSpent(p.tokens)))} doing={item.doing} runId={r.id} implicit={implicit} notes={stepNotes(r, item.x.block, item.x.iteration, item.x.phase)}>
           {noteBox && <NoteBox r={r} placeholder={t('Указание следующему шагу: что поправить или учесть — этот этап уже идёт')} />}
         </RunningCard>
       );
@@ -235,6 +254,11 @@ function CtxChip({ x, live }: { x: Parameters<typeof ctxChipInfo>[0]; live: bool
   return info ? <span className={cx(styles.pctx, info.level && styles[info.level])} title={info.title}>{info.text}</span> : null;
 }
 
+function SpentChip({ x, live, maxDone }: { x: Parameters<typeof spentChipInfo>[0]; live: boolean; maxDone?: number }) {
+  const info = spentChipInfo(x, live, maxDone);
+  return info ? <span className={cx(styles.pctx, info.level && styles[info.level])} title={info.title}>{info.text}</span> : null;
+}
+
 function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: string; implicit: readonly string[]; notes: RunNote[] }) {
   const files = p.files || {};
   return (
@@ -246,11 +270,12 @@ function PhaseCard({ p, runId, implicit, notes }: { p: PhaseReport; runId: strin
         <span className={styles.tools}>{p.call ? <CallLink call={p.call} /> : `[${toolsLabel(p.tools, implicit)}]`}</span>
         <ModelChip x={p} />
         <CtxChip x={p} live={false} />
-        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
+        <SpentChip x={p} live={false} />
+        <span className={styles.stats} title={t('{n} знаков в ответе', { n: p.chars })}>{`${p.call ? '' : `${t('{n} ходов', { n: p.turns })} · `}${dur(p.durationMs)} · ${p.tokens?.estimated && !p.costUsd ? '$?' : usd(p.costUsd)}${p.ok ? '' : ` · ${p.subtype}`}`}</span>
       </div>
       {p.errors?.length > 0 && <div className="error">{p.errors.join('\n')}</div>}
       <StepNotes notes={notes} />
-      {art.on && <ArtStepLine rep={p} phase={p.phase} />}
+      {art.on ? <ArtStepLine rep={p} phase={p.phase} /> : p.denials?.length ? <DenialLine denials={p.denials} /> : null}
       {Object.keys(files).length > 0 && (
         <div className={styles.actions}>
           <button className="btn small" onClick={() => void openRunFile(runId, files.prompt, t('Промпт · {name}', { name: p.phase }))}>{t('промпт')}</button>
@@ -267,7 +292,7 @@ const CallLink = ({ call }: { call: { runId: string; flow: string } }) => (
   <Link to={`/run/${call.runId}`} title={t('Открыть вызванный запуск {id}', { id: call.runId })}>{t('↪ запуск flow {flow}', { flow: call.flow })}</Link>
 );
 
-function RunningCard({ x, doing, runId, implicit, notes, children }: { x: PendingPhase; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
+function RunningCard({ x, maxDone, doing, runId, implicit, notes, children }: { x: PendingPhase; maxDone: number; doing: string; runId: string; implicit: readonly string[]; notes: RunNote[]; children?: ReactNode }) {
   // промпт записан до старта этапа, транскрипт пишется по ходу; вывода до phase_end ещё нет. У старых запусков files нет.
   const pf = x.files;
   return (
@@ -279,6 +304,7 @@ function RunningCard({ x, doing, runId, implicit, notes, children }: { x: Pendin
         <span className={styles.tools}>{x.call ? <CallLink call={x.call} /> : `[${toolsLabel(x.tools, implicit)}]`}</span>
         <ModelChip x={x} />
         <CtxChip x={x} live />
+        <SpentChip x={x} live maxDone={maxDone} />
         <span className={styles.stats}>{doing}</span>
       </div>
       <StepNotes notes={notes} />
@@ -373,7 +399,7 @@ function RunFinal({ r }: { r: RunReport }) {
   const multi = blocks.length > 1;
   const facts = finalFacts(r);
   const fb = finalFeedback(r);
-  const tags = r.tags?.length || r.autoTag?.error ? tagFinalLines(r) : null;
+  const spaces = r.space || r.tags?.length || r.autoSpace?.error || r.autoTag?.error ? stateFinalLines(r) : null;
   const final = r.final ?? [];
   return (
     <div>
@@ -391,16 +417,16 @@ function RunFinal({ r }: { r: RunReport }) {
         )}
         {r.error && <div className="error">{r.error}</div>}
         {art.on && r.artifacts && <ArtFinalLine />}
-        {tags?.autoTagError && <div className={styles.tagLine}><span className="warn">{t('Тег не заведён: {why}', { why: tags.autoTagError })}</span></div>}
-        {tags?.lines.map((l) => (
-          <div key={l.tag} className={styles.tagLine}>
-            <Link to={`/tags/${l.tag}`}><TagBadge slug={l.tag} /></Link>
-            {l.auto && <span className="muted small">{t('заведён автоматически')}</span>}
+        {spaces?.autoError && <div className={styles.tagLine}><span className="warn">{t('Пространство не заведено: {why}', { why: spaces.autoError })}</span></div>}
+        {spaces?.lines.map((l) => (
+          <div key={l.space} className={styles.tagLine}>
+            <SpaceBadge slug={l.space} link />
+            {l.auto && <span className="muted small">{t('заведено автоматически')}</span>}
             {l.state === 'ok' ? (
               <>
                 <span className="ok">{l.text}</span>
                 <span className="muted">{`≈${usd(l.costUsd)}`}</span>
-                <button className="btn small" onClick={() => void openTagSummary(l.tag)}>{t('саммари')}</button>
+                <button className="btn small" onClick={() => void openSpaceState(l.space)}>{t('состояние')}</button>
               </>
             ) : <span className={l.state === 'error' ? 'warn' : 'muted'}>{l.text}</span>}
           </div>

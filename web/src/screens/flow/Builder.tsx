@@ -22,13 +22,27 @@ import { afterRender, bindField, clearSel, flash, openBlockPane, openPhasePane, 
 import { BlockPane, BlockSection, blockPaneTitles, KnowledgeBadge, phaseKey } from './BlockEditor';
 import { PhaseCard } from './PhaseCard';
 import {
-  applySaved, emit, flowState, saveStart, knowledgeDraft, markDirty, msgClass, NO_MSG, revealNode, selBlockAt, selPhaseAt, set, useFlowStore, type FieldKey,
+  applySaved, emit, flowState, saveStart, knowledgeDraft, markDirty, msgClass, NO_MSG, selBlockAt, selPhaseAt, set, useFlowStore, type FieldKey, type Selection,
 } from './store';
 import { setAiProgress, useAiProgress } from './store';
 import styles from './Flow.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 const knowledgeChip = (t: string) => <KnowledgeBadge slug={t} />;
+/** Граф конструктора вписывается не мельче: названия узлов при 85% — 11 px, подписи — 9,4 px; шире — прокрутка холста. */
+const FIT_MIN = 0.85;
+
+/**
+ * Выбранное в инспекторе — ключ на графе, вокруг которого он вписывается: этап, блок или его поле, задача flow. У блока с
+ * циклом — его ромб: инспектор правит условие, и широкий блок, который целиком не влез, показан хотя бы до ромба.
+ */
+function graphFocus(spec: EditSpec, sel: Selection): string | null {
+  const at = selPhaseAt(spec, sel);
+  if (at) return `p:${spec.blocks[at.b]!.name}:${spec.blocks[at.b]!.phases[at.i]!.name}`;
+  const block = spec.blocks[selBlockAt(spec, sel)];
+  if (block) return `${block.loop ? 'c' : 'b'}:${block.name}`;
+  return sel?.kind === 'field' && sel.field.scope === 'flow' && sel.field.key === 'input' ? 'start' : null;
+}
 
 export function Builder({ hidden }: { hidden: boolean }) {
   const st = useFlowStore();
@@ -57,18 +71,6 @@ export function Builder({ hidden }: { hidden: boolean }) {
   }, []);
 
   const inspector = st.sel !== null;
-  // инспектор открылся или закрылся — холст сменил ширину: выбранный узел снова в кадре
-  const wasOpen = useRef(inspector);
-  useEffect(() => {
-    if (wasOpen.current === inspector) return;
-    wasOpen.current = inspector;
-    const s = flowState.spec;
-    const sel = flowState.sel;
-    if (!s || !sel) return;
-    const at = selPhaseAt(s, sel);
-    const key = at ? `p:${s.blocks[at.b]!.name}:${s.blocks[at.b]!.phases[at.i]!.name}` : sel.kind === 'block' ? `b:${sel.block.name}` : '';
-    if (key) afterRender(() => revealNode(key));
-  }, [inspector]);
 
   // Esc закрывает инспектор из него самого или с графа; поля поиска и папки ловят Esc сами
   const paneRef = useRef<HTMLElement>(null);
@@ -86,6 +88,8 @@ export function Builder({ hidden }: { hidden: boolean }) {
 
   if (!st.flow) return null;
   const selBlock = spec ? selBlockAt(spec, st.sel) : -1;
+  // инспектор открылся или закрылся — холст сменил ширину: граф вписывается заново вокруг выбранного блока
+  const autoFit = { min: FIT_MIN, focus: spec ? graphFocus(spec, st.sel) : null };
 
   return (
     <section className={styles.tabBuilder} hidden={hidden}>
@@ -111,7 +115,7 @@ export function Builder({ hidden }: { hidden: boolean }) {
                 toolsOf={toolsOf}
                 onNode={pick}
                 onAdd={add}
-                reveal={st.reveal}
+                autoFit={autoFit}
               />
             </div>
           )}

@@ -104,7 +104,8 @@ export type GraphFrame = {
 export type GraphModel = { nodes: GraphNode[]; edges: GraphEdge[]; frames: GraphFrame[]; width: number; height: number };
 
 export const NODE_W = 210;
-export const NODE_H = 88;
+export const NODE_H = 88; // название в две строки, подпись, строка инструментов и бейджа
+export const NODE_H_IN = 104; // и ещё строка «получает» (модель с inputsOf, конструктор)
 export const COL_GAP = 120; // между колонками: здесь стоит подпись ребра
 export const ROW_GAP = 22; // между участниками группы
 export const MARGIN = 24;
@@ -220,7 +221,8 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
   const edges: GraphEdge[] = [];
   const frames: GraphFrame[] = [];
   const x0 = MARGIN + NODE_W + COL_GAP + GPAD + FPAD; // левый край первой колонки этапов
-  const start: GraphNode = { id: 'start', key: 'start', kind: 'start', x: MARGIN, y: MARGIN, w: NODE_W, h: NODE_H, title: t('Задача'), sub: '{{input}}' };
+  const nodeH = opts.inputsOf ? NODE_H_IN : NODE_H;
+  const start: GraphNode = { id: 'start', key: 'start', kind: 'start', x: MARGIN, y: MARGIN, w: NODE_W, h: nodeH, title: t('Задача'), sub: '{{input}}' };
   nodes.push(start);
   let laneTop = MARGIN;
   let right = start.x + start.w;
@@ -263,7 +265,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
     const head = framed ? FPAD + FRAME_HEAD : 0;
     const loopY = laneTop + head + LOOP_H / 2;
     const top = laneTop + head + (b.loop ? LOOP_H : 0) + (hasGroup ? GROUP_HEAD + 4 : 0);
-    const mid = top + NODE_H / 2;
+    const mid = top + nodeH / 2;
     if (!prev) start.y = top;
     let x = x0;
     const cols = steps.map((s) => {
@@ -274,7 +276,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
           num: multi ? `${bi + 1}.${i + 1}` : `${i + 1}`, title: p.title || p.name,
           sub: call ? opts.callSub?.(raw.flow!) || t('вызов flow') : [p.name, p.model, p.effort].filter(Boolean).join(' · '),
           tools: (p.tools || []).length, group: p.group || '',
-          x, y: top + k * (NODE_H + ROW_GAP), w: NODE_W, h: NODE_H,
+          x, y: top + k * (nodeH + ROW_GAP), w: NODE_W, h: nodeH,
           ...(call ? { flow: raw.flow } : {}),
         };
         if (opts.inputsOf) {
@@ -284,10 +286,10 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
         nodes.push(n);
         return n;
       });
-      let box: Box = { id: '', x, y: top, w: NODE_W, h: NODE_H };
+      let box: Box = { id: '', x, y: top, w: NODE_W, h: nodeH };
       let frameKey = '';
       if (isGroupStep(s)) {
-        const h = members.length * NODE_H + (members.length - 1) * ROW_GAP;
+        const h = members.length * nodeH + (members.length - 1) * ROW_GAP;
         frameKey = `g:${b.name}:${s.group}`;
         box = { id: frameKey, x: x - GPAD, y: top - GROUP_HEAD, w: NODE_W + 2 * GPAD, h: GROUP_HEAD + h + GPAD };
         frames.push({ kind: 'group', key: frameKey, b: bi, i: s.to, block: b.name, group: s.group, title: `∥ ${s.group}`, x: box.x, y: box.y, w: box.w, h: box.h });

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · задача</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--scrim:rgba(0,0,0,.55);--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 8px 28px rgba(0,0,0,.45);--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 40px;position:relative;overflow:hidden}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.sec-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 6px}
+.sec-head h2{margin:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.sec-count{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.list{list-style:none;margin:0;padding:0}
+.lrun{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:10px;padding:6px 8px;border-radius:6px}
+.lrun-main{min-width:0;display:flex;flex-direction:column}
+.lrun-t{font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.lrun-s{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrun-it{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}.dot.fail{background:var(--st-fail)}.dot.off{background:transparent;box-shadow:inset 0 0 0 1px var(--ink-3)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}.t-fail{color:var(--st-fail)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.btn.more{padding:3px 9px;letter-spacing:1px;color:var(--ink-2)}
+.btn[aria-disabled="true"]{opacity:.55;cursor:default}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 16px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3);margin:0 0 8px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.ticks{display:flex;gap:2px;align-items:center}
+.tk{width:10px;height:14px;border-radius:2px;background:var(--line-strong);flex:none}
+.tk.fail{background:color-mix(in srgb,var(--st-fail) 75%,var(--panel))}.tk.live{background:var(--live)}.tk.empty{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong)}
+
+/* фон: доска под затемнением */
+.ghost-board{display:grid;grid-template-columns:repeat(4,minmax(200px,1fr));gap:14px}
+.gcol{display:flex;flex-direction:column;gap:8px}
+.gcol h3{margin:0 0 2px;padding:0 2px 8px;border-bottom:1px solid var(--line);font-size:13px;font-weight:500;color:var(--ink-2)}
+.gcard{height:92px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.gcard.live{border-color:color-mix(in srgb,var(--live) 40%,transparent)}
+.gcard.sel{border-color:var(--ink)}
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+
+/* панель задачи */
+.drawer{position:absolute;top:0;right:0;bottom:0;width:min(620px,100%);background:var(--panel);border-left:1px solid var(--line-strong);box-shadow:var(--shadow-pop);overflow-y:auto;padding:16px 22px 28px;display:flex;flex-direction:column;gap:20px}
+.d-top{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.d-top .id{font-family:var(--font-mono);color:var(--ink-2)}
+.d-top .grow{flex:1}
+.d-title{margin:-10px 0 0;font-size:18px;font-weight:600;line-height:1.3;text-wrap:balance}
+.fields{display:grid;grid-template-columns:116px minmax(0,1fr);gap:8px 12px;align-items:center}
+.lbl{font-size:12px;font-weight:500;color:var(--ink-3)}
+.pick{display:inline-flex;align-items:center;gap:8px;background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:3px 10px;cursor:pointer;color:var(--ink)}
+.pick .who{width:18px;height:18px;font-size:9px}
+.pick i{font-style:normal;color:var(--ink-3);font-size:11px}
+.val{color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.val.muted{color:var(--ink-3);white-space:normal}
+.dep-s{font-size:12px;color:var(--ink-3);margin-left:6px}
+.run{display:grid;grid-template-columns:8px minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.run:last-child{border-bottom:1px solid var(--line)}
+.run-main{min-width:0;display:flex;flex-direction:column;gap:2px}
+.run-top{display:flex;align-items:baseline;gap:10px;min-width:0}
+.run-title{font-weight:500;color:var(--ink);white-space:nowrap;text-decoration:none}
+.run-meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.run-sum{font-size:13px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run-r{display:flex;align-items:center;gap:10px}
+.cells{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:0 0 10px 20px}
+.cell{padding:7px 9px;border-radius:6px;border:1px solid var(--line);font-size:12px;color:var(--ink-2);display:flex;flex-direction:column;gap:3px;min-width:0}
+.cell-h{display:flex;justify-content:space-between;font-family:var(--font-mono)}
+.cell.fail .cell-h b{color:var(--st-fail);font-weight:500}
+.cell.live{border-color:var(--live)}
+.cell.live .cell-h b{color:var(--live);font-weight:500}
+.cell.future{border-style:dashed;color:var(--ink-3)}
+.cell p{margin:0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.md p{margin:0 0 8px;color:var(--ink)}
+.md p:last-child{margin-bottom:0}
+.md code{font-family:var(--font-mono);font-size:12px;background:var(--well);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.checks label{display:flex;gap:10px;align-items:flex-start;padding:5px 6px;border-radius:6px;cursor:pointer}
+.checks label:hover{background:var(--hover)}
+.checks input{margin:3px 0 0;accent-color:var(--ink-2);width:14px;height:14px;flex:none}
+.checks .done{color:var(--ink-2);text-decoration:line-through;text-decoration-color:var(--ink-off)}
+.cmt{display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px;padding:10px 0;border-top:1px solid var(--line)}
+.cmt-h{display:flex;gap:8px;align-items:baseline}
+.cmt-h b{font-weight:500}
+.cmt p{margin:2px 0 0}
+.composer{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--line)}
+.composer textarea{width:100%;min-height:64px;resize:vertical;background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:8px 10px;color:var(--ink)}
+.composer textarea::placeholder{color:var(--ink-3)}
+.composer .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.foot{margin:0;color:var(--ink-3)}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.drawer{width:100%;padding:14px 16px 24px}.fields{grid-template-columns:96px minmax(0,1fr)}.cells{grid-template-columns:minmax(0,1fr);padding-left:0}.ghost-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+<section>
+<div class="sec-head"><h2>Сейчас</h2><span class="sec-count t-wait">ждут 1 · идут 2</span></div>
+<ul class="list">
+<li class="lrun"><span class="dot wait"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-14 · Шаблон выгрузки для 1С</a><span class="lrun-s t-wait">ждёт ответа · фаза «code»</span></div><span class="lrun-it">1/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-12 · Выгрузка счетов за период</a><span class="lrun-s">фаза «code»</span></div><span class="lrun-it">2/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-19 · Повтор при таймауте 1С</a><span class="lrun-s">◇ billing-export · работает · 4 мин</span></div><span class="lrun-it">›_</span></li>
+</ul>
+</section>
+</aside>
+
+<main class="main" id="main">
+<p class="crumbs"><a href="#">Teamwork</a> › <a href="#">Платёжная команда</a></p>
+<h1>Экспорт счетов</h1>
+<p class="sub">Бухгалтерия выгружает счета за период в CSV и 1С</p>
+<nav class="tabs" aria-label="Проект"><a class="tab" href="#">Обзор</a><a class="tab" href="#">ТЗ</a><a class="tab" href="#">Архитектура</a><a class="tab" href="#">Дизайн</a><a class="tab" href="#">Документы</a><a class="tab" href="#">Бэклог</a><a class="tab active" href="#" aria-current="page">Доска</a><a class="tab" href="#">Спринты</a></nav>
+<div class="ghost-board" aria-hidden="true">
+<div class="gcol"><h3>К работе</h3><div class="gcard"></div><div class="gcard"></div><div class="gcard"></div></div>
+<div class="gcol"><h3>В работе</h3><div class="gcard"></div><div class="gcard sel"></div><div class="gcard"></div><div class="gcard live"></div></div>
+<div class="gcol"><h3>Ревью</h3><div class="gcard"></div><div class="gcard"></div></div>
+<div class="gcol"><h3>Готово</h3><div class="gcard"></div><div class="gcard"></div></div>
+</div>
+<div class="scrim" aria-hidden="true"></div>
+
+<aside class="drawer" role="dialog" aria-label="Задача PAY-12">
+<div class="d-top"><span class="id">PAY-12</span><span>feature</span><span class="grow"></span><button class="btn ghost small" type="button">Скопировать ссылку</button><button class="btn ghost more" type="button" aria-label="Ещё действия задачи">⋯</button><button class="btn ghost more" type="button" aria-label="Закрыть">×</button></div>
+<h2 class="d-title">Выгрузка счетов за период в CSV</h2>
+
+<div class="fields">
+<span class="lbl">Статус</span><span><button class="pick" type="button">В работе<i>▾</i></button></span>
+<span class="lbl">Спринт</span><span><button class="pick" type="button">Спринт 2<i>▾</i></button></span>
+<span class="lbl">Исполнитель</span><span><button class="pick" type="button"><span class="who">АК</span>Алексей<i>▾</i></button></span>
+<span class="lbl">Оценка</span><span><button class="pick mono" type="button">3<i>▾</i></button></span>
+<span class="lbl">Репо и ветка</span><span class="val mono">billing · tw/PAY-12-csv-export</span>
+<span class="lbl">PR</span><span class="val muted">появится сам, когда по ветке откроют PR</span>
+<span class="lbl">Ждёт</span><span class="val"><a class="mono" href="#">PAY-9</a> Модель данных экспорта <span class="dep-s" style="color: var(--st-ok)">готово</span></span>
+<span class="lbl">Блокирует</span><span class="val"><a class="mono" href="#">PAY-17</a> Описать API выгрузки в docs <span class="dep-s">к работе · Мария</span></span>
+</div>
+
+<section>
+<h3 class="cap">Работа агентов на этом компьютере</h3>
+<div class="run">
+<span class="dot"></span>
+<div class="run-main">
+<div class="run-top"><a class="run-title" href="#">teamwork-task</a><span class="run-meta">итерация 2/3 · ◇ billing-export</span></div>
+<span class="run-sum">Сейчас фаза «code»: дописывает тест на пустой период</span>
+</div>
+<span class="ticks" aria-label="Итерации: 1 не принята, 2 идёт, 3 впереди"><span class="tk fail"></span><span class="tk live"></span><span class="tk empty"></span></span>
+<span class="run-r"><span class="meta">12 мин · $0.84</span><a class="btn small" href="#">Открыть</a></span>
+</div>
+<div class="cells">
+<div class="cell fail"><div class="cell-h"><span>1</span><b>✕</b></div><p>Нет теста на пустой период, BOM в начале файла не пишется</p></div>
+<div class="cell live"><div class="cell-h"><span>2</span><b>●</b></div><p>Идёт: фаза «code»</p></div>
+<div class="cell future"><div class="cell-h"><span>3</span><span>○</span></div><p>Последняя попытка</p></div>
+</div>
+<div class="run">
+<span class="dot off"></span>
+<div class="run-main">
+<div class="run-top"><a class="run-title" href="#">›_ Формат файла для 1С</a><span class="run-meta">сессия · вчера 18:40 · 14 ходов</span></div>
+<span class="run-sum">Разобрали, какие колонки ждёт 1С, итог записан в docs/1c-format.md</span>
+</div>
+<span></span>
+<span class="run-r"><a class="btn small" href="#">Продолжить</a></span>
+</div>
+</section>
+
+<section>
+<h3 class="cap">Описание</h3>
+<div class="md">
+<p>Бухгалтер выбирает период в форме выгрузки и получает CSV со всеми счетами за него. Колонки и их порядок — как в <code>docs/columns.md</code>.</p>
+<p>Требования ТЗ: <a class="mono" href="#">FR-1</a>, <a class="mono" href="#">FR-4</a>.</p>
+</div>
+</section>
+
+<section>
+<h3 class="cap">Критерии приёмки · 2 из 5</h3>
+<ul class="checks">
+<li><label><input type="checkbox" checked><span class="done">Счета выбираются по дате выставления, границы включаются</span></label></li>
+<li><label><input type="checkbox" checked><span class="done">Колонки в порядке из docs/columns.md</span></label></li>
+<li><label><input type="checkbox"><span>CSV в UTF-8 с BOM, разделитель «;»</span></label></li>
+<li><label><input type="checkbox"><span>Пустой период даёт файл только с заголовком</span></label></li>
+<li><label><input type="checkbox"><span>Тест на каждый пункт выше</span></label></li>
+</ul>
+</section>
+
+<section>
+<h3 class="cap">Обсуждение · 2</h3>
+<div class="cmt"><span class="who">МС</span><div><div class="cmt-h"><b>Мария</b><span class="meta">сегодня 10:12</span></div><p>Для Excel оставляем UTF-8 с BOM, а для 1С кодировку решаем в PAY-14.</p></div></div>
+<div class="cmt"><span class="who">АК</span><div><div class="cmt-h"><b>Алексей</b><span class="meta">сегодня 10:40</span></div><p>Ок. Отправил задачу агенту, критерии про кодировку не трогаю.</p></div></div>
+<div class="composer">
+<label class="lbl" for="c1">Комментарий</label>
+<textarea id="c1" placeholder="Напишите команде…"></textarea>
+<div class="row"><span class="meta">уйдёт коммитом в репо команды</span><button class="btn small" type="button" aria-disabled="true">Отправить</button></div>
+</div>
+</section>
+
+<p class="foot meta">изменено: Мария · 14 мин назад · <a href="#">история</a></p>
+</aside>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

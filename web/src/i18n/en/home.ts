@@ -49,7 +49,7 @@ export const home: Record<string, string> = {
 
   // HomeScreen.tsx
   'Стоимость: оценка по прайсу API; с подписки не списывается': 'Cost: estimate from API pricing; not charged to the subscription',
-  'Сначала те, что ждут дольше': 'Longest waiting first',
+  'Вопросы агентов, сначала те, что ждут дольше; под ними — сессии, где ход за тобой': 'Agent questions, longest waiting first; below them — sessions where it’s your turn',
   'Ждёт тебя': 'Waiting for you',
   'Идут': 'Running',
   'Главная заработает после перезапуска UI-сервера: этот сервер запущен до её появления и не отдаёт вопросы и идущие запуски. Пока они видны в списке слева. Перезапуск остановит идущие запуски — дождись их конца.':
@@ -61,7 +61,8 @@ export const home: Record<string, string> = {
   'Вопросы агентов со всех flow появятся здесь — отвечать можно не открывая запуск.': 'Agent questions from all flows will appear here — you can reply without opening the run.',
   'Заблокированы в настройках браузера для этого адреса. Включи их там': 'Blocked in the browser settings for this address. Enable them there',
   'Уведомления выключены': 'Notifications off',
-  'Показывать системное уведомление, когда агент задаёт вопрос, а вкладка не на виду': 'Show a system notification when an agent asks a question and the tab is not in view',
+  'Показывать системное уведомление, когда агент задаёт вопрос или сессия ждёт тебя, а вкладка не на виду':
+    'Show a system notification when an agent asks a question or a session is waiting for you and the tab is not in view',
   'Включить уведомления': 'Enable notifications',
 
   // HomeRuns.tsx
@@ -86,7 +87,8 @@ export const home: Record<string, string> = {
 
   // Attention.tsx, Dash.tsx: «Задачи и код», «MR · нужно внимание»
   'Загружаю…': 'Loading…',
-  'Твоим MR сейчас ничего не нужно: CI не падал, ответов никто не ждёт, конфликтов нет.': "Your MRs need nothing right now: CI didn't fail, nobody is waiting for a reply, no conflicts.",
+  '— ничего не нужно': '— nothing needed',
+  'CI не падал, ответов никто не ждёт, конфликтов нет': "CI didn't fail, nobody is waiting for a reply, no conflicts",
   '{why}: откроет «Запуск» с причинами во входе': '{why}: opens “Run” with the reasons in the input',
   'Подсказка haiku': 'haiku suggestion',
   'Ещё {n}': '{n} more',
@@ -113,7 +115,7 @@ export const home: Record<string, string> = {
   'Найти': 'Find',
   'Задач нет.': 'No tasks.',
   'У репозитория нет origin на GitLab или GitHub.': 'The repository has no origin on GitLab or GitHub.',
-  'Открытых {mr} нет.': 'No open {mr}s.',
+  'открытых {mr} нет': 'no open {mr}s',
   'текущая': 'current',
   'в worktree': 'in worktree',
   'Ветки': 'Branches',
@@ -172,4 +174,14 @@ export const home: Record<string, string> = {
   'Копировать в worktree (через запятую)': 'Copy into worktree (comma-separated)',
   'Worktree создаются в': 'Worktrees are created in',
   'Сохранить': 'Save',
+  // главная: сессии терминала в «Ждёт тебя» и «Идут», первый запуск
+  'Сессия терминала': 'Terminal session',
+  'ждёт: доверие к папке': 'waiting: folder trust',
+  'Открыть сессию «{name}»': 'Open session “{name}”',
+  'ход|хода|ходов': 'turn|turns',
+  'С чего начать': 'Where to start',
+  'Начни с сессии или flow': 'Start with a session or a flow',
+  'Начни с flow': 'Start with a flow',
+  'сессия — Claude Code в терминале, flow — цепочка этапов, которые идут сами': 'a session is Claude Code in a terminal, a flow is a chain of phases that run on their own',
+  'flow — цепочка этапов, которые идут сами': 'a flow is a chain of phases that run on their own',
 };

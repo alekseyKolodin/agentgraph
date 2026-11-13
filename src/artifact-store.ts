@@ -64,6 +64,13 @@ export const nodeProbe: PathProbe = {
     const s = fs.lstatSync(p, { throwIfNoEntry: false });
     return s ? { file: s.isFile(), symlink: s.isSymbolicLink(), nlink: s.nlink } : undefined;
   },
+  readlink: (p) => {
+    try {
+      return fs.readlinkSync(p);
+    } catch {
+      return undefined;
+    }
+  },
 };
 
 /** Отчёт этапа или проверки условия глазами хранилища: сюда пишутся изменения, предупреждения и отказы. */

@@ -67,7 +67,7 @@ export function LaunchButton({ target, onLaunch }: { target: IntakeTarget; onLau
   );
 }
 
-/** Чипы запусков, связанных со строкой: flow, теги, статус; клик — открыть запуск. */
+/** Чипы запусков, связанных со строкой: flow, пространство, статус; клик — открыть запуск. */
 export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
   const navigate = useNavigate();
   if (!runs.length) return null;
@@ -76,12 +76,12 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
       {runs.map((r) => (
         <button key={r.id} className="chip" title={when(r.startedAt)} onClick={() => void navigate(`/run/${r.id}`)}>
           {r.flow}
-          {(r.tags || []).map((tag) => (
-            <span key={tag}>
+          {r.space && (
+            <span>
               {' '}
-              <span className="muted">#{tag}</span>
+              <span className="muted">◇ {r.space}</span>
             </span>
-          ))}
+          )}
           <Badge status={r.status} />
         </button>
       ))}
@@ -209,9 +209,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
       <p className="muted small">{t('У репозитория нет origin на GitLab или GitHub.')}</p>
     ) : !items ? (
       <p className="muted small">{t('Загружаю…')}</p>
-    ) : !items.length ? (
-      <p className="muted small">{t('Открытых {mr} нет.', { mr: mrWord })}</p>
-    ) : (
+    ) : !items.length ? null : (
       <>
         <ul className={styles.dashList}>
           {dashCap(items, more).map((m) => (
@@ -263,6 +261,8 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
     );
   }
   const count = tab === 'mr' ? mrs.data?.mrs.length : branches.data?.branches.length;
+  // открытых MR/PR нет — карточка в одну строку: «нет» вместо счётчика «0», без пустого тела
+  const none = tab === 'mr' && Boolean(p.remote) && !cur.error && mrs.data?.mrs.length === 0;
   return (
     <div className={styles.dashBox}>
       <div className={styles.dashTitle}>
@@ -284,10 +284,10 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
             </button>
           )}
         </span>
-        <span className="muted small">{count ?? ''}</span>
+        <span className="muted small">{none ? t('открытых {mr} нет', { mr: mrWord }) : (count ?? '')}</span>
         <button className={`btn small ghost ${styles.push}`} title={t('Обновить')} onClick={() => reload(tab === 'mr' ? keys.mrs(path, mine) : keys.branches(path))}>↻</button>
       </div>
-      {list}
+      {!none && list}
     </div>
   );
 }

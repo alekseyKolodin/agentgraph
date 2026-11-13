@@ -3,7 +3,7 @@
 // «как текст» показывает исходник, выбор общий для markdown-файлов, транскриптов и живого лога и переживает перезагрузку
 // (agentgraph.fileRaw). Окно одно на страницу, открывается откуда угодно.
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { errorText, fetchRunFile, fetchTag } from '../../api';
+import { errorText, fetchRunFile, fetchSpace } from '../../api';
 import { renderMarkdown } from '../../lib/md';
 import { fileIsMarkdown, fileIsTranscript } from '../../lib/run/view';
 import { LS } from '../../lib/storage';
@@ -56,13 +56,13 @@ export async function openRunFile(runId: string, file: string, title: string, se
   }
 }
 
-/** Саммари тега из карточки «Итог». */
-export async function openTagSummary(slug: string): Promise<void> {
+/** Состояние пространства из карточки «Итог». */
+export async function openSpaceState(slug: string): Promise<void> {
   const my = ++seq;
-  set({ open: true, n: view.n + 1, title: t('Саммари тега · {slug}', { slug }), session: '', text: t('Загружаю…'), md: false, tx: false, run: '' });
+  set({ open: true, n: view.n + 1, title: t('Состояние пространства · {slug}', { slug }), session: '', text: t('Загружаю…'), md: false, tx: false, run: '' });
   try {
-    const r = await fetchTag(slug);
-    if (my === seq) set({ text: r.summary || t('Саммари пока нет'), md: true });
+    const s = await fetchSpace(slug);
+    if (my === seq) set({ text: s.state || t('Состояния пока нет'), md: true });
   } catch (err) {
     if (my === seq) set({ text: errorText(err), md: false });
   }

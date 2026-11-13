@@ -53,10 +53,36 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
   const errs = (att.data?.errors ?? []).map((e) => (
     <p key={e.project} className="msg err small" title={e.project}>{`${e.name}: ${e.error}`}</p>
   ));
+  const title = t('Твои открытые MR из проектов «Подключений», где упал CI, ждут ответа обсуждения или есть конфликты. «Запустить…» и подсказка flow заполнят форму запуска, запустишь сам');
+  // ничего не нужно — одна строка вместо пустой карточки: в простое она не занимает верх главной
+  if (!att.error && items && !items.length && !errs.length) {
+    return (
+      <section className={homeStyles.homeSec}>
+        <div className={`${styles.dashHead} ${styles.dashQuiet}`}>
+          <h2 title={title}>
+            {t('MR · нужно внимание')}{' '}
+            <span className="muted small" title={t('CI не падал, ответов никто не ждёт, конфликтов нет')}>{t('— ничего не нужно')}</span>
+          </h2>
+          {/* перезапрос на месте: сброс показал бы на миг полную карточку с «Загружаю…» */}
+          <button
+            className="btn small ghost"
+            title={t('Обновить')}
+            disabled={att.isFetching}
+            onClick={() => {
+              force.current = true;
+              void att.refetch();
+            }}
+          >
+            ↻
+          </button>
+        </div>
+      </section>
+    );
+  }
   let list;
   if (att.error) list = <p className="msg err">{errorText(att.error)}</p>;
   else if (!items) list = <p className="muted small">{t('Загружаю…')}</p>;
-  else if (!items.length) list = errs.length ? null : <p className="muted small">{t('Твоим MR сейчас ничего не нужно: CI не падал, ответов никто не ждёт, конфликтов нет.')}</p>;
+  else if (!items.length) list = null;
   else {
     list = (
       <>
@@ -106,7 +132,7 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
   return (
     <section className={homeStyles.homeSec}>
       <div className={styles.dashHead}>
-        <h2 title={t('Твои открытые MR из проектов «Подключений», где упал CI, ждут ответа обсуждения или есть конфликты. «Запустить…» и подсказка flow заполнят форму запуска, запустишь сам')}>
+        <h2 title={title}>
           {t('MR · нужно внимание')} <span className="muted small">{items?.length ? String(items.length) : ''}</span>
         </h2>
         <button className="btn small ghost" title={t('Обновить')} onClick={reload}>↻</button>

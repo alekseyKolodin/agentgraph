@@ -1,0 +1,64 @@
+/* Черновик пространства с моделью и «Предложить пространства»: панель справа на странице «Пространства». */
+.panel { display: flex; flex-direction: column; gap: 14px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 14px 16px; min-width: 0; }
+.head { display: flex; align-items: center; gap: 10px; }
+.head h3 { margin: 0; font-size: var(--fs-h3); font-weight: 600; }
+.head :global(.row) { gap: 6px; }
+.push { margin-left: auto; }
+
+.setup { gap: 12px; }
+.setup p { margin: 0; max-width: 760px; }
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+/* textarea в .form получает font: inherit — моноширинный перебиваем той же специфичностью позже */
+.mono, :global(.form) textarea.mono, :global(.form) input.mono { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.5; }
+.sources { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sources ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; }
+/* флажок с подписью в строку — как inline-check формы запуска: глобальные .form label (колонка) и .form input (100%) перебиты */
+:global(.form) label.check, label.check { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; min-width: 0; flex: 0 0 auto; cursor: pointer; }
+:global(.form) label.check > input[type='checkbox'], label.check > input[type='checkbox'] { width: auto; flex: none; padding: 0; }
+:global(.form) label.check > span { font-size: inherit; }
+label.check > .doc-name { width: 220px; flex: none; }
+.now { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.item-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+:global(.form) label.model, label.model { display: flex; flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; }
+:global(.form) label.model > select { width: auto; min-width: 210px; height: auto; padding: 4px 8px; font-size: var(--fs-small); }
+
+.running { display: flex; flex-direction: column; gap: 8px; }
+.running p { margin: 0; }
+.wait { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--fs-small); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.2s ease-in-out infinite; flex: none; }
+@keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+.log { margin: 0; padding: 8px 10px; background: var(--well); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto; }
+
+.result { display: flex; flex-direction: column; gap: 14px; }
+.meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.warnings { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.doubts { display: flex; flex-direction: column; gap: 4px; border-left: 3px solid var(--st-wait); padding: 2px 0 2px 10px; }
+.doubts ul { margin: 0; padding-left: 18px; }
+.part { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.part-head { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-width: 0; }
+.part-head :global(.row) { gap: 4px; }
+.views .on { background: var(--select); color: var(--ink); }
+.stat { font-variant-numeric: tabular-nums; }
+.foot { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+
+/* разница строк: + и − — полоской и фоном статуса, неизменённое — приглушённо */
+.diff { margin: 0; padding: 6px 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.55; max-height: 460px; overflow: auto; }
+.line { display: block; padding: 0 10px; white-space: pre-wrap; word-break: break-word; color: var(--ink-3); }
+.line.add { color: var(--ink); background: color-mix(in srgb, var(--st-ok) 12%, transparent); box-shadow: inset 3px 0 0 var(--st-ok); }
+.line.del { color: var(--ink-2); background: color-mix(in srgb, var(--st-fail) 12%, transparent); box-shadow: inset 3px 0 0 var(--st-fail); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--st-fail) 50%, transparent); }
+.skip { display: block; padding: 2px 10px; color: var(--ink-3); font-style: italic; }
+
+.docs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.doc { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; }
+.doc-name { width: 220px; max-width: 100%; padding: 3px 6px; font-size: var(--fs-small); }
+.save-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+.groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.group { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
+.group p { margin: 0; }
+.group-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+@container (max-width: 720px) {
+  .two-col { grid-template-columns: minmax(0, 1fr); }
+}

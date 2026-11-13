@@ -6,7 +6,8 @@ import { t } from './i18n';
 
 /** Запомненный выбор: тот же ключ и формат, что у старого UI. */
 export const CTX_LS = 'agentgraph.context';
-export type CtxSelection = { cwd: string; flow: string; phase: string; model: string };
+/** space — пространство: его папка уйдёт доп. директорией листинга, карта — в файлы памяти. Старый выбор без поля — без пространства. */
+export type CtxSelection = { cwd: string; flow: string; phase: string; model: string; space?: string };
 
 export const CTX_KIND_LABEL: Record<string, string> = { used: t('занято'), deferred: t('вне окна'), buffer: t('резерв на сжатие'), free: t('свободно') };
 
@@ -51,9 +52,9 @@ export function ctxPhaseGroups(spec: SpecLike | undefined): PhaseGroup[] {
     : [{ label: '', options: (blocks[0]?.phases ?? []).map(opt) }];
 }
 
-/** Шапка: «cwd · flow X, этап Y · модель M · данные на HH:MM». */
-export function ctxMeta(d: Pick<ContextView, 'cwd' | 'flow' | 'phase' | 'model' | 'at'>, now?: Date): string {
-  const what = [d.flow && `flow ${d.flow}`, d.phase && t('этап {phase}', { phase: d.phase })].filter(Boolean).join(', ');
+/** Шапка: «cwd · flow X, этап Y, пространство S · модель M · данные на HH:MM». */
+export function ctxMeta(d: Pick<ContextView, 'cwd' | 'flow' | 'phase' | 'model' | 'at' | 'space'>, now?: Date): string {
+  const what = [d.flow && `flow ${d.flow}`, d.phase && t('этап {phase}', { phase: d.phase }), d.space && t('пространство {space}', { space: d.space })].filter(Boolean).join(', ');
   return `${d.cwd}${what ? ` · ${what}` : ''} · ${t('модель {model}', { model: d.model })} · ${t('данные на {time}', { time: clock(d.at, now) })}`;
 }
 

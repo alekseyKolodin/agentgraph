@@ -8,6 +8,7 @@ import { APP_DIR, FLOWS_DIR, RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import {
   assertFlowName,
   blankFlowYaml,
+  checkCalls,
   deleteFlow,
   flowCallers,
   flowExists,
@@ -24,28 +25,36 @@ import {
   summarize,
 } from './flows.js';
 import { flowBlocks, IMPLICIT_TOOLS, KNOWN_TOOLS, type FlowSpec } from './schema.js';
-import { type AskAnswers } from './agent.js';
+import { type AskAnswers, type LogFn, type SessionRequest, type SessionResult } from './agent.js';
 import { editBase } from './edit.js';
 import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunOptions, type RunReport } from './runner.js';
 import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { osNotify } from './notify.js';
 import { pickRunTitle } from './run-title.js';
+import { RunNameError, runName, writeRunName } from './run-name.js';
 import { writeDigest } from './run-digest.js';
 import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
+import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
+import { TeamDrafts, type DraftRunDeps } from './teamwork-drafts.js';
+import { currentTeamworkStatus, parseTeamworkLink, statusService, stopTeamworkStatus, teamworkStatus } from './teamwork-status.js';
+import { sessionTeamwork, teamworkWorkRoute } from './teamwork-work.js';
+import { teamsAddDirProblem, teamsCwdProblem } from './teamwork-trust.js';
+import { TeamError } from './teamwork-repo.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
+import { modelContextReply, spaceContextReply } from './model-context.js';
 import type { ContextFile, ContextFileSaved, ContextView } from './api-types.js';
 import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeRun, RecentDir, RunningPhase, RunParent, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
-import { loadSettings, updateSettings, type Settings } from './settings.js';
+import { configDir, loadSettings, updateSettings, type Settings } from './settings.js';
 import { requestProblem } from './server-guard.js';
 import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
@@ -56,25 +65,50 @@ import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fi
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
   addTagAttachmentReply,
-  createTag,
   createTagReply,
   deleteTagAttachmentReply,
   deleteTagReply,
-  readTag,
+  knowledgeTags,
   resolveKnowledge,
   runTagSlugs,
-  splitRunTags,
   stripTagBlocks,
   tagReply,
   tagsListReply,
-  tagsRunDirs,
   updateTagReply,
-  withTagsInput,
-  type Tag,
 } from './tags.js';
-import { pickAutoTag, type AutoTagReport } from './auto-tag.js';
+import {
+  addSpaceDocReply,
+  createSpace,
+  createSpaceReply,
+  deleteSpaceDocReply,
+  deleteSpaceReply,
+  inheritRun,
+  listSpaces,
+  readSpace,
+  readSpaceMeta,
+  reportSpace,
+  SpaceError,
+  setMigrationRunsDir,
+  type Space,
+  spaceWorkdirOf,
+  spaceWorkOf,
+  type SpaceWork,
+  spaceDocReply,
+  spaceReadDirs,
+  spaceReply,
+  spacesListReply,
+  spaceSlug,
+  updateSpaceReply,
+  writeSpaceDocReply,
+} from './spaces.js';
+import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { liveSessionNames, sessionsAvailable, sessionsRoute, sessionsUpgrade, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import {
+  draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
+  type GroupSource,
+} from './space-draft.js';
+import type { SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -90,12 +124,20 @@ export type ServerOptions = {
   update?: boolean;
   /** Перезапуск процесса после автообновления, сервер останавливает сам; нет — UI просит перезапустить вручную. */
   restart?: Restart;
+  /** Раннер запусков: тесты API подменяют его, чтобы не звать настоящий Agent SDK. */
+  runFlow?: typeof runFlow;
+  /** Сессия модели черновиков пространств (space-draft.ts): тесты подменяют её, настоящий claude не зовётся. */
+  draftSession?: (req: SessionRequest, log: LogFn) => Promise<SessionResult>;
+  /** Сервис команд Teamwork (teamwork-server.ts): тесты выключают таймеры и подменяют git-идентичность через exec. */
+  teamwork?: TeamServiceDeps;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
 
 type LiveRun = {
   id: string;
+  /** Пространство запуска: удалить его нельзя, пока запуск идёт (run.json на диске может ещё не быть). */
+  space?: string;
   /** События для переигрывания новому подключению, уже в формате SSE. По не-log событиям клиент восстанавливает состояние, их храним все. */
   events: string[];
   /** Хвост лога (не больше LOG_REPLAY_MAX строк): весь лог этапа лежит в его транскрипте. */
@@ -140,7 +182,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type']>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -150,8 +192,15 @@ type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http
 
 const live = new Map<string, LiveRun>();
 const chats = new Map<string, ChatTurnState>();
-/** Идущие генерации и правки flow ИИ: живут, пока живо соединение; stopServer прерывает их. */
+/** Идущие генерации и правки flow ИИ и черновики пространств: живут, пока живо соединение; stopServer прерывает их. */
 const generations = new Set<AbortController>();
+/**
+ * Идущие черновики пространств: space:<slug> — черновик существующего (один на пространство), new:<n> — нового, groups —
+ * «Предложить пространства» (одна). Черновиков вместе — не больше DRAFTS_MAX: каждый тратит деньги.
+ */
+const spaceDrafts = new Set<string>();
+const DRAFTS_MAX = 2;
+let draftSeq = 0;
 /** Идущие анализы flow (POST /api/runs/:id/analysis): один на запуск, второй одновременно — 409 busy. */
 const analyses = new Set<string>();
 /** Подписчики общего потока: главная, счётчик вопросов, уведомления. Значение — вкладка сама показывает уведомления браузера. */
@@ -160,7 +209,8 @@ const LOG_REPLAY_MAX = 3000;
 
 /** Ошибка с HTTP-кодом: функции управления запуском бросают её, а отвечает обработчик запроса. */
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** body — тело ответа целиком (код причины и данные, например 409 flow_untrusted); без него — { error }. */
+  constructor(readonly status: number, message: string, readonly body?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -172,11 +222,29 @@ const contextHttp = (err: unknown) => (err instanceof ContextError ? new HttpErr
 const servers = new Set<http.Server>();
 /** Автообновление checkout agentgraph: одно на процесс, создаёт первый startServer с update. */
 let updater: Updater | null = null;
+/** Подписка на «сессия ждёт тебя»: одна на поднятые серверы, адрес в уведомлении — первого startServer; снимает stopServer. */
+let sessionWaits: (() => void) | null = null;
+/** Подписка на правки сессий терминала (пространство, flow): событие space или flows общего потока; снимает stopServer. */
+let sessionEdits: (() => void) | null = null;
+/**
+ * Пустые рабочие папки запусков в папке настроек (configDir()/workdirs/<id запуска>/<имя>): черновик Teamwork без репо кода
+ * (startRun emptyCwd). Не в папке запусков: она бывает внутри репо agentgraph (ROOT = APP_DIR), и агент подхватил бы его
+ * CLAUDE.md и .claude/ вверх по дереву. Удаляются вместе с запуском.
+ */
+const RUN_WORKDIRS = 'workdirs';
+const runWorkdir = (id: string): string => path.join(configDir(), RUN_WORKDIRS, id);
+/** Подписка на изменения команд Teamwork: одна на процесс, снимает stopServer. */
+let teamChanges: (() => void) | null = null;
+/** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
+let stopping = false;
 
 export function startServer(opts: ServerOptions): Promise<string> {
+  stopping = false;
+  // перенос тегов задач ищет их запуски в этой папке запусков: их артефакты откроются перенесённому пространству
+  setMigrationRunsDir(RUNS_DIR);
   const server = http.createServer((req, res) => {
     handle(req, res, opts).catch((err) => {
-      if (!res.headersSent) sendJson(res, err instanceof HttpError ? err.status : 500, { error: errMsg(err) });
+      if (!res.headersSent) sendJson(res, err instanceof HttpError ? err.status : 500, err instanceof HttpError && err.body ? err.body : { error: errMsg(err) });
       else res.end();
     });
   });
@@ -191,6 +259,22 @@ export function startServer(opts: ServerOptions): Promise<string> {
   }
   // WebSocket экрана сессии терминала: upgrade обходит handle(), проверки Host и Origin — в sessions-server.ts
   server.on('upgrade', sessionsUpgrade);
+  // сессия поменяла пространство или flow (MCP или правкой файла с вопросом): открытые экраны перечитают
+  sessionEdits ??= onSessionEdit((e) => homeBroadcast(e.kind === 'space' ? { type: 'space', runId: '', flow: '', space: e.slug, spacePart: e.part } : { type: 'flows', runId: '', flow: '' }));
+  sessionWaits ??= onSessionWaiting((v) => {
+    const session = { id: v.id, name: v.name, ...(v.space ? { space: v.space } : {}) };
+    homeBroadcast({ type: 'session', runId: '', flow: '', session });
+    notifySession(opts, session);
+  });
+  // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
+  if (!teamChanges) {
+    const service = teamService({ hasSubscribers: () => homeClients.size > 0, workStatus: teamWorkStatus, ...opts.teamwork });
+    teamChanges = service.onChange((e) => homeBroadcast({ type: 'team', runId: '', flow: '', team: e.team, projects: e.projects }));
+    // автоматика статусов задач (teamwork-status.ts): старт и конец запусков по задаче, опрос PR по таймеру; сессии из задачи
+    const status = teamworkStatus({ service: statusService(service), timers: opts.teamwork?.timers, exec: opts.teamwork?.repo?.exec });
+    status.start();
+    setSessionTeamwork(sessionTeamwork(service, status));
+  }
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -203,6 +287,7 @@ export function startServer(opts: ServerOptions): Promise<string> {
  * Ждёт конца запусков и ходов не дольше timeoutMs: завис — процесс всё равно выходит.
  */
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
+  stopping = true;
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
   updater?.stop();
@@ -212,6 +297,18 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while ((live.size || chats.size || generations.size) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   await sessionsStopped;
+  sessionWaits?.();
+  sessionWaits = null;
+  sessionEdits?.();
+  sessionEdits = null;
+  // клоны команд: таймеры снимаются, текущая запись или push дожидается; опрос PR — тоже
+  teamChanges?.();
+  teamChanges = null;
+  setSessionTeamwork(null);
+  await stopTeamworkStatus();
+  // текущий push без сети висит до таймаута git (2 минуты): выход ждёт его не дольше оставшегося времени — коммиты и так
+  // остаются в клоне и уйдут при следующем запуске
+  await Promise.race([stopTeamwork(), new Promise<void>((resolve) => setTimeout(resolve, Math.max(deadline - Date.now(), 2_000)).unref())]);
   await Promise.all(
     [...servers].map(
       (server) =>
@@ -246,7 +343,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'recent-dirs-hide', 'auto-tag', 'run-title', 'connectors', 'run-analysis', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -302,6 +399,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       },
       flows: listFlows,
     });
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
+  // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts); задача в работу —
+  // intake и worktree (teamwork-work.ts)
+  if (p === '/api/teams' || p.startsWith('/api/teams/')) {
+    // teamService() после stopTeamwork завёл бы новый сервис с таймерами посреди выхода
+    if (stopping) return sendJson(res, 503, { error: 'Сервер останавливается' });
+    const service = teamService(opts.teamwork);
+    const r = (await teamworkRoute(method, url, () => readJson(req), { service, drafts: new TeamDrafts(service, draftRuns(opts)) })) ?? (await teamworkWorkRoute(method, url, () => readJson(req), { service, exec: opts.teamwork?.repo?.exec }));
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -364,8 +471,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const instruction = (body.instruction ?? '').trim();
     if (!instruction) return sendJson(res, 400, { error: 'Опиши, что поменять' });
     const base = editBase(name, body.spec || typeof body.yaml === 'string' ? body : { yaml: readFlowYaml(name) });
-    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию
-    const cwd = path.resolve((body.cwd ?? '').trim() || opts.defaultCwd);
+    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию; папка в клоне команды — 400 (resolveDir)
+    const cwd = resolveDir(body.cwd, opts.defaultCwd);
     return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
   }
 
@@ -440,6 +547,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
         flow,
         phase: (flow && q.get('phase')) || undefined,
         model: q.get('model') || undefined,
+        space: q.get('space') || undefined,
         force: q.get('force') === '1',
       })) satisfies ContextView);
     } catch (err) {
@@ -461,8 +569,103 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     }
   }
 
-  // --- теги: краткое саммари фичи между запусками (src/tags.ts). Слаг берём регэкспом без декодирования:
-  // кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из tags.ts
+  // --- пространства (src/spaces.ts): фича или проект — карта, документы, состояние, их сессии и запуски. Слаг берём
+  // регэкспом без декодирования: кривой %-escape не уронит сервер 500-й, а неверный слаг ответит 400 из spaces.ts
+  if (method === 'GET' && p === '/api/spaces') return reply(res, spacesListReply(await allSpaceWork()));
+  // «Модель получит»: тексты сессии и этапа тем же кодом, что их отправляет
+  if (method === 'GET' && p === '/api/model-context') return reply(res, modelContextReply(url.searchParams));
+  if (method === 'POST' && p === '/api/spaces') return reply(res, createSpaceReply(await readJson(req)));
+  if ((m = p.match(/^\/api\/spaces\/([^/]+)$/))) {
+    const slug = m[1];
+    if (method === 'GET') {
+      // сессии — из реестра сессий терминала (без node-pty их нет), запуски — из runs/
+      const sessions = await spaceSessions(slug).catch(() => []);
+      return reply(res, spaceReply(slug, (s) => {
+        const runs = spaceRuns(slug, s.migratedFrom?.at);
+        const work = spaceWorkOf([...sessions.map((x) => ({ space: slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session' as const })), ...runs.map((r) => ({ space: slug, cwd: r.cwd, at: r.startedAt, from: 'run' as const }))], RUNS_DIR);
+        const workdir = spaceWorkdirOf(s.cwd, work.get(slug));
+        // сессии без пространства в тех же папках: у перенесённого — сессии той же работы, у которых не было тега задачи
+        const folders = [...new Set([...sessions.map((x) => x.cwd), ...runs.flatMap((r) => (r.cwd ? [r.cwd] : [])), ...(workdir ? [workdir.path] : [])])];
+        const loose = looseSpaceSessions(folders);
+        return { runs, sessions, ...(workdir ? { workdir } : {}), ...(loose.length ? { looseSessions: loose } : {}) };
+      }));
+    }
+    if (method === 'PUT') return reply(res, updateSpaceReply(slug, (await readJson(req)) as Record<string, unknown>));
+    if (method === 'DELETE') {
+      // идущий запуск читает пространство на старте каждого этапа и пишет состояние в конце: удалять — после него
+      const ofSpace = (rs: { id: string; space?: string }[]) => rs.filter((r) => r.space === slug).map((r) => r.id);
+      const running = [...new Set([...ofSpace([...live.values()]), ...ofSpace(listRuns().filter((r) => r.status === 'running'))])];
+      if (running.length) return sendJson(res, 409, { error: `Пространство ${slug} у идущего запуска: ${running.join(', ')} — дождись его конца или останови` });
+      // идущая сессия в нём — 409; остальные отцепляются только после удаления (не удалилось — сессии как были):
+      // заведённое потом с тем же слагом их ходов не получит. Между проверкой и удалением await нет
+      try {
+        assertSpaceFree(slug);
+      } catch (err) {
+        if (err instanceof SessionError) return sendJson(res, err.status, { error: err.message });
+        throw err;
+      }
+      const deleted = deleteSpaceReply(slug);
+      if (deleted.status === 200) releaseSpaceSessions(slug);
+      return reply(res, deleted);
+    }
+  }
+  if (method === 'GET' && (m = p.match(/^\/api\/spaces\/([^/]+)\/context$/))) return reply(res, spaceContextReply(m[1], RUNS_DIR));
+  // черновик пространства с моделью (src/space-draft.ts): ничего не пишет — сохраняет человек путями выше. С
+  // Accept: application/x-ndjson — поток хода, как у генерации flow; закрыли соединение — сессия прерывается
+  if (method === 'POST' && p === '/api/space-drafts') {
+    const body = await readJson(req);
+    let input: DraftInput;
+    try {
+      input = resolveDraftInput(body, await draftResolveDeps(body));
+    } catch (err) {
+      return sendJson(res, err instanceof SpaceError ? err.status : 400, { error: errMsg(err) });
+    }
+    if ((body as { estimate?: unknown }).estimate === true) return sendJson(res, 200, draftEstimate(input) satisfies SpaceDraftEstimate);
+    // проверка и пометка — синхронно, без await между ними
+    const key = input.space ? `space:${input.space.slug}` : `new:${++draftSeq}`;
+    if (spaceDrafts.has(key)) return sendJson(res, 409, { error: `Черновик пространства ${input.space!.slug} уже пишется`, code: 'busy' });
+    if ([...spaceDrafts].filter((k) => k !== 'groups').length >= DRAFTS_MAX) return sendJson(res, 409, { error: `Уже пишутся ${DRAFTS_MAX} черновика: дождись одного из них`, code: 'busy' });
+    spaceDrafts.add(key);
+    try {
+      return await respondFlowAi(req, res, generations, (ai) => draftReply(input, ai, draftDeps(opts)));
+    } finally {
+      spaceDrafts.delete(key);
+    }
+  }
+  // «Предложить пространства»: работа без пространства — группами (haiku без инструментов); создаёт их человек
+  if (method === 'POST' && p === '/api/space-groups') {
+    const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
+    let model: ReturnType<typeof draftModel>;
+    try {
+      model = draftModel(body?.model, SPACE_GROUPS_MODEL);
+    } catch (err) {
+      return sendJson(res, 400, { error: errMsg(err) });
+    }
+    const { items, skipped } = groupItems(await groupSources());
+    if (body?.estimate === true) return sendJson(res, 200, groupsEstimate(items, skipped, model) satisfies SpaceGroupsEstimate);
+    if (spaceDrafts.has('groups')) return sendJson(res, 409, { error: 'Предложение пространств уже готовится', code: 'busy' });
+    spaceDrafts.add('groups');
+    try {
+      return await respondFlowAi(req, res, generations, (ai) => groupsReply(items, skipped, model, ai, draftDeps(opts)));
+    } finally {
+      spaceDrafts.delete('groups');
+    }
+  }
+  if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
+  if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {
+    let name: string;
+    try {
+      name = decodeURIComponent(m[2]);
+    } catch {
+      return sendJson(res, 400, { error: 'Неверное имя документа' });
+    }
+    if (method === 'GET') return reply(res, spaceDocReply(m[1], name));
+    // документ текстом — до 200 КБ: тело больше 1 МБ (с запасом на экранирование JSON) не читаем вовсе
+    if (method === 'PUT') return reply(res, writeSpaceDocReply(m[1], name, (await readJson(req, SPACE_DOC_BODY_MAX)) as { text?: unknown; base?: unknown }));
+    if (method === 'DELETE') return reply(res, deleteSpaceDocReply(m[1], name));
+  }
+
+  // --- теги знаний (src/tags.ts): правила и справка для этапов и сессий. Слаг — как у пространств
   if (method === 'GET' && p === '/api/tags') return reply(res, tagsListReply());
   if (method === 'POST' && p === '/api/tags') return reply(res, createTagReply((await readJson(req)) as { slug?: unknown; title?: unknown; kind?: unknown }));
   if ((m = p.match(/^\/api\/tags\/([^/]+)$/))) {
@@ -523,76 +726,91 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       worktree?: unknown;
       attachments?: unknown;
       addDirs?: unknown;
-      /** Теги любого вида (слаги): несуществующие заводятся тегами задачи; блок тега задачи вставляется во ввод, если его там ещё нет, тег знаний уходит в knowledge запуска. */
+      /** Пространство (слаг): нового слага — пустое пространство; null или пусто — без пространства. */
+      space?: unknown;
+      /** Обновить состояние пространства после запуска; по умолчанию — да. */
+      saveState?: unknown;
+      /** Завести новое пространство по тексту задачи (auto-space.ts), если пространство не выбрано; состояние после done — всегда. */
+      autoSpace?: unknown;
+      /** Теги знаний (слаги), только существующие: их раздел получит каждый блок. Тег задачи — 400 с подсказкой про пространство. */
       tags?: unknown;
-      /** Обновить саммари тегов после запуска; по умолчанию — да. */
+      /** Поля тегов задач до пространств: 400 с подсказкой, а не молча без пространства. */
       saveTag?: unknown;
-      /** Завести новый тег задачи по тексту задачи (auto-tag.ts), если тег задачи не выбран; саммари после done — всегда. */
       autoTag?: unknown;
+      /** Flow команды Teamwork вместо flow: читается из репо команды, запуск разовый со снимком flow.yaml (spec §12). */
+      teamFlow?: unknown;
+      /** Связь с задачей или черновиком Teamwork: в run.json, статусы задачи по запуску (spec §10). */
+      teamwork?: unknown;
     };
     let spec: FlowSpec;
     let adhoc: boolean;
+    let teamwork: RunTeamworkLink | undefined;
     try {
-      ({ spec, adhoc } = specFromRunBody(body));
+      teamwork = parseTeamworkLink(body.teamwork);
+      ({ spec, adhoc } = teamFlowSpec(body, opts) ?? specFromRunBody(body));
     } catch (err) {
-      throw new HttpError(400, errMsg(err));
+      if (err instanceof HttpError) throw err;
+      // 409 flow_untrusted и 400 flow_forbidden — с телом целиком: UI показывает диалог доверия по нему
+      throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err), err instanceof TeamError ? err.body() : undefined);
+    }
+    // задача Teamwork: команда, проект и задача должны быть — до создания папки запуска; источник запуска — сама задача
+    let teamSource: RunSource | undefined;
+    if (teamwork?.task) {
+      try {
+        const status = currentTeamworkStatus();
+        if (!status) throw new HttpError(503, 'Сервер останавливается');
+        const task = status.check(teamwork);
+        if (task) teamSource = { type: 'teamwork', key: task.id, title: task.title };
+      } catch (err) {
+        if (err instanceof HttpError) throw err;
+        throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err));
+      }
     }
     if (body.input?.trim()) spec.input = body.input.trim();
-    // блоки тегов — не задача: ввод из одних блоков (тег выбран, задача не вписана) — та же ошибка
+    // блоки тегов старых версий — не задача: ввод из одних блоков — та же ошибка
     if (!stripTagBlocks(spec.input ?? '')) return sendJson(res, 400, { error: spec.input === undefined ? 'Введи задачу: у flow нет поля input' : 'Введи задачу' });
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
     // всё проверяем до startRun: при ошибке папка запуска не создаётся
     let attachments: Attachment[];
     let addDirs: string[];
-    let tags: string[];
+    let knowledge: string[];
+    let slug: string | undefined;
     try {
+      if (body.saveTag !== undefined || body.autoTag !== undefined) throw new Error('Теги задач заменены пространствами: space, saveState и autoSpace вместо tags с тегом задачи, saveTag и autoTag');
       attachments = validateAttachments(body.attachments);
       addDirs = runAddDirs(body.addDirs, cwd);
-      tags = runTagSlugs(body.tags);
-      if (body.saveTag !== undefined && typeof body.saveTag !== 'boolean') throw new Error('saveTag — true или false');
-      if (body.autoTag !== undefined && typeof body.autoTag !== 'boolean') throw new Error('autoTag — true или false');
-      // битый tag.json — тоже 400, а не 500
-      for (const t of tags) readTag(t);
-    } catch (err) {
-      throw new HttpError(400, errMsg(err));
-    }
-    // теги заводятся последними: ошибка 400 выше не оставит пустой тег на диске. Новый слаг — тег задачи
-    // (вид «знание» задаётся на странице «Теги»); выбранные делятся по виду
-    let tagDirs: string[] = [];
-    let taskTags: string[] = [];
-    let knowledge: string[] = [];
-    let saveTag = body.saveTag !== false;
-    if (tags.length) {
-      for (const t of tags) createTag(t);
-      const split = splitRunTags(tags);
-      taskTags = split.task.map((t) => t.slug);
-      knowledge = split.knowledge.map((t) => t.slug);
-      // скилл и любой клиент API шлют ввод без блоков: вставляем сами; блоки, вставленные руками, не трогаем
-      if (split.task.length) {
-        spec.input = withTagsInput(spec.input ?? '', split.task);
-        tagDirs = tagsRunDirs(split.task, RUNS_DIR);
-      }
-    }
-    // несуществующий тег знаний в knowledge блока — 400 до создания папки запуска, как директории
-    try {
+      // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
+      knowledge = knowledgeTags(runTagSlugs(body.tags)).map((t) => t.slug);
+      slug = spaceSlug(body.space);
+      if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
+      if (body.autoSpace !== undefined && typeof body.autoSpace !== 'boolean') throw new Error('autoSpace — true или false');
+      // битый space.json — тоже 400
+      if (slug) readSpaceMeta(slug);
+      // несуществующий тег знаний в knowledge блока — 400 до создания папки запуска, как директории
       resolveKnowledge(spec, knowledge);
     } catch (err) {
       throw new HttpError(400, errMsg(err));
     }
     const links = runLinks(body, cwd);
-    // автотег — после всех проверок: запрос, который получил бы 400, не тратит денег. Выбран тег задачи руками —
-    // галочка не действует. Сбой подбора — не ошибка запуска: он идёт без тега, причина — в ответе и run.json
-    let autoTag: AutoTagReport | undefined;
-    if (body.autoTag === true && !taskTags.length) {
-      autoTag = await pickAutoTag(spec.input ?? '', { flow: spec.name, source: links.source });
-      const tag = autoTag.slug ? readTag(autoTag.slug) : undefined;
-      if (tag) {
-        taskTags = [tag.slug];
-        spec.input = withTagsInput(spec.input ?? '', [tag]);
-        tagDirs = tagsRunDirs([tag], RUNS_DIR);
-        // автотег без саммари бесполезен: галочка «Обновить саммари» для него не действует
-        saveTag = true;
-      }
+    // источник из задачи Teamwork — поверх присланного; project — основной checkout репо кода, как у ветки
+    if (teamSource) links.source = { ...teamSource, ...(typeof (body.source as { project?: unknown } | undefined)?.project === 'string' ? { project: (body.source as { project: string }).project.slice(0, 500) } : {}) };
+    let saveState = body.saveState !== false;
+    // пространство заводится последним: ошибка 400 выше не оставит пустое пространство на диске
+    let space: Space | undefined;
+    try {
+      space = slug ? readSpace(slug) ?? createSpace(slug) : undefined;
+    } catch (err) {
+      // папка без space.json с чужими файлами — 409, как у POST /api/spaces
+      throw new HttpError(err instanceof SpaceError ? err.status : 400, errMsg(err));
+    }
+    // автопространство — после всех проверок: запрос, который получил бы 400, не тратит денег. Выбрано пространство —
+    // галочка не действует. Сбой подбора — не ошибка запуска: он идёт без пространства, причина — в ответе и run.json
+    let autoSpace: AutoSpaceReport | undefined;
+    if (body.autoSpace === true && !space) {
+      autoSpace = await pickAutoSpace(spec.input ?? '', { flow: spec.name, source: links.source });
+      space = autoSpace.slug ? readSpace(autoSpace.slug) : undefined;
+      // автопространство без состояния бесполезно: галочка «Обновить состояние» для него не действует
+      if (space) saveState = true;
     }
     const id = startRun(spec, {
       cwd,
@@ -600,15 +818,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       maxBudgetUsd: numOrUndefined(body.maxBudgetUsd),
       model: body.model || undefined,
       ...links,
+      ...(teamwork ? { teamwork } : {}),
       addDirs,
       attachments,
       adhoc,
-      ...(taskTags.length ? { tags: taskTags, saveTag, tagDirs } : {}),
+      ...(space ? { space: space.slug, saveState, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
       ...(knowledge.length ? { knowledge } : {}),
-      ...(autoTag ? { autoTag } : {}),
+      ...(autoSpace ? { autoSpace } : {}),
     }, opts);
-    const autoTagReply = autoTag && (autoTag.slug ? { slug: autoTag.slug, ...(autoTag.title ? { title: autoTag.title } : {}) } : { error: autoTag.error });
-    return sendJson(res, 201, { id, ...(autoTagReply ? { autoTag: autoTagReply } : {}) } satisfies RunStarted);
+    const autoSpaceReply = autoSpace && (autoSpace.slug ? { slug: autoSpace.slug, ...(autoSpace.title ? { title: autoSpace.title } : {}) } : { error: autoSpace.error });
+    return sendJson(res, 201, { id, ...(autoSpaceReply ? { autoSpace: autoSpaceReply } : {}) } satisfies RunStarted);
   }
 
   // Продолжение завершённого запуска текущей версией флоу: done-блоки не повторяются (continuationFrom).
@@ -661,6 +880,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const f = finishedRun(m[1]);
     if ('error' in f) return sendJson(res, f.code, { error: f.error });
     fs.rmSync(f.dir, { recursive: true, force: true });
+    // пустая рабочая папка черновика Teamwork — вместе с запуском
+    fs.rmSync(runWorkdir(m[1]), { recursive: true, force: true });
     return sendJson(res, 200, { ok: true });
   }
 
@@ -676,6 +897,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     else delete raw.hidden;
     fs.writeFileSync(f.file, JSON.stringify(raw, null, 2));
     return sendJson(res, 200, { ok: true, hidden: body.hidden });
+  }
+
+  // Имя запуска от человека: { title } — у завершённого; идущий run.json переписывает раннер (и имя от модели — тоже он)
+  if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)\/title$/)) && method === 'PUT') {
+    const body = await readJson(req);
+    let title: string;
+    try {
+      title = runName(body && typeof body === 'object' && !Array.isArray(body) ? (body as { title?: unknown }).title : undefined);
+    } catch (err) {
+      if (err instanceof RunNameError) return sendJson(res, 400, { error: err.message });
+      throw err;
+    }
+    const f = finishedRun(m[1]);
+    if ('error' in f) return sendJson(res, f.code, { error: f.code === 409 ? 'Запуск ещё идёт: переименовать его можно, когда он закончится' : f.error });
+    const saved = writeRunName(f.file, title);
+    // то же событие, что у имени от модели: списки запусков во всех вкладках перечитываются сразу, а не опросом
+    homeBroadcast({ type: 'title', runId: m[1], flow: saved.flow, title });
+    return sendJson(res, 200, { id: m[1], title } satisfies RunRenamed);
   }
 
   if ((m = p.match(/^\/api\/runs\/([A-Za-z0-9_-]+)$/)) && method === 'GET') {
@@ -877,6 +1116,8 @@ function startRun(
     model?: string;
     continueFrom?: Continuation;
     source?: RunSource;
+    /** Связь с Teamwork (черновик документа проекта или задача): в run.json; по задаче — статусы задачи на старте и в конце (teamwork-status.ts). */
+    teamwork?: RunTeamworkLink;
     worktree?: RunWorktree;
     addDirs?: string[];
     /** Новые вложения из формы. */
@@ -887,20 +1128,29 @@ function startRun(
     artifactsFrom?: { runId: string; runDir: string };
     /** Разовый запуск: flow не из flows/ (см. adhoc.ts). */
     adhoc?: boolean;
-    /** Теги задачи, галочка обновления их саммари и папки чтения из тегов (см. tags.ts). */
-    tags?: string[];
-    saveTag?: boolean;
-    tagDirs?: string[];
+    /** Пространство, галочка обновления его состояния и папки пространства (см. spaces.ts). */
+    space?: string;
+    saveState?: boolean;
+    spaceDirs?: string[];
     /** Теги знаний на весь запуск. */
     knowledge?: string[];
-    /** Итог автотега: в run.json, стоимость — в итог запуска. */
-    autoTag?: AutoTagReport;
+    /** Итог автопространства: в run.json, стоимость — в итог запуска. */
+    autoSpace?: AutoSpaceReport;
     /** Имя исходного запуска (продолжение): без подбора моделью. */
     title?: string;
+    /**
+     * Рабочая папка — пустая папка с этим именем (runWorkdir(id)/<имя>), а не cwd: черновик Teamwork без репо кода (spec
+     * §14). Имя — слаг проекта: по нему список запусков группирует их, как по папке проекта.
+     */
+    emptyCwd?: string;
   },
   srv: ServerOptions,
 ): string {
   const runDir = makeRunDir(RUNS_DIR, spec.name);
+  if (o.emptyCwd) {
+    o = { ...o, cwd: path.join(runWorkdir(path.basename(runDir)), path.basename(o.emptyCwd)) };
+    fs.mkdirSync(o.cwd, { recursive: true });
+  }
   // до live.set: упавшая запись вложений не оставит висящий запуск
   let attachments: string[];
   try {
@@ -909,10 +1159,14 @@ function startRun(
     fs.rmSync(runDir, { recursive: true, force: true });
     throw err;
   }
-  const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
+  const { attachments: _files, attachmentsFrom: _from, emptyCwd: _empty, ...runOpts } = o;
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
-  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv).id;
+  // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json.
+  // До раннера: его событие end может прийти раньше, чем он вернёт управление, а конец ждёт записи старта той же задачи
+  const id = path.basename(runDir);
+  if (o.teamwork?.task) void currentTeamworkStatus()?.started(o.teamwork, { kind: 'run', id, status: 'running', ...(o.title ? { title: o.title } : {}) });
+  return launchRun(spec, { ...runOpts, attachments, runsDir: RUNS_DIR, runDir, ...(nameRun ? { nameRun } : {}) }, srv, undefined, srv.runFlow ? { runFlow: srv.runFlow } : undefined).id;
 }
 
 /**
@@ -932,6 +1186,7 @@ function launchRun(
   const id = path.basename(runDir);
   const lr: LiveRun = {
     id,
+    ...(opts.space ? { space: opts.space } : {}),
     events: [],
     logs: [],
     clients: new Set(),
@@ -992,7 +1247,7 @@ function launchRun(
       const next = lr.running[0];
       lr.current = next ? { block: next.block, iteration: next.iteration, title: next.title } : null;
     } else if (e.type === 'condition_start') lr.current = { block: e.block, iteration: e.iteration, title: 'проверка условия' };
-    else if (e.type === 'tag_summary_start') lr.current = { block: '', iteration: 0, title: `саммари тега ${e.tag}` };
+    else if (e.type === 'space_state_start') lr.current = { block: '', iteration: 0, title: `состояние пространства ${e.space}` };
     else if (e.type === 'condition' || e.type === 'end') {
       lr.current = null;
       lr.running = [];
@@ -1034,6 +1289,10 @@ function launchRun(
       for (const client of lr.clients) client.end();
       lr.clients.clear();
       live.delete(id);
+      // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
+      // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
+      // (автоматика уже снята остановкой сервера — конец опоздавшего запуска просто не записывается)
+      if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
   };
   lr.broadcast = broadcast;
@@ -1074,9 +1333,13 @@ function launchRun(
       runDir,
       startedAt: new Date().toISOString(),
       ...(opts.adhoc ? { adhoc: true as const } : {}),
+      // связи запуска — как у раннера: упавший до start черновик Teamwork или запуск по задаче не должен пропасть из их списков
+      ...(opts.source ? { source: opts.source } : {}),
+      ...(opts.teamwork ? { teamwork: opts.teamwork } : {}),
+      ...(opts.worktree ? { worktree: opts.worktree } : {}),
       ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
-      ...(opts.tags?.length ? { tags: opts.tags, saveTag: opts.saveTag !== false } : {}),
+      ...(opts.space ? { space: opts.space, saveState: opts.saveState !== false } : {}),
       ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
       ...(opts.title ? { title: opts.title } : {}),
       ...(opts.parent ? { parent: opts.parent } : {}),
@@ -1404,10 +1667,15 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   if (!prev) throw new HttpError(404, 'Запуск не найден');
   if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: продолжить можно только завершённый');
   if (!prev.cwd) throw new HttpError(400, 'В отчёте запуска нет директории проекта');
+  // черновик прошлых версий шёл в папке проекта в клоне команды: продолжать его там нельзя (spec §14)
+  const inTeams = teamsCwdProblem(prev.cwd);
+  if (inTeams) throw new HttpError(400, inTeams);
   // вызванный блоком-вызовом запуск продолжается вместе с родителем: отдельно он оторвался бы от связки
   if (prev.parent) throw new HttpError(400, childContinueReason(prev.parent));
   const spec = specOf(prev);
-  spec.input = prev.input;
+  // старый запуск нёс в задаче блок тега задачи с саммари на момент старта: свежее состояние даст раздел пространства
+  const { input, ...spaceOpts } = inheritRun(prev, RUNS_DIR);
+  spec.input = input;
   let cont: Continuation;
   try {
     cont = continuationFrom(prev, spec, {
@@ -1437,6 +1705,7 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     model: o.model,
     continueFrom: cont,
     source: prev.source,
+    ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
     worktree: prev.worktree,
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
@@ -1444,8 +1713,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     artifactsFrom: { runId: prevId, runDir: path.join(RUNS_DIR, prevId) },
     // продолжение разового запуска тоже разовое: его снимок — тот же flow
     adhoc: prev.adhoc,
-    // теги и галочка наследуются; ввод уже с блоками тегов. Папки чтения пересчитываются по нынешним тегам: старые могли удалить
-    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    // пространство и галочка наследуются (у старого запуска — его перенесённый тег задачи); папки пересчитываются по
+    // нынешнему пространству: старые могли удалить
+    ...spaceOpts,
     // теги знаний тоже наследуются; их разделы раннер пересчитает по нынешнему состоянию тегов
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     // имя наследуется, модель заново не зовётся
@@ -1564,6 +1834,8 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   if (!prev) throw new HttpError(404, 'Запуск не найден');
   if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: перезапустить можно только завершённый');
   if (!prev.cwd || !fs.existsSync(prev.cwd)) throw new HttpError(400, 'Директории проекта запуска больше нет');
+  const inTeams = teamsCwdProblem(prev.cwd);
+  if (inTeams) throw new HttpError(400, inTeams);
   let spec: FlowSpec;
   let addDirs: string[];
   try {
@@ -1579,17 +1851,20 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   } catch (err) {
     throw new HttpError(400, errMsg(err));
   }
-  spec.input = prev.input;
+  // старый запуск нёс в задаче блок тега задачи с саммари на момент старта: свежее состояние даст раздел пространства
+  const { input: rerunInput, ...rerunSpace } = inheritRun(prev, RUNS_DIR);
+  spec.input = rerunInput;
   const id = startRun(spec, {
     cwd: prev.cwd,
     maxBudgetUsd: o.maxBudgetUsd,
     model: o.model,
     source: prev.source,
+    ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
     worktree: prev.worktree,
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
     adhoc: prev.adhoc,
-    ...(prev.tags?.length ? { tags: prev.tags, saveTag: prev.saveTag !== false, tagDirs: tagsRunDirs(readTagsSafe(prev.tags), RUNS_DIR) } : {}),
+    ...rerunSpace,
     ...(prev.knowledge?.length ? { knowledge: prev.knowledge } : {}),
     ...(prev.title ? { title: prev.title } : {}),
   }, srv);
@@ -1740,6 +2015,16 @@ function notifyPause(srv: ServerOptions, id: string, flow: string, r: PauseReaso
   osNotify({ title: `${flow}: «${r.phase}» ждёт решения`, body, url: `http://${srv.host}:${srv.port}/run/${id}`, group: id, sound: true });
 }
 
+/**
+ * Сессия терминала закончила ход и ждёт тебя. Строже, чем у вопроса: только когда UI не открыт вовсе. Открытая вкладка
+ * сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода, пока
+ * человек сидит в этом терминале.
+ */
+function notifySession(srv: ServerOptions, s: HomeSessionWait): void {
+  if (srv.notify === false || homeClients.size > 0) return;
+  osNotify({ title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', url: `http://${srv.host}:${srv.port}/sessions/${s.id}`, group: s.id });
+}
+
 /** Общий поток без переигрывания: при (пере)подключении UI сам забирает состояние из /api/home и /api/runs. */
 function streamHome(req: http.IncomingMessage, res: http.ServerResponse, notifies: boolean): void {
   res.writeHead(200, {
@@ -1786,6 +2071,7 @@ function liveRuns(): HomeRun[] {
       // «Ответить на странице запуска» на главной: пауза по просьбе агента и артефакт решений
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
       ...(r.parent ? { parent: r.parent } : {}),
+      ...(r.teamwork ? { teamwork: r.teamwork } : {}),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -1850,10 +2136,12 @@ function listRuns(): RunSummary[] {
       cwd: r.cwd,
       hidden: Boolean(r.hidden),
       source: r.source,
+      ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       worktree: r.worktree,
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
-      ...(r.tags?.length ? { tags: r.tags } : {}),
+      ...(reportSpace(r) ? { space: reportSpace(r) } : {}),
+      ...(!r.space && (r.tags?.length ?? 0) > 1 ? { legacyTags: r.tags } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
       ...(r.parent ? { parent: r.parent } : {}),
     });
@@ -1894,15 +2182,99 @@ function finishedRun(id: string): { dir: string; file: string } | { code: number
   return { dir, file: path.join(dir, 'run.json') };
 }
 
-/** Теги по слагам из отчёта; испорченный или удалённый тег пропускается. */
-function readTagsSafe(slugs: string[]): Tag[] {
-  return slugs.flatMap((slug) => {
-    try {
-      return readTag(slug) ?? [];
-    } catch {
-      return [];
-    }
-  });
+/**
+ * Последняя работа всех пространств: запуски — по сводкам (не в worktree, не дочерние), сессии — из реестра сессий.
+ * Что из неё подставят формы — решает spaceWorkOf (папки данных agentgraph не в счёт).
+ */
+async function allSpaceWork(): Promise<ReturnType<typeof spaceWorkOf>> {
+  const work: SpaceWork[] = [];
+  for (const r of listRuns()) {
+    if (!r.space || r.parent) continue;
+    const running = live.has(r.id) || r.status === 'running';
+    // старый запуск с несколькими тегами задач — у каждого их пространства (папка — только у первого)
+    for (const space of r.legacyTags ?? [r.space]) work.push({ space, ...(r.cwd && !r.worktree && space === r.space ? { cwd: r.cwd } : {}), at: r.startedAt, from: 'run', live: running });
+  }
+  for (const s of listSpaces()) {
+    for (const x of await spaceSessions(s.slug).catch(() => [])) work.push({ space: s.slug, cwd: x.cwd, at: x.lastActivityAt, from: 'session', live: x.live });
+  }
+  return spaceWorkOf(work, RUNS_DIR);
+}
+
+/** Подмена сессии модели черновиков (тесты). */
+const draftDeps = (opts: ServerOptions): DraftDeps => (opts.draftSession ? { session: opts.draftSession } : {});
+
+/** Запуски для черновиков Teamwork (teamwork-drafts.ts): старт обычным startRun, список и отчёт глазами сервера, статус живого. */
+const draftRuns = (opts: ServerOptions): DraftRunDeps => ({
+  runsDir: RUNS_DIR,
+  // без репо кода — пустая папка в папке запуска: клон репо команды рабочей папкой агента не бывает (spec §14)
+  start: (spec, { cwd, ...o }) => startRun(spec, cwd === undefined ? { ...o, cwd: '', emptyCwd: o.teamwork.project } : { ...o, cwd }, opts),
+  runs: listRuns,
+  report: readReport,
+  live: (id) => {
+    const lr = live.get(id);
+    return lr ? liveStatus(lr) : undefined;
+  },
+});
+
+/**
+ * Источники черновика: сессии — из реестра сессий терминала (асинхронно, поэтому заранее — по id из тела), запуски — по
+ * run.json с итогом последнего шага.
+ */
+async function draftResolveDeps(body: unknown): Promise<DraftResolveDeps> {
+  const raw = body && typeof body === 'object' ? (body as { sessions?: unknown }).sessions : undefined;
+  const found = new Map<string, DraftSession>();
+  for (const id of Array.isArray(raw) ? raw.slice(0, 20) : []) {
+    if (typeof id !== 'string' || found.has(id)) continue;
+    const s = await sessionDraftSource(id).catch(() => undefined);
+    if (s) found.set(id, s);
+  }
+  return {
+    session: (id) => found.get(id),
+    // папка запуска — по id, а не из run.json: её открывают модели на чтение
+    run: (id) => {
+      const r = readReport(id);
+      return r ? { ...withFinal(r), runDir: path.join(RUNS_DIR, id) } : undefined;
+    },
+    runsDir: RUNS_DIR,
+  };
+}
+
+/**
+ * Работа без пространства для «Предложить пространства»: сессии с хотя бы одним сообщением и запуски — не дочерние, не
+ * скрытые, не идущие, без пространства и без старых тегов задач.
+ */
+async function groupSources(): Promise<GroupSource[]> {
+  const out: GroupSource[] = [];
+  for (const s of await spacelessSessions().catch(() => [])) {
+    if (s.first.trim()) out.push({ kind: 'session', id: s.id, name: s.name, cwd: s.cwd, at: s.lastActivityAt, text: s.first });
+  }
+  for (const r of listRuns()) {
+    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running') continue;
+    const cwd = r.worktree?.path ?? r.cwd;
+    out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, flow: r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
+  }
+  return out;
+}
+
+/**
+ * Запуски пространства для его страницы — по сводкам списка запусков, без второго чтения run.json: свежие сверху, без
+ * дочерних запусков блоков-вызовов (они идут под родителем). legacy — запуск до переноса тега задачи в пространство.
+ */
+function spaceRuns(slug: string, migratedAt?: string): SpaceRun[] {
+  return listRuns()
+    .filter((r) => (r.space === slug || r.legacyTags?.includes(slug)) && !r.parent)
+    .map((r) => ({
+      id: r.id,
+      flow: r.flow,
+      ...(r.title ? { title: r.title } : {}),
+      status: r.status,
+      startedAt: r.startedAt,
+      ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+      input: r.input,
+      // папка — как в списке (allSpaceWork): у старого запуска с несколькими тегами задач — только первого
+      ...(r.cwd && !r.worktree && r.space === slug ? { cwd: r.cwd } : {}),
+      ...(migratedAt && r.startedAt < migratedAt ? { legacy: true as const } : {}),
+    }) satisfies SpaceRun);
 }
 
 function readReport(id: string): RunReport | undefined {
@@ -2061,12 +2433,20 @@ function runAddDirs(raw: unknown, cwd: string): string[] {
   const dirs = resolveDirList(list as string[], cwd).filter((d) => d !== cwd);
   const missing = dirs.filter((d) => !isDir(d));
   if (missing.length) throw new Error(`Директория не найдена: ${missing.join(', ')}`);
+  // папка проекта из клона команды с .claude/ (скиллы, сабагенты, плагины участников) — не доп. папка агента (spec §14)
+  for (const d of dirs) {
+    const conf = teamsAddDirProblem(d);
+    if (conf) throw new Error(conf);
+  }
   return dirs;
 }
 
 function resolveDir(dir: string | undefined, fallback: string): string {
   const resolved = path.resolve((dir ?? '').trim() || fallback);
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`Директория не найдена: ${resolved}`);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new HttpError(400, `Директория не найдена: ${resolved}`);
+  // клон репо команды не бывает рабочей папкой агента (spec §14): его .claude/settings.json грузится как настройки проекта
+  const inTeams = teamsCwdProblem(resolved);
+  if (inTeams) throw new HttpError(400, inTeams);
   return resolved;
 }
 
@@ -2076,8 +2456,44 @@ function numOrUndefined(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * POST /api/runs с teamFlow: { team, name } — flow из репо команды Teamwork вместо flow (spec §12): невалидный — 400, нет —
+ * 404 (TeamError). Запуск разовый: единственная копия flow — снимок flow.yaml в папке запуска, как у черновика. Без
+ * teamFlow — undefined, и flow берётся как обычно.
+ */
+function teamFlowSpec(body: { teamFlow?: unknown; flow?: unknown; spec?: unknown; yaml?: unknown }, opts: ServerOptions): { spec: FlowSpec; adhoc: boolean } | undefined {
+  if (body.teamFlow === undefined || body.teamFlow === null || body.teamFlow === '') return undefined;
+  const tf = body.teamFlow as { team?: unknown; name?: unknown };
+  if (typeof tf !== 'object' || typeof tf.team !== 'string' || typeof tf.name !== 'string' || !tf.team.trim() || !tf.name.trim()) throw new Error('teamFlow — { team, name }: слаг команды и имя flow из её репо');
+  if ([body.flow, body.spec, body.yaml].some((v) => v !== undefined && v !== null && v !== '')) throw new Error('Передай что-то одно из teamFlow, flow, spec и yaml');
+  if (stopping) throw new HttpError(503, 'Сервер останавливается');
+  // доверие к содержимому и запреты flow команды (spec §14) — в readTeamFlow: 409 flow_untrusted, 400 flow_forbidden
+  const spec = teamService(opts.teamwork).readTeamFlow(tf.team.trim(), tf.name.trim()).spec;
+  // блоки-вызовы flow команде запрещены (teamFlowProblems); проверка вызовов осталась на случай, если запрет ослабят
+  checkCalls(spec);
+  return { spec, adhoc: true };
+}
+
+/**
+ * Живой статус запуска или сессии по задаче Teamwork (TeamTask.work из local.json): идущий здесь запуск — из памяти
+ * (ждёт ответа, на паузе), завершённый — из run.json (оборвавшийся — interrupted); сессия — у менеджера сессий. Чужой
+ * или удалённый запуск — запись как есть.
+ */
+function teamWorkStatus(w: TeamTaskWork): TeamTaskWork {
+  if (w.kind === 'run') {
+    const lr = live.get(w.id);
+    const r = lr?.report ?? readReport(w.id);
+    if (!r) return w;
+    return { ...w, status: lr ? liveStatus(lr) : r.status, ...(r.title ? { title: r.title } : {}) };
+  }
+  const s = sessionWorkStatus(w.id);
+  return s ? { ...w, status: s.status, title: s.title } : w;
+}
+
 const JSON_BODY_MAX = 5 * 1024 * 1024;
 const RUN_BODY_MAX = 40 * 1024 * 1024;
+/** PUT документа пространства: текст до 200 КБ (SPACE_DOC_TEXT_MAX), JSON-экранирование раздувает его до ×6. */
+const SPACE_DOC_BODY_MAX = 1024 * 1024;
 
 function readJson(req: http.IncomingMessage, maxBytes = JSON_BODY_MAX): Promise<unknown> {
   return new Promise((resolve, reject) => {

@@ -1,6 +1,7 @@
 // Одна фаза = одна свежая сессия Claude Code через Agent SDK.
 import { query, type ModelUsage, type Options, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { IMPLICIT_TOOLS } from './schema.js';
+import { teamsAddDirProblem, teamsCwdProblem } from './teamwork-trust.js';
 import type { AskAnswers, AskQuestion, EffortLevel, SessionTokens } from './api-types.js';
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk' | 'plan' | 'auto';
@@ -48,7 +49,7 @@ export type SessionRequest = {
   guard?: (tool: string, input: Record<string, unknown>, ctx: { cwd: string }) => string | undefined;
   /** Вызывается один раз, когда SDK прислал system/init с фактической моделью сессии. */
   onModel?: (model: string) => void;
-  /** Вызывается после каждого нового запроса главного цикла к модели: занятость контекста по ходу сессии. */
+  /** Вызывается после каждого нового запроса к модели (и сабагентов) и роста его расхода: контекст и расход по ходу сессии. */
   onContext?: (c: ContextSnapshot) => void;
   /** Ход сессии событиями (SessionEvent) — рядом с LogFn, а не вместо: строки лога остаются как были. */
   onEvent?: (e: SessionEvent) => void;
@@ -72,17 +73,29 @@ export type SessionResult = {
 };
 
 
-/** Занятость контекста по ходу сессии: пик из SessionTokens и окно, если оно уже известно. */
-export type ContextSnapshot = { contextPeak: number; requests: number; contextWindow?: number };
+/**
+ * Занятость контекста по ходу сессии: пик из SessionTokens и окно, если оно уже известно. spent — все токены
+ * всех запросов сессии (вход, кэш, выход), включая сабагентов: subSpent из них у subagents сабагентов.
+ * Оценка по ходу: точный итог придёт с результатом. Нулевые поля не пишутся.
+ */
+export type ContextSnapshot = { contextPeak: number; requests: number; contextWindow?: number; spent?: number; subSpent?: number; subagents?: number };
 
 /**
  * Счётчик токенов по потоку сообщений SDK; seen — id сообщений модели, чей запрос уже учтён;
  * model — модель главного цикла из system/init; liveWindow — окно из getContextUsage, пока результата нет.
  */
-export type TokenTally = { tokens: SessionTokens; seen: Set<string>; model?: string; liveWindow?: number };
+export type TokenTally = {
+  tokens: SessionTokens;
+  seen: Set<string>;
+  model?: string;
+  liveWindow?: number;
+  /** Расход по ходу: id сообщения модели -> его токены (n — сумма; sub — запрос сабагента); subagents — их parent_tool_use_id. */
+  spent: Map<string, { n: number; sub: boolean; input: number; output: number; cacheRead: number; cacheCreation: number }>;
+  subagents: Set<string>;
+};
 
 export function newTally(): TokenTally {
-  return { tokens: { contextStart: 0, contextPeak: 0, requests: 0 }, seen: new Set() };
+  return { tokens: { contextStart: 0, contextPeak: 0, requests: 0 }, seen: new Set(), spent: new Map(), subagents: new Set() };
 }
 
 /**
@@ -110,7 +123,39 @@ export function mainContextWindow(usage: Record<string, ModelUsage>, model?: str
 /** Снимок контекста: окно из результата, а пока его нет — из кэша по модели, затем из getContextUsage. */
 export function contextSnapshot(t: TokenTally): ContextSnapshot {
   const contextWindow = t.tokens.contextWindow ?? (t.model ? windowCache.get(t.model) : undefined) ?? t.liveWindow;
-  return { contextPeak: t.tokens.contextPeak, requests: t.tokens.requests, ...(contextWindow ? { contextWindow } : {}) };
+  let spent = 0;
+  let subSpent = 0;
+  for (const x of t.spent.values()) {
+    spent += x.n;
+    if (x.sub) subSpent += x.n;
+  }
+  return {
+    contextPeak: t.tokens.contextPeak,
+    requests: t.tokens.requests,
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(spent ? { spent } : {}),
+    ...(subSpent ? { subSpent, subagents: t.subagents.size } : {}),
+  };
+}
+
+/**
+ * Учесть расход запроса по ходу сессии, включая сабагентов: их запросы стоят лимита так же, как главного цикла,
+ * а в tokens попадают только с результатом. Стрим одного запроса — несколько сообщений с общим id и растущим выходом:
+ * берём наибольшее. true — расход вырос.
+ */
+export function tallySpent(t: TokenTally, msg: SDKMessage): boolean {
+  if (msg.type !== 'assistant') return false;
+  const m = msg.message as { id?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } };
+  if (!m.id || !m.usage) return false;
+  const u = m.usage;
+  const x = { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheCreation: u.cache_creation_input_tokens ?? 0 };
+  const n = x.input + x.output + x.cacheRead + x.cacheCreation;
+  const prev = t.spent.get(m.id);
+  if (prev && prev.n >= n) return false;
+  const parent = msg.parent_tool_use_id;
+  t.spent.set(m.id, { n, sub: !!parent, ...x });
+  if (parent) t.subagents.add(parent);
+  return true;
 }
 
 /** Учесть сообщение SDK в счётчике. true — счётчик что-то узнал (иначе tokens в отчёт не пишем). */
@@ -156,6 +201,23 @@ export function tallyTokens(t: TokenTally, msg: SDKMessage): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Итога нет (сессию остановили или она упала до result): input/output/кэш — по живому счётчику, со сабагентами,
+ * с пометкой estimated. Без этого расход остановленного этапа пропадал из отчёта. true — оценку записали.
+ */
+export function estimateTotals(t: TokenTally): boolean {
+  if (t.tokens.input !== undefined || !t.spent.size) return false;
+  const sum = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  for (const x of t.spent.values()) {
+    sum.input += x.input;
+    sum.output += x.output;
+    sum.cacheRead += x.cacheRead;
+    sum.cacheCreation += x.cacheCreation;
+  }
+  Object.assign(t.tokens, sum, { estimated: true });
+  return true;
 }
 
 /** Фактическая модель сессии из сообщения system/init; undefined — другое сообщение или модели в нём нет. */
@@ -269,9 +331,16 @@ async function probeWindow(usage: () => Promise<{ rawMaxTokens: number }>, t: To
 
 export async function runSession(req: SessionRequest, log: LogFn, deps: SessionDeps = { query }): Promise<SessionResult> {
   const preface: Preface = { text: '', open: false };
-  const options = sessionOptions(req, preface);
   const started = Date.now();
   const result: SessionResult = { ok: false, subtype: 'no_result', text: '', costUsd: 0, turns: 0, durationMs: 0, errors: [] };
+  let options: Options;
+  try {
+    options = sessionOptions(req, preface);
+  } catch (err) {
+    // отказ до старта (рабочая папка в клоне репо команды) — неудачная сессия с причиной, а не исключение раннеру
+    result.errors.push(err instanceof Error ? err.message : String(err));
+    return result;
+  }
   const tally = newTally();
   let counted = false;
   let done = false;
@@ -295,14 +364,16 @@ export async function runSession(req: SessionRequest, log: LogFn, deps: SessionD
         }
       }
       const requests = tally.tokens.requests;
+      const grew = tallySpent(tally, msg);
       counted = tallyTokens(tally, msg) || counted;
-      if (tally.tokens.requests !== requests) emitContext();
+      if (tally.tokens.requests !== requests || grew) emitContext();
     }
   } catch (err) {
     result.errors.push(err instanceof Error ? err.message : String(err));
   }
   done = true;
   result.durationMs = Date.now() - started;
+  counted = estimateTotals(tally) || counted;
   if (counted) result.tokens = tally.tokens;
   return result;
 }
@@ -318,6 +389,16 @@ export function claudeExecutable(): Pick<Options, 'pathToClaudeCodeExecutable'> 
 
 /** Опции Agent SDK для сессии: инструменты, разрешения, env, вопросы пользователю (preface — текст агента перед ними). */
 export function sessionOptions(req: SessionRequest, preface?: Preface): Options {
+  // последняя линия (spec §14): клон репо команды не бывает рабочей папкой сессии — его .claude/settings.json грузится как
+  // настройки проекта (хуки), а пишут его участники команды. Маршруты отвечают на это 400 раньше
+  const cwdProblem = teamsCwdProblem(req.cwd);
+  if (cwdProblem) throw new Error(cwdProblem);
+  // доп. папки собираются заново на каждый этап: папка проекта из клона, куда pull посреди запуска принёс .claude/
+  // (скиллы, сабагенты, плагины участников), не уходит и следующей сессии
+  for (const d of req.additionalDirectories ?? []) {
+    const conf = teamsAddDirProblem(d);
+    if (conf) throw new Error(conf);
+  }
   const options: Options = {
     ...claudeExecutable(),
     cwd: req.cwd,

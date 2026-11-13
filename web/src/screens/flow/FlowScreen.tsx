@@ -126,7 +126,7 @@ export function FlowScreen({ draft = false }: { draft?: boolean }) {
   );
 }
 
-/** Подсказки поля «Теги знаний» блока: теги вида «знание» со страницы «Теги». */
+/** Подсказки поля «Теги знаний» блока: теги со страницы «Знания». */
 function KnowledgeTags() {
   const tags = useTags(useFeature('tags')).data?.tags ?? [];
   return (

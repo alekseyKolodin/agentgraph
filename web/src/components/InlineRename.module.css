@@ -1,0 +1,26 @@
+/* Имя с правкой на месте (InlineRename.tsx): текст обрезается многоточием, карандаш — сразу за ним. В строке списка
+   карандаш виден при наведении и фокусе строки (класс rename-host) или самого имени, в шапке — всегда (.always). Поле
+   встаёт на место текста: шрифт берёт у имени, отрицательные отступы съедают его рамку и внутренний отступ. */
+.wrap { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* скрыт только прозрачностью: нажать его можно и без наведения — голосовым управлением, по подписи */
+.pencil {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: var(--r-xs); background: transparent; color: var(--ink-2); cursor: pointer;
+  opacity: 0; transition: opacity .12s, background-color .12s;
+}
+.pencil svg { width: 12px; height: 12px; display: block; }
+.wrap:hover .pencil, :global(.rename-host):hover .pencil, :global(.rename-host):focus-within .pencil, .always .pencil, .pencil:focus-visible { opacity: 1; }
+/* в шапке он виден всегда — тише, как прочие значки шапки */
+.always .pencil { color: var(--ink-3); }
+.pencil:hover { color: var(--ink); background: var(--select); }
+.pencil:focus-visible { outline: none; box-shadow: var(--focus); }
+.editing { display: flex; }
+.input {
+  flex: 1 1 auto; min-width: 0; max-width: calc(100% + 12px); box-sizing: border-box; margin: -3px -6px; padding: 2px 5px;
+  font: inherit; color: var(--ink); background: var(--well); border: 1px solid var(--live); border-radius: var(--r-xs);
+}
+.input:focus { outline: none; box-shadow: var(--focus); }
+@media (prefers-reduced-motion: reduce) {
+  .pencil { transition: none; }
+}

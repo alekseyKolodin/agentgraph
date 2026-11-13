@@ -1,0 +1,18 @@
+/* «Модель получит» (ModelPreview.tsx, system.md → Model gets): строка раскрытия как у .run-more, тело — панель --well. */
+.preview > summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; padding: 2px 0; min-width: 0; }
+.preview > summary::-webkit-details-marker { display: none; }
+.caret { color: var(--ink-3); font-size: var(--fs-cap); transition: transform .12s; display: inline-block; }
+.preview[open] .caret { transform: rotate(90deg); }
+.title { font-weight: 500; color: var(--ink-2); font-size: var(--fs-small); flex: none; }
+.sum { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sum.err { color: var(--st-fail); }
+.body { margin-top: 8px; padding: 10px 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 10px; }
+.modes { display: flex; gap: 4px; }
+.raw { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); max-height: 360px; overflow-y: auto; }
+.readable { display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-small); }
+.readable section { display: flex; flex-direction: column; gap: 4px; }
+.readable h4 { margin: 0; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.readable p { margin: 0; }
+.readable ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 2px; }
+.readable li { overflow-wrap: anywhere; }
+.state { max-height: 240px; overflow-y: auto; }

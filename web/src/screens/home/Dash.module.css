@@ -56,3 +56,7 @@ a.dash-key { color: var(--live); text-decoration: none; }
 
 /* ---------- «Пульт»: заголовки секций — тихие подписи, а не капс (system.md → «Иерархия») */
 .dash-head h2 { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); letter-spacing: .01em; }
+
+/* «MR · нужно внимание» без единого MR — одна строка без карточки (Attention.tsx) */
+.dash-quiet { margin-bottom: 0; }
+.dash-quiet h2 :global(.small) { font-weight: 400; }

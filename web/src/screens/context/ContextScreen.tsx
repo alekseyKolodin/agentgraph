@@ -4,8 +4,9 @@
 // Состояние — модуль (как ctx старого UI): выбор, листинг и открытый файл живут, пока страница не видна, и ответ, пришедший
 // после ухода с экрана, не теряется.
 import { Fragment, useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import type { ContextView } from '@server/api-types';
-import { ApiError, errorText, fetchContext, fetchContextFile, fetchFlow, saveContextFile, useConfig, useFeature, useFlows, useRecentDirs } from '../../api';
+import { ApiError, errorText, fetchContext, fetchContextFile, fetchFlow, saveContextFile, useConfig, useFeature, useFlows, useRecentDirs, useSpaces } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SafeMarkdown } from '../../components/MdText';
 import { PathLink } from '../../components/PathLink';
@@ -27,7 +28,7 @@ type Msg = { cls: string; text: string };
 
 const ctx = {
   inited: false,
-  sel: { cwd: '', flow: '', phase: '', model: '' } as CtxSelection,
+  sel: { cwd: '', flow: '', phase: '', model: '', space: '' } as CtxSelection,
   /** Последнее «принятое» значение директории: смена по blur, как change у старого поля. */
   cwdCommitted: '',
   phases: [] as PhaseGroup[],
@@ -89,7 +90,7 @@ async function fillPhases(flow: string, current: string): Promise<void> {
 }
 
 async function loadContext(force = false): Promise<void> {
-  const sel: CtxSelection = { cwd: ctx.sel.cwd.trim(), flow: ctx.sel.flow, phase: phaseValue(), model: ctx.sel.model };
+  const sel: CtxSelection = { cwd: ctx.sel.cwd.trim(), flow: ctx.sel.flow, phase: phaseValue(), model: ctx.sel.model, space: ctx.sel.space ?? '' };
   LS.set(CTX_LS, sel);
   const my = ++ctx.seq;
   ctx.loading = true;
@@ -118,6 +119,8 @@ export function ContextScreen() {
   const config = useConfig().data!;
   const flows = useFlows();
   const recent = useRecentDirs(useFeature('recent-dirs')).data ?? [];
+  const spacesOn = useFeature('spaces');
+  const spaces = useSpaces(spacesOn).data?.spaces ?? [];
   const { askConfirm } = useConfirm();
   const toast = useToast();
   const editorRef = useRef<HTMLElement>(null);
@@ -127,10 +130,24 @@ export function ContextScreen() {
   if (!ctx.inited) {
     ctx.inited = true;
     const saved = LS.get<Partial<CtxSelection>>(CTX_LS, {});
-    ctx.sel = { cwd: saved.cwd || LS.raw('agentgraph.cwd') || config.defaultCwd, flow: saved.flow || '', phase: '', model: saved.model || '' };
+    ctx.sel = { cwd: saved.cwd || LS.raw('agentgraph.cwd') || config.defaultCwd, flow: saved.flow || '', phase: '', model: saved.model || '', space: saved.space || '' };
     ctx.cwdCommitted = ctx.sel.cwd;
     ctx.ready = fillPhases(saved.flow || '', saved.phase || '');
   }
+
+  // ?space=<slug> со страницы пространства («Токены в «Контексте»»): выбрать его и перечитать листинг
+  const [params, setParams] = useSearchParams();
+  const spaceParam = params.get('space');
+  useEffect(() => {
+    if (!spaceParam || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(spaceParam)) return;
+    ctx.sel.space = spaceParam;
+    changed();
+    setParams({}, { replace: true });
+    void (async () => {
+      await ctx.ready;
+      void loadContext();
+    })();
+  }, [spaceParam]);
 
   const flowOptions = ctxFlowOptions(flows.data ?? []);
   // список flow мог поменяться, пока страница была скрыта: flow, которого больше нет среди валидных, — «без flow»
@@ -324,6 +341,23 @@ export function ContextScreen() {
               {modelOptions(ctx.sel.model).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
           </label>
+          {spacesOn && (
+            <label>
+              <span title={t('Пространство сессии или запуска: его папка уйдёт доп. директорией, карта (CLAUDE.md) — в файлы памяти')}>{t('Пространство')}</span>
+              <select
+                name="space"
+                value={ctx.sel.space ?? ''}
+                onChange={(ev) => {
+                  set({ space: ev.target.value });
+                  void loadContext();
+                }}
+              >
+                <option value="">{t('без пространства')}</option>
+                {ctx.sel.space && !spaces.some((x) => x.slug === ctx.sel.space) && <option value={ctx.sel.space}>{ctx.sel.space}</option>}
+                {spaces.map((x) => <option key={x.slug} value={x.slug}>{x.title ? `${x.title} · ${x.slug}` : x.slug}</option>)}
+              </select>
+            </label>
+          )}
           <button type="submit" className="btn primary">{t('Показать')}</button>
           <span className={ctx.msg.cls}>{ctx.msg.text}</span>
         </div>
@@ -422,7 +456,7 @@ function ContextBody({ d, home, open }: { d: ContextView; home: string; open: (p
             {ctxPromptRows(d.prompt).map((x, i) => (
               <li key={i} className={styles.ctxRow}>
                 <span className={styles.ctxName}>{x.name}</span>
-                {x.inline && <span className="chip" title={t('Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Теги»')}>{t('целиком')}</span>}
+                {x.inline && <span className="chip" title={t('Заметки тега уходят в каждую итерацию целиком; режим меняется на странице «Знания»')}>{t('целиком')}</span>}
                 <span className={styles.ctxTok}>{`${x.chars} · ${x.share}`}</span>
               </li>
             ))}

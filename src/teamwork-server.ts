@@ -1,0 +1,1735 @@
+// Teamwork: сервис команды и маршруты /api/teams (spec §12), по образцу integrationsRoute. Сервис читает клоны через
+// TeamRepo и пишет через его очередь (коммит на запись); ответы — типы Teamwork из src/api-types.ts; ошибки — { error } с
+// 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly, repo_state, rewritten, running). Конфликты синхронизации (spec §7.4) —
+// GET …/conflicts, DELETE …/conflicts/:id («оставить версию команды»), POST …/conflicts/:id/mine («взять мою»: поле, текст
+// или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*) — объект
+// TeamDrafts из teamwork-drafts.ts в deps маршрута; текст задачи для запуска (…/intake) и worktree задачи (…/worktree)
+// добавляет сессия work волны 2 — их маршруты не заняты. Репо кода добавляется выбором моей папки: POST …/repo-info читает её
+// origin и ветку по умолчанию из git, а папка (repos[].local в create/update проекта) хранится только в local.json → repoPaths.
+import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { parseFlow } from './flows.js';
+import { defaultBranch, exec, originUrl, parseRemote, repoRoot, type Exec } from './git.js';
+import { describeProjects } from './projects.js';
+import { loadSettings } from './settings.js';
+import type { FlowSpec } from './schema.js';
+import type { TeamDrafts } from './teamwork-drafts.js';
+import { PROJECT_DOC_FILES, PROJECT_TEMPLATE_DIR, projectDocs, renderDoc, TEMPLATE_DIR } from './teamwork-template.js';
+import { flowHash, pinTemplateFlows, teamFlowProblems, teamFlowTextProblems, trustFlow, untrustedFlow } from './teamwork-trust.js';
+import { addMember, checkRemote, COMMENT_FILE_RE, isProjectClaude, CONFLICT_REF, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
+import {
+  commentFileName, composeTask, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextTaskId, parseComment,
+  parseProject, parseRequirements, parseSprint, parseTask, PROJECT_STATUSES, rankNear, remoteProblem, replaceSection, shareableUrl, requirementMax, sectionHash, serializeComment,
+  serializeProject, serializeSprint, serializeTask, sortTasks, splitSections, sprintSummary, sprintView, TASK_ID_RE, TASK_STATUSES, TASK_TYPES, taskChangeMessage,
+  taskFrontmatter, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
+} from './teamwork.js';
+import { addedRequirementRepeats, compareTasks, mergeField, mergeFieldMine, placeRank, TASK_BRANCH_RE, updateTaskText, validRank, type RequirementKind } from './teamwork.js';
+import type {
+  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamFlowTrust, TeamFlowTrusted, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
+  TeamMine, TeamMineProject, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
+  TeamTaskWork,
+} from './api-types.js';
+
+export type Reply = { status: number; body: unknown };
+
+export type TeamServiceDeps = {
+  /** Корень команд; по умолчанию teamsDir() при каждом обращении (тесты подменяют AGENTGRAPH_CONFIG_DIR). */
+  root?: () => string;
+  repo?: Partial<RepoDeps>;
+  /** Открыт ли UI (/api/events): получение каждые 30 с, иначе раз в 5 минут. */
+  hasSubscribers?: () => boolean;
+  /** Таймеры: отправка через 3 с после записи, получение по расписанию, фоновый pull при открытии экрана; false — только явный POST /sync (тесты). */
+  timers?: boolean;
+  /** Локальная папка репо кода по ссылке: по умолчанию среди проектов дашборда по origin. */
+  findLocal?: (url: string) => Promise<string | undefined>;
+  /** Живой статус запуска или сессии по задаче (TeamTask.work): сервер сверяет запись local.json с идущими запусками и сессиями. */
+  workStatus?: (work: TeamTaskWork) => TeamTaskWork;
+};
+
+/** Новая задача (POST …/tasks): dependsOn — ключи соседей по пачке или номера существующих задач, становятся blockedBy. */
+export type NewTask = {
+  key?: string;
+  title: string;
+  type?: TeamTaskType;
+  body?: string;
+  description?: string;
+  acceptance?: string[];
+  estimate?: number;
+  repo?: string;
+  assignee?: string;
+  sprint?: number;
+  blockedBy?: string[];
+  dependsOn?: string[];
+  covers?: string[];
+  /** Место в своём списке (спринт или бэклог): after — сразу после этой задачи, before — сразу перед ней; без них — в конец. */
+  after?: string;
+  before?: string;
+};
+
+export type WriteDocOptions = { base?: string; section?: string; hash?: string; message?: string };
+/**
+ * work — задача та, у которой в local.json → work записан этот запуск или сессия, а не номер из аргумента (D-14): номер ищется
+ * внутри очереди записей клона, после синхронизации, которая могла переименовать задачу. Записи нет — 404.
+ */
+export type TaskWriteOptions = { message?: string; author?: { name: string; email: string }; work?: Pick<TeamTaskWork, 'kind' | 'id'> };
+export type NewSprint = { title?: string; goal?: string; start?: boolean; tasks?: string[] };
+export type CloseSprint = { next?: string[]; backlog?: string[] };
+export type TeamFlow = TeamFlowOf<FlowSpec>;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+function bad(msg: string): never {
+  throw new TeamError(400, msg);
+}
+const optStr = (v: unknown, field: string): string | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') bad(`Поле ${field} — строка`);
+  return (v as string).trim();
+};
+const reqStr = (v: unknown, field: string, what = `Укажи ${field}`): string => {
+  const s = optStr(v, field);
+  if (!s) bad(what);
+  return s!;
+};
+const strArr = (v: unknown, field: string): string[] => {
+  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) bad(`Поле ${field} — список строк`);
+  return (v as string[]).map((s) => s.trim()).filter(Boolean);
+};
+const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/i;
+const DOC_UPDATED: Record<string, string> = { prd: 'ТЗ обновлено', architecture: 'архитектура обновлена', design: 'дизайн обновлён' };
+
+/** YAML-файл как объект для слияния полей и правки элементов по месту; не объект или не разбирается — пустой. */
+function rawYaml(text: string): Record<string, unknown> {
+  try {
+    const v: unknown = parseYaml(text);
+    return isRecord(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Элемент списка из файла по ключу (участник по email, репо кода по key) — со всеми его полями, в том числе неизвестными. */
+function elementBy(list: unknown, key: 'email' | 'key', id: string): Record<string, unknown> | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const norm = (v: string) => (key === 'email' ? v.trim().toLowerCase() : v.trim());
+  return list.find((x): x is Record<string, unknown> => isRecord(x) && typeof x[key] === 'string' && norm(x[key] as string) === norm(id));
+}
+
+/**
+ * Известные поля из запроса поверх элемента из файла (spec §5.9, D-9): неизвестные поля элемента остаются на своих местах,
+ * известное поле, которого нет в запросе, снимается.
+ */
+function overlay(from: Record<string, unknown> | undefined, value: Record<string, unknown>, known: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(from ?? {}) };
+  for (const k of known) {
+    if (value[k] === undefined) delete out[k];
+    else out[k] = value[k];
+  }
+  return out;
+}
+
+/** Ключ репо из имени папки: латиница в нижнем регистре, цифры, дефис и подчёркивание (KEY_RE); ничего не осталось — repo. */
+export function repoKeyFrom(name: string): string {
+  const k = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 41).replace(/[-_]+$/, '');
+  return KEY_RE.test(k) ? k : 'repo';
+}
+
+/** Текущая ветка папки (запасная ветка по умолчанию, когда нет origin/HEAD); отделённый HEAD — undefined. */
+async function currentBranch(root: string, x: Exec): Promise<string | undefined> {
+  try {
+    return (await x('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: root, timeoutMs: 10_000 })).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Локальная папка репо кода среди проектов дашборда по origin (spec §5.3). */
+export async function findLocalRepo(url: string, x: Exec = exec): Promise<string | undefined> {
+  return (await findLocalRepos([url], x)).get(url);
+}
+
+/** Папки нескольких репо кода за один обход проектов дашборда: ссылка → папка, ненайденных нет. */
+export async function findLocalRepos(urls: readonly string[], x: Exec = exec): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const wanted = urls.flatMap((url) => {
+    const r = parseRemote(url);
+    return r ? [{ url, r }] : [];
+  });
+  if (!wanted.length) return out;
+  const projects = await describeProjects(loadSettings(), x).catch(() => []);
+  for (const { url, r } of wanted) {
+    const found = projects.find((p) => p.remote && p.remote.host === r.host && p.remote.path === r.path)?.path;
+    if (found) out.set(url, found);
+  }
+  return out;
+}
+
+/**
+ * Сервис команд: открывает клоны по слагу, держит их таймеры, пересылает события изменений (после записи или pull) и
+ * собирает ответы API. Методы для сессий work и drafts: readTeamFlow, updateTask, createTasks, writeDoc, recordWork, onChange, stop.
+ */
+export class TeamService {
+  private repos = new Map<string, TeamRepo>();
+  /** Когда открытие экрана команды последний раз запускало фоновый pull (удачный или нет): без сети lastFetchAt не растёт. */
+  private pulledAt = new Map<string, number>();
+  private listeners = new Set<(e: ChangeEvent) => void>();
+  private readonly repoDeps: RepoDeps;
+  private stopped = false;
+
+  constructor(private readonly deps: TeamServiceDeps = {}) {
+    // timers: false — отправка только явная, даже если deps.repo принёс pushDelayMs (например, целиком defaultRepoDeps()):
+    // иначе через 3 с после записи уходила бы фоновая синхронизация посреди теста
+    this.repoDeps = { ...defaultRepoDeps(), ...(deps.repo ?? {}), ...(deps.timers === false ? { pushDelayMs: Infinity } : {}) };
+  }
+
+  root(): string {
+    return this.deps.root ? this.deps.root() : teamsDir();
+  }
+
+  onChange(fn: (e: ChangeEvent) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit(e: ChangeEvent): void {
+    for (const fn of this.listeners) fn(e);
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    await Promise.all([...this.repos.values()].map((r) => r.stop()));
+    this.repos.clear();
+  }
+
+  /** Клон команды; нет такой — 404. Открытый клон подписывается на события и получает таймеры. */
+  repo(slug: string): TeamRepo {
+    const got = this.repos.get(slug);
+    if (got) return got;
+    const repo = TeamRepo.open(slug, this.repoDeps, this.root());
+    if (!repo) throw new TeamError(404, `Команды ${slug} нет`);
+    return this.adopt(repo);
+  }
+
+  /**
+   * Клон — в работу сервиса. Flow команды, совпадающие с шаблоном agentgraph, сразу запоминаются одобренными (spec §14):
+   * при создании и подключении команды и при первом открытии клона процессом — так новая версия шаблона после
+   * обновления agentgraph не делает «чужим» нетронутый flow, который до обновления ни разу не открывали. Клон без правил
+   * sparse-checkout (сделан до этой версии) переводится на них в очереди.
+   */
+  private adopt(repo: TeamRepo): TeamRepo {
+    this.repos.set(repo.slug, repo);
+    this.pinTemplates(repo);
+    // клон до этой версии: .claude из папок проектов убирается сразу, а не при первой записи или опросе (spec §14)
+    if (repo.needsSparse()) void repo.prepareSparse().catch(() => undefined);
+    repo.onChange((e) => this.emit(e));
+    if (this.deps.timers !== false && !this.stopped) repo.startTimers(this.deps.hasSubscribers ?? (() => false));
+    return repo;
+  }
+
+  private forget(slug: string): void {
+    this.repos.delete(slug);
+  }
+
+  /** Flow команды, совпадающие с шаблоном agentgraph, — в trust.json (via template); сбой чтения или записи — не повод не открыть клон. */
+  private pinTemplates(repo: TeamRepo): void {
+    try {
+      const flows = this.flowNames(repo).flatMap((name) => {
+        const yaml = repo.read(this.flowFile(repo, name));
+        return yaml === undefined ? [] : [{ name, yaml }];
+      });
+      pinTemplateFlows(repo.dir, flows, this.repoDeps.templateDir, this.repoDeps.now());
+    } catch {
+      // не запомнилось — flow шаблона одобрен и так, пока шаблон тот же (untrustedFlow)
+    }
+  }
+
+  // ---------- команды (spec §8.1–8.2, §12)
+
+  async listTeams(): Promise<TeamSummary[]> {
+    const out: TeamSummary[] = [];
+    for (const slug of TeamRepo.list(this.root())) {
+      const repo = this.repo(slug);
+      try {
+        out.push(await this.summary(repo));
+      } catch (err) {
+        // teamwork.yaml не читается: команда в списке остаётся, причина — в строке синхронизации
+        out.push({ slug, title: slug, prefix: '', remote: shareableUrl(repo.local().remote), members: 0, projects: [], sync: { ...(await repo.syncState()), error: errMsg(err) } });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * «Мои задачи» на главной (spec §11): задачи активных спринтов всех команд, где исполнитель — я по git config клона,
+   * одним ответом; фонового pull не тянет (главную открывают часто, клоны и так получают по таймеру). Папки репо кода —
+   * как у проекта: local.json, иначе один обход проектов дашборда на все ссылки.
+   */
+  async mine(): Promise<TeamMine> {
+    const out: TeamMine = { teams: [], projects: [], tasks: [] };
+    const wanted = new Map<TeamMineProject, ProjectRepo[]>();
+    const repoPaths = new Map<TeamMineProject, Record<string, string>>();
+    for (const slug of TeamRepo.list(this.root())) {
+      const repo = this.repo(slug);
+      let cfg: TeamConfig;
+      try {
+        cfg = repo.config();
+      } catch (err) {
+        out.teams.push({ slug, title: slug, prefix: '', flows: [], error: errMsg(err) });
+        continue;
+      }
+      const me = (await repo.identity()).email;
+      out.teams.push({
+        slug, title: cfg.title, prefix: cfg.prefix, flows: this.flowNames(repo), columns: cfg.columns,
+        ...(cfg.defaultFlow ? { defaultFlow: cfg.defaultFlow } : {}), ...(me ? { me } : {}), ...(repo.readonly() ? { readonly: true as const } : {}),
+      });
+      if (!me) continue;
+      for (const p of repo.dirs('projects')) {
+        let pc: ProjectConfig;
+        try {
+          pc = this.readProjectConfig(repo, p);
+        } catch {
+          continue; // битый project.yaml виден на экране команды
+        }
+        const active = pc.status === 'active' ? this.readSprints(repo, p).find((s) => s.status === 'active') : undefined;
+        if (!active) continue;
+        const tasks = this.readTasks(repo, p);
+        const mine = tasks.filter((x) => !x.error && x.sprint === active.number && x.assignee?.toLowerCase() === me);
+        if (!mine.length) continue;
+        const project: TeamMineProject = { team: slug, slug: p, title: pc.title, sprint: { number: active.number, title: active.title }, repos: [] };
+        out.projects.push(project);
+        wanted.set(project, pc.repos);
+        repoPaths.set(project, repo.local().repoPaths);
+        const byId = new Map(tasks.map((x) => [x.id, x]));
+        for (const x of mine) {
+          const waiting = x.blockedBy.filter((id) => byId.has(id) && byId.get(id)!.status !== 'done');
+          out.tasks.push({ team: slug, project: p, task: taskView(x), waiting });
+        }
+      }
+    }
+    const own = (p: TeamMineProject, url: string) => (Object.hasOwn(repoPaths.get(p)!, url) ? repoPaths.get(p)![url] : undefined);
+    const auto = await this.findLocals([...new Set([...wanted].flatMap(([p, repos]) => repos.filter((r) => !own(p, r.url)).map((r) => r.url)))]);
+    for (const [p, repos] of wanted) {
+      p.repos = repos.map((r) => {
+        const found = own(p, r.url) ?? auto.get(r.url);
+        return { key: r.key, url: r.url, ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}), ...(found ? { local: found } : {}) };
+      });
+    }
+    return out;
+  }
+
+  /** Проверка ссылки; у репо команды — ещё и какие репо кода проектов уже есть на этом компьютере (по origin). */
+  async check(url: string): Promise<TeamRemoteCheck> {
+    const r = await checkRemote(url, this.repoDeps);
+    if (r.kind !== 'team') return r;
+    const found = await this.findLocals([...new Set(r.projects.flatMap((p) => p.repos))]);
+    return { ...r, localRepos: Object.fromEntries(found) };
+  }
+
+  /** Папки репо кода у меня по ссылкам: подменённый findLocal — по одной, иначе один обход проектов дашборда. */
+  private async findLocals(urls: string[]): Promise<Map<string, string>> {
+    const one = this.deps.findLocal;
+    if (!one) return findLocalRepos(urls).catch(() => new Map<string, string>());
+    const out = new Map<string, string>();
+    for (const u of urls) {
+      const found = await one(u).catch(() => undefined);
+      if (found) out.set(u, found);
+    }
+    return out;
+  }
+
+  async createTeam(body: { url: string; title: string; prefix: string }): Promise<TeamDetail> {
+    const repo = await createTeam(body, this.repoDeps, this.root());
+    return this.detail(this.adopt(repo));
+  }
+
+  async joinTeam(body: { url: string; addMe?: boolean }): Promise<TeamDetail> {
+    const { repo } = await joinTeam(body, this.repoDeps, this.root());
+    return this.detail(this.adopt(repo));
+  }
+
+  /**
+   * «Добавить меня» (POST /api/teams/:t/members/me): я по git config клона — в участники отдельным коммитом, как при
+   * подключении. Список не перезаписывается: участник, которого добавил или поправил коллега после того, как экран
+   * прочитал список, остаётся. Уже участник — ничего не пишется, ответ тот же.
+   */
+  async addMe(slug: string): Promise<TeamDetail> {
+    const repo = this.repo(slug);
+    const me = await repo.requireIdentity();
+    await repo.write(`Участник добавлен: ${me.name}`, (r) => {
+      addMember(r, me);
+    });
+    return this.detail(repo);
+  }
+
+  async removeTeam(slug: string, force: boolean): Promise<void> {
+    const repo = this.repo(slug);
+    await repo.disconnect(force);
+    this.forget(slug);
+  }
+
+  async team(slug: string): Promise<TeamDetail> {
+    const repo = this.repo(slug);
+    const detail = await this.detail(repo);
+    // при открытии экрана — получить в фоне, если давно не получали (spec §7.3); после ответа, чтобы его чтение не шло
+    // поверх reset/rebase. Pull пришлёт событие team, и UI перечитает
+    if (this.deps.timers !== false) {
+      const last = Math.max(Date.parse(repo.local().sync.lastFetchAt ?? '') || 0, this.pulledAt.get(slug) ?? 0);
+      if (Date.now() - last > 10_000) {
+        this.pulledAt.set(slug, Date.now());
+        void repo.pull().catch(() => undefined);
+      }
+    }
+    return detail;
+  }
+
+  /**
+   * Правка полей YAML-файла клона от версии, с которой клиент открыл форму (D-10). base — textHash файла из ответа GET:
+   * файл с тех пор не менялся или base нет (старый клиент) — присланное ложится поверх текущего; менялся — каждое
+   * присланное поле сливается трёхсторонне от версии base из истории клона, так что чужие правки других полей, ключей
+   * колонок и участников остаются, а одно место, изменённое и мной, и командой по-разному, — 409 conflict с текущим
+   * видом. Версии base в истории нет — тоже 409. mine строит присланные поля поверх версии base (элементы списков — с их
+   * неизвестными полями, D-9). Возвращает патч для updateYaml.
+   */
+  private async patchFrom(r: TeamRepo, rel: string, base: string | undefined, mine: (was: Record<string, unknown>) => Record<string, unknown>, current: () => Promise<unknown>, what: string): Promise<Record<string, unknown>> {
+    const text = r.read(rel) ?? '';
+    const old = base && textHash(text) !== base ? await r.versionByHash(rel, base) : text;
+    if (old === undefined) throw new TeamError(409, `${what} изменились, а версии, с которой открыта форма, в истории нет: открой форму заново`, 'conflict', { current: await current() });
+    const was = rawYaml(old);
+    const cur = rawYaml(text);
+    const patch: Record<string, unknown> = {};
+    const clash: string[] = [];
+    for (const [k, v] of Object.entries(mine(was))) {
+      const m = mergeField(k, was[k], v, cur[k]);
+      if (m.conflict) clash.push(k);
+      else patch[k] = m.value;
+    }
+    if (clash.length) throw new TeamError(409, `${what} уже изменил кто-то другой: ${clash.join(', ')}`, 'conflict', { current: await current() });
+    return patch;
+  }
+
+  /**
+   * PUT настроек команды (spec §12): название, названия колонок, участники, flow по умолчанию. Правка идёт внутри очереди
+   * по текущему teamwork.yaml, а не по config() до неё: колонки — по ключам, участники — по email с их неизвестными полями
+   * (spec §5.9, D-9); с base — слияние с чужими правками и 409 на одно место (patchFrom, D-10).
+   */
+  async updateTeam(slug: string, body: unknown): Promise<TeamDetail> {
+    const repo = this.repo(slug);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const b = body as Record<string, unknown>;
+    const changes: string[] = [];
+    const title = b.title !== undefined ? reqStr(b.title, 'title', 'Название не может быть пустым') : undefined;
+    if (title !== undefined) changes.push('название');
+    let columns: Partial<TeamColumns> | undefined;
+    if (b.columns !== undefined) {
+      if (!isRecord(b.columns)) bad('Поле columns — объект с названиями колонок');
+      columns = {};
+      for (const [k, v] of Object.entries(b.columns as Record<string, unknown>)) {
+        if (!TASK_STATUSES.includes(k as TeamTaskStatus)) bad(`Колонки фиксированы: ${TASK_STATUSES.join(', ')}; лишний ключ ${k}`);
+        columns[k as TeamTaskStatus] = reqStr(v, `columns.${k}`, `Название колонки ${k} не может быть пустым`);
+      }
+      changes.push('колонки');
+    }
+    let members: TeamMember[] | undefined;
+    if (b.members !== undefined) {
+      if (!Array.isArray(b.members)) bad('Поле members — список участников');
+      members = [];
+      for (const m of b.members as unknown[]) {
+        if (!isRecord(m)) bad('Участник — объект с name и email');
+        const email = reqStr(m.email, 'email', 'У участника нужен email').toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+$/.test(email)) bad(`Неверный email: ${email}`);
+        if (members.some((x) => x.email === email)) bad(`Email повторяется: ${email}`);
+        const github = optStr(m.github, 'github');
+        const gitlab = optStr(m.gitlab, 'gitlab');
+        members.push({ name: optStr(m.name, 'name') || email, email, ...(github ? { github } : {}), ...(gitlab ? { gitlab } : {}) });
+      }
+      if (!members.length) bad('В команде должен остаться хотя бы один участник');
+      changes.push('участники');
+    }
+    let defaultFlow: string | null | undefined;
+    if (b.defaultFlow !== undefined) {
+      defaultFlow = b.defaultFlow === null || b.defaultFlow === '' ? null : reqStr(b.defaultFlow, 'defaultFlow');
+      if (defaultFlow && !FLOW_NAME_RE.test(defaultFlow)) bad(`Недопустимое имя flow: ${defaultFlow}`);
+      changes.push('flow по умолчанию');
+    }
+    if (b.prefix !== undefined && optStr(b.prefix, 'prefix')?.toUpperCase() !== repo.config().prefix) bad('Префикс номеров задач после создания не меняется');
+    const base = optStr(b.base, 'base');
+    if (!changes.length) return this.detail(repo);
+    await repo.write(`Настройки команды: ${changes.join(', ')}`, async (r) => {
+      if (defaultFlow && !this.flowNames(r).includes(defaultFlow)) bad(`Flow ${defaultFlow} нет в репо команды (flows/${defaultFlow}.yaml)`);
+      const patch = await this.patchFrom(
+        r,
+        'teamwork.yaml',
+        base,
+        (was) => ({
+          ...(title !== undefined ? { title } : {}),
+          ...(columns ? { columns: { ...(isRecord(was.columns) ? was.columns : {}), ...columns } } : {}),
+          ...(members ? { members: members.map((m) => overlay(elementBy(was.members, 'email', m.email), m, ['name', 'email', 'github', 'gitlab'])) } : {}),
+          ...(defaultFlow !== undefined ? { defaultFlow: defaultFlow ?? undefined } : {}),
+        }),
+        () => this.detail(r),
+        'Настройки команды',
+      );
+      if (members && Array.isArray(patch.members) && !patch.members.length) bad('В команде должен остаться хотя бы один участник');
+      r.writeFile('teamwork.yaml', updateYaml(r.read('teamwork.yaml') ?? '', patch));
+    });
+    return this.detail(repo);
+  }
+
+  /** Синхронизировать сейчас: ошибка сети остаётся строкой синхронизации, а не кодом ответа. */
+  async sync(slug: string): Promise<TeamSync> {
+    const repo = this.repo(slug);
+    try {
+      return await repo.sync();
+    } catch {
+      return repo.syncState();
+    }
+  }
+
+  local(slug: string): TeamLocal {
+    const l = this.repo(slug).local();
+    return { repoPaths: l.repoPaths, projectSpaces: l.projectSpaces };
+  }
+
+  updateLocal(slug: string, body: unknown): TeamLocal {
+    const repo = this.repo(slug);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const b = body as Record<string, unknown>;
+    const merge = (target: Record<string, string>, src: unknown, field: string, check?: (k: string, v: string) => void) => {
+      if (src === undefined) return;
+      if (!isRecord(src)) bad(`Поле ${field} — объект`);
+      for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+        if (v === null || v === '') delete target[k];
+        else {
+          if (typeof v !== 'string') bad(`Поле ${field}.${k} — строка`);
+          check?.(k, v as string);
+          target[k] = v as string;
+        }
+      }
+    };
+    repo.saveLocal((l) => {
+      merge(l.repoPaths, b.repoPaths, 'repoPaths', (_k, v) => {
+        if (!path.isAbsolute(v)) bad(`Путь к репо кода должен быть абсолютным: ${v}`);
+      });
+      merge(l.projectSpaces, b.projectSpaces, 'projectSpaces');
+    });
+    // привязки пространств видны в проекте, пути репо — во всех проектах с этим репо: UI сбрасывает кэш команды целиком
+    this.emit({ team: slug, projects: isRecord(b.projectSpaces) && b.repoPaths === undefined ? Object.keys(b.projectSpaces as object).sort() : this.repo(slug).dirs('projects') });
+    return this.local(slug);
+  }
+
+  private async summary(repo: TeamRepo): Promise<TeamSummary> {
+    const cfg = repo.config();
+    return {
+      slug: repo.slug,
+      title: cfg.title,
+      prefix: cfg.prefix,
+      // ссылка уходит в UI и в ответы API: без логина и токена (S-8)
+      remote: shareableUrl(repo.local().remote),
+      members: cfg.members.length,
+      projects: this.projectBriefs(repo),
+      sync: await repo.syncState(),
+    };
+  }
+
+  private async detail(repo: TeamRepo): Promise<TeamDetail> {
+    const cfg = repo.config();
+    return {
+      ...(await this.summary(repo)),
+      format: cfg.format,
+      columns: cfg.columns,
+      memberList: cfg.members,
+      ...(cfg.defaultFlow ? { defaultFlow: cfg.defaultFlow } : {}),
+      me: await this.me(repo, cfg),
+      flows: this.flowNames(repo),
+      dir: repo.repoDir,
+      base: textHash(repo.read('teamwork.yaml') ?? ''),
+    };
+  }
+
+  private async me(repo: TeamRepo, cfg: TeamConfig): Promise<TeamMe> {
+    const id = await repo.identity();
+    return { ...id, inTeam: Boolean(id.email && cfg.members.some((m) => m.email === id.email)) };
+  }
+
+  // ---------- конфликты синхронизации (spec §7.4)
+
+  conflicts(slug: string): TeamConflict[] {
+    return this.repo(slug).local().conflicts;
+  }
+
+  /**
+   * Решить конфликт: theirs — оставить версию команды (запись просто снимается); mine — записать моё значение коммитом:
+   * поле задачи или YAML (у списков и объектов — мои спорные элементы поверх текущего, D-3), тело задачи, текст документа,
+   * удалённый файл, двоичный файл из blob (D-1). Для двух активных спринтов «моё» нет: задачи переносятся в активный
+   * спринт руками; поле спринта — обычное поле (D-13, у старых записей kind sprint с field).
+   */
+  async resolveConflict(slug: string, id: string, how: 'theirs' | 'mine'): Promise<TeamConflict[]> {
+    const repo = this.repo(slug);
+    const c = repo.local().conflicts.find((x) => x.id === id);
+    if (!c) throw new TeamError(404, 'Такого конфликта нет: он уже решён');
+    if (how === 'mine') {
+      if (c.kind === 'sprint' && !c.field) bad('Для двух активных спринтов «взять моё» нет: перенеси задачи в активный спринт');
+      // такой конфликт бывает только у клона старой версии; запись мимо правил sparse-checkout не закоммитится (spec §14)
+      if (isProjectClaude(c.file)) bad(`${c.file} — в .claude папки проекта: agentgraph такие файлы в клон не выгружает и не пишет. Оставь версию команды или поправь репо команды обычным git`);
+      const label = c.task ?? c.doc ?? c.file;
+      await repo.write(`${label}: взято моё${c.field ? ` (${c.field})` : ''}`, async (r) => {
+        const comment = c.file.match(COMMENT_FILE_RE);
+        // мой комментарий к задаче, которую команда удалила: вернуть его — оставить сироту (D-5)
+        if (comment && c.kind === 'deleted' && !r.exists(`projects/${comment[1]}/tasks/${comment[2]}.md`)) throw new TeamError(409, `Задачи ${comment[2]} у команды больше нет: комментарий вернуть некуда`, 'conflict');
+        if (c.blob) return r.restoreBlob(c.file, c.blob);
+        const current = r.read(c.file);
+        if (c.kind === 'deleted') {
+          const task = c.file.match(TASK_FILE_RE);
+          // моё удаление задачи — целиком, как deleteTask: перепроигрывание оставило её комментарии и ссылки соседей
+          if ((c.ours === null || c.ours === undefined) && task) this.removeTask(r, task[1], task[2]);
+          else if (c.ours === null || c.ours === undefined) r.remove(c.file);
+          else r.writeFile(c.file, String(c.ours));
+          return;
+        }
+        if (current === undefined) throw new TeamError(409, `Файла ${c.file} больше нет в репо команды`, 'conflict');
+        if (c.kind === 'text' && (!c.field || c.field === 'text')) return r.writeFile(c.file, String(c.ours));
+        if (TASK_FILE_RE.test(c.file)) {
+          const t = parseTask(current, c.file);
+          if (t.error) throw new TeamError(409, `Задача ${c.task} не читается (${t.error})`, 'conflict');
+          if (c.field === 'body') return r.writeFile(c.file, composeTask(taskFrontmatter(t), String(c.ours)));
+          const v = mergeFieldMine(c.field!, c.theirs, c.ours, taskFrontmatter(t)[c.field!]);
+          return r.writeFile(c.file, updateTaskText(current, { [c.field!]: v ?? undefined }));
+        }
+        if (/\.ya?ml$/.test(c.file) && c.field) return r.writeFile(c.file, updateYaml(current, { [c.field]: mergeFieldMine(c.field, c.theirs, c.ours, rawYaml(current)[c.field]) ?? undefined }));
+        r.writeFile(c.file, String(c.ours));
+      });
+    }
+    repo.saveLocal((l) => (l.conflicts = l.conflicts.filter((x) => x.id !== id)));
+    // через очередь: update-ref параллельно с fetch той же команды мог бы споткнуться о packed-refs.lock
+    if (c.blob) await repo.enqueue(() => repo.git(['update-ref', '-d', `${CONFLICT_REF}${c.id}`])).catch(() => undefined);
+    if (how === 'theirs') this.emit({ team: slug, projects: c.project ? [c.project] : [] });
+    return repo.local().conflicts;
+  }
+
+  // ---------- проекты (spec §8.3)
+
+  private projectSlug(slug: string): string {
+    if (!TEAM_SLUG_RE.test(slug)) bad(`Неверный слаг проекта: ${slug}`);
+    return slug;
+  }
+
+  private readProjectConfig(repo: TeamRepo, slug: string): ProjectConfig {
+    const text = repo.read(`projects/${this.projectSlug(slug)}/project.yaml`);
+    if (text === undefined) throw new TeamError(404, `Проекта ${slug} нет`);
+    try {
+      return parseProject(text, slug);
+    } catch (err) {
+      throw new TeamError(500, `project.yaml проекта ${slug} не читается: ${errMsg(err)}`);
+    }
+  }
+
+  private readTasks(repo: TeamRepo, slug: string): TaskFile[] {
+    const dir = `projects/${slug}/tasks`;
+    const work = repo.local().work;
+    return sortTasks(
+      repo.list(dir, (n) => /\.md$/i.test(n)).map((name) => {
+        const rel = `${dir}/${name}`;
+        const t = parseTask(repo.read(rel) ?? '', rel);
+        t.comments = repo.list(`projects/${slug}/comments/${t.id}`, (n) => /\.md$/i.test(n)).length;
+        if (work[t.id]?.length) t.work = this.deps.workStatus ? work[t.id].map(this.deps.workStatus) : work[t.id];
+        return t;
+      }),
+    );
+  }
+
+  /** Следующий номер спринта — по именам файлов, не по разобранным: битый sprints/3.yaml номер не освобождает. */
+  private nextSprintNumberIn(repo: TeamRepo, slug: string): number {
+    return repo.list(`projects/${slug}/sprints`, (n) => /^\d+\.ya?ml$/.test(n)).reduce((m, n) => Math.max(m, Number(n.split('.')[0])), 0) + 1;
+  }
+
+  private readSprints(repo: TeamRepo, slug: string): SprintFile[] {
+    const dir = `projects/${slug}/sprints`;
+    const out: SprintFile[] = [];
+    for (const name of repo.list(dir, (n) => /^\d+\.ya?ml$/.test(n))) {
+      try {
+        out.push(parseSprint(repo.read(`${dir}/${name}`) ?? '', Number(name.split('.')[0])));
+      } catch {
+        // битый спринт: пропускаем, его видно в истории
+      }
+    }
+    return out.sort((a, b) => a.number - b.number);
+  }
+
+  private projectBriefs(repo: TeamRepo): TeamProjectBrief[] {
+    return repo.dirs('projects').map((slug) => {
+      let cfg: ProjectConfig;
+      try {
+        cfg = this.readProjectConfig(repo, slug);
+      } catch (err) {
+        return { slug, title: slug, summary: `Не читается: ${errMsg(err)}`, status: 'active', backlog: 0 };
+      }
+      const tasks = this.readTasks(repo, slug).filter((t) => !t.error);
+      const active = this.readSprints(repo, slug).find((s) => s.status === 'active');
+      return {
+        slug,
+        title: cfg.title,
+        summary: cfg.summary,
+        status: cfg.status,
+        ...(active ? { sprint: { number: active.number, title: active.title, ...sprintSummary(tasks, active.number) } } : {}),
+        backlog: tasks.filter((t) => t.sprint === undefined).length,
+      };
+    });
+  }
+
+  listProjects(slug: string): TeamProjectBrief[] {
+    return this.projectBriefs(this.repo(slug));
+  }
+
+  async project(team: string, slug: string): Promise<TeamProject> {
+    const repo = this.repo(team);
+    return this.projectView(repo, this.readProjectConfig(repo, slug));
+  }
+
+  private async projectView(repo: TeamRepo, cfg: ProjectConfig): Promise<TeamProject> {
+    const local = repo.local();
+    const auto = await this.findLocals(cfg.repos.filter((r) => !Object.hasOwn(local.repoPaths, r.url)).map((r) => r.url));
+    const repos: TeamRepoRef[] = [];
+    for (const r of cfg.repos) {
+      const found = (Object.hasOwn(local.repoPaths, r.url) ? local.repoPaths[r.url] : undefined) ?? auto.get(r.url);
+      repos.push({ key: r.key, url: r.url, ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}), ...(found ? { local: found } : {}) });
+    }
+    const space = local.projectSpaces[cfg.slug];
+    const claude = await repo.projectClaude(cfg.slug);
+    return {
+      slug: cfg.slug,
+      title: cfg.title,
+      summary: cfg.summary,
+      status: cfg.status,
+      repos,
+      ...(cfg.createdAt ? { createdAt: cfg.createdAt } : {}),
+      ...(cfg.createdBy ? { createdBy: cfg.createdBy } : {}),
+      ...(space ? { space } : {}),
+      dir: repo.abs(`projects/${cfg.slug}`),
+      base: textHash(repo.read(`projects/${cfg.slug}/project.yaml`) ?? ''),
+      docs: await this.docBriefs(repo, cfg.slug),
+      sprints: this.readSprints(repo, cfg.slug).map(sprintView),
+      ...(claude.length ? { claudeSkipped: claude } : {}),
+    };
+  }
+
+  /**
+   * Репо кода из тела запроса: key, url, defaultBranch — в project.yaml (общее); local — моя папка этого репо, только в
+   * local.json → repoPaths, в репо команды не попадает.
+   */
+  private parseRepos(v: unknown): { repos: ProjectRepo[]; local: Record<string, string> } {
+    if (!Array.isArray(v)) bad('Поле repos — список репо кода');
+    const out: ProjectRepo[] = [];
+    const local: Record<string, string> = {};
+    for (const r of v as unknown[]) {
+      if (!isRecord(r)) bad('Репо кода — объект с key и url');
+      const key = reqStr(r.key, 'key', 'У репо кода нужен ключ');
+      if (!KEY_RE.test(key)) bad(`Ключ репо — латиница, цифры, дефис: ${key}`);
+      const url = reqStr(r.url, 'url', 'У репо кода нужна ссылка');
+      const problem = remoteProblem(url);
+      if (problem) bad(`Репо ${key}: ${problem}`);
+      // ссылка уходит в репо команды и ко всем участникам: логин и токен в ней — утечка
+      if (shareableUrl(url) !== url) bad(`Репо ${key}: в ссылке логин или токен — уберите их, ссылка попадёт в репо команды`);
+      if (out.some((x) => x.key === key)) bad(`Ключ репо повторяется: ${key}`);
+      const defaultBranch = optStr(r.defaultBranch, 'defaultBranch');
+      out.push({ key, url, ...(defaultBranch ? { defaultBranch } : {}) });
+      const dir = optStr(r.local, 'local');
+      if (dir) {
+        if (!path.isAbsolute(dir)) bad(`Путь к репо кода должен быть абсолютным: ${dir}`);
+        local[url] = dir;
+      }
+    }
+    return { repos: out, local };
+  }
+
+  /** Мои папки репо кода из create/update проекта — в local.json, после удачного коммита project.yaml. */
+  private saveRepoPaths(repo: TeamRepo, local: Record<string, string>): void {
+    if (Object.keys(local).length) repo.saveLocal((l) => Object.assign(l.repoPaths, local));
+  }
+
+  /** Что git знает о моей папке репо кода (POST …/repo-info): корень, origin, ветка по умолчанию, ключ из имени папки. */
+  async repoInfo(team: string, body: unknown): Promise<TeamRepoInfo> {
+    this.repo(team);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const dir = reqStr((body as Record<string, unknown>).path, 'path', 'Укажи папку репо кода');
+    if (!path.isAbsolute(dir)) bad(`Путь к репо кода должен быть абсолютным: ${dir}`);
+    const x = this.repoDeps.exec;
+    const root = await repoRoot(dir, x);
+    if (!root) return { path: dir, key: repoKeyFrom(path.basename(dir)), problem: 'not_git' };
+    const branch = (await defaultBranch(root, x)) ?? (await currentBranch(root, x));
+    const info: TeamRepoInfo = { path: root, key: repoKeyFrom(path.basename(root)), ...(branch ? { defaultBranch: branch } : {}) };
+    const origin = await originUrl(root, x);
+    if (!origin) return { ...info, problem: 'no_origin' };
+    // в project.yaml — без логина и токена; локальный путь и file:// коллеги по origin не найдут — тоже не годится
+    const url = shareableUrl(origin);
+    return { ...info, url, ...(remoteProblem(url) || !parseRemote(url) ? { problem: 'bad_origin' as const } : {}) };
+  }
+
+  async createProject(team: string, body: unknown): Promise<TeamProject> {
+    const repo = this.repo(team);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const b = body as Record<string, unknown>;
+    const slug = reqStr(b.slug, 'slug', 'Укажи slug проекта');
+    if (!TEAM_SLUG_RE.test(slug)) bad('Slug проекта — латиница в нижнем регистре, цифры и дефис');
+    const title = reqStr(b.title, 'title', 'Укажи название проекта');
+    const summary = optStr(b.summary, 'summary') ?? '';
+    const { repos, local } = b.repos === undefined ? { repos: [], local: {} } : this.parseRepos(b.repos);
+    const me = await repo.requireIdentity();
+    let cfg!: ProjectConfig;
+    await repo.write(`${slug}: проект создан`, (r) => {
+      if (r.exists(`projects/${slug}`)) throw new TeamError(409, `Проект ${slug} уже есть`, 'not_empty');
+      cfg = { slug, title, summary, status: 'active', repos, createdAt: this.repoDeps.now().toISOString(), createdBy: me.email, extra: {} };
+      r.writeFile(`projects/${slug}/project.yaml`, serializeProject(cfg));
+      // заготовки из project-template/ репо команды читаются через r.read (проверка пути, S-7), нет — из шаблона agentgraph
+      const fallback = projectDocs({ title, summary }, [path.join(this.repoDeps.templateDir ?? TEMPLATE_DIR, PROJECT_TEMPLATE_DIR)]);
+      for (const file of PROJECT_DOC_FILES) {
+        const own = r.read(`${PROJECT_TEMPLATE_DIR}/${file}`);
+        r.writeFile(`projects/${slug}/${file}`, own !== undefined ? renderDoc(own, { title, summary }) : fallback[file]);
+      }
+    });
+    this.saveRepoPaths(repo, local);
+    return this.projectView(repo, cfg);
+  }
+
+  /**
+   * PUT проекта: название, суть, статус, репо кода. Как и настройки команды — внутри очереди по текущему project.yaml,
+   * репо кода — по key с их неизвестными полями (D-9), с base — слияние с чужими правками и 409 на одно место (D-10).
+   */
+  async updateProject(team: string, slug: string, body: unknown): Promise<TeamProject> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const b = body as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    const changes: string[] = [];
+    if (b.title !== undefined) {
+      patch.title = reqStr(b.title, 'title', 'Название не может быть пустым');
+      changes.push('название');
+    }
+    if (b.summary !== undefined) {
+      patch.summary = optStr(b.summary, 'summary') ?? '';
+      changes.push('суть');
+    }
+    if (b.status !== undefined) {
+      const st = optStr(b.status, 'status');
+      if (!PROJECT_STATUSES.includes(st as ProjectConfig['status'])) bad(`Статус проекта: ${PROJECT_STATUSES.join(' | ')}`);
+      patch.status = st;
+      changes.push(st === 'archived' ? 'в архив' : 'снова активен');
+    }
+    let local: Record<string, string> = {};
+    let repos: ProjectRepo[] | undefined;
+    if (b.repos !== undefined) {
+      ({ repos, local } = this.parseRepos(b.repos));
+      changes.push('репо кода');
+    }
+    if (b.slug !== undefined && b.slug !== slug) bad('Slug проекта не меняется');
+    const base = optStr(b.base, 'base');
+    const rel = `projects/${slug}/project.yaml`;
+    if (changes.length) {
+      await repo.write(`${slug}: ${changes.join(', ')}`, async (r) => {
+        if (!r.exists(rel)) throw new TeamError(404, `Проекта ${slug} нет`);
+        const merged = await this.patchFrom(
+          r,
+          rel,
+          base,
+          (was) => ({ ...patch, ...(repos ? { repos: repos.map((x) => overlay(elementBy(was.repos, 'key', x.key), x, ['key', 'url', 'defaultBranch'])) } : {}) }),
+          () => this.projectView(r, this.readProjectConfig(r, slug)),
+          'Проект',
+        );
+        r.writeFile(rel, updateYaml(r.read(rel) ?? '', merged));
+      });
+    }
+    this.saveRepoPaths(repo, local);
+    return this.projectView(repo, this.readProjectConfig(repo, slug));
+  }
+
+  // ---------- документы (spec §8.4)
+
+  private docPath(slug: string, name: string): { name: TeamDocName; rel: string } {
+    const file = docFile(name);
+    if (!file || !isDocName(name)) throw new TeamError(400, `Недопустимое имя документа: ${name}`);
+    return { name, rel: `projects/${slug}/${file}` };
+  }
+
+  private async docBriefs(repo: TeamRepo, slug: string): Promise<TeamDocBrief[]> {
+    const names: string[] = [...Object.keys(DOC_FILES).filter((n) => repo.exists(`projects/${slug}/${DOC_FILES[n as keyof typeof DOC_FILES]}`)), ...repo.list(`projects/${slug}/docs`, (n) => /\.md$/i.test(n)).map((n) => `docs/${n}`)];
+    const out: TeamDocBrief[] = [];
+    for (const name of names) {
+      if (!isDocName(name)) continue;
+      const { rel } = this.docPath(slug, name);
+      const text = repo.read(rel) ?? '';
+      const [last] = await repo.history({ path: rel, limit: 1 });
+      out.push({ name, title: docTitle(text, docLabel(name)), size: Buffer.byteLength(text), ...(last ? { updatedAt: last.at, updatedBy: last.email } : {}) });
+    }
+    return out;
+  }
+
+  async doc(team: string, slug: string, name: string): Promise<TeamDoc> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const { rel } = this.docPath(slug, name);
+    if (!repo.exists(rel)) throw new TeamError(404, `Документа ${name} нет`);
+    return this.docView(repo, slug, name);
+  }
+
+  private async docView(repo: TeamRepo, slug: string, name: string): Promise<TeamDoc> {
+    const { rel } = this.docPath(slug, name);
+    const text = repo.read(rel) ?? '';
+    const [last] = await repo.history({ path: rel, limit: 1 });
+    const cfg = this.readProjectConfig(repo, slug);
+    const requirements = parseRequirements(text);
+    return {
+      name: name as TeamDocName,
+      text,
+      base: textHash(text),
+      sections: docSections(text),
+      ...(last ? { updatedAt: last.at, updatedBy: last.email } : {}),
+      requirements,
+      nextRequirement: { FR: nextRequirementId(text, 'FR', cfg.lastRequirement), NFR: nextRequirementId(text, 'NFR', cfg.lastRequirement) },
+    };
+  }
+
+  /**
+   * Сохранить документ целиком (base — хэш файла) или один раздел (section — заголовок, hash — хэш раздела на момент
+   * начала правки): 409 conflict только если менялся этот раздел, правки в других разделах не мешают. Номера требований
+   * ТЗ, выданные документом, запоминаются в project.yaml → lastRequirement.
+   */
+  async writeDoc(team: string, slug: string, name: string, text: string, o: WriteDocOptions = {}): Promise<TeamDoc> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const { rel } = this.docPath(slug, name);
+    if (typeof text !== 'string') bad('Поле text — строка');
+    const label = DOC_UPDATED[name] ?? `документ ${docLabel(name)} обновлён`;
+    const message = o.message?.trim() || (o.section !== undefined ? `${slug}: ${label}, раздел «${o.section || 'начало'}»` : `${slug}: ${label}`);
+    await repo.write(message, async (r) => {
+      const current = r.read(rel);
+      if (current === undefined && (o.section !== undefined || o.base)) throw new TeamError(404, `Документа ${name} нет`);
+      let next: string;
+      if (o.section !== undefined) {
+        const sec = findSection(current ?? '', o.section);
+        if (!sec) throw new TeamError(404, `Раздела «${o.section}» нет в документе`);
+        if (o.hash && sectionHash(sec.text) !== o.hash) throw new TeamError(409, `Раздел «${o.section}» уже изменил кто-то другой`, 'conflict', { current: await this.docView(r, slug, name) });
+        next = replaceSection(current ?? '', o.section, text);
+      } else {
+        if (o.base && textHash(current ?? '') !== o.base) throw new TeamError(409, 'Документ уже изменил кто-то другой', 'conflict', { current: await this.docView(r, slug, name) });
+        next = text.endsWith('\n') || !text ? text : `${text}\n`;
+      }
+      const cfg = name === 'prd' ? this.readProjectConfig(r, slug) : undefined;
+      if (cfg) {
+        // номер требования — идентификатор (spec §8.4): запись не добавляет второй FR-8 ни из UI, ни из черновика агента
+        const repeats = addedRequirementRepeats(next, current ?? '');
+        if (repeats.length) {
+          const kinds = [...new Set(repeats.map((id) => id.split('-')[0] as RequirementKind))];
+          const free = kinds.map((k) => nextRequirementId(next, k, cfg.lastRequirement)).join(', ');
+          bad(`В ТЗ повторяются номера требований: ${repeats.join(', ')}. У каждого требования свой номер — следующий свободный: ${free}`);
+        }
+      }
+      r.writeFile(rel, next);
+      if (cfg) {
+        const max = requirementMax(next);
+        const last = { FR: Math.max(cfg.lastRequirement?.FR ?? 0, max.FR), NFR: Math.max(cfg.lastRequirement?.NFR ?? 0, max.NFR) };
+        if (last.FR !== (cfg.lastRequirement?.FR ?? 0) || last.NFR !== (cfg.lastRequirement?.NFR ?? 0)) {
+          // остальные ключи lastRequirement (неизвестные этой версии) остаются (spec §5.9, D-9)
+          const ptext = r.read(`projects/${slug}/project.yaml`) ?? '';
+          const was = rawYaml(ptext).lastRequirement;
+          r.writeFile(`projects/${slug}/project.yaml`, updateYaml(ptext, { lastRequirement: { ...(isRecord(was) ? was : {}), ...last } }));
+        }
+      }
+    });
+    return this.docView(repo, slug, name);
+  }
+
+  history(team: string, slug: string, o: { doc?: string; limit?: number } = {}): Promise<TeamHistoryItem[]> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const p = o.doc ? this.docPath(slug, o.doc).rel : `projects/${slug}`;
+    return repo.history({ path: p, ...(Number.isFinite(o.limit) ? { limit: o.limit } : {}) });
+  }
+
+  /** Документ до и после коммита из истории (spec §8.4 «История» — дифф): файла в одной из версий нет — пустая строка. */
+  async docRevision(team: string, slug: string, name: string, hash: string): Promise<TeamDocRevision> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const { rel } = this.docPath(slug, name);
+    if (!/^[0-9a-f]{7,40}$/.test(hash)) bad('hash — номер коммита');
+    const show = (ref: string) => repo.git(['show', `${ref}:${rel}`]).catch(() => undefined);
+    const after = await show(hash);
+    const before = await show(`${hash}^`);
+    if (after === undefined && before === undefined) throw new TeamError(404, `В коммите ${hash.slice(0, 7)} нет документа ${name}`);
+    return { name: name as TeamDocName, hash, before: before ?? '', after: after ?? '' };
+  }
+
+  // ---------- задачи (spec §8.5–8.7)
+
+  private taskId(id: string): string {
+    if (!TASK_ID_RE.test(id)) bad(`Неверный номер задачи: ${id}`);
+    return id;
+  }
+
+  tasks(team: string, slug: string): TeamTask[] {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    return this.readTasks(repo, slug).map(taskView);
+  }
+
+  task(team: string, slug: string, id: string): TeamTask {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    return taskView(this.readTask(repo, slug, this.taskId(id)));
+  }
+
+  private readTask(repo: TeamRepo, slug: string, id: string): TaskFile {
+    const t = this.readTasks(repo, slug).find((x) => x.id === id);
+    if (!t) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
+    return t;
+  }
+
+  /**
+   * Пачка задач одним коммитом: номера сквозные по команде и не возвращаются после удаления (teamwork.yaml → lastTask),
+   * dependsOn → blockedBy. Место — в своём списке (спринт или бэклог): after — сразу после этой задачи, before — сразу
+   * перед ней, оба — между ними, без них — в конец; соседа нет в этом списке — 400.
+   */
+  async createTasks(team: string, slug: string, items: NewTask[], o: TaskWriteOptions = {}): Promise<TeamTask[]> {
+    const repo = this.repo(team);
+    const project = this.readProjectConfig(repo, slug);
+    if (!Array.isArray(items) || !items.length) bad('Нужна хотя бы одна задача');
+    const me = await repo.requireIdentity();
+    const prefix = repo.config().prefix;
+    const created: TaskFile[] = [];
+    const message = () => (created.length === 1 ? `${created[0].id}: создана — ${created[0].title}` : { subject: `${slug}: ${created.length} задач добавлено`, body: created.map((t) => `- ${t.id}: ${t.title}`).join('\n') });
+    await repo.write(message, async (r) => {
+      const existing = this.readTasks(r, slug);
+      const sprints = this.readSprints(r, slug);
+      const ids = new Set(r.taskIds());
+      const last = r.config().lastTask;
+      const keys = new Map<string, string>();
+      const drafts: { item: NewTask; id: string }[] = [];
+      for (const item of items) {
+        if (!isRecord(item)) bad('Задача — объект');
+        const id = nextTaskId(ids, prefix, last);
+        ids.add(id);
+        if (item.key !== undefined) {
+          const k = reqStr(item.key, 'key');
+          if (keys.has(k)) bad(`Ключ ${k} повторяется`);
+          keys.set(k, id);
+        }
+        drafts.push({ item, id });
+      }
+      // списки по спринту (undefined — бэклог) в порядке rank; задачи пачки встают в них по мере создания
+      const lists = new Map<number | undefined, { id: string; rank: string }[]>();
+      const batch = new Set<string>();
+      const listOf = (sprint: number | undefined) => {
+        let list = lists.get(sprint);
+        if (!list) lists.set(sprint, (list = sortTasks(existing.filter((t) => !t.error && t.sprint === sprint)).map((t) => ({ id: t.id, rank: t.rank }))));
+        return list;
+      };
+      const now = this.repoDeps.now().toISOString();
+      for (const { item, id } of drafts) {
+        const title = reqStr(item.title, 'title', 'У задачи нужен заголовок');
+        const type = item.type === undefined ? 'feature' : item.type;
+        if (!TASK_TYPES.includes(type)) bad(`Тип задачи: ${TASK_TYPES.join(' | ')}`);
+        const sprint = item.sprint === undefined || item.sprint === null ? undefined : item.sprint;
+        if (sprint !== undefined && !sprints.some((s) => s.number === sprint && s.status !== 'closed')) bad(`Спринта ${sprint} нет или он закрыт`);
+        const estimate = item.estimate === undefined || item.estimate === null ? undefined : item.estimate;
+        if (estimate !== undefined && (typeof estimate !== 'number' || !Number.isFinite(estimate) || estimate < 0)) bad('Оценка — число очков');
+        const repoKey = optStr(item.repo, 'repo') || undefined;
+        if (repoKey && !project.repos.some((x) => x.key === repoKey)) bad(`В проекте нет репо ${repoKey}`);
+        const deps = [...(item.blockedBy ? strArr(item.blockedBy, 'blockedBy') : []), ...(item.dependsOn ? strArr(item.dependsOn, 'dependsOn') : [])];
+        const blockedBy = [...new Set(deps.map((d) => keys.get(d) ?? d))];
+        for (const d of blockedBy) if (d === id || (!existing.some((t) => t.id === d) && ![...keys.values()].includes(d))) bad(`Неизвестная зависимость: ${d}`);
+        const body = typeof item.body === 'string' ? item.body : composeBody(item);
+        const list = listOf(sprint);
+        const at = (ref: unknown, what: string): number | undefined => {
+          const want = optStr(ref, what) || undefined;
+          if (want === undefined) return undefined;
+          const i = list.findIndex((x) => x.id === want);
+          if (i < 0) bad(`Задачи ${want} (${what}) нет ${sprint === undefined ? 'в бэклоге' : `в спринте ${sprint}`}: новая задача встаёт рядом с задачей своего списка`);
+          return i;
+        };
+        const bi = at(item.before, 'before');
+        let ai = at(item.after, 'after');
+        // задачи пачки, уже вставшие сразу за after, остаются перед новой: пачка с одним after идёт в своём порядке
+        if (ai !== undefined) while (ai + 1 < list.length && ai + 1 !== bi && batch.has(list[ai + 1].id)) ai++;
+        // границы — ближайшие допустимые rank строго по разные стороны: у соседей бывает один rank (двое одновременно
+        // добавили в конец) или rank, правленный руками, — тогда задача встаёт сразу за группой (перед группой у before),
+        // а не уезжает за чужие задачи. before без after — после предыдущей; иначе — после after (или в конец), до
+        // before или следующей задачи; соседи наоборот — после after
+        const ranks = list.map((x) => validRank(x.rank));
+        const left = (from: number, below?: string) => ranks.slice(0, from + 1).filter((x): x is string => x !== undefined && (below === undefined || x < below)).pop();
+        const right = (from: number, above?: string) => ranks.slice(from).find((x): x is string => x !== undefined && (above === undefined || x > above));
+        let lo: string | undefined;
+        let hi: string | undefined;
+        if (ai === undefined && bi !== undefined) {
+          hi = right(bi);
+          lo = left(bi - 1, hi);
+        } else {
+          lo = left(ai ?? list.length - 1);
+          hi = bi !== undefined ? right(bi, lo) : ai !== undefined ? right(ai + 1, lo) : undefined;
+        }
+        const rank = rankNear(lo, hi);
+        const pos = list.findIndex((x) => compareTasks({ id, rank }, x) < 0);
+        list.splice(pos < 0 ? list.length : pos, 0, { id, rank });
+        batch.add(id);
+        const file = `projects/${slug}/tasks/${id}.md`;
+        const assignee = optStr(item.assignee, 'assignee') || undefined;
+        const t: TaskFile = {
+          id, title, type, status: 'todo', ...(sprint !== undefined ? { sprint } : {}), rank, ...(assignee ? { assignee } : {}), ...(estimate !== undefined ? { estimate } : {}),
+          ...(repoKey ? { repo: repoKey } : {}), blockedBy, covers: item.covers ? strArr(item.covers, 'covers') : [], createdAt: now, createdBy: me.email, body, acceptance: { done: 0, total: 0 },
+          comments: 0, base: '', file, extra: {},
+        };
+        r.writeFile(file, serializeTask(t));
+        created.push(t);
+      }
+    }, o);
+    return created.map((t) => taskView(this.readTask(repo, slug, t.id)));
+  }
+
+  /** PATCH задачи: изменённые поля и base (409 conflict, если задачу успели поменять); null снимает поле. */
+  async updateTask(team: string, slug: string, id: string, patch: TeamTaskPatch, o: TaskWriteOptions = {}): Promise<TeamTask> {
+    return this.changeTask(team, slug, this.taskId(id), patch, {}, o);
+  }
+
+  /** Перенос: статус, спринт и место между соседями (after — после кого, before — перед кем) одной операцией. */
+  async moveTask(team: string, slug: string, id: string, move: TeamTaskMove, o: TaskWriteOptions = {}): Promise<TeamTask> {
+    this.taskId(id);
+    const patch: TeamTaskPatch = {};
+    if (move.status !== undefined) patch.status = move.status;
+    if (move.sprint !== undefined) patch.sprint = move.sprint;
+    return this.changeTask(team, slug, id, patch, { before: move.before, after: move.after }, o);
+  }
+
+  private async changeTask(team: string, slug: string, taskId: string, patch: TeamTaskPatch, place: { before?: string; after?: string }, o: TaskWriteOptions): Promise<TeamTask> {
+    const repo = this.repo(team);
+    const project = this.readProjectConfig(repo, slug);
+    if (!isRecord(patch)) bad('Тело запроса — объект');
+    const columns = repo.config().columns;
+    const me = await repo.identity();
+    let message = o.message?.trim() || '';
+    let id = taskId;
+    await repo.write(() => message, (r) => {
+      if (o.work) id = this.taskOfWork(team, taskId, o.work);
+      const all = this.readTasks(r, slug);
+      const cur = all.find((t) => t.id === id);
+      if (!cur) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
+      if (cur.error) throw new TeamError(400, `Задача ${id} не читается (${cur.error}): поправь файл ${cur.file} руками`);
+      if (patch.base && patch.base !== cur.base) throw new TeamError(409, `Задачу ${id} уже изменил кто-то другой`, 'conflict', { current: taskView(cur) });
+      const next: TaskFile = { ...cur, blockedBy: [...cur.blockedBy], covers: [...cur.covers], extra: { ...cur.extra } };
+      const changes: string[] = [];
+      if (patch.title !== undefined) {
+        next.title = reqStr(patch.title, 'title', 'Заголовок не может быть пустым');
+        if (next.title !== cur.title) changes.push(`переименована: ${next.title}`);
+      }
+      if (patch.type !== undefined) {
+        if (!TASK_TYPES.includes(patch.type)) bad(`Тип задачи: ${TASK_TYPES.join(' | ')}`);
+        next.type = patch.type;
+        if (next.type !== cur.type) changes.push(`тип → ${next.type}`);
+      }
+      if (patch.status !== undefined) {
+        if (!TASK_STATUSES.includes(patch.status)) bad(`Статус: ${TASK_STATUSES.join(' | ')}`);
+        next.status = patch.status;
+        if (next.status !== cur.status) changes.push(`статус → ${columns[next.status]}`);
+      }
+      if (patch.sprint !== undefined) {
+        if (patch.sprint === null) delete next.sprint;
+        else {
+          if (!Number.isInteger(patch.sprint) || !this.readSprints(r, slug).some((s) => s.number === patch.sprint && s.status !== 'closed')) bad(`Спринта ${patch.sprint} нет или он закрыт`);
+          next.sprint = patch.sprint;
+        }
+        if (next.sprint !== cur.sprint) changes.push(next.sprint === undefined ? 'в бэклог' : `спринт → ${next.sprint}`);
+      }
+      if (patch.assignee !== undefined) {
+        const a = patch.assignee === null ? undefined : optStr(patch.assignee, 'assignee') || undefined;
+        if (a) next.assignee = a;
+        else delete next.assignee;
+        if (a !== cur.assignee) changes.push(a ? `исполнитель → ${a}` : 'исполнитель снят');
+      }
+      if (patch.estimate !== undefined) {
+        if (patch.estimate === null) delete next.estimate;
+        else {
+          if (typeof patch.estimate !== 'number' || !Number.isFinite(patch.estimate) || patch.estimate < 0) bad('Оценка — число очков');
+          next.estimate = patch.estimate;
+        }
+        if (next.estimate !== cur.estimate) changes.push(next.estimate === undefined ? 'оценка снята' : `оценка → ${next.estimate}`);
+      }
+      if (patch.repo !== undefined) {
+        const key = patch.repo === null ? undefined : optStr(patch.repo, 'repo') || undefined;
+        if (key && !project.repos.some((x) => x.key === key)) bad(`В проекте нет репо ${key}`);
+        if (key) next.repo = key;
+        else delete next.repo;
+        if (key !== cur.repo) changes.push(key ? `репо → ${key}` : 'репо снято');
+      }
+      if (patch.pr !== undefined) {
+        // ссылка на PR и его состояние (spec §10): пишут автоматика статусов и team_task_update; без state — open
+        let pr: TaskFile['pr'];
+        if (patch.pr !== null) {
+          if (!isRecord(patch.pr)) bad('Поле pr — { url, state? } или null');
+          const url = reqStr(patch.pr.url, 'pr.url', 'Укажи ссылку на PR');
+          // UI рисует её ссылкой: только http(s), без пробелов и управляющих символов
+          if (!/^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(url)) bad('Поле pr.url — ссылка на PR или MR, https://…');
+          const state = patch.pr.state ?? 'open';
+          if (!['open', 'merged', 'closed'].includes(state)) bad('Поле pr.state: open | merged | closed');
+          pr = { url, state };
+        }
+        if (pr) next.pr = pr;
+        else delete next.pr;
+        if (pr?.url !== cur.pr?.url || pr?.state !== cur.pr?.state) changes.push(pr ? `PR ${pr.state === 'open' ? 'открыт' : pr.state === 'merged' ? 'смёржен' : 'закрыт'}: ${pr.url}` : 'PR снят');
+      }
+      if (patch.branch !== undefined) {
+        const br = patch.branch === null ? undefined : optStr(patch.branch, 'branch') || undefined;
+        if (br && !TASK_BRANCH_RE.test(br)) bad(`Недопустимое имя ветки: ${br} (латиница, цифры, «._/-», без ведущего «-»)`);
+        if (br) next.branch = br;
+        else delete next.branch;
+        if (br !== cur.branch) changes.push(br ? `ветка → ${br}` : 'ветка снята');
+      }
+      if (patch.blockedBy !== undefined) {
+        const list = [...new Set(strArr(patch.blockedBy, 'blockedBy'))];
+        for (const d of list) {
+          if (d === id) bad('Задача не может ждать сама себя');
+          if (!all.some((t) => t.id === d)) bad(`Неизвестная задача в blockedBy: ${d}`);
+        }
+        next.blockedBy = list;
+        if (list.join() !== cur.blockedBy.join()) changes.push(list.length ? `ждёт ${list.join(', ')}` : 'ничего не ждёт');
+      }
+      if (patch.covers !== undefined) {
+        next.covers = [...new Set(strArr(patch.covers, 'covers'))];
+        if (next.covers.join() !== cur.covers.join()) changes.push('требования');
+      }
+      if (patch.body !== undefined) {
+        if (typeof patch.body !== 'string') bad('Поле body — строка');
+        next.body = patch.body;
+        if (next.body !== cur.body) changes.push('описание');
+      }
+      if (place.before !== undefined || place.after !== undefined) {
+        const neighbour = (ref: string | undefined, what: string) => {
+          if (ref === undefined) return undefined;
+          const n = all.find((t) => t.id === ref && !t.error);
+          if (!n) bad(`Соседа ${ref} (${what}) нет в проекте`);
+          return n!;
+        };
+        const after = neighbour(place.after, 'after');
+        const before = neighbour(place.before, 'before');
+        // соседи совпали по rank или поменялись местами (одновременные переносы), rank правлен руками — между after и
+        // ближайшим rank своего списка больше него, а не в конец (D-12)
+        const rank = placeRank(all.filter((t) => !t.error && t.id !== id && t.sprint === next.sprint).map((t) => t.rank), after?.rank, before?.rank);
+        if (rank !== cur.rank) {
+          next.rank = rank;
+          changes.push('порядок');
+        }
+      }
+      if (!changes.length) return;
+      next.updatedAt = this.repoDeps.now().toISOString();
+      if (me.email) next.updatedBy = me.email;
+      else delete next.updatedBy;
+      if (!message) message = taskChangeMessage(id, changes);
+      r.writeFile(cur.file, serializeTask(next));
+    }, o);
+    return taskView(this.readTask(repo, slug, id));
+  }
+
+  async deleteTask(team: string, slug: string, id: string): Promise<void> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    this.taskId(id);
+    await repo.write(`${id}: удалена`, (r) => {
+      if (!r.exists(`projects/${slug}/tasks/${id}.md`)) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
+      this.removeTask(r, slug, id);
+    });
+  }
+
+  /** Удаление задачи целиком: файл, её комментарии и ссылки blockedBy соседей — одним коммитом (вызывающий пишет). */
+  private removeTask(r: TeamRepo, slug: string, id: string): void {
+    r.remove(`projects/${slug}/tasks/${id}.md`);
+    r.remove(`projects/${slug}/comments/${id}`);
+    for (const t of this.readTasks(r, slug)) {
+      if (t.error || !t.blockedBy.includes(id)) continue;
+      r.writeFile(t.file, serializeTask({ ...t, blockedBy: t.blockedBy.filter((b) => b !== id) }));
+    }
+  }
+
+  /**
+   * Номер задачи, у которой в local.json → work записан этот запуск или сессия. Запуск и сессия помнят номер со старта, а
+   * после переименования совпавшего номера (spec §5.7) работа переезжает на новый (D-14). Нет записи — undefined.
+   */
+  workTask(team: string, work: Pick<TeamTaskWork, 'kind' | 'id'>): string | undefined {
+    const all = this.repo(team).local().work;
+    return Object.keys(all).find((id) => all[id].some((w) => w.kind === work.kind && w.id === work.id));
+  }
+
+  /** Номер задачи по записи работы — внутри очереди записей (TaskWriteOptions.work); записи нет — 404 с понятной причиной. */
+  private taskOfWork(team: string, id: string, work: Pick<TeamTaskWork, 'kind' | 'id'>): string {
+    const found = this.workTask(team, work);
+    if (!found) throw new TeamError(404, `Задачи ${id} больше нет среди работы ${work.kind === 'session' ? 'этой сессии' : 'этого запуска'}: её удалили, или старт не записался. Измени задачу в agentgraph руками`);
+    return found;
+  }
+
+  /** Запуск или сессия по задаче на этом компьютере — в local.json → work (spec §6); тот же kind и id — обновляется. */
+  recordWork(team: string, taskId: string, work: TeamTaskWork): void {
+    const repo = this.repo(team);
+    this.taskId(taskId);
+    repo.saveLocal((l) => {
+      const list = (l.work[taskId] ?? []).filter((w) => !(w.kind === work.kind && w.id === work.id));
+      l.work[taskId] = [...list, work];
+    });
+    const project = repo.dirs('projects').find((p) => repo.exists(`projects/${p}/tasks/${taskId}.md`));
+    this.emit({ team, projects: project ? [project] : [] });
+  }
+
+  // ---------- комментарии (spec §5.6)
+
+  async comments(team: string, slug: string, id: string): Promise<TeamComment[]> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    this.readTask(repo, slug, this.taskId(id));
+    const me = (await repo.identity()).email;
+    const dir = `projects/${slug}/comments/${id}`;
+    return repo
+      .list(dir, (n) => /\.md$/i.test(n))
+      .flatMap((name) => {
+        const c = parseComment(repo.read(`${dir}/${name}`) ?? '', name);
+        return c ? [{ id: c.id, author: c.author, at: c.at, text: c.text, mine: c.author === me }] : [];
+      })
+      .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  }
+
+  /** Комментарий к задаче; o.work — задача по записи работы, номер ищется внутри очереди (D-14). */
+  async addComment(team: string, slug: string, taskId: string, text: unknown, o: Pick<TaskWriteOptions, 'work'> = {}): Promise<TeamComment> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    if (!o.work) this.readTask(repo, slug, this.taskId(taskId));
+    const body = reqStr(text, 'text', 'Комментарий пустой');
+    const me = await repo.requireIdentity();
+    const at = this.repoDeps.now().toISOString();
+    let file = commentFileName(at, me.email);
+    let id = taskId;
+    await repo.write(() => `${id}: комментарий`, (r) => {
+      if (o.work) {
+        id = this.taskOfWork(team, taskId, o.work);
+        if (!r.exists(`projects/${slug}/tasks/${id}.md`)) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
+      }
+      const dir = `projects/${slug}/comments/${id}`;
+      for (let i = 2; r.exists(`${dir}/${file}`); i++) file = commentFileName(at, me.email).replace(/\.md$/, `-${i}.md`);
+      r.writeFile(`${dir}/${file}`, serializeComment({ author: me.email, name: me.name, at, text: body, extra: {} }));
+    });
+    return { id: file.replace(/\.md$/, ''), author: me.email, at, text: body, mine: true };
+  }
+
+  // ---------- спринты (spec §8.6)
+
+  private sprintNumber(n: string | number): number {
+    const num = Number(n);
+    if (!Number.isInteger(num) || num <= 0) bad(`Неверный номер спринта: ${n}`);
+    return num;
+  }
+
+  sprints(team: string, slug: string): TeamSprint[] {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    return this.readSprints(repo, slug).map(sprintView);
+  }
+
+  /** Новый спринт: planned (один на проект) или сразу active со списком задач. */
+  async createSprint(team: string, slug: string, body: NewSprint): Promise<TeamSprint> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    if (!isRecord(body)) bad('Тело запроса — объект');
+    const me = await repo.requireIdentity();
+    let out!: SprintFile;
+    const start = body.start === true;
+    await repo.write(() => `${slug}: спринт ${out.number} ${start ? 'запущен' : 'запланирован'}`, (r) => {
+      const sprints = this.readSprints(r, slug);
+      if (!start && sprints.some((s) => s.status === 'planned')) throw new TeamError(409, 'Запланированный спринт уже есть: запусти его или перенеси задачи в него', 'busy');
+      if (start && sprints.some((s) => s.status === 'active')) throw new TeamError(409, 'Активный спринт уже есть: сначала заверши его', 'busy');
+      const number = this.nextSprintNumberIn(r, slug);
+      const goal = optStr(body.goal, 'goal');
+      out = { number, title: optStr(body.title, 'title') || `Спринт ${number}`, ...(goal ? { goal } : {}), status: 'planned', extra: {} };
+      if (start) this.activate(r, slug, out, body.tasks, me.email);
+      r.writeFile(`projects/${slug}/sprints/${number}.yaml`, serializeSprint(out));
+    });
+    return sprintView(out);
+  }
+
+  /** Запустить спринт (spec §8.6): запланированный становится активным, его задачи получают «К работе». */
+  async startSprint(team: string, slug: string, n: string | number, body: NewSprint = {}): Promise<TeamSprint> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const number = this.sprintNumber(n);
+    const me = await repo.requireIdentity();
+    let out!: SprintFile;
+    await repo.write(`${slug}: спринт ${number} запущен`, (r) => {
+      const sprints = this.readSprints(r, slug);
+      const s = sprints.find((x) => x.number === number);
+      if (!s) throw new TeamError(404, `Спринта ${number} нет`);
+      if (s.status === 'active') throw new TeamError(409, `Спринт ${number} уже активен`, 'busy');
+      if (s.status === 'closed') throw new TeamError(409, `Спринт ${number} закрыт`, 'busy');
+      const active = sprints.find((x) => x.status === 'active');
+      if (active) throw new TeamError(409, `Активен спринт ${active.number}: сначала заверши его`, 'busy');
+      const title = optStr(body.title, 'title');
+      const goal = optStr(body.goal, 'goal');
+      out = { ...s, ...(title ? { title } : {}), ...(goal !== undefined ? (goal ? { goal } : {}) : {}) };
+      if (goal === '') delete out.goal;
+      this.activate(r, slug, out, body.tasks, me.email);
+      r.writeFile(`projects/${slug}/sprints/${number}.yaml`, serializeSprint(out));
+    });
+    return sprintView(out);
+  }
+
+  private activate(r: TeamRepo, slug: string, s: SprintFile, taskIds: unknown, email: string): void {
+    s.status = 'active';
+    s.startedAt = this.repoDeps.now().toISOString();
+    s.startedBy = email;
+    const picked = new Set(taskIds === undefined ? [] : strArr(taskIds, 'tasks'));
+    const tasks = this.readTasks(r, slug);
+    for (const id of picked) if (!tasks.some((t) => t.id === id && !t.error)) bad(`Задачи ${id} нет в проекте`);
+    const now = this.repoDeps.now().toISOString();
+    for (const t of tasks) {
+      if (t.error) continue;
+      const inSprint = t.sprint === s.number || picked.has(t.id);
+      if (!inSprint || (t.sprint === s.number && t.status === 'todo')) continue;
+      r.writeFile(t.file, serializeTask({ ...t, sprint: s.number, status: 'todo', updatedAt: now, updatedBy: email }));
+    }
+  }
+
+  /** Завершить спринт: готовые остаются в нём, незавершённые — в следующий (next, создаётся при нужде) или в бэклог; итог в result. */
+  async closeSprint(team: string, slug: string, n: string | number, body: CloseSprint = {}): Promise<TeamSprint> {
+    const repo = this.repo(team);
+    this.readProjectConfig(repo, slug);
+    const number = this.sprintNumber(n);
+    const me = await repo.requireIdentity();
+    let out!: SprintFile;
+    await repo.write(`${slug}: спринт ${number} завершён`, (r) => {
+      const sprints = this.readSprints(r, slug);
+      const s = sprints.find((x) => x.number === number);
+      if (!s) throw new TeamError(404, `Спринта ${number} нет`);
+      if (s.status !== 'active') throw new TeamError(409, `Спринт ${number} не активен`, 'busy');
+      const tasks = this.readTasks(r, slug).filter((t) => !t.error && t.sprint === number);
+      const toNext = new Set(body.next === undefined ? [] : strArr(body.next, 'next'));
+      for (const id of toNext) if (!tasks.some((t) => t.id === id)) bad(`Задачи ${id} нет в спринте ${number}`);
+      const now = this.repoDeps.now().toISOString();
+      const unfinished = tasks.filter((t) => t.status !== 'done');
+      const carried = unfinished.filter((t) => toNext.has(t.id));
+      const returned = unfinished.filter((t) => !toNext.has(t.id));
+      let nextNumber: number | undefined;
+      if (carried.length) {
+        const planned = sprints.find((x) => x.status === 'planned');
+        if (planned) nextNumber = planned.number;
+        else {
+          nextNumber = this.nextSprintNumberIn(r, slug);
+          r.writeFile(`projects/${slug}/sprints/${nextNumber}.yaml`, serializeSprint({ number: nextNumber, title: `Спринт ${nextNumber}`, status: 'planned', extra: {} }));
+        }
+      }
+      for (const t of carried) r.writeFile(t.file, serializeTask({ ...t, sprint: nextNumber!, updatedAt: now, updatedBy: me.email }));
+      for (const t of returned) {
+        const { sprint: _s, ...rest } = t;
+        r.writeFile(t.file, serializeTask({ ...rest, updatedAt: now, updatedBy: me.email }));
+      }
+      out = { ...s, status: 'closed', closedAt: now, closedBy: me.email, result: { done: tasks.filter((t) => t.status === 'done').map((t) => t.id), carried: carried.map((t) => t.id), returned: returned.map((t) => t.id) } };
+      r.writeFile(`projects/${slug}/sprints/${number}.yaml`, serializeSprint(out));
+    });
+    return sprintView(out);
+  }
+
+  // ---------- flow команды (spec §11 «Процесс команды»)
+
+  private flowNames(repo: TeamRepo): string[] {
+    return repo.list('flows', (n) => /\.ya?ml$/.test(n)).map((n) => n.replace(/\.ya?ml$/, '')).filter((n) => FLOW_NAME_RE.test(n));
+  }
+
+  private flowFile(repo: TeamRepo, name: string): string {
+    if (!FLOW_NAME_RE.test(name)) bad(`Недопустимое имя flow: ${name}`);
+    return repo.exists(`flows/${name}.yml`) && !repo.exists(`flows/${name}.yaml`) ? `flows/${name}.yml` : `flows/${name}.yaml`;
+  }
+
+  /**
+   * Flow команды как есть: YAML и spec, если он проходит схему, иначе error (для редактора «Процесс»); у проходящего схему —
+   * что flow команде нельзя (problems) и не одобрена ли эта версия на этом компьютере (trust, spec §14).
+   */
+  teamFlow(team: string, name: string): TeamFlow {
+    const repo = this.repo(team);
+    const rel = this.flowFile(repo, name);
+    const yaml = repo.read(rel);
+    if (yaml === undefined) throw new TeamError(404, `Flow ${name} нет в репо команды`);
+    let spec: FlowSpec;
+    try {
+      spec = parseFlow(yaml);
+    } catch (err) {
+      return { name, yaml, file: repo.abs(rel), error: errMsg(err) };
+    }
+    const problems = [...teamFlowTextProblems(yaml), ...teamFlowProblems(spec)];
+    const trust = problems.length ? undefined : this.untrusted(repo, team, name, yaml, spec);
+    return { name, yaml, file: repo.abs(rel), spec, ...(problems.length ? { problems } : {}), ...(trust ? { trust } : {}) };
+  }
+
+  private untrusted(repo: TeamRepo, team: string, name: string, yaml: string, spec: FlowSpec): TeamFlowTrust | undefined {
+    return untrustedFlow({ teamDir: repo.dir, templateDir: this.repoDeps.templateDir, team, name, yaml, spec });
+  }
+
+  /**
+   * Flow команды для запуска (черновики, разбивка, «В работу», spec §14): невалидный — 400; с тем, что flow команде нельзя, —
+   * 400 flow_forbidden; версия не одобрена на этом компьютере — 409 flow_untrusted с YAML, базой диффа и возможностями
+   * flow. spec разобран из того же текста, чей хэш сверен: подменить файл между проверкой и запуском нельзя.
+   */
+  readTeamFlow(team: string, name: string): { spec: FlowSpec; yaml: string; file: string } {
+    const f = this.teamFlow(team, name);
+    if (!f.spec) throw new TeamError(400, `Flow ${name} не проходит проверку: ${f.error}`);
+    if (f.problems) throw forbidden(name, f.problems);
+    if (f.trust) throw untrustedError(f.trust);
+    return { spec: f.spec, yaml: f.yaml, file: f.file };
+  }
+
+  /** «Доверять этой версии» (POST …/flows/:name/trust { hash }): flow успел измениться — 409 flow_untrusted с новой версией. */
+  trustTeamFlow(team: string, name: string, body: unknown): TeamFlowTrusted {
+    const hash = reqStr(isRecord(body) ? body.hash : undefined, 'hash', 'Укажи hash — sha256 версии flow, которую одобряешь');
+    const repo = this.repo(team);
+    const f = this.teamFlow(team, name);
+    if (!f.spec) throw new TeamError(400, `Flow ${name} не проходит проверку: ${f.error}`);
+    if (f.problems) throw forbidden(name, f.problems);
+    const current = flowHash(f.yaml);
+    if (current !== hash) {
+      // одобряют ровно то, что видели: пока смотрели, pull принёс другую версию
+      if (f.trust) throw new TeamError(409, `Flow ${name} успел измениться: посмотри новую версию`, 'flow_untrusted', { flow: f.trust });
+      return { name, hash: current, trusted: true };
+    }
+    if (f.trust) trustFlow(repo.dir, name, f.yaml, 'trust', this.repoDeps.now());
+    return { name, hash, trusted: true };
+  }
+
+  /** Сохранение на вкладке «Процесс»: невалидный и запрещённый flow — 400; сохранённая здесь версия сразу одобрена. */
+  async writeTeamFlow(team: string, name: string, yaml: unknown): Promise<TeamFlow> {
+    const repo = this.repo(team);
+    const rel = this.flowFile(repo, name);
+    if (typeof yaml !== 'string' || !yaml.trim()) bad('Поле yaml — текст flow');
+    let spec: FlowSpec;
+    try {
+      spec = parseFlow(yaml as string);
+    } catch (err) {
+      throw new TeamError(400, errMsg(err));
+    }
+    const problems = [...teamFlowTextProblems(yaml as string), ...teamFlowProblems(spec)];
+    if (problems.length) throw forbidden(name, problems);
+    const text = (yaml as string).endsWith('\n') ? (yaml as string) : `${yaml}\n`;
+    await repo.write(`flow ${name}: ${repo.exists(rel) ? 'обновлён' : 'добавлен'}`, (r) => r.writeFile(rel, text));
+    // одобряется текст, который записал я, а не файл после записи: его мог уже переписать pull
+    trustFlow(repo.dir, name, text, 'save', this.repoDeps.now());
+    return this.teamFlow(team, name);
+  }
+}
+
+/** 400 flow_forbidden: во flow команды то, что ей нельзя (teamFlowProblems). */
+function forbidden(name: string, problems: string[]): TeamError {
+  return new TeamError(400, `Flow ${name} нельзя запускать как flow команды:\n${problems.map((p) => `- ${p}`).join('\n')}`, 'flow_forbidden', { problems });
+}
+
+/** 409 flow_untrusted: эту версию flow команды на этом компьютере не одобряли (spec §14). */
+export function untrustedError(flow: TeamFlowTrust): TeamError {
+  const why = flow.base?.kind === 'trusted' ? 'изменился с версии, которую ты одобрял' : flow.base?.kind === 'template' ? 'отличается от шаблона agentgraph' : 'новый';
+  return new TeamError(409, `Flow команды ${flow.name} ${why}: посмотри изменения и подтверди, что доверяешь этой версии`, 'flow_untrusted', { flow });
+}
+
+/** Разделы документа для API: только «## », без текста до первого раздела. */
+function docSections(text: string): TeamDoc['sections'] {
+  return splitSections(text).flatMap((s) => (s.heading ? [{ heading: s.heading, hash: sectionHash(s.text) }] : []));
+}
+
+/** Тело задачи из описания и критериев приёмки черновика разбивки (spec §9.1). */
+function composeBody(item: Pick<NewTask, 'description' | 'acceptance'>): string {
+  const parts: string[] = [];
+  const d = typeof item.description === 'string' ? item.description.trim() : '';
+  if (d) parts.push(`## Описание\n\n${d}`);
+  const acc = Array.isArray(item.acceptance) ? item.acceptance.filter((x): x is string => typeof x === 'string' && Boolean(x.trim())) : [];
+  if (acc.length) parts.push(`## Критерии приёмки\n\n${acc.map((a) => `- [ ] ${a.trim()}`).join('\n')}`);
+  return parts.length ? `${parts.join('\n\n')}\n` : '';
+}
+
+// ---------- маршруты (spec §12)
+
+let service: TeamService | undefined;
+
+/** Сервис процесса: один на сервер, создаётся при первом обращении. */
+export function teamService(deps?: TeamServiceDeps): TeamService {
+  service ??= new TeamService(deps);
+  return service;
+}
+
+/** Остановить сервис команд (stopServer): таймеры снимаются, текущая операция дожидается. */
+export async function stopTeamwork(): Promise<void> {
+  const s = service;
+  service = undefined;
+  await s?.stop();
+}
+
+/** Команда, у которой в клоне есть коммиты, которых нет в репо команды (диалог выхода десктопа, spec §7.5); pushing — отправка идёт сейчас. */
+export type TeamUnsent = { slug: string; title: string; unpushed: number; error?: string; pushing?: boolean };
+
+/** Неотправленные изменения всех команд — src/desktop/main.ts спрашивает о них перед выходом. Сервиса нет — пусто. */
+export async function unsentTeams(): Promise<TeamUnsent[]> {
+  const svc = service;
+  if (!svc) return [];
+  const out: TeamUnsent[] = [];
+  for (const slug of TeamRepo.list(svc.root())) {
+    try {
+      const repo = svc.repo(slug);
+      const sync = await repo.syncState();
+      if (!sync.unpushed) continue;
+      let title = slug;
+      try {
+        title = repo.config().title || slug;
+      } catch {
+        // teamwork.yaml не читается: подпись — слаг
+      }
+      out.push({ slug, title, unpushed: sync.unpushed, ...(sync.error ? { error: sync.error } : {}), ...(sync.state === 'pushing' ? { pushing: true } : {}) });
+    } catch {
+      // клон не открылся: отправлять нечего
+    }
+  }
+  return out;
+}
+
+/** «Отправить и закрыть» в диалоге выхода: синхронизировать команды сейчас; ошибка остаётся в строке синхронизации. */
+export async function pushTeams(slugs: readonly string[]): Promise<void> {
+  const svc = service;
+  if (!svc) return;
+  await Promise.all(slugs.map((s) => svc.sync(s).catch(() => undefined)));
+}
+
+/** drafts — черновики агентов (teamwork-drafts.ts); без него маршруты …/drafts* отвечают 501. */
+export type TeamworkRouteDeps = { service: TeamService; drafts?: TeamDrafts };
+
+const ok = (body: unknown, status = 200): Reply => ({ status, body });
+
+/** Маршрут не наш — undefined. Ошибки TeamError — их код и тело; прочие — 500. */
+export async function teamworkRoute(method: string, url: URL, readBody: () => Promise<unknown>, deps: TeamworkRouteDeps): Promise<Reply | undefined> {
+  const p = url.pathname;
+  if (p !== '/api/teams' && !p.startsWith('/api/teams/')) return undefined;
+  const svc = deps.service;
+  const body = async <T = Record<string, unknown>>(): Promise<T> => {
+    const b = await readBody();
+    return (isRecord(b) ? b : {}) as T;
+  };
+  let m: RegExpMatchArray | null;
+  try {
+    if (p === '/api/teams' && method === 'GET') return ok(await svc.listTeams());
+    if (p === '/api/teams' && method === 'POST') {
+      const b = await body<{ url?: unknown; title?: unknown; prefix?: unknown }>();
+      return ok(await svc.createTeam({ url: reqStr(b.url, 'url', 'Укажи ссылку на репо'), title: optStr(b.title, 'title') ?? '', prefix: optStr(b.prefix, 'prefix') ?? '' }), 201);
+    }
+    if (p === '/api/teams/mine' && method === 'GET') return ok(await svc.mine());
+    if (p === '/api/teams/check' && method === 'POST') {
+      const b = await body<{ url?: unknown }>();
+      return ok(await svc.check(reqStr(b.url, 'url', 'Укажи ссылку на репо')));
+    }
+    if (p === '/api/teams/join' && method === 'POST') {
+      const b = await body<{ url?: unknown; addMe?: unknown }>();
+      return ok(await svc.joinTeam({ url: reqStr(b.url, 'url', 'Укажи ссылку на репо'), addMe: b.addMe !== false }), 201);
+    }
+    const seg = (s: string) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return bad(`Неверный путь: ${s}`);
+      }
+    };
+    if ((m = p.match(/^\/api\/teams\/([^/]+)$/))) {
+      const t = seg(m[1]);
+      if (method === 'GET') return ok(await svc.team(t));
+      if (method === 'PUT') return ok(await svc.updateTeam(t, await readBody()));
+      if (method === 'DELETE') {
+        const b = await body<{ force?: unknown }>();
+        await svc.removeTeam(t, url.searchParams.get('force') === 'true' || b.force === true);
+        return ok({ ok: true });
+      }
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/sync$/)) && method === 'POST') return ok(await svc.sync(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/members\/me$/)) && method === 'POST') return ok(await svc.addMe(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts$/)) && method === 'GET') return ok(svc.conflicts(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)$/)) && method === 'DELETE') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'theirs'));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)\/mine$/)) && method === 'POST') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'mine'));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/repo-info$/)) && method === 'POST') return ok(await svc.repoInfo(seg(m[1]), await readBody()));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/local$/))) {
+      if (method === 'GET') return ok(svc.local(seg(m[1])));
+      if (method === 'PUT') return ok(svc.updateLocal(seg(m[1]), await readBody()));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/flows\/([^/]+)$/))) {
+      if (method === 'GET') return ok(svc.teamFlow(seg(m[1]), seg(m[2])));
+      if (method === 'PUT') return ok(await svc.writeTeamFlow(seg(m[1]), seg(m[2]), (await body<{ yaml?: unknown }>()).yaml));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/flows\/([^/]+)\/trust$/)) && method === 'POST') return ok(svc.trustTeamFlow(seg(m[1]), seg(m[2]), await readBody()));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects$/))) {
+      if (method === 'GET') return ok(svc.listProjects(seg(m[1])));
+      if (method === 'POST') return ok(await svc.createProject(seg(m[1]), await readBody()), 201);
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)$/))) {
+      if (method === 'GET') return ok(await svc.project(seg(m[1]), seg(m[2])));
+      if (method === 'PUT') return ok(await svc.updateProject(seg(m[1]), seg(m[2]), await readBody()));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/docs\/(.+)$/))) {
+      const [t, pr, name] = [seg(m[1]), seg(m[2]), m[3].split('/').map(seg).join('/')];
+      if (method === 'GET') return ok(await svc.doc(t, pr, name));
+      if (method === 'PUT') {
+        const b = await body<{ text?: unknown; base?: unknown; section?: unknown; hash?: unknown; message?: unknown }>();
+        if (typeof b.text !== 'string') bad('Поле text — строка');
+        return ok(await svc.writeDoc(t, pr, name, b.text as string, { base: optStr(b.base, 'base'), section: typeof b.section === 'string' ? b.section : undefined, hash: optStr(b.hash, 'hash'), message: optStr(b.message, 'message') }));
+      }
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/history$/)) && method === 'GET') {
+      const limit = url.searchParams.get('limit');
+      return ok(await svc.history(seg(m[1]), seg(m[2]), { doc: url.searchParams.get('doc') ?? undefined, limit: limit ? Number(limit) : undefined }));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/history\/([^/]+)$/)) && method === 'GET') {
+      const doc = url.searchParams.get('doc');
+      if (!doc) bad('Нужен doc — какой документ показать');
+      return ok(await svc.docRevision(seg(m[1]), seg(m[2]), doc as string, seg(m[3])));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/tasks$/))) {
+      if (method === 'GET') return ok(svc.tasks(seg(m[1]), seg(m[2])));
+      if (method === 'POST') {
+        const b = await readBody();
+        const items = isRecord(b) && Array.isArray(b.tasks) ? (b.tasks as NewTask[]) : isRecord(b) ? [b as NewTask] : [];
+        const created = await svc.createTasks(seg(m[1]), seg(m[2]), items);
+        return ok(isRecord(b) && Array.isArray(b.tasks) ? { tasks: created } : created[0], 201);
+      }
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/tasks\/([^/]+)$/))) {
+      const [t, pr, id] = [seg(m[1]), seg(m[2]), seg(m[3])];
+      if (method === 'GET') return ok(svc.task(t, pr, id));
+      if (method === 'PATCH') return ok(await svc.updateTask(t, pr, id, (await body<TeamTaskPatch>()) as TeamTaskPatch));
+      if (method === 'DELETE') {
+        await svc.deleteTask(t, pr, id);
+        return ok({ ok: true });
+      }
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/tasks\/([^/]+)\/move$/)) && method === 'POST') {
+      return ok(await svc.moveTask(seg(m[1]), seg(m[2]), seg(m[3]), (await body<TeamTaskMove>()) as TeamTaskMove));
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/tasks\/([^/]+)\/comments$/))) {
+      const [t, pr, id] = [seg(m[1]), seg(m[2]), seg(m[3])];
+      if (method === 'GET') return ok(await svc.comments(t, pr, id));
+      if (method === 'POST') return ok(await svc.addComment(t, pr, id, (await body<{ text?: unknown }>()).text), 201);
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/sprints$/))) {
+      if (method === 'GET') return ok(svc.sprints(seg(m[1]), seg(m[2])));
+      if (method === 'POST') return ok(await svc.createSprint(seg(m[1]), seg(m[2]), (await body<NewSprint>()) as NewSprint), 201);
+    }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/sprints\/(\d+)\/(start|close)$/)) && method === 'POST') {
+      const [t, pr, n] = [seg(m[1]), seg(m[2]), m[3]];
+      if (m[4] === 'start') return ok(await svc.startSprint(t, pr, n, (await body<NewSprint>()) as NewSprint));
+      return ok(await svc.closeSprint(t, pr, n, (await body<CloseSprint>()) as CloseSprint));
+    }
+    // черновики агентов (spec §9.2–9.3): список и старт, черновик с текстами, принятие
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects\/([^/]+)\/drafts(?:\/([^/]+)(\/accept)?)?$/))) {
+      const drafts = deps.drafts;
+      if (!drafts) return { status: 501, body: { error: 'Черновики агентов не подключены' } };
+      const [t, pr, run, accept] = [seg(m[1]), seg(m[2]), m[3] ? seg(m[3]) : undefined, Boolean(m[4])];
+      if (run === undefined) {
+        if (method === 'GET') return ok(drafts.list(t, pr));
+        if (method === 'POST') return ok(await drafts.start(t, pr, await readBody()), 201);
+      } else if (accept) {
+        if (method === 'POST') return ok(await drafts.accept(t, pr, run, await readBody()));
+      } else if (method === 'GET') return ok(await drafts.draft(t, pr, run));
+    }
+    return undefined;
+  } catch (err) {
+    if (err instanceof TeamError) return { status: err.status, body: err.body() };
+    // ошибка чтения тела с кодом (413 от readJson сервера) — с её кодом
+    const status = (err as { status?: unknown }).status;
+    return { status: typeof status === 'number' && status >= 400 && status < 600 ? status : 500, body: { error: errMsg(err) } };
+  }
+}

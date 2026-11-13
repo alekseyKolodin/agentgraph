@@ -10,6 +10,24 @@ export type Exec = (cmd: string, args: string[], opts?: { cwd?: string; timeoutM
 /** Ответ glab со 100 MR вместе с описаниями больше дефолтного 1 МБ. */
 const MAX_BUFFER = 32 * 1024 * 1024;
 
+/**
+ * Опции git, значение которых идёт следующим аргументом: `-c core.quotePath=false`, `-C <папка>`, `--git-dir <путь>`. Набор —
+ * только для git: gh, glab и npm здесь зовутся с командой первым аргументом, и для них commandOf его же и вернёт.
+ */
+const VALUE_OPTS = new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--config-env']);
+
+/**
+ * Команда для подписи ошибки: первый аргумент, который не опция. `git -c core.quotePath=false fetch` → fetch, а не «-c»;
+ * у остальных опций (`-q`, `--depth=1`) значение слитно или его нет. Одни опции — пусто.
+ */
+export function commandOf(args: string[]): string {
+  for (let i = 0; i < args.length; i++) {
+    if (VALUE_OPTS.has(args[i])) i++;
+    else if (!args[i].startsWith('-')) return args[i];
+  }
+  return '';
+}
+
 export const exec: Exec = (cmd, args, opts = {}) =>
   new Promise((resolve, reject) => {
     execFile(
@@ -26,7 +44,7 @@ export const exec: Exec = (cmd, args, opts = {}) =>
         if (err) {
           const e = err as NodeJS.ErrnoException & { killed?: boolean };
           const why = e.code === 'ENOENT' ? `${cmd} не установлен` : e.killed ? 'таймаут' : String(stderr || e.message).trim().split('\n').slice(-3).join(' ');
-          reject(new Error(`${cmd} ${args[0] ?? ''}: ${why}`));
+          reject(new Error(`${[cmd, commandOf(args)].filter(Boolean).join(' ')}: ${why}`));
         } else resolve(String(stdout));
       },
     );

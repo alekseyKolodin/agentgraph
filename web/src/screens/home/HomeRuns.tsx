@@ -1,7 +1,8 @@
 // Главная: идущие запуски строками со сводкой (ui/app.js homeRunHtml, renderHome): что происходит сейчас и почему,
-// мини-лента итераций, стоимость и действия — пауза, возобновление, стоп, ответ на паузу агента.
+// мини-лента итераций, стоимость и действия — пауза, возобновление, стоп, ответ на паузу агента. Запуск по задаче Teamwork —
+// с номером задачи ссылкой на неё.
 import type { MouseEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { HomeRun } from '@server/api-types';
 import { api, errorText, useFeature } from '../../api';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -10,6 +11,7 @@ import { projectLabels } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { homeRunView } from '../../lib/home';
 import { artResume } from '../run/artStore';
+import { runTeamworkLink } from '../teamwork/shell';
 import styles from './Home.module.css';
 
 export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
@@ -42,6 +44,8 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
     <ul className={styles.homeRuns}>
       {runs.map((r) => {
         const v = homeRunView(r, labels.get(r.cwd || '') ?? '', artifacts, now);
+        // запуск по задаче Teamwork — номер задачи ссылкой на её панель; черновик — на вкладку документа
+        const tw = runTeamworkLink(r.teamwork);
         // кнопки внутри строки — свои действия, не «открыть»
         const act = (fn: () => void) => (e: MouseEvent) => {
           e.stopPropagation();
@@ -62,6 +66,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
             <div className={styles.hrunMain}>
               <div className={styles.hrunTop}>
                 <span className={styles.hrunTitle}>{v.title}</span>
+                {tw && <Link to={tw.to} className={styles.hrunTask} title={tw.title} onClick={(e) => e.stopPropagation()}>{tw.label}</Link>}
                 <span className={styles.hrunMeta} title={r.cwd || ''}>{v.meta}</span>
               </div>
               <div className={styles.hrunSum} title={v.sum}>{v.sum}</div>

@@ -1,0 +1,31 @@
+/* Главная, «Мои задачи»: строки с разделителями в одной панели, как идущие запуски (Home.module.css .home-runs) —
+   номер моно, заголовок, где задача, статус и действия; цвет — только у работы агента. */
+.count { margin-left: 6px; font-family: var(--font-mono); color: var(--ink-2); font-weight: 400; }
+.list { list-style: none; margin: 8px 0 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }
+.row { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--hover); }
+.row.wait { background: color-mix(in srgb, var(--st-wait) 6%, var(--panel)); }
+.id { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.title { font-weight: 500; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title:hover { text-decoration: underline; }
+/* «ждёт PAY-1» и работа агента переносятся под «где», а не обрезают друг друга */
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; font-size: var(--fs-meta); color: var(--ink-2); }
+.where { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; flex: 0 1 auto; }
+.q { color: var(--ink-3); white-space: nowrap; font-family: var(--font-mono); }
+.work { display: inline-flex; align-items: center; gap: 6px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; flex: 0 1 auto; }
+.work:hover { text-decoration: underline; }
+.work.fail { color: var(--st-fail); }
+.status { font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
+.acts { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
+.acts :global(.btn) { white-space: nowrap; text-decoration: none; }
+.empty { margin: 6px 0 0; font-size: var(--fs-small); color: var(--ink-2); }
+.empty.fail { color: var(--st-fail); }
+.empty.fail a { color: inherit; }
+@media (max-width: 700px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  .id { grid-column: 1 / -1; }
+  .acts { grid-column: 1 / -1; justify-content: flex-start; }
+  .acts:empty { display: none; }
+}

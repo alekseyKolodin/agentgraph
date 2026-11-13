@@ -65,8 +65,6 @@ type State = {
   yamlSeq: number;
   /** Явное открытие этапа или блока в инспекторе: прокрутка наверх, фокус в название. */
   openSeq: number;
-  /** Узел, который граф прокручивает в кадр. */
-  reveal: { key: string; seq: number } | null;
   /** Уход с экрана уже подтверждён (openFlow, удаление): блокировщик перехода не спрашивает второй раз. */
   approved: boolean;
   /** Растёт, когда форму запуска надо заполнить заново (renderFlow старого UI): flow открыли или сохранили. */
@@ -77,7 +75,7 @@ type State = {
 
 export const flowState: State = {
   flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiProgress: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
-  sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, openSeq: 0, reveal: null, approved: false, formSeq: 0, extrasSeq: 0,
+  sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
 };
 
 let version = 0;
@@ -109,11 +107,6 @@ export function markDirty(): void {
   flowState.dirty = true;
   flowState.editSeq++;
   emit();
-}
-
-let revealSeq = 0;
-export function revealNode(key: string): void {
-  set({ reveal: { key, seq: ++revealSeq } });
 }
 
 const progressListeners = new Set<() => void>();

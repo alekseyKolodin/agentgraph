@@ -2,12 +2,14 @@
 # Главный процесс — dist/desktop/main.js (tsc из src/desktop/main.ts), сервер — dist/*.js, UI — dist/web (vite).
 # node_modules — только dependencies из package.json: devDependencies (React, Vite, Electron) в приложение не попадают.
 appId: dev.agentgraph.desktop
-productName: agentgraph
+productName: AgentGraph
 directories:
   output: release/desktop
 files:
   - package.json
   - dist/**/*
+  # шаблон репо команды Teamwork (src/teamwork-template.ts читает его из APP_DIR/templates)
+  - templates/**/*
   - "!dist/**/*.map"
   - "!dist/**/*.test.js"
   # node-pty (терминал вкладки «Сессии»): исходники и сборки под Windows (~60 МБ) приложению под macOS не нужны
@@ -23,6 +25,8 @@ asarUnpack:
 # пересобирать под Electron нечего: node-pty 1.1.0 — N-API со сборками под darwin-arm64 и darwin-x64 в пакете
 npmRebuild: false
 mac:
+  # иконка — build/icon.icns (папка build/ — buildResources electron-builder по умолчанию, в приложение не кладётся)
+  icon: build/icon.icns
   category: public.app-category.developer-tools
   # бинарник Claude Code — под одну архитектуру (пакет SDK ставится под машину сборки), поэтому без universal и x64
   target:

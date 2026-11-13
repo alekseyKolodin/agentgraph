@@ -20,7 +20,8 @@ export type PendingPhase = {
   model?: string;
   effort?: string;
   at: number;
-  ctx?: { peak: number; requests: number; window?: number };
+  /** spent — токены этапа по ходу, включая сабагентов (subSpent из них у subagents сабагентов). */
+  ctx?: { peak: number; requests: number; window?: number; spent?: number; subSpent?: number; subagents?: number };
   /** Блок-вызов: идущий дочерний запуск (событие call). */
   call?: { runId: string; flow: string };
 };
@@ -31,7 +32,8 @@ export type LiveState = {
   /** Ключ — pendingKey: у параллельной группы в одной итерации идут несколько этапов. */
   pending: Map<string, PendingPhase>;
   condPending: PendingCond | null;
-  tagPending: { tag: string; file: string } | null;
+  /** Идёт сессия состояния пространства после done: что и где её промпт. */
+  statePending: { space: string; file: string } | null;
 };
 
 /** Что сделать после события, кроме перерисовки. */
@@ -54,7 +56,7 @@ export const pendingKey = (x: { block?: string; iteration: number; phase: string
 
 /** Состояние только что открытого запуска. */
 export function liveState(run: RunDetail): LiveState {
-  return { run: withQuestions(run), pending: new Map(), condPending: null, tagPending: null };
+  return { run: withQuestions(run), pending: new Map(), condPending: null, statePending: null };
 }
 
 const withQuestions = <T extends { questions?: QuestionRecord[] }>(r: T): T & { questions: QuestionRecord[] } => ({ ...r, questions: r.questions || [] });
@@ -98,7 +100,13 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       // этапа нет в pending — снимок опоздал к phase_end
       const cur = st.pending.get(pendingKey(e));
       if (!cur) return { render: false };
-      cur.ctx = { peak: e.contextPeak, requests: e.requests, ...(e.contextWindow ? { window: e.contextWindow } : {}) };
+      cur.ctx = {
+        peak: e.contextPeak,
+        requests: e.requests,
+        ...(e.contextWindow ? { window: e.contextWindow } : {}),
+        ...(e.spent ? { spent: e.spent } : {}),
+        ...(e.subSpent ? { subSpent: e.subSpent, subagents: e.subagents ?? 0 } : {}),
+      };
       break;
     }
     case 'call': {
@@ -130,16 +138,14 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       st.condPending = x;
       break;
     }
-    case 'tag_summary_start':
-      st.tagPending = { tag: e.tag, file: e.file };
+    case 'space_state_start':
+      st.statePending = { space: e.space, file: e.file };
       break;
-    case 'tag_summary': {
-      st.tagPending = null;
-      const list = (r.tagSummaries ||= []);
-      if (!list.some((s) => s.tag === e.tag)) {
-        r.totalCostUsd += e.report.costUsd;
-        list.push(e.report);
-      }
+    case 'space_state': {
+      st.statePending = null;
+      // переигрывание потока не удваивает стоимость
+      if (!r.stateUpdate) r.totalCostUsd += e.report.costUsd;
+      r.stateUpdate = e.report;
       break;
     }
     case 'condition':
@@ -213,7 +219,7 @@ export function applyRunEvent(st: LiveState, e: RunStreamEvent, now: number = Da
       st.run = withQuestions({ ...e.report, live: false });
       st.pending.clear();
       st.condPending = null;
-      st.tagPending = null;
+      st.statePending = null;
       return { render: true, close: true, runsSoon: true, ended: true };
     case 'error':
       return { render: true, close: true };

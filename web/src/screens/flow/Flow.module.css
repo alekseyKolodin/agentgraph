@@ -99,10 +99,12 @@
 .pcard-head .pnum { width: 26px; height: 26px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--line-strong); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-weight: 500; font-size: var(--fs-meta); flex: none; }
 .pcard-head input.p-title { font-weight: 600; font-size: var(--fs-h3); flex: 2; }
 .p-adv input.p-name, .bpanel input.b-name { font-family: var(--font-mono); font-size: var(--fs-meta); }
-.pcard-head .icon, .bblock-head .icon, .next-rule .icon { border: 1px solid var(--line); background: transparent; color: var(--ink-2); border-radius: var(--r-sm); width: 28px; height: 28px; cursor: pointer; font-size: var(--fs-small); }
-.pcard-head .icon:hover, .bblock-head .icon:hover, .next-rule .icon:hover { background: var(--hover); color: var(--ink); }
-.pcard-head .icon.danger:hover, .bblock-head .icon.danger:hover, .next-rule .icon.danger:hover { color: var(--st-fail); }
-.pcard-head .icon:disabled, .bblock-head .icon:disabled { opacity: .35; cursor: default; }
+/* инспектор: кнопки этапа строкой под названием, с его левого края */
+.pcard-tools { display: flex; align-items: center; gap: 8px; margin: -4px 0 0 34px; }
+.pcard-head .icon, .pcard-tools .icon, .bblock-head .icon, .next-rule .icon { border: 1px solid var(--line); background: transparent; color: var(--ink-2); border-radius: var(--r-sm); width: 28px; height: 28px; cursor: pointer; font-size: var(--fs-small); }
+.pcard-head .icon:hover, .pcard-tools .icon:hover, .bblock-head .icon:hover, .next-rule .icon:hover { background: var(--hover); color: var(--ink); }
+.pcard-head .icon.danger:hover, .pcard-tools .icon.danger:hover, .bblock-head .icon.danger:hover, .next-rule .icon.danger:hover { color: var(--st-fail); }
+.pcard-head .icon:disabled, .pcard-tools .icon:disabled, .bblock-head .icon:disabled { opacity: .35; cursor: default; }
 /* этап параллельной группы: метка ∥ группа */
 .pgroup { font-size: var(--fs-cap); font-weight: 600; color: var(--live); border: 1px solid color-mix(in srgb, var(--live) 40%, transparent); border-radius: var(--r-pill); padding: 0 7px; white-space: nowrap; flex: none; }
 

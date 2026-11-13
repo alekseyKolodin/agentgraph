@@ -1,7 +1,7 @@
 // Что показывает страница запуска (порт renderRun, renderRunSummary, blockIters, renderRunRibbons, renderRunFinal,
 // renderInspector, runGraphGoto из ui/app.js) — без React и DOM: компоненты только раскладывают готовые данные.
-import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens } from '@server/api-types';
-import { dur, excerpt, usd } from '../format';
+import type { BlockNext, ConditionReport, PhaseReport, QuestionRecord, RunFlowEdit, RunNote, RunReport, RunStatus, SessionTokens, StateSkip } from '@server/api-types';
+import { dur, excerpt, statusLabel, usd } from '../format';
 import { t } from '../i18n';
 import { markdownFits } from '../md';
 import { ctxLabel, ctxLevel, tokensShort } from '../graph/text';
@@ -31,6 +31,10 @@ export function runBlocks(r: Pick<RunReport, 'blocks' | 'status' | 'iterations' 
 
 /** Запуск закончен (карточка «Итог»). Запуск из CLI, открытый в UI, приходит с live: false и статусом running — итога ещё нет. */
 export const runFinished = (r: { live?: boolean; status: string }): boolean => !r.live && r.status !== 'running';
+
+/** Этапы, из чьих транскриптов собран «Лог» запуска без живого потока: в порядке конца, у самых старых запусков файлов нет. */
+export const logPhases = <P extends { files?: { transcript?: string } }>(r: { phases: P[] }): (P & { files: { transcript: string } })[] =>
+  r.phases.filter((p): p is P & { files: { transcript: string } } => Boolean(p.files?.transcript));
 
 /** Агент ждёт ответа на вопрос. */
 export const runWaiting = (r: RunView): boolean => r.live && r.questions.some((q) => !q.answers);
@@ -69,15 +73,21 @@ export function headerStatus(r: RunView): string {
   return runWaiting(r) ? 'waiting' : pause === 'paused' ? 'paused' : r.live ? 'running' : r.status;
 }
 
-/** «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; идущее саммари тега. */
-export function runMeta(r: RunView, tagPending: LiveState['tagPending']): string {
+/**
+ * «итерация N/M» у одного блока, «блок k/n · итераций: N» у нескольких; ≈стоимость; токены идущих этапов
+ * (их стоимость придёт только с концом этапа, а лимит подписки тратится уже сейчас); идущее обновление состояния пространства.
+ */
+export function runMeta(r: RunView, statePending: LiveState['statePending'], running: Iterable<PendingPhase> = []): string {
   const blocks = runBlocks(r);
   let progress = t('итерация {i}/{n}', { i: r.iterations, n: r.maxIterations ?? '?' });
   if (blocks.length > 1) {
     const cur = Math.max(0, blocks.findLastIndex((b) => b.status !== 'pending'));
     progress = t('блок {k}/{n} · итераций: {i}', { k: cur + 1, n: blocks.length, i: r.iterations });
   }
-  return `${progress} · ≈${usd(r.totalCostUsd)}${tagPending ? ` · ${t('обновляю саммари тега {tag}…', { tag: tagPending.tag })}` : ''}`;
+  let spent = 0;
+  for (const x of running) spent += x.ctx?.spent ?? 0;
+  const live = spent > 0 ? ` · ${t('идёт ≈{n} токенов', { n: tokensShort(spent) })}` : '';
+  return `${progress} · ≈${usd(r.totalCostUsd)}${live}${statePending ? ` · ${t('обновляю состояние пространства {space}…', { space: statePending.space })}` : ''}`;
 }
 
 /** Лимит итераций можно менять у живого запуска, пока блок с циклом не завершился. */
@@ -327,6 +337,35 @@ export function ctxChipInfo(
   return { text: `ctx ${ctxLabel(peak!, window)}`, level: ctxLevel(peak!, window), title: parts.join('\n') };
 }
 
+/** Все токены этапа (вход, кэш, выход, включая сабагентов) по итогу сессии; нет данных — 0. */
+export const phaseSpent = (tk?: SessionTokens): number => (tk?.input ?? 0) + (tk?.output ?? 0) + (tk?.cacheRead ?? 0) + (tk?.cacheCreation ?? 0);
+
+/**
+ * Чип расхода этапа «Σ 38M · 5 саб.»: идущий — по снимку ctx из потока, готовый — по tokens отчёта. Идущий этап,
+ * который уже потратил больше самого дорогого готового этапа запуска (maxDone), подсвечивается: такой этап стоит
+ * остановить или проверить, пока он не съел лимит. Нет данных — null.
+ */
+export function spentChipInfo(
+  x: { tokens?: SessionTokens; ctx?: { spent?: number; subSpent?: number; subagents?: number } },
+  live: boolean,
+  maxDone = 0,
+): { text: string; level: '' | 'warn'; title: string } | null {
+  const spent = live ? x.ctx?.spent ?? 0 : phaseSpent(x.tokens);
+  if (!(spent > 0)) return null;
+  const n = tokensShort;
+  const subs = live ? x.ctx?.subagents ?? 0 : 0;
+  const est = !live && !!x.tokens?.estimated;
+  const lines = [live ? t('Потрачено этапом к этому моменту: ≈{n} токенов (вход, кэш и выход)', { n: n(spent) }) : t('Потрачено этапом: {n} токенов (вход, кэш и выход)', { n: n(spent) })];
+  if (subs > 0) lines.push(t('из них сабагенты ({k}): {n}', { k: subs, n: n(x.ctx!.subSpent) }));
+  else if (!live) lines.push(t('включая сабагентов'));
+  if (est) lines.push(t('Оценка по ходу этапа: его остановили до итога, точного расхода и стоимости нет'));
+  const over = live && maxDone > 0 && spent > maxDone;
+  if (over) lines.push(t('Уже больше самого дорогого готового этапа запуска ({n}): проверьте, нужен ли он, или поставьте запуск на паузу', { n: n(maxDone) }));
+  lines.push(t('Большая часть обычно — чтение кэша: оно дешевле остального, но тоже идёт в лимит'));
+  if (live) lines.push(t('Оценка по ходу этапа: служебные запросы сюда не попадают, точный итог и стоимость будут, когда он закончится'));
+  return { text: `Σ ${est || live ? '≈' : ''}${n(spent)}${subs > 0 ? ` · ${t('{k} саб.', { k: subs })}` : ''}`, level: over ? 'warn' : '', title: lines.join('\n') };
+}
+
 /** Замечания судьи — markdown; у команды это хвост её вывода — моноширинно, как condition.command.log. */
 export const feedbackIsMarkdown = (c: Pick<ConditionReport, 'type' | 'feedback'>): boolean => c.type !== 'command' && markdownFits(c.feedback);
 
@@ -545,20 +584,63 @@ export function finalFeedback(r: RunReport): ConditionReport | undefined {
   return last && !last.done && last.feedback ? last : undefined;
 }
 
-export type TagLine = { tag: string; state: 'ok' | 'error' | 'skip'; text: string; costUsd?: number; auto: boolean };
+/**
+ * Причины пропуска, которые старые запуски писали только текстом (src/runner.ts до кода skip, раньше — саммари тегов задач):
+ * по ним — тот же код, что у новых.
+ */
+const LEGACY_SKIP: [RegExp, StateSkip][] = [
+  [/^галочка «Обновить (?:состояние пространства|саммари тегов?)» снята$/, 'off'],
+  [/^запуск не завершён \([a-z_]+\)$/, 'not-done'],
+  [/^остановлено$/, 'stopped'],
+];
 
-/** Строки о тегах в «Итоге»: обновилось ли саммари каждого тега; autoTagError — тег не заведён. */
-export function tagFinalLines(r: Pick<RunReport, 'tags' | 'tagSummaries' | 'autoTag'>): { autoTagError?: string; lines: TagLine[] } {
-  const byTag = new Map((r.tagSummaries || []).map((s) => [s.tag, s]));
-  const lines = (r.tags || []).map((tag): TagLine => {
-    const s = byTag.get(tag);
-    const auto = r.autoTag?.slug === tag;
-    if (s?.ok) return { tag, state: 'ok', text: t('Саммари тега обновлено'), costUsd: s.costUsd, auto };
-    if (s?.error) return { tag, state: 'error', text: t('Саммари тега не обновлено: {why}', { why: s.error }), auto };
-    return { tag, state: 'skip', text: s?.skipped ? t('Саммари тега не обновлено: {why}', { why: s.skipped }) : t('Саммари тега не обновлено'), auto };
-  });
-  return { ...(r.autoTag?.error ? { autoTagError: r.autoTag.error } : {}), lines };
+/**
+ * Почему состояние не обновлялось — словами интерфейса: по коду сервера (у старых запусков — по их тексту), «не завершён» —
+ * тем же словом, что бейдж статуса запуска. Незнакомый текст — как есть.
+ */
+export function stateSkipText(u: { skipped?: string; skip?: StateSkip }, status?: string): string {
+  const code = u.skip ?? LEGACY_SKIP.find(([re]) => re.test(u.skipped ?? ''))?.[1];
+  switch (code) {
+    case 'off': return t('галочка «Обновить состояние пространства» снята');
+    case 'not-done': return status ? t('запуск не завершён ({status})', { status: statusLabel(status) }) : t('запуск не завершён');
+    case 'stopped': return t('остановлено до записи состояния');
+    default: return u.skipped ?? '';
+  }
 }
+
+/** Строка «Итога» о состоянии пространства; space — слаг пространства (у старого запуска — его тега задачи). */
+export type StateLine = { space: string; state: 'ok' | 'error' | 'skip'; text: string; costUsd?: number; auto: boolean };
+
+/**
+ * Строки о пространстве в «Итоге»: обновилось ли его состояние; autoError — пространство не заведено. Старый запуск
+ * (до пространств) — по строке на тег задачи: его саммари — теперь состояние пространства с тем же слагом.
+ */
+export function stateFinalLines(
+  r: Pick<RunReport, 'space' | 'stateUpdate' | 'autoSpace' | 'tags' | 'tagSummaries' | 'autoTag'> & Partial<Pick<RunReport, 'status'>>,
+): { autoError?: string; lines: StateLine[] } {
+  const line = (space: string, u: { ok: boolean; costUsd: number; error?: string; skipped?: string; skip?: StateSkip } | undefined, auto: boolean): StateLine => {
+    if (u?.ok) return { space, state: 'ok', text: t('Состояние пространства обновлено'), costUsd: u.costUsd, auto };
+    if (u?.error) return { space, state: 'error', text: t('Состояние не обновлено: {why}', { why: u.error }), auto };
+    const why = u ? stateSkipText(u, r.status) : '';
+    return { space, state: 'skip', text: why ? t('Состояние не обновлено: {why}', { why }) : t('Состояние не обновлено'), auto };
+  };
+  const autoError = r.autoSpace?.error ?? r.autoTag?.error;
+  const err = autoError ? { autoError } : {};
+  if (r.space) return { ...err, lines: [line(r.space, r.stateUpdate, r.autoSpace?.slug === r.space)] };
+  const byTag = new Map((r.tagSummaries || []).map((s) => [s.tag, s]));
+  return { ...err, lines: (r.tags || []).map((tag) => line(tag, byTag.get(tag), r.autoTag?.slug === tag)) };
+}
+
+// ---------- задача запуска без служебной разметки
+
+/** Блоки тегов задач старых запусков: <!-- tag:slug -->…<!-- /tag -->. Как TAG_BLOCKS_RE на сервере (src/tags.ts). */
+const TAG_BLOCKS_RE = /<!-- tag:[a-z0-9-]+ -->[\s\S]*?<!-- \/tag -->\n*/g;
+
+/** Задача запуска, как её писал человек: без блоков тегов задач старых запусков (тег стал пространством — оно рядом плашкой). */
+export const runTask = (input: string | undefined): string => (input ?? '').replace(TAG_BLOCKS_RE, '').trim();
+
+/** Пространство запуска: поле space, у старого запуска — его первый тег задачи (перенесён в пространство с тем же слагом). */
+export const runSpaceOf = (r: Pick<RunReport, 'space' | 'tags'>): string | undefined => r.space ?? r.tags?.[0];
 
 // ---------- граф: инспектор и переход в «Обзор»
 
@@ -671,7 +753,7 @@ export function inspectView(st: LiveState, sel: InspectSel, specBlocks: SpecBloc
     const meta = [until?.type ? COND_LABEL[until.type] || until.type : '', until?.run ? `$ ${until.run}` : '', c ? t('итер. {it}', { it: c.iteration }) : ''].filter(Boolean).join(' · ');
     return { where, kind: 'cond', status, meta, c };
   }
-  if (sel.kind === 'start') return { where, kind: 'start', input: r.input || '' };
+  if (sel.kind === 'start') return { where, kind: 'start', input: runTask(r.input) };
   return { where, kind: 'block', title: b ? b.title || b.name || t('Блок') : t('Блок'), status: b?.status, meta: b?.looped ? t('итераций {i} / {n}', { i: b.iterations || 0, n: b.maxIterations }) : t('один проход') };
 }
 

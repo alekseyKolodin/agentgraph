@@ -1,4 +1,4 @@
-/* Страница «Теги» (ui/style.css «страница «Теги»», system.md → «Теги»): правила перенесены как есть, в том же порядке.
+/* Страница «Знания», теги знаний (ui/style.css «страница «Теги»», system.md → «Knowledge»): правила перенесены как есть, в том же порядке.
    #view-tags, #tag-focus, #tag-form, #btn-tag-new, #tags-msg старого UI — классы view-tags, tag-focus, tag-form, btn-tag-new, tags-msg.
    Правила с [hidden] у элементов, которые здесь не рисуются вовсе (вид тега, «Выбрать…», запуски, редактор), не нужны. */
 
@@ -13,7 +13,7 @@
 .list .name { font-weight: 600; }
 .list .sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* страница «Теги»: список — главный, слева; новый тег — компактной формой над ним по кнопке; редактор справа */
+/* страница «Знания»: список — главный, слева; новый тег — компактной формой над ним по кнопке; редактор справа */
 .view-tags { container-type: inline-size; }
 .tags-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 24px; align-items: start; }
 @container (max-width: 680px) { .tags-layout { grid-template-columns: minmax(0, 1fr); } }

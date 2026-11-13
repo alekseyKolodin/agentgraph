@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · команда, конфликт</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--scrim:rgba(0,0,0,.55);--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 8px 28px rgba(0,0,0,.45);--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck);position:relative}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 40px}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2);font-family:var(--font-mono);font-size:12px}
+.head-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px}
+.people{display:flex;gap:4px}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 16px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-left:4px}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3);margin:0 0 8px}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.prow{display:grid;grid-template-columns:minmax(0,1fr) 220px 180px;align-items:center;gap:16px;padding:12px 8px;border-bottom:1px solid var(--line)}
+.prow .t{font-weight:600;color:var(--ink);text-decoration:none}
+.prow .d{display:block;font-size:13px;color:var(--ink-2)}
+.strip{display:flex;gap:2px}
+.st{width:8px;height:14px;border-radius:2px;flex:none}
+.st.done{background:var(--st-ok)}.st.review{background:var(--ink-2)}.st.work{background:var(--ink-off)}.st.todo{box-shadow:inset 0 0 0 1px var(--line-strong)}
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+.dlg{position:absolute;top:64px;left:50%;transform:translateX(-50%);width:min(640px,calc(100% - 32px));background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-pop);padding:20px 22px;display:flex;flex-direction:column;gap:16px}
+.dlg h2{margin:0;font-size:18px;font-weight:600}
+.dlg h2 .id{font-family:var(--font-mono);font-weight:500;color:var(--ink-2);margin-right:8px}
+.dlg p{margin:0;color:var(--ink-2)}
+.merged{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.merged b{font-weight:500;color:var(--ink)}
+.cf{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.cf-h{display:flex;align-items:baseline;gap:10px}
+.cf-h b{font-weight:500}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;cursor:pointer;background:transparent}
+.opt:hover{background:var(--hover)}
+.opt.on{border-color:var(--ink)}
+.opt input{margin:3px 0 0;accent-color:var(--ink);flex:none}
+.opt .v{display:flex;flex-direction:column;gap:2px;min-width:0}
+.opt .v b{font-weight:500;display:inline-flex;align-items:center;gap:8px}
+.opt .v small{font-size:12px;color:var(--ink-2);font-family:var(--font-mono)}
+.mini{background:var(--well);border:1px solid var(--line);border-radius:6px;padding:6px 0;font-family:var(--font-mono);font-size:12px;line-height:1.6}
+.mini div{padding:0 12px;white-space:pre-wrap}
+.mini .a{background:color-mix(in srgb,var(--st-ok) 11%,transparent);color:var(--ink)}
+.mini .k{color:var(--ink-3)}
+.foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.foot .grow{flex:1}
+.foot .hint{font-size:12px;color:var(--ink-3)}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px}.prow{grid-template-columns:minmax(0,1fr)}.dlg{top:16px;padding:16px}.opts{grid-template-columns:minmax(0,1fr)}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+</aside>
+
+<main class="main" id="main" aria-hidden="true">
+<p class="crumbs"><a href="#">Teamwork</a></p>
+<div class="head">
+<div><h1>Платёжная команда</h1><p class="sub">github.com/acme/payments-team · PAY</p></div>
+<div class="head-r">
+<span class="sync t-wait"><span class="dot wait s6"></span>конфликт в PAY-12</span>
+<button class="btn small" type="button">Разобрать</button>
+<span class="people"><span class="who">АК</span><span class="who">МС</span><span class="who">ИВ</span></span>
+</div>
+</div>
+<nav class="tabs" aria-label="Команда"><a class="tab active" href="#">Проекты<span class="n">2</span></a><a class="tab" href="#">Участники<span class="n">3</span></a><a class="tab" href="#">Процесс<span class="n">4</span></a><a class="tab" href="#">Настройки</a></nav>
+<div style="border-top: 1px solid var(--line)">
+<div class="prow"><span><a class="t" href="#">Экспорт счетов</a><span class="d">Бухгалтерия выгружает счета за период в CSV и 1С</span></span><span class="strip"><span class="st done"></span><span class="st done"></span><span class="st review"></span><span class="st review"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st work"></span><span class="st todo"></span><span class="st todo"></span><span class="st todo"></span></span><span class="meta">спринт 2 · 2 из 12</span></div>
+<div class="prow"><span><a class="t" href="#">Сверка с банком</a><span class="d">Выписки банка сверяются со счетами каждую ночь</span></span><span class="meta">спринт не запущен</span><span class="meta">бэклог 7</span></div>
+</div>
+</main>
+<div class="scrim" aria-hidden="true"></div>
+
+<section class="dlg" role="dialog" aria-modal="true" aria-labelledby="ct">
+<h2 id="ct"><span class="id">PAY-12</span>Конфликт правок</h2>
+<p>Вы и Мария изменили задачу почти одновременно. Разные поля слились сами, по двум нужно решение. Пока его нет, в репо лежит версия команды.</p>
+<div class="merged"><span class="cap" style="margin: 0">Слилось само</span><span>статус <b>Ревью</b> · Мария</span><span>оценка <b>3</b> · вы</span></div>
+
+<div class="cf" role="radiogroup" aria-labelledby="f1">
+<div class="cf-h"><b id="f1">Исполнитель</b><span class="meta">одно поле, разные значения</span></div>
+<div class="opts">
+<label class="opt"><input type="radio" name="as"><span class="v"><b><span class="who">АК</span>Алексей</b><small>ваше · 11:42</small></span></label>
+<label class="opt on"><input type="radio" name="as" checked><span class="v"><b><span class="who">МС</span>Мария</b><small>команды · 11:43</small></span></label>
+</div>
+</div>
+
+<div class="cf" role="radiogroup" aria-labelledby="f2">
+<div class="cf-h"><b id="f2">Описание</b><span class="meta">текст изменили оба</span></div>
+<div class="mini" aria-label="Различия">
+<div class="k">  Бухгалтер выбирает период в форме выгрузки…</div>
+<div class="a">+ Счета в статусе «Черновик» в выгрузку не попадают.   вы</div>
+<div class="a">+ Сортировка по дате выставления, затем по номеру.    Мария</div>
+</div>
+<div class="opts">
+<label class="opt"><input type="radio" name="ds"><span class="v"><b>Взять мою</b><small>+1 строка</small></span></label>
+<label class="opt on"><input type="radio" name="ds" checked><span class="v"><b>Оставить версию команды</b><small>+1 строка · Мария</small></span></label>
+</div>
+<a href="#" style="font-size: 12px; align-self: flex-start">Объединить вручную…</a>
+</div>
+
+<div class="foot"><span class="hint">Решение уйдёт одним коммитом</span><span class="grow"></span><button class="btn ghost" type="button">Позже</button><button class="btn primary" type="button">Сохранить решение</button></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

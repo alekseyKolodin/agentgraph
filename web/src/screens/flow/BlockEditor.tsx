@@ -275,7 +275,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
       {kinds && (
         <div className={styles.bKnowledgeBox}>
           <label>
-            <span title={t('Теги вида «знание» со страницы «Теги»: их заметки, пути и вложения получат все этапы блока. Несуществующий тег роняет запуск до старта')}>{t('Теги знаний')}</span>
+            <span title={t('Теги знаний со страницы «Знания»: каждый этап блока получит строку с описанием тега, полный текст возьмёт инструментом knowledge_read (тег «всегда в промпт» — целиком); пути и вложения тега откроются этапам. Несуществующий тег роняет запуск до старта')}>{t('Теги знаний')}</span>
             <input
               className={fk.className}
               onFocus={fk.onFocus}

@@ -19,8 +19,8 @@ export const inbox = (runs: HomeRun[]): InboxItem[] =>
 /** Сколько вопросов ждут ответа: счётчик у «Главной» и в заголовке вкладки. */
 export const inboxCount = (runs: HomeRun[]): number => runs.reduce((k, r) => k + r.questions.length, 0);
 
-/** Заголовок вкладки: «(2) agentgraph», на странице запуска — с его именем (без имени — flow): «(2) Кнопка · agentgraph». */
-export const docTitle = (questions: number, run = ''): string => `${questions ? `(${questions}) ` : ''}${run ? `${run} · ` : ''}agentgraph`;
+/** Заголовок вкладки: «(2) AgentGraph», на странице запуска — с его именем (без имени — flow): «(2) Кнопка · AgentGraph». */
+export const docTitle = (questions: number, run = ''): string => `${questions ? `(${questions}) ` : ''}${run ? `${run} · ` : ''}AgentGraph`;
 
 /** Подпись под «Главная»: «идут 2 · вопросов 1 · ≈$0.42»; без запусков — пусто. */
 export const homeMeta = (runs: HomeRun[], questions: number): string =>

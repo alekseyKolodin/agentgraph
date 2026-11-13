@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Teamwork · бэклог</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+:root{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--st-ok:#4cc38a;--st-fail:#f06a6a;--st-wait:#f2b136;--act:#e7e9ec;--on-act:#111316;--font-sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow-pop:0 8px 28px rgba(0,0,0,.45);--focus:0 0 0 2px rgba(122,167,255,.55)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deck);color:var(--ink);font-family:var(--font-sans);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:var(--live);text-decoration:none}a:hover{text-decoration:underline}
+button,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.app{display:flex;flex-wrap:wrap;align-items:stretch;min-height:100vh;background:var(--deck)}
+.side{flex:0 0 300px;background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:14px}
+.main{flex:999 1 560px;min-width:0;padding:22px 28px 0;position:relative;display:flex;flex-direction:column}
+.topbar{display:none}
+.brand-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{font-weight:600;font-size:18px;color:var(--ink);padding:2px 6px 0;text-decoration:none}
+.lang{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-3);background:none;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.nav{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:2px 4px}
+.nav .w{grid-column:1}.nav .r{grid-column:2}
+.nav a{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:3px 10px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;white-space:nowrap;text-decoration:none}
+.nav a.active{background:var(--select);color:var(--ink)}
+.count{font-family:var(--font-mono);font-size:11px;font-weight:600;padding:0 6px;border-radius:999px;background:var(--st-wait);color:#111316}
+.sec-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 6px}
+.sec-head h2{margin:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.sec-count{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.list{list-style:none;margin:0;padding:0}
+.lrun{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;column-gap:10px;padding:6px 8px;border-radius:6px}
+.lrun-main{min-width:0;display:flex;flex-direction:column}
+.lrun-t{font-weight:500;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.lrun-s{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lrun-it{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;display:inline-block}
+.dot.wait{background:var(--st-wait)}.dot.ok{background:var(--st-ok)}
+.dot.s6{width:6px;height:6px}
+.t-wait{color:var(--st-wait)}.t-ok{color:var(--st-ok)}
+.btn{border:1px solid var(--line-strong);background:var(--raised);color:var(--ink);padding:6px 12px;border-radius:6px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background-color .12s,border-color .12s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:color-mix(in srgb,var(--raised) 80%,var(--ink) 8%);text-decoration:none}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--act);border-color:var(--act);color:var(--on-act)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--hover);color:var(--ink)}
+.btn.small{padding:3px 9px;font-size:12px}
+.btn.danger{color:var(--st-fail)}
+.btn.more{padding:3px 9px;letter-spacing:1px;color:var(--ink-2)}
+.btn[aria-disabled="true"]{opacity:.55;cursor:default}
+.crumbs{font-size:12px;color:var(--ink-3);margin:0 0 6px}
+.crumbs a{color:var(--ink-2)}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.01em}
+.sub{margin:4px 0 0;color:var(--ink-2)}
+.head-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sync{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.tabs{display:flex;gap:18px;border-bottom:1px solid var(--line);margin:14px 0 16px;overflow-x:auto}
+.tab{border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--ink-3);padding:6px 0;font-weight:500;white-space:nowrap;text-decoration:none}
+.tab.active{color:var(--ink);border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--font-mono);font-size:12px;color:var(--ink-3);margin-left:4px}
+.who{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:999px;background:var(--raised);border:1px solid var(--line-strong);font-family:var(--font-mono);font-size:10px;font-weight:600;color:var(--ink-2);flex:none}
+.who.none{background:transparent;border-style:dashed}
+.meta{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.b-quiet{background:var(--well);color:var(--ink-2)}
+
+/* предложение агента — ждёт тебя */
+.prop{background:color-mix(in srgb,var(--st-wait) 6%,var(--panel));border:1px solid color-mix(in srgb,var(--st-wait) 45%,transparent);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:14px}
+.prop-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.prop-h h2{margin:0;font-size:16px;font-weight:500}
+.prop-h .grow{flex:1}
+.cover{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+.cover-l{font-size:12px;font-weight:500;color:var(--ink-3);padding-bottom:16px;width:96px;flex:none}
+.frs{display:flex;gap:6px}
+.fr{display:flex;flex-direction:column;align-items:center;gap:4px}
+.fr i{display:block;width:26px;height:14px;border-radius:2px}
+.fr span{font-family:var(--font-mono);font-size:11px;color:var(--ink-2)}
+.fr.has i{background:var(--ink-off)}
+.fr.new i{background:var(--ink-2)}
+.fr.gap i{box-shadow:inset 0 0 0 1.5px var(--st-wait)}
+.fr.gap span{color:var(--st-wait)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);padding-bottom:16px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:12px;height:8px;border-radius:2px}
+.prow{display:grid;grid-template-columns:18px minmax(0,1fr) 64px 24px 64px 110px 64px;align-items:center;gap:12px;padding:8px 6px;border-top:1px solid var(--line);border-radius:0}
+.prow:hover{background:var(--hover)}
+.prow input{accent-color:var(--ink-2);width:14px;height:14px;margin:0}
+.prow .t{font-weight:500;min-width:0}
+.prow .d{display:block;font-weight:400;font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow .off{color:var(--ink-2)}
+.prow .ty{font-size:12px;color:var(--ink-3)}
+.prow .fr-c{display:flex;gap:4px;flex-wrap:wrap}
+.frc{font-family:var(--font-mono);font-size:11px;color:var(--ink-2);border:1px solid var(--line-strong);border-radius:4px;padding:0 5px}
+.prop-f{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.prop-f .note{margin-left:auto;font-size:12px;color:var(--st-wait)}
+.ctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--ink-3);padding:3px 10px;font-size:12px;font-weight:500;cursor:pointer}
+.seg button.on{background:var(--raised);color:var(--ink)}
+.lh,.lr{display:grid;grid-template-columns:18px 22px minmax(0,1fr) 150px 90px 90px 28px;align-items:center;gap:12px;padding:7px 6px}
+.lh{font-size:12px;font-weight:500;color:var(--ink-3);padding-bottom:4px}
+.lr{border-top:1px solid var(--line)}
+.lr:hover{background:var(--hover)}
+.lr input{accent-color:var(--ink-2);width:14px;height:14px;margin:0}
+.lr .k{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.lr .t{font-weight:500;min-width:0}
+.lr .d{display:block;font-weight:400;font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr .dp{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline;font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.lr .dp .s{font-family:var(--font-sans);color:var(--ink-3)}
+.lr .no{color:var(--ink-off)}
+.lr .e{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);text-align:right}
+.wvh{font-size:12px;font-weight:500;color:var(--ink-3);padding:12px 6px 4px;border-top:1px solid var(--line)}
+.wvh .meta{color:var(--ink-3);margin-left:6px}
+@media (max-width:800px){.lh{display:none}.lr{grid-template-columns:18px 22px minmax(0,1fr)}.lr .dp.op,.lr .fr-c,.lr .e{display:none}.lr .dp.wt{grid-column:3}}
+
+/* разделы бэклога */
+.sec{margin-top:24px}
+.sec-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.sec-h h2{margin:0;font-size:14px;font-weight:600}
+.sec-h .grow{flex:1}
+.sec-h .hint{font-size:12px;color:var(--ink-3)}
+.rows{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.brow{display:grid;grid-template-columns:20px 18px 60px minmax(0,1fr) 64px 24px 22px 92px;align-items:center;gap:12px;padding:7px 6px;border-bottom:1px solid var(--line)}
+.brow:hover{background:var(--hover)}
+.brow.sel{background:var(--select)}
+.grip{border:0;background:transparent;color:var(--ink-off);cursor:grab;padding:0;font-size:12px;letter-spacing:-2px;line-height:1}
+.brow:hover .grip{color:var(--ink-3)}
+.brow input{accent-color:var(--ink-2);width:14px;height:14px;margin:0}
+.brow .id{font-family:var(--font-mono);font-size:12px;color:var(--ink-2)}
+.brow .t{color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none}
+.brow .ty{font-size:12px;color:var(--ink-3)}
+.brow .est{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);text-align:right}
+.brow .stt{font-size:12px;color:var(--ink-3);text-align:right}
+.quick{display:flex;gap:8px;align-items:center;padding:8px 6px;border-bottom:1px solid var(--line)}
+.quick input{flex:1;background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:5px 10px;color:var(--ink)}
+.quick input::placeholder{color:var(--ink-3)}
+.bulk{position:sticky;bottom:0;margin-top:20px;background:var(--deck);border-top:1px solid var(--line);padding:10px 0 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bulk b{font-weight:500;margin-right:6px}
+@media (max-width:800px){.side{display:none}.topbar{display:flex;flex:1 1 100%;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}.main{padding:16px 16px 0}.prow{grid-template-columns:18px minmax(0,1fr) 24px}.prow .ty,.prow .rp,.prow .fr-c,.prow .af{display:none}.brow{grid-template-columns:18px 52px minmax(0,1fr) 22px}.brow .grip,.brow .ty,.brow .est,.brow .stt{display:none}.cover-l{width:auto;padding-bottom:0}.legend{padding-bottom:0}}
+</style>
+</helmet>
+<div class="app">
+<div class="topbar"><button class="btn small" type="button">Меню</button><a class="brand" href="#">AgentGraph</a><span class="count">1</span></div>
+<aside class="side" aria-label="Боковая панель">
+<div class="brand-row"><a class="brand" href="#">AgentGraph</a><button class="lang" type="button" aria-label="Язык интерфейса">RU</button></div>
+<nav aria-label="Разделы">
+<ul class="nav">
+<li class="w"><a href="#"><span>Главная</span><span class="count">1</span></a></li>
+<li class="r"><a href="#">Знания</a></li>
+<li class="w"><a href="#">Пространства</a></li>
+<li class="r"><a href="#">Контекст</a></li>
+<li class="w"><a href="#" class="active" aria-current="page">Teamwork</a></li>
+<li class="w"><a href="#">Сессии</a></li>
+</ul>
+</nav>
+<section>
+<div class="sec-head"><h2>Сейчас</h2><span class="sec-count t-wait">ждут 1 · идут 2</span></div>
+<ul class="list">
+<li class="lrun"><span class="dot wait"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-14 · Шаблон выгрузки для 1С</a><span class="lrun-s t-wait">ждёт ответа · фаза «code»</span></div><span class="lrun-it">1/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-12 · Выгрузка счетов за период</a><span class="lrun-s">фаза «code»</span></div><span class="lrun-it">2/3</span></li>
+<li class="lrun"><span class="dot"></span><div class="lrun-main"><a class="lrun-t" href="#">PAY-19 · Повтор при таймауте 1С</a><span class="lrun-s">◇ billing-export · работает · 4 мин</span></div><span class="lrun-it">›_</span></li>
+</ul>
+</section>
+</aside>
+
+<main class="main" id="main">
+<p class="crumbs"><a href="#">Teamwork</a> › <a href="#">Платёжная команда</a></p>
+<div class="head">
+<div><h1>Экспорт счетов</h1><p class="sub">Бухгалтерия выгружает счета за период в CSV и 1С</p></div>
+<div class="head-r"><span class="sync"><span class="dot ok s6"></span>синхронизировано · 8 с назад</span><button class="btn small" type="button">Разбить ТЗ на задачи…</button></div>
+</div>
+<nav class="tabs" aria-label="Проект"><a class="tab" href="#">Обзор</a><a class="tab" href="#">ТЗ</a><a class="tab" href="#">Архитектура</a><a class="tab" href="#">Дизайн</a><a class="tab" href="#">Документы<span class="n">4</span></a><a class="tab active" href="#" aria-current="page">Бэклог<span class="n">14</span></a><a class="tab" href="#">Доска</a><a class="tab" href="#">Спринты</a></nav>
+
+<section class="prop" aria-label="Предложение агента">
+<div class="prop-h"><h2>Агент предложил 7 задач по ТЗ</h2><span class="meta">teamwork-split · 4 мин назад · $0.12</span><span class="grow"></span><a href="#" style="font-size: 12px">Открыть запуск</a></div>
+<div class="cover">
+<span class="cover-l">Покрытие требований ТЗ</span>
+<div class="frs" role="img" aria-label="FR-1, FR-2, FR-4 и FR-7 покрыты задачами, FR-3, FR-5 и FR-8 покрывает предложение, FR-6 без задач">
+<div class="fr has"><i></i><span>FR-1</span></div>
+<div class="fr has"><i></i><span>FR-2</span></div>
+<div class="fr new"><i></i><span>FR-3</span></div>
+<div class="fr has"><i></i><span>FR-4</span></div>
+<div class="fr new"><i></i><span>FR-5</span></div>
+<div class="fr gap"><i></i><span>FR-6</span></div>
+<div class="fr has"><i></i><span>FR-7</span></div>
+<div class="fr new"><i></i><span>FR-8</span></div>
+</div>
+<div class="legend"><span><i style="background: var(--ink-off)"></i>уже есть задача</span><span><i style="background: var(--ink-2)"></i>в этом предложении</span><span class="t-wait"><i style="box-shadow: inset 0 0 0 1.5px var(--st-wait)"></i>без задач</span></div>
+</div>
+<div class="ctl">
+<span class="seg" role="group" aria-label="Вид"><button type="button" aria-pressed="false">Граф</button><button class="on" type="button" aria-pressed="true">Список</button></span>
+<span class="meta">3 волны · сразу можно начать 1 · ждут текущих задач 2 · <span style="color: var(--st-ok)">циклов нет</span></span>
+</div>
+<div>
+<div class="lh" aria-hidden="true"><span></span><span>№</span><span>Задача</span><span>Ждёт</span><span>Открывает</span><span>ТЗ</span><span style="text-align: right">Оц.</span></div>
+<div class="wvh">Волна 1<span class="meta">можно начать сейчас</span></div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 1"><span class="k">1</span><span class="t">Журнал выгрузок: таблица и запись<span class="d">Запись в export_log при каждой выгрузке, без содержимого файла</span></span><span class="dp wt"><span class="no">—</span></span><span class="dp op">2</span><span class="fr-c"><span class="frc">FR-8</span></span><span class="e">3</span></div>
+<div class="wvh">Волна 2</div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 2"><span class="k">2</span><span class="t">Экран журнала для роли «Админ»<span class="d">Таблица выгрузок с автором и периодом</span></span><span class="dp wt">1</span><span class="dp op">6</span><span class="fr-c"><span class="frc">FR-8</span></span><span class="e">2</span></div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 3"><span class="k">3</span><span class="t">Выбор кодировки в форме выгрузки<span class="d">CP1251 для 1С, UTF-8 с BOM для Excel, по умолчанию последняя</span></span><span class="dp wt"><a href="#">PAY-14</a><span class="s">в работе</span></span><span class="dp op">5, 7</span><span class="fr-c"><span class="frc">FR-3</span></span><span class="e">2</span></div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 4"><span class="k">4</span><span class="t">Имя части файла с номером<span class="d">invoices_2026-10_part2.csv и порядок частей</span></span><span class="dp wt"><a href="#">PAY-13</a><span class="s">в работе</span></span><span class="dp op">7</span><span class="fr-c"><span class="frc">FR-5</span></span><span class="e">1</span></div>
+<div class="wvh">Волна 3</div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 5"><span class="k">5</span><span class="t">Тесты кодировок на эталонах 1С<span class="d">Три эталона из docs/1c-format.md</span></span><span class="dp wt">3</span><span class="dp op"><span class="no">—</span></span><span class="fr-c"><span class="frc">FR-3</span></span><span class="e">1</span></div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 6"><span class="k">6</span><span class="t">Фильтр журнала по периоду и автору<span class="d">Фильтры над таблицей журнала</span></span><span class="dp wt">2</span><span class="dp op"><span class="no">—</span></span><span class="fr-c"><span class="frc">FR-8</span></span><span class="e">1</span></div>
+<div class="lr"><input type="checkbox" checked aria-label="Взять задачу 7"><span class="k">7</span><span class="t">Документация формата выгрузки<span class="d">Кодировки и имена частей в docs/export.md</span></span><span class="dp wt">3, 4</span><span class="dp op"><span class="no">—</span></span><span class="fr-c"><span class="frc">FR-3</span><span class="frc">FR-5</span></span><span class="e">1</span></div>
+</div>
+<div class="prop-f">
+<button class="btn primary" type="button">Добавить 7 в бэклог</button>
+<button class="btn ghost" type="button">Повторить черновик</button>
+<button class="btn ghost" type="button">Отклонить</button>
+<span class="note">FR-6 «Выгрузка по расписанию» без задач</span>
+</div>
+</section>
+
+<section class="sec" aria-label="Следующий спринт">
+<div class="sec-h"><h2>Следующий спринт · Спринт 3</h2><span class="badge b-quiet">запланирован</span><span class="meta">2 задачи · 3 очка</span><span class="grow"></span><span class="hint">запустится после завершения спринта 2</span><button class="btn small" type="button" aria-disabled="true">Запустить</button></div>
+<ul class="rows">
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-21">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-21"><span class="id">PAY-21</span><a class="t" href="#">Выгрузка в 1С через обмен файлами</a><span class="ty">feature</span><span class="est">2</span><span class="who">ИВ</span><span class="stt">к работе</span></li>
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-22">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-22"><span class="id">PAY-22</span><a class="t" href="#">Права на выгрузку: роли «Бухгалтер» и «Админ»</a><span class="ty">feature</span><span class="est">1</span><span class="who none" aria-label="Без исполнителя"></span><span class="stt">к работе</span></li>
+</ul>
+</section>
+
+<section class="sec" aria-label="Бэклог">
+<div class="sec-h"><h2>Бэклог</h2><span class="meta">14</span><span class="grow"></span><span class="hint">сверху важнее · перетаскивайте или ⌥↑ ⌥↓</span></div>
+<div class="quick"><label class="sr" for="q" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Новая задача</label><input id="q" placeholder="Новая задача — Enter создаст её внизу бэклога"></div>
+<ul class="rows" style="border-top: 0">
+<li class="brow sel"><button class="grip" type="button" aria-label="Переместить PAY-23">⋮⋮</button><input type="checkbox" checked aria-label="Выбрать PAY-23"><span class="id">PAY-23</span><a class="t" href="#">Журнал выгрузок: хранить 12 месяцев</a><span class="ty">chore</span><span class="est">1</span><span class="who none" aria-label="Без исполнителя"></span><span class="stt">к работе</span></li>
+<li class="brow sel"><button class="grip" type="button" aria-label="Переместить PAY-24">⋮⋮</button><input type="checkbox" checked aria-label="Выбрать PAY-24"><span class="id">PAY-24</span><a class="t" href="#">Предпросмотр первых 20 строк перед выгрузкой</a><span class="ty">feature</span><span class="est">2</span><span class="who">МС</span><span class="stt">к работе</span></li>
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-25">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-25"><span class="id">PAY-25</span><a class="t" href="#">Ошибка «нет счетов» вместо пустого файла — обсудить</a><span class="ty">bug</span><span class="est"></span><span class="who none" aria-label="Без исполнителя"></span><span class="stt">к работе</span></li>
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-26">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-26"><span class="id">PAY-26</span><a class="t" href="#">Выгрузка за несколько юрлиц одним файлом</a><span class="ty">feature</span><span class="est">5</span><span class="who none" aria-label="Без исполнителя"></span><span class="stt">к работе</span></li>
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-27">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-27"><span class="id">PAY-27</span><a class="t" href="#">Метрика: время выгрузки и размер файла</a><span class="ty">chore</span><span class="est">1</span><span class="who">ИВ</span><span class="stt">к работе</span></li>
+<li class="brow"><button class="grip" type="button" aria-label="Переместить PAY-7">⋮⋮</button><input type="checkbox" aria-label="Выбрать PAY-7"><span class="id">PAY-7</span><a class="t" href="#">Черновой прототип экспорта из прошлого квартала</a><span class="ty">chore</span><span class="est">2</span><span class="who">АК</span><span class="stt" style="color: var(--ink-2)">в работе</span></li>
+</ul>
+<div class="bulk" role="region" aria-label="Действия с выбранными">
+<b>Выбрано 2</b>
+<button class="btn small" type="button">В следующий спринт</button>
+<button class="btn small" type="button">Назначить ▾</button>
+<button class="btn ghost small danger" type="button">Удалить…</button>
+<button class="btn ghost small" type="button">Снять выбор</button>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1340}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
