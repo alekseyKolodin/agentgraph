@@ -1,7 +1,7 @@
 // Диалог конфликтов синхронизации (spec §7.4; макет Team.dc.html): конфликты сгруппированы по задаче или документу, у каждого
 // выбор «Взять мою версию» / «Оставить версию команды» — по умолчанию команды, она уже лежит в репо. «Сохранить решение» применяет
 // выбранное: мою — POST …/conflicts/:id/mine, команды — DELETE …/conflicts/:id, по коммиту на конфликт. Для двух активных
-// спринтов моя версия недоступна: задачи второго переносятся руками.
+// спринтов (kind sprint без поля) моя версия недоступна: задачи второго переносятся руками; поле спринта — обычное поле.
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamConflict, TeamMember } from '@server/api-types';
@@ -37,7 +37,8 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
     const m = memberByEmail(members, email);
     return m ? memberLabel(m) : email;
   };
-  const pick = (c: TeamConflict): Choice => (c.kind === 'sprint' ? 'theirs' : choice[c.id] ?? 'theirs');
+  const locked = (c: TeamConflict): boolean => c.kind === 'sprint' && !c.field;
+  const pick = (c: TeamConflict): Choice => (locked(c) ? 'theirs' : choice[c.id] ?? 'theirs');
 
   const save = async () => {
     setBusy(true);
@@ -88,8 +89,8 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
                   <span className={styles.meta}>{c.kind === 'field' || c.kind === 'text' || (c.kind === 'sprint' && c.field && c.field !== 'status') ? t('изменили оба') : conflictKindText(c.kind)}</span>
                 </div>
                 <div className={styles.opts}>
-                  <label className={cx(styles.opt, cur === 'mine' && styles.on)} aria-disabled={c.kind === 'sprint' || undefined}>
-                    <input type="radio" name={`cf-${c.id}`} checked={cur === 'mine'} disabled={c.kind === 'sprint' || busy} onChange={() => setChoice((m) => ({ ...m, [c.id]: 'mine' }))} />
+                  <label className={cx(styles.opt, cur === 'mine' && styles.on)} aria-disabled={locked(c) || undefined}>
+                    <input type="radio" name={`cf-${c.id}`} checked={cur === 'mine'} disabled={locked(c) || busy} onChange={() => setChoice((m) => ({ ...m, [c.id]: 'mine' }))} />
                     <span className={styles.v}>
                       <b>{c.kind === 'deleted' ? t('Вернуть мою версию') : t('Взять мою версию')}</b>
                       <small>{t('ваша правка')}</small>

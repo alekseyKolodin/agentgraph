@@ -25,6 +25,8 @@ export const TEAM_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const PREFIX_RE = /^[A-Z]{2,6}$/;
 export const TASK_ID_RE = /^[A-Z]{2,6}-\d+$/;
 export const FLOW_NAME_RE = /^[a-z0-9-]+$/;
+/** Ветка задачи в файле: латиница, цифры, «._/-», без ведущего «-» — её получают агент в тексте задачи и git аргументом (S-3). */
+export const TASK_BRANCH_RE = /^(?!-)[A-Za-z0-9._/-]+$/;
 /** Строка требования ТЗ: «- FR-3. Текст» или «- NFR-2. Текст» в любом разделе (spec §8.4). */
 export const REQUIREMENT_RE = /^- (FR|NFR)-(\d+)\.\s+(.*)$/;
 const CHECKBOX_RE = /^\s*[-*+]\s+\[([ xX])\]\s/;
@@ -43,7 +45,10 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : typ
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 /** Даты в YAML разбираются в Date: нам нужна строка ISO как в файле. */
 const iso = (v: unknown): string | undefined => (v instanceof Date ? v.toISOString() : str(v));
-const eq = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** JSON с ключами объектов по алфавиту: тот же объект с другим порядком ключей (правка руками) — то же значение. */
+const canonical = (v: unknown): unknown =>
+  Array.isArray(v) ? v.map(canonical) : isRecord(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v;
+const eq = (a: unknown, b: unknown): boolean => JSON.stringify(canonical(a ?? null)) === JSON.stringify(canonical(b ?? null));
 
 /** Короткий хэш текста: base документа и задачи, хэш раздела. */
 export function textHash(text: string): string {
@@ -79,6 +84,17 @@ export function updateYaml(text: string, patch: Record<string, unknown>): string
     } else doc.set(k, v);
   }
   return doc.toString({ lineWidth: 0 });
+}
+
+/**
+ * Правка frontmatter задачи по месту, как updateYaml: остальные поля, вложенные неизвестные поля, комментарии и тело
+ * остаются как были. Файл без frontmatter — как есть.
+ */
+export function updateTaskText(text: string, patch: Record<string, unknown>): string {
+  const m = text.match(/^(---\r?\n)([\s\S]*?\r?\n)(---[ \t]*(?:\r?\n|$))/);
+  if (!m) return text;
+  const yaml = updateYaml(m[2], patch);
+  return m[1] + (yaml.endsWith('\n') ? yaml : `${yaml}\n`) + m[3] + text.slice(m[0].length);
 }
 
 // ---------- teamwork.yaml
@@ -168,9 +184,13 @@ export type ProjectConfig = {
   extra: Record<string, unknown>;
 };
 
+/**
+ * project.yaml. slug — имя папки проекта: оно главнее поля в файле, иначе скопированная папка projects/alpha → gamma
+ * отдавала бы документы, спринты и пространство alpha (S-5). Без него (разбор текста без папки) — поле slug файла.
+ */
 export function parseProject(text: string, slug?: string): ProjectConfig {
   const { slug: s, title, summary, status, repos, createdAt, createdBy, lastRequirement, ...extra } = parseYamlRecord(text, 'project.yaml');
-  const own = str(s)?.trim() || slug;
+  const own = slug || str(s)?.trim();
   if (!own || !TEAM_SLUG_RE.test(own)) throw new Error('project.yaml: нет поля slug');
   const st = str(status)?.trim();
   const list: ProjectRepo[] = [];
@@ -304,8 +324,22 @@ export function parseTask(text: string, file: string): TaskFile {
   if (!TASK_STATUSES.includes(st as TeamTaskStatus)) return broken(`поле status: ${st} (ожидалось ${TASK_STATUSES.join(' | ')})`, fm.body);
   if (sprint !== undefined && sprint !== null && !(typeof sprint === 'number' && Number.isInteger(sprint) && sprint > 0)) return broken(`поле sprint: ${JSON.stringify(sprint)}`, fm.body);
   if (estimate !== undefined && estimate !== null && typeof estimate !== 'number') return broken(`поле estimate: ${JSON.stringify(estimate)}`, fm.body);
+  // известное поле неожиданного вида — ошибка у задачи, а не молча исчезнувшее при следующей записи поле (spec §5.9, D-9)
+  for (const [name, v] of Object.entries({ rank, assignee, repo, branch, createdAt, createdBy, updatedAt, updatedBy })) {
+    if (v !== undefined && v !== null && typeof v !== 'string' && typeof v !== 'number' && !(v instanceof Date)) return broken(`поле ${name}: ожидалась строка, а не ${JSON.stringify(v)}`, fm.body);
+  }
+  for (const [name, v] of Object.entries({ blockedBy, covers })) {
+    if (v !== undefined && v !== null && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) return broken(`поле ${name}: ожидался список строк, а не ${JSON.stringify(v)}`, fm.body);
+  }
+  // ветку агент получает в тексте задачи и git — аргументом: только имя ветки, без ведущего «-» (S-3)
+  const br = str(branch)?.trim();
+  if (br && !TASK_BRANCH_RE.test(br)) return broken(`поле branch: недопустимое имя ветки ${JSON.stringify(br)}`, fm.body);
+  if (pr !== undefined && pr !== null && !isRecord(pr)) return broken(`поле pr: ожидалось { url, state }, а не ${JSON.stringify(pr)}`, fm.body);
   const prUrl = isRecord(pr) ? str(pr.url)?.trim() : undefined;
   const prState = isRecord(pr) ? str(pr.state)?.trim() : undefined;
+  // UI рисует ссылку на PR: только http(s) без пробелов и управляющих символов (S-10)
+  if (isRecord(pr) && (!prUrl || !/^https?:\/\/[^\s\u0000-\u001f\u007f]+$/.test(prUrl))) return broken(`поле pr.url: ожидалась ссылка http(s), а не ${JSON.stringify(pr.url ?? null)}`, fm.body);
+  if (prState !== undefined && !['open', 'merged', 'closed'].includes(prState)) return broken(`поле pr.state: ${prState} (ожидалось open | merged | closed)`, fm.body);
   const body = fm.body.replace(/^(\r?\n)+/, '');
   const task: TaskFile = {
     id: tid,
@@ -317,7 +351,7 @@ export function parseTask(text: string, file: string): TaskFile {
     ...(str(assignee)?.trim() ? { assignee: str(assignee)!.trim() } : {}),
     ...(typeof estimate === 'number' ? { estimate } : {}),
     ...(str(repo)?.trim() ? { repo: str(repo)!.trim() } : {}),
-    ...(str(branch)?.trim() ? { branch: str(branch)!.trim() } : {}),
+    ...(br ? { branch: br } : {}),
     ...(prUrl ? { pr: { url: prUrl, state: prState === 'merged' || prState === 'closed' ? prState : 'open' } } : {}),
     blockedBy: strList(blockedBy),
     covers: strList(covers),
@@ -447,6 +481,22 @@ export function rankNear(a?: string, b?: string): string {
   } catch {
     return rankBetween(lo);
   }
+}
+
+/**
+ * rank для переноса между соседями своего списка (D-12): строго между after и before, а если между ними места нет (одинаковый
+ * rank после одновременных переносов, соседи поменялись местами, rank правлен руками) — между after и ближайшим rank
+ * списка больше него (или между before и ближайшим меньше), а не в самый конец за чужие задачи. ranks — rank задач
+ * списка без переносимой.
+ */
+export function placeRank(ranks: readonly string[], after?: string, before?: string): string {
+  const lo = validRank(after);
+  const hi = validRank(before);
+  const valid = ranks.map(validRank).filter((x): x is string => x !== undefined);
+  if (lo !== undefined && hi !== undefined && lo < hi) return rankBetween(lo, hi);
+  if (lo !== undefined) return rankBetween(lo, valid.filter((x) => x > lo).sort()[0]);
+  if (hi !== undefined) return rankBetween(valid.filter((x) => x < hi).sort().pop(), hi);
+  return rankBetween(valid.sort().pop());
 }
 
 function midpoint(a: string, b: string | undefined): string {
@@ -724,8 +774,9 @@ export function remoteProblem(url: string): string | undefined {
   if (!url) return 'Укажи ссылку на репо';
   if (/\s/.test(url)) return 'Ссылка не может содержать пробелы и переводы строк';
   if (url.startsWith('-')) return 'Ссылка не может начинаться с «-»';
-  // ext:: и fd:: запускают команду или читают дескриптор: git их по умолчанию запрещает, но и мы не пропускаем
-  if (/^(ext|fd)::/i.test(url)) return 'Ссылки ext:: и fd:: не поддерживаются';
+  // <helper>::<адрес> зовёт внешний remote-helper git (ext:: запускает команду, fd:: читает дескриптор, hg::, foo::…):
+  // git часть из них запрещает сам, но мы не пропускаем ни один (S-9)
+  if (/^[a-z][a-z0-9+.-]*::/i.test(url)) return 'Ссылки вида <helper>::… (ext::, fd::, hg:: и подобные) не поддерживаются';
   if (/^(https?|ssh|file):\/\//i.test(url)) {
     try {
       new URL(url);
@@ -767,29 +818,117 @@ export function teamSlugFromUrl(url: string): string {
 
 export type FieldConflict = { field: string; ours: unknown; theirs: unknown };
 
+/** Ключ элемента в списке объектов: участники — по email, репо кода — по key (D-3). */
+const LIST_IDS: Record<string, string> = { members: 'email', repos: 'key' };
+/** Поля-объекты, которые сливаются только целиком: ссылка на PR и его состояние вместе. */
+const ATOMIC_FIELDS = new Set(['pr']);
+const listId = (field: string, v: unknown): string | undefined => {
+  const k = LIST_IDS[field];
+  const id = k && isRecord(v) ? str(v[k])?.trim() : undefined;
+  return id ? (k === 'email' ? id.toLowerCase() : id) : undefined;
+};
+const isPrimitive = (v: unknown): boolean => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+
 /**
- * Слияние объектов по полям: база, моё, их. Поле менял только я — моё; только они — их; оба одинаково — любое; по-разному —
- * остаётся значение команды, моё уходит в конфликты. Отсутствие поля — тоже значение (снятое поле).
+ * Трёхстороннее слияние значения поля (D-3): менял только я — моё; только они — их; оба одинаково — любое. Оба по-разному:
+ * объект — по вложенным ключам (columns, lastRequirement, неизвестные), список строк — как множество (добавленное любой
+ * стороной — в итоге, удалённое любой — убрано), список участников и репо — по элементам (email, key); конфликт — только
+ * если один ключ или элемент изменён по-разному, и тогда его значение — от prefer (команды в файле, моё — в конфликте).
+ * Остальное (pr, списки без ключей) — целиком.
+ */
+function merge3(field: string, b: unknown, m: unknown, t: unknown, prefer: 'theirs' | 'mine'): { value: unknown; conflict: boolean } {
+  if (eq(m, t) || eq(m, b)) return { value: t, conflict: false };
+  if (eq(t, b)) return { value: m, conflict: false };
+  const pick = { value: prefer === 'mine' ? m : t, conflict: true };
+  if (ATOMIC_FIELDS.has(field)) return pick;
+  if (isRecord(m) && isRecord(t) && (b === undefined || b === null || isRecord(b))) {
+    const bb = isRecord(b) ? b : {};
+    const value: Record<string, unknown> = {};
+    let conflict = false;
+    for (const k of new Set([...Object.keys(t), ...Object.keys(m), ...Object.keys(bb)])) {
+      const r = merge3(k, bb[k], m[k], t[k], prefer);
+      conflict ||= r.conflict;
+      if (r.value !== undefined) value[k] = r.value;
+    }
+    return { value, conflict };
+  }
+  // нет поля — пустой список: covers без элементов в файл не пишется вовсе
+  const lists = [b, m, t].map((v) => (v === undefined || v === null ? [] : v));
+  if (!(Array.isArray(m) || Array.isArray(t)) || !lists.every(Array.isArray)) return pick;
+  return mergeLists(field, lists[0] as unknown[], lists[1] as unknown[], lists[2] as unknown[], prefer, pick);
+}
+
+/** Списки для merge3: из примитивов — как множество, из объектов с ключом (LIST_IDS) — по элементам, иначе — pick целиком. */
+function mergeLists(field: string, bl: unknown[], m: unknown[], t: unknown[], prefer: 'theirs' | 'mine', pick: { value: unknown; conflict: boolean }): { value: unknown; conflict: boolean } {
+  if ([...bl, ...m, ...t].every(isPrimitive)) {
+    const key = (x: unknown) => JSON.stringify(x);
+    const [bs, ms, ts] = [bl, m, t].map((l) => new Set(l.map(key)));
+    const removed = new Set([...bs].filter((x) => !ms.has(x)));
+    const added = m.filter((x, i) => !bs.has(key(x)) && !ts.has(key(x)) && m.findIndex((y) => key(y) === key(x)) === i);
+    return { value: [...t.filter((x) => !removed.has(key(x))), ...added], conflict: false };
+  }
+  const ids = (l: unknown[]) => l.map((x) => listId(field, x));
+  const [bi, mi, ti] = [bl, m, t].map(ids);
+  if ([...bi, ...mi, ...ti].some((x) => x === undefined) || [bi, mi, ti].some((l) => new Set(l).size !== l.length)) return pick;
+  const byId = (l: unknown[], li: (string | undefined)[]) => new Map(l.map((x, i) => [li[i]!, x]));
+  const [bm, mm, tm] = [byId(bl, bi), byId(m, mi), byId(t, ti)];
+  const value: unknown[] = [];
+  let conflict = false;
+  // порядок — как у команды, мои новые элементы — следом в моём порядке
+  for (const id of [...ti, ...mi.filter((x) => !tm.has(x!))] as string[]) {
+    const [be, me, te] = [bm.get(id), mm.get(id), tm.get(id)];
+    if (me !== undefined && te !== undefined) {
+      const r = merge3(`${field}[]`, be, me, te, prefer);
+      conflict ||= r.conflict;
+      value.push(r.value);
+    } else if (te !== undefined) {
+      // у меня элемента нет: удалил я (было в базе) или добавили они
+      if (be === undefined) value.push(te);
+      else if (!eq(be, te)) {
+        conflict = true; // они его изменили, я удалил
+        if (prefer === 'theirs') value.push(te);
+      }
+    } else if (be === undefined) value.push(me);
+    else if (!eq(be, me)) {
+      conflict = true; // я его изменил, они удалили
+      if (prefer === 'mine') value.push(me);
+    }
+  }
+  return { value, conflict };
+}
+
+/**
+ * Слияние объектов по полям: база, моё, их (merge3 по каждому полю). Поле менял только я — моё; только они — их; оба
+ * одинаково — любое; по-разному — по вложенным ключам и элементам списков, а что не слилось — остаётся значение команды,
+ * моё (то же поле, но с моими значениями в спорных местах) уходит в конфликты. Отсутствие поля — тоже значение (снятое поле).
  */
 export function mergeRecords(base: Record<string, unknown> | undefined, mine: Record<string, unknown>, theirs: Record<string, unknown>): { merged: Record<string, unknown>; conflicts: FieldConflict[] } {
   const merged: Record<string, unknown> = {};
   const conflicts: FieldConflict[] = [];
   const keys = [...new Set([...Object.keys(theirs), ...Object.keys(mine), ...Object.keys(base ?? {})])];
   for (const k of keys) {
-    const bv = base?.[k];
-    const mv = mine[k];
-    const tv = theirs[k];
-    let v: unknown;
-    if (eq(mv, tv)) v = tv;
-    else if (eq(mv, bv)) v = tv;
-    else if (eq(tv, bv)) v = mv;
-    else {
-      v = tv;
-      conflicts.push({ field: k, ours: mv, theirs: tv });
-    }
-    if (v !== undefined) merged[k] = v;
+    const r = merge3(k, base?.[k], mine[k], theirs[k], 'theirs');
+    if (r.conflict) conflicts.push({ field: k, ours: merge3(k, base?.[k], mine[k], theirs[k], 'mine').value, theirs: r.value });
+    if (r.value !== undefined) merged[k] = r.value;
   }
   return { merged, conflicts };
+}
+
+/**
+ * «Взять моё» у конфликта поля: моё значение из конфликта поверх текущего, как слияние от значения команды на момент
+ * конфликта. У простого поля — моё; у списка и объекта — мои спорные элементы и ключи, а то, что команда изменила с тех
+ * пор в остальных, остаётся.
+ */
+export function mergeFieldMine(field: string, theirsAtConflict: unknown, ours: unknown, current: unknown): unknown {
+  return merge3(field, theirsAtConflict, ours, current, 'mine').value;
+}
+
+/**
+ * Трёхстороннее слияние одного поля для правки настроек от base клиента (D-10): conflict — один ключ или элемент изменён
+ * и клиентом, и командой по-разному; value — итог (значение команды в спорных местах).
+ */
+export function mergeField(field: string, base: unknown, mine: unknown, current: unknown): { value: unknown; conflict: boolean } {
+  return merge3(field, base, mine, current, 'theirs');
 }
 
 /** Поля-следы правки задачи: при расхождении сторон это не конфликт, а «кто правил последним». */
@@ -885,9 +1024,10 @@ export function mergeYamlTexts(base: string | undefined, mine: string, theirs: s
   const { merged, conflicts: all } = mergeRecords(b, m, t);
   for (const k of COUNTER_FIELDS) if (m[k] !== undefined || t[k] !== undefined) merged[k] = maxCounter(m[k], t[k]);
   const conflicts = all.filter((c) => !COUNTER_FIELDS.has(c.field));
+  // поверх текста команды — только то, что слияние поменяло: остальные поля сохраняют её вид и комментарии
   const patch: Record<string, unknown> = {};
-  for (const k of new Set([...Object.keys(t), ...Object.keys(merged)])) patch[k] = merged[k];
-  return { text: updateYaml(theirs, patch), conflicts };
+  for (const k of new Set([...Object.keys(t), ...Object.keys(merged)])) if (!eq(merged[k], t[k]) || (k in t) !== (k in merged)) patch[k] = merged[k];
+  return { text: Object.keys(patch).length ? updateYaml(theirs, patch) : theirs, conflicts };
 }
 
 // ---------- сообщения коммитов (spec §7.1)

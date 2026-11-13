@@ -1566,6 +1566,11 @@ export type TeamDetail = TeamSummary & {
   flows: string[];
   /** Папка клона на этом компьютере. */
   dir: string;
+  /**
+   * Хэш teamwork.yaml: PUT настроек принимает его полем base — тогда чужие правки, сделанные после открытия формы, не
+   * затираются (каждое присланное поле сливается с ними), а одно место, изменённое по-разному, даёт 409 conflict.
+   */
+  base?: string;
 };
 
 /**
@@ -1637,6 +1642,8 @@ export type TeamProject = {
   space?: string;
   /** Папка проекта в клоне: агенты читают её как дополнительную папку. */
   dir: string;
+  /** Хэш project.yaml: PUT проекта принимает его полем base, как настройки команды (TeamDetail.base). */
+  base?: string;
   docs: TeamDocBrief[];
   sprints: TeamSprint[];
 };
@@ -1743,7 +1750,8 @@ export type TeamSprint = {
 /**
  * Нерешённый конфликт синхронизации (spec §7.4): моё значение не вошло, в репо — значение команды. GET /api/teams/:t/conflicts —
  * список; DELETE …/conflicts/:id — «оставить версию команды» (запись снимается); POST …/conflicts/:id/mine — «взять мою»
- * (поле, текст или удалённый файл записываются коммитом; для sprint недоступно).
+ * (поле, текст или удалённый файл записываются коммитом; для sprint без field — два активных спринта — недоступно). У
+ * двоичного файла ours — подпись, а blob — объект git моей версии: «взять мою» кладёт его байт в байт.
  */
 export type TeamConflict = {
   id: string;
@@ -1755,6 +1763,7 @@ export type TeamConflict = {
   field?: string;
   ours: unknown;
   theirs: unknown;
+  blob?: string;
   theirsBy?: string;
   at: string;
 };

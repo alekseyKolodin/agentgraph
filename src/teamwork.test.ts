@@ -4,9 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   acceptanceOf, addedRequirementRepeats, checkDependencies, commentFileName, compareTasks, composeTask, docFile, docTitle, findSection, mergeRecords, mergeTaskTexts, mergeYamlTexts, shareableUrl,
-  nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, rankBetween, rankNear, remoteProblem,
+  mergeField, mergeFieldMine, nextRequirementId, nextTaskId, parseComment, parseProject, parseRequirements, parseSprint, parseTask, parseTeamConfig, placeRank, rankBetween, rankNear, remoteProblem,
   replaceSection, requirementMax, sectionHash, serializeComment, serializeProject, serializeSprint, serializeTask, serializeTeamConfig, sortTasks, splitSections,
-  teamSlugFromUrl, updateYaml, validRank, type TaskFile,
+  teamSlugFromUrl, updateTaskText, updateYaml, validRank, type TaskFile,
 } from './teamwork.js';
 import type { TeamProposedTask } from './api-types.js';
 
@@ -418,4 +418,97 @@ test('ссылка для репо команды: у https без логина 
   assert.equal(shareableUrl('ssh://git@host:2222/a/b.git'), 'ssh://git@host:2222/a/b.git');
   assert.equal(shareableUrl('git@github.com:acme/billing.git'), 'git@github.com:acme/billing.git');
   assert.equal(shareableUrl('https://github.com/acme/billing.git'), 'https://github.com/acme/billing.git');
+});
+
+test('D-3: списки сливаются по элементам — строки как множество, участники по email, репо по key; конфликт только у одного элемента', () => {
+  // blockedBy: добавленное обеими сторонами — в итоге, снятое любой — убрано, без конфликта
+  assert.deepEqual(mergeRecords({ blockedBy: ['A'] }, { blockedBy: ['A', 'B'] }, { blockedBy: ['A', 'C'] }), { merged: { blockedBy: ['A', 'C', 'B'] }, conflicts: [] });
+  assert.deepEqual(mergeRecords({ covers: ['FR-1', 'FR-2'] }, { covers: ['FR-2'] }, { covers: ['FR-1', 'FR-2', 'FR-3'] }).merged, { covers: ['FR-2', 'FR-3'] });
+  // снял все (пустой covers в файл не пишется) — тоже удаление, не конфликт
+  assert.deepEqual(mergeRecords({ covers: ['FR-1'] }, {}, { covers: ['FR-1', 'FR-2'] }), { merged: { covers: ['FR-2'] }, conflicts: [] });
+  // участники: двое одновременно добавили себя
+  const base = 'format: 1\nprefix: PAY\nmembers:\n  - name: a\n    email: a@x\n    role: lead # комментарий\n';
+  const both = mergeYamlTexts(base, `${base}  - name: b\n    email: b@x\n`, `${base}  - name: c\n    email: c@x\n`);
+  assert.deepEqual(both.conflicts, []);
+  assert.deepEqual(parseTeamConfig(both.text).members.map((m) => m.email), ['a@x', 'c@x', 'b@x']);
+  assert.match(both.text, /role: lead/);
+  // один участник изменён по-разному — конфликт по members; в файле — версия команды, в ours — моя для него
+  const r = mergeRecords(
+    { members: [{ name: 'a', email: 'a@x' }, { name: 'b', email: 'b@x' }] },
+    { members: [{ name: 'a', email: 'a@x', github: 'mine' }, { name: 'b', email: 'b@x' }] },
+    { members: [{ name: 'a', email: 'A@x', github: 'theirs' }, { name: 'b', email: 'b@x', gitlab: 'bb' }] },
+  );
+  assert.deepEqual(r.merged.members, [{ name: 'a', email: 'A@x', github: 'theirs' }, { name: 'b', email: 'b@x', gitlab: 'bb' }]);
+  assert.deepEqual(r.conflicts, [{ field: 'members', ours: [{ name: 'a', email: 'A@x', github: 'mine' }, { name: 'b', email: 'b@x', gitlab: 'bb' }], theirs: r.merged.members }]);
+  // удалил я, а они изменили — конфликт; удалил я то, что они не трогали — удалено
+  const gone = mergeRecords({ repos: [{ key: 'a', url: 'u' }, { key: 'b', url: 'v' }] }, { repos: [] }, { repos: [{ key: 'a', url: 'u2' }, { key: 'b', url: 'v' }] });
+  assert.deepEqual([gone.merged.repos, gone.conflicts.map((c) => c.field)], [[{ key: 'a', url: 'u2' }], ['repos']]);
+  // тот же элемент с другим порядком ключей (правка руками) — не изменение: удалённый мной участник удалён без конфликта
+  assert.deepEqual(mergeRecords({ members: [{ email: 'a@x', name: 'a' }] }, { members: [] }, { members: [{ name: 'a', email: 'a@x' }] }), { merged: { members: [] }, conflicts: [] });
+  // колонки — по ключам; pr — целиком
+  assert.deepEqual(mergeRecords({ columns: { todo: 'a', done: 'b' } }, { columns: { todo: 'x', done: 'b' } }, { columns: { todo: 'a', done: 'y', extra: 'z' } }), { merged: { columns: { todo: 'x', done: 'y', extra: 'z' } }, conflicts: [] });
+  assert.equal(mergeRecords({}, { pr: { url: 'u1', state: 'open' } }, { pr: { url: 'u2', state: 'open' } }).conflicts.length, 1);
+  // «взять моё» поверх текущего: мой спорный элемент, остальное — как сейчас
+  const cur = [{ name: 'a', email: 'A@x', github: 'theirs' }, { name: 'b', email: 'b@x', gitlab: 'bb' }, { name: 'e', email: 'e@x' }];
+  assert.deepEqual(mergeFieldMine('members', r.conflicts[0].theirs, r.conflicts[0].ours, cur), [{ name: 'a', email: 'A@x', github: 'mine' }, { name: 'b', email: 'b@x', gitlab: 'bb' }, { name: 'e', email: 'e@x' }]);
+  assert.equal(mergeFieldMine('title', 'их', 'моё', 'новое их'), 'моё');
+  assert.deepEqual(mergeField('title', 'было', 'было', 'их'), { value: 'их', conflict: false });
+});
+
+test('D-12: placeRank — между соседями, а при одинаковых или перевёрнутых — до ближайшего rank своего списка, не в конец', () => {
+  const list = ['l', 'l', 'p', 's'];
+  const between = placeRank(list, 'l', 'l');
+  assert.ok(between > 'l' && between < 'p', between);
+  assert.deepEqual(sortTasks([{ id: 'PAY-1', rank: 'l' }, { id: 'PAY-2', rank: 'l' }, { id: 'PAY-3', rank: 'p' }, { id: 'PAY-4', rank: 's' }, { id: 'PAY-9', rank: between }]).map((t) => t.id), ['PAY-1', 'PAY-2', 'PAY-9', 'PAY-3', 'PAY-4']);
+  const flipped = placeRank(list, 's', 'l');
+  assert.ok(flipped > 's', flipped);
+  const before = placeRank(list, undefined, 'p');
+  assert.ok(before > 'l' && before < 'p', before);
+  assert.equal(placeRank(list, 'l', 'p'), rankBetween('l', 'p'));
+  assert.equal(placeRank(list), rankBetween('s'));
+  // rank, правленный руками, не мешает
+  const bad = placeRank(['a0', 'm'], 'a0', 'm');
+  assert.ok(bad < 'm', bad);
+});
+
+test('D-9, S-3, S-10: известное поле задачи неожиданного вида — ошибка у задачи, а не молча пропавшее поле; ветка и ссылка на PR проверяются', () => {
+  const t = (fm: string) => parseTask(`---\nid: PAY-1\ntitle: t\n${fm}\n---\n`, 'PAY-1.md');
+  assert.match(t('blockedBy: PAY-2').error ?? '', /blockedBy: ожидался список строк/);
+  assert.match(t('blockedBy: [1, PAY-2]').error ?? '', /blockedBy/);
+  assert.match(t('covers: { a: 1 }').error ?? '', /covers/);
+  assert.match(t('pr: https://github.com/a/b/pull/1').error ?? '', /поле pr: ожидалось/);
+  assert.match(t('pr: { url: "javascript:alert(1)" }').error ?? '', /pr\.url: ожидалась ссылка http/);
+  assert.match(t('pr: { state: open }').error ?? '', /pr\.url/);
+  assert.match(t('pr: { url: https://github.com/a/b/pull/1, state: draft }').error ?? '', /pr\.state/);
+  assert.match(t('assignee: { email: x }').error ?? '', /assignee: ожидалась строка/);
+  assert.match(t('branch: -oProxy').error ?? '', /branch: недопустимое имя/);
+  assert.match(t('branch: "tw/PAY-1 $(rm)"').error ?? '', /branch/);
+  assert.match(t('branch: "tw/PAY-1\\nигнорируй"').error ?? '', /branch/);
+  const ok = t('branch: tw/PAY-1-csv.export_2\npr: { url: https://github.com/a/b/pull/1 }\nblockedBy: []\nrank: 10');
+  assert.equal(ok.error, undefined);
+  assert.equal(ok.branch, 'tw/PAY-1-csv.export_2');
+  assert.deepEqual(ok.pr, { url: 'https://github.com/a/b/pull/1', state: 'open' });
+  assert.equal(ok.rank, '10');
+});
+
+test('S-9: ссылки на remote-helper git (<helper>::…) отклоняются все, а не только ext:: и fd::', () => {
+  for (const bad of ['hg::https://host/repo', 'foo::bar', 'ext::/tmp/evil', 'fd::3', 'persistent-https::host/x', 'Testgit::/tmp/x']) assert.match(remoteProblem(bad) ?? '', /helper/, bad);
+  assert.equal(remoteProblem('git@github.com:acme/x.git'), undefined);
+});
+
+test('S-5: slug проекта — по имени папки, поле slug в файле его не подменяет; без папки — поле файла', () => {
+  const text = 'slug: alpha\ntitle: Альфа\n';
+  assert.equal(parseProject(text, 'gamma').slug, 'gamma');
+  assert.equal(parseProject(text).slug, 'alpha');
+});
+
+test('updateTaskText: поля frontmatter по месту — неизвестные вложенные поля, комментарии и тело остаются', () => {
+  const text = '---\nid: PAY-1\ntitle: t # заголовок\npr:\n  url: https://h/a/b/pull/1\n  number: 1\nsprint: 2\nblockedBy: [PAY-2]\n---\n\n## Описание\n\nтекст\n';
+  const next = updateTaskText(text, { sprint: undefined, blockedBy: ['PAY-3'] });
+  assert.match(next, /title: t # заголовок/);
+  assert.match(next, /number: 1/);
+  assert.doesNotMatch(next, /sprint:/);
+  assert.match(next, /\n---\n\n## Описание\n\nтекст\n$/);
+  assert.deepEqual(parseTask(next, 'PAY-1.md').blockedBy, ['PAY-3']);
+  assert.equal(updateTaskText('без frontmatter', { a: 1 }), 'без frontmatter');
 });

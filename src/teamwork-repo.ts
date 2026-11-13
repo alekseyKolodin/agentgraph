@@ -4,21 +4,24 @@
 // локальные коммиты применяются заново как слияние полей (задачи, YAML) и текстов (git merge-file), нерешённое — в
 // local.json → conflicts (список, «оставить команды» и «взять моё» — в teamwork-server.ts); совпавшие номера задач переименовываются (§5.7); нет сети — повторы с нарастающей паузой (§7.5);
 // правки руками в клоне коммитятся перед pull (§7.6); формат новее — только чтение. Git только через execFile с массивом
-// аргументов и GIT_TERMINAL_PROMPT=0 (exec из git.ts).
+// аргументов и GIT_TERMINAL_PROMPT=0 (exec из git.ts). Перепроигрывание собирает коммит во временном индексе по объектам
+// git, а не по тексту: двоичные файлы и файлы, которые менял только я, переносятся байт в байт (D-1, D-6 финального ревью);
+// клон, оставшийся посреди rebase или merge, перед записью и синхронизацией возвращается в чистое состояние (D-2).
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { parse as parseYaml } from 'yaml';
 import { exec, type Exec } from './git.js';
 import { writeAtomic } from './safe-fs.js';
 import { copyTemplate, renderTeamConfig, TEMPLATE_DIR } from './teamwork-template.js';
 import {
   maxTaskNumber, mergeTaskTexts, mergeYamlTexts, nextTaskId, parseProject, parseSprint, parseTask, parseTeamConfig, remoteProblem, serializeTask, TEAM_FORMAT,
-  TEAM_SLUG_RE, taskNumber, teamSlugFromUrl, teamsDir, updateYaml, type FieldConflict, type TeamConfig,
+  TEAM_SLUG_RE, taskNumber, teamSlugFromUrl, teamsDir, textHash, updateTaskText, updateYaml, type FieldConflict, type TeamConfig,
 } from './teamwork.js';
 import type { TeamConflict, TeamDocName, TeamHistoryItem, TeamMember, TeamRemoteCheck, TeamSync, TeamTaskWork } from './api-types.js';
 
-/** Ошибка с HTTP-кодом и кодом причины для 409 (not_empty, is_team, conflict, unpushed, busy, readonly). */
+/** Ошибка с HTTP-кодом и кодом причины для 409 (not_empty, is_team, conflict, unpushed, busy, readonly, rewritten, repo_state). */
 export class TeamError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string, readonly extra?: Record<string, unknown>) {
     super(message);
@@ -36,7 +39,8 @@ export type LocalData = {
   repoPaths: Record<string, string>;
   projectSpaces: Record<string, string>;
   work: Record<string, TeamTaskWork[]>;
-  sync: { lastFetchAt?: string; lastPushAt?: string; error?: string | null };
+  /** format — версия формата teamwork.yaml в репо команды после последнего fetch: новее известной — только чтение (§5.9). */
+  sync: { lastFetchAt?: string; lastPushAt?: string; error?: string | null; format?: number };
   conflicts: TeamConflict[];
 };
 
@@ -75,14 +79,56 @@ export type CommitMessage = string | { subject: string; body?: string };
 export const LOCAL_FILE = 'local.json';
 export const REPO_DIR = 'repo';
 export const TASK_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\/tasks\/([A-Z]{2,6}-\d+)\.md$/;
+/** Комментарий задачи: projects/<slug>/comments/<ID>/<файл>. */
+export const COMMENT_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\/comments\/([A-Z]{2,6}-\d+)\/(.+)$/;
 const PROJECT_FILE_RE = /^projects\/([a-z0-9][a-z0-9-]*)\//;
 const MANUAL_MESSAGE = 'Правки в папке команды';
 const GIT_TIMEOUT = 60_000;
 const NET_TIMEOUT = 120_000;
+/** Ссылка, которая держит blob моей версии двоичного файла из конфликта, пока конфликт не решён (gc его не уберёт). */
+export const CONFLICT_REF = 'refs/agentgraph/conflicts/';
+/** Обычные файлы в дереве git; ссылка (120000) и подмодуль (160000) как текст не сливаются. */
+const REGULAR_MODES = new Set(['100644', '100755']);
+/** Файл в папке git клона: идёт свой rebase, внутри — pid процесса agentgraph (D-2). */
+const REBASE_MARKER = 'agentgraph-rebase';
+/** Служебные файлы ОС: не уходят команде (.gitignore новой команды и info/exclude каждого клона). */
+const OS_JUNK = ['.DS_Store', 'Thumbs.db'];
+/** Текст больше этого как текст не сливается (буфер exec — 32 МБ): как двоичный, в конфликт с blob. */
+const MAX_MERGE_BYTES = 8 * 1024 * 1024;
+/** Жив ли процесс: signal 0 только проверяет; EPERM — жив, но чужой. */
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 /** Текст ошибки git без учётных данных из ссылки (https://user:token@host/…). */
 export const scrub = (s: string): string => s.replace(/(\/\/)[^/@\s]+@/g, '$1***@');
+
+/** Запись дерева git: режим, объект. */
+type TreeEntry = { mode: string; oid: string };
+/** Итог перепроигрывания по пути: объект как есть (моя версия байт в байт), текст после слияния, null — удалить. */
+type ReplayOut = TreeEntry | { text: string; mode: string } | null;
+
+const eqJson = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** Тот же конфликт уже записан (повтор перепроигрывания после сбоя до сдвига ветки): второй раз не добавляется. */
+const sameConflict = (a: TeamConflict, b: TeamConflict): boolean =>
+  a.file === b.file && a.kind === b.kind && (a.field ?? '') === (b.field ?? '') && (a.blob ?? '') === (b.blob ?? '') && eqJson(a.ours, b.ours) && eqJson(a.theirs, b.theirs);
+
+/** Запуски и сессии переименованной задачи (local.json → work) переезжают на её новый номер. */
+function moveWork(l: LocalData, from: string, to: string): void {
+  if (!l.work[from]) return;
+  l.work[to] = [...(l.work[to] ?? []), ...l.work[from]];
+  delete l.work[from];
+}
+
+/** Ошибка: репо команды на формате новее известного, а у меня есть коммиты — их нельзя ни слить, ни отправить (spec §5.9). */
+const readonlyError = () =>
+  new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его. Неотправленные изменения ждут в клоне, пока команда только для чтения', 'readonly');
 
 function emptyLocal(remote: string): LocalData {
   return { remote, repoPaths: {}, projectSpaces: {}, work: {}, sync: {}, conflicts: [] };
@@ -136,6 +182,12 @@ export class TeamRepo {
   private pollTimer?: NodeJS.Timeout;
   private retryMs = 0;
   private stopped = false;
+  /** Клон удалён отключением: local.json больше не пишется, иначе папка команды появилась бы снова (D-15). */
+  private removed = false;
+  /** stop() снаружи (остановка сервиса команд): отказ в отключении клон уже не возвращает в работу. */
+  private closed = false;
+  private timersOn = false;
+  private gitDirPath?: string;
   private busy = false;
   private listeners = new Set<(e: ChangeEvent) => void>();
   private hasSubscribers: () => boolean = () => false;
@@ -177,6 +229,7 @@ export class TeamRepo {
   saveLocal(mutate: (l: LocalData) => void): LocalData {
     const l = this.local();
     mutate(l);
+    if (this.removed) return l;
     fs.mkdirSync(this.dir, { recursive: true });
     writeAtomic(this.localFile, JSON.stringify(l, null, 2) + '\n');
     return l;
@@ -190,21 +243,39 @@ export class TeamRepo {
 
   /**
    * Абсолютный путь файла клона по относительному; выход за клон — ошибка, в том числе через ссылку: клон делается с
-   * core.symlinks=false, но файл внутри него писали другие участники, поэтому ближайший существующий предок сверяется по realpath.
+   * core.symlinks=false, но ссылку мог положить в папку человек. Каждая часть пути проверяется lstat: ссылка разрешается
+   * и должна вести внутрь клона, висячая ссылка — тоже выход (fs.existsSync шёл бы по ней и пропускал её, S-7).
    */
   abs(rel: string): string {
     const p = path.resolve(this.repoDir, rel);
     const inside = (x: string, root: string) => x === root || x.startsWith(root + path.sep);
     if (!inside(p, this.repoDir)) throw new TeamError(400, `Путь вне репо команды: ${rel}`);
-    let probe = p;
-    while (!fs.existsSync(probe) && probe !== this.repoDir) probe = path.dirname(probe);
+    let realRoot: string;
     try {
-      const realRoot = fs.realpathSync(this.repoDir);
-      const real = fs.realpathSync(probe);
-      if (!inside(real, realRoot)) throw new TeamError(400, `Путь ведёт за пределы репо команды: ${rel}`);
-    } catch (err) {
-      if (err instanceof TeamError) throw err;
-      // клона ещё нет (создание) — сверять нечего
+      realRoot = fs.realpathSync(this.repoDir);
+    } catch {
+      return p; // клона ещё нет (создание) — сверять нечего
+    }
+    const outside = () => new TeamError(400, `Путь ведёт за пределы репо команды: ${rel}`);
+    let cur = realRoot;
+    for (const part of path.relative(this.repoDir, p).split(path.sep).filter(Boolean)) {
+      const next = path.join(cur, part);
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(next);
+      } catch {
+        break; // дальше пути нет: новый файл или папка
+      }
+      if (st.isSymbolicLink()) {
+        let real: string;
+        try {
+          real = fs.realpathSync(next);
+        } catch {
+          throw outside(); // висячая ссылка: запись пошла бы по ней наружу
+        }
+        if (!inside(real, realRoot)) throw outside();
+        cur = real;
+      } else cur = next;
     }
     return p;
   }
@@ -267,8 +338,12 @@ export class TeamRepo {
     }
   }
 
-  /** Формат новее известного — только чтение (spec §5.9). */
+  /**
+   * Формат новее известного — только чтение (spec §5.9): в клоне или в репо команды после последнего fetch (у меня могут быть
+   * неотправленные коммиты, тогда клон на новый формат не перешёл, но писать в него дальше нельзя — D-8).
+   */
   readonly(): boolean {
+    if ((this.local().sync.format ?? 0) > TEAM_FORMAT) return true;
     try {
       return this.config().format > TEAM_FORMAT;
     } catch {
@@ -279,8 +354,8 @@ export class TeamRepo {
   // ---------- git
 
   /** git в клоне: имена файлов без экранирования не-ASCII (core.quotePath), сообщения git — на английском (разбор ошибок). */
-  git(args: string[], timeoutMs = GIT_TIMEOUT): Promise<string> {
-    return this.deps.exec('git', ['-c', 'core.quotePath=false', ...args], { cwd: this.repoDir, timeoutMs, env: { LC_ALL: 'C' } });
+  git(args: string[], timeoutMs = GIT_TIMEOUT, env: NodeJS.ProcessEnv = {}): Promise<string> {
+    return this.deps.exec('git', ['-c', 'core.quotePath=false', ...args], { cwd: this.repoDir, timeoutMs, env: { LC_ALL: 'C', ...env } });
   }
 
   /** Я по git config клона (глобальный конфиг тоже действует). */
@@ -327,18 +402,20 @@ export class TeamRepo {
     return this.enqueue(async () => {
       if (this.stopped) throw new TeamError(409, 'Команда отключается', 'busy');
       if (this.readonly()) throw new TeamError(409, 'Формат репо команды новее, чем знает agentgraph: обнови его, пока команда только для чтения', 'readonly');
+      await this.recover();
       await this.commitManual();
       let gone: string[];
       try {
         await mutate(this);
         gone = await this.rememberTaskNumbers();
       } catch (err) {
-        await this.git(['checkout', '-q', '--', '.']).catch(() => undefined);
+        // и индекс тоже: mutate мог положить в него blob (restoreBlob)
+        await this.git(['reset', '-q', '--hard', 'HEAD']).catch(() => undefined);
         await this.git(['clean', '-qfd']).catch(() => undefined);
         throw err;
       }
       await this.git(['add', '-A']);
-      const files = (await this.git(['diff', '--cached', '--name-only'])).split('\n').filter(Boolean);
+      const files = (await this.git(['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean);
       if (!files.length) return;
       const author = o.author ? ['--author', `${o.author.name} <${o.author.email}>`] : [];
       const msg = typeof message === 'function' ? message() : message;
@@ -356,6 +433,80 @@ export class TeamRepo {
       this.emit(files);
       this.schedulePush();
     });
+  }
+
+  /** Двоичная версия файла из объекта git — в рабочую копию и индекс байт в байт («взять моё» у двоичного конфликта). */
+  async restoreBlob(rel: string, oid: string): Promise<void> {
+    this.abs(rel);
+    if (!/^[0-9a-f]{40,64}$/.test(oid)) throw new TeamError(400, `Неверный объект git: ${oid}`);
+    const staged = (await this.git(['ls-files', '-s', '-z', '--', rel])).split('\0')[0];
+    const mode = staged && REGULAR_MODES.has(staged.split(' ')[0]) ? staged.split(' ')[0] : '100644';
+    await this.git(['update-index', '--add', '--cacheinfo', mode, oid, rel]);
+    await this.git(['checkout-index', '-f', '--', rel]);
+  }
+
+  private async gitDir(): Promise<string> {
+    if (this.gitDirPath) return this.gitDirPath;
+    const dir = (await this.git(['rev-parse', '--absolute-git-dir'])).trim();
+    // служебные файлы ОС не уходят команде и у клонов команд, созданных до .gitignore в шаблоне (D-1): локальное исключение
+    try {
+      const exclude = path.join(dir, 'info', 'exclude');
+      const text = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+      const missing = OS_JUNK.filter((p) => !text.split(/\r?\n/).includes(p));
+      if (missing.length) {
+        fs.mkdirSync(path.dirname(exclude), { recursive: true });
+        fs.appendFileSync(exclude, `${text && !text.endsWith('\n') ? '\n' : ''}${missing.join('\n')}\n`);
+      }
+    } catch {
+      // не записалось — не причина не синхронизировать
+    }
+    return (this.gitDirPath = dir);
+  }
+
+  /**
+   * Клон после сбоя или выхода посреди своего rebase (spec §7.4 «рабочая копия никогда не остаётся с маркерами конфликта»,
+   * D-2): свой rebase помечен файлом REBASE_MARKER с pid процесса — он откатывается, отделённый HEAD возвращается на ветку.
+   * Rebase, merge, cherry-pick и revert, начатые человеком руками, файлы с конфликтом в индексе и отделённый HEAD без своего
+   * маркера не трогаются: откат стёр бы сведённые руками правки, а add -A закоммитил бы маркеры конфликта и отправил их
+   * команде. Тогда — 409 repo_state с подсказкой. Rebase другого живого процесса agentgraph на той же папке данных — 409 busy.
+   */
+  private async recover(): Promise<void> {
+    const dir = await this.gitDir();
+    const has = (p: string) => fs.existsSync(path.join(dir, p));
+    const repoDir = this.repoDir;
+    const stuck = (what: string, fix: string) => new TeamError(409, `В папке команды ${what}. agentgraph его не трогает, чтобы не потерять правки: ${fix}`, 'repo_state');
+    const marker = path.join(dir, REBASE_MARKER);
+    const ours = fs.existsSync(marker);
+    if (ours) {
+      const pid = Number(fs.readFileSync(marker, 'utf8').trim());
+      if (pid && pid !== process.pid && alive(pid)) throw new TeamError(409, 'Команду сейчас синхронизирует другой процесс agentgraph: попробуй позже', 'busy');
+      if (has('rebase-merge') || has('rebase-apply')) {
+        await this.git(['rebase', '--abort']).catch(() => this.git(['rebase', '--quit']).catch(() => undefined));
+        // состояние rebase битое и git его не снял: убираем сами, дальше — как отделённый HEAD
+        for (const p of ['rebase-merge', 'rebase-apply']) if (has(p)) fs.rmSync(path.join(dir, p), { recursive: true, force: true });
+      }
+    } else if (has('rebase-merge') || has('rebase-apply')) {
+      throw stuck('незаконченный rebase', `закончи его или отмени — git -C "${repoDir}" rebase --abort`);
+    }
+    if (has('MERGE_HEAD')) throw stuck('незаконченное слияние (merge)', `закончи его (git add, git commit) или отмени — git -C "${repoDir}" merge --abort`);
+    if (has('CHERRY_PICK_HEAD')) throw stuck('незаконченный cherry-pick', `закончи его или отмени — git -C "${repoDir}" cherry-pick --abort`);
+    if (has('REVERT_HEAD')) throw stuck('незаконченный revert', `закончи его или отмени — git -C "${repoDir}" revert --abort`);
+    const unmerged = [...new Set((await this.git(['ls-files', '-u', '-z'])).split('\0').filter(Boolean).map((l) => l.slice(l.indexOf('\t') + 1)))];
+    if (unmerged.length) throw stuck(`незавершённое слияние: ${unmerged.slice(0, 5).join(', ')}`, `разреши конфликт в файлах или сбрось его — git -C "${repoDir}" reset --merge`);
+    if (!(await this.git(['symbolic-ref', '-q', 'HEAD']).then(() => true, () => false))) {
+      const head = await this.rev('HEAD');
+      const branch = this.branch();
+      if (head) {
+        if (!ours) throw stuck(`отделённый HEAD (не на ветке ${branch})`, `перейди на ветку — git -C "${repoDir}" checkout ${branch}`);
+        const tip = await this.rev(`refs/heads/${branch}`);
+        const ancestor = (a: string, b: string) => this.git(['merge-base', '--is-ancestor', a, b]).then(() => true, () => false);
+        // ветка догоняет HEAD (коммиты отделённого HEAD не теряются), или HEAD отстал от ветки — переходим на неё
+        if (!tip || (await ancestor(tip, head))) await this.git(['checkout', '-q', '-B', branch]);
+        else if (await ancestor(head, tip)) await this.git(['checkout', '-q', branch]);
+        else throw stuck(`отделённый HEAD разошёлся с веткой ${branch}`, `перейди на ветку — git -C "${repoDir}" checkout ${branch}`);
+      }
+    }
+    if (ours) fs.rmSync(marker, { force: true });
   }
 
   /** Незакоммиченные правки не через agentgraph — отдельным коммитом (spec §7.6). true — что-то было. */
@@ -425,7 +576,7 @@ export class TeamRepo {
     this.pushTimer.unref();
   }
 
-  /** Отправить сейчас, без ожидания таймера (тесты и кнопка «Повторить»). */
+  /** Отправить сейчас, без ожидания таймера (тесты и кнопка «Повторить»). После stop() — ничего (D-15). */
   push(): Promise<void> {
     if (this.pushTimer) {
       clearTimeout(this.pushTimer);
@@ -445,6 +596,18 @@ export class TeamRepo {
     return this.syncState();
   }
 
+  /** Версия формата teamwork.yaml в репо команды (origin) после fetch; файла нет или не читается — undefined. */
+  private async remoteFormat(): Promise<number | undefined> {
+    const text = await this.show(`origin/${this.branch()}`, 'teamwork.yaml');
+    if (text === undefined) return undefined;
+    try {
+      const raw = parseYaml(text) as { format?: unknown } | null;
+      return typeof raw?.format === 'number' && Number.isInteger(raw.format) ? raw.format : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Внутри очереди: правки руками, fetch, слияние, push при push и неотправленных коммитах. Ошибка сети — в local.sync.error
    * и повтор. Событие team — одно на вызов: fetch принёс изменения, коммиты ушли, ошибка синхронизации появилась или
@@ -452,14 +615,19 @@ export class TeamRepo {
    * («…after 3 ms» → «…after 4 ms») события не даёт: иначе событие → GET команды → фоновый pull → новая ошибка → событие.
    */
   private async syncNow(push: boolean): Promise<string[]> {
+    // остановлен или отключён: операция, вставшая в очередь до stop(), клон и local.json не трогает (D-15)
+    if (this.stopped) return [];
     this.busy = true;
     let changed: string[] = [];
     let pushed = false;
     const failedBefore = Boolean(this.local().sync.error);
     try {
+      await this.recover();
       await this.commitManual();
       await this.fetch();
-      changed = await this.integrate();
+      const format = await this.remoteFormat();
+      if (format !== this.local().sync.format) this.saveLocal((l) => (format === undefined ? delete l.sync.format : (l.sync.format = format)));
+      changed = await this.integrate(format !== undefined && format > TEAM_FORMAT);
       if (push && (await this.unpushed()) > 0) {
         await this.git(['push', '-q', '-u', 'origin', `HEAD:refs/heads/${this.branch()}`], NET_TIMEOUT);
         pushed = true;
@@ -497,28 +665,40 @@ export class TeamRepo {
 
   /**
    * Слить origin в клон: ничего нового — пусто; у меня нет своих коммитов — fast-forward; расхождение — rebase, а при его
-   * конфликте откат и перепроигрывание моих коммитов слиянием полей (replay). Возвращает изменившиеся файлы.
+   * конфликте откат и перепроигрывание моих коммитов слиянием полей (replay). Возвращает изменившиеся файлы. Нет общей
+   * истории (репо команды пересоздан или история переписана) — ошибка без replay и push: иначе «моим» стало бы всё дерево
+   * и откатило бы репо команды к моему снимку (D-7). newer — репо команды на формате новее известного: только
+   * fast-forward, без replay, переименований и понижения спринтов (D-8); разошлись — ошибка readonly, мои коммиты ждут.
+   * Мои коммиты поверх их последнего (правка руками в клоне на новом формате) уходят обычным push: их файлы никто не сливал.
    */
-  private async integrate(): Promise<string[]> {
+  private async integrate(newer = false): Promise<string[]> {
     const remoteRef = `origin/${this.branch()}`;
     const remote = await this.rev(remoteRef);
     const head = await this.rev('HEAD');
     if (!remote || !head || remote === head) return [];
     const base = (await this.git(['merge-base', 'HEAD', remoteRef]).catch(() => '')).trim();
+    if (!base) throw new TeamError(409, 'История репо команды переписана: у клона нет с ней общих коммитов. Отключи команду и подключись заново', 'rewritten');
     if (base === remote) return [];
     if (base === head) await this.git(['merge', '-q', '--ff-only', remoteRef]);
     else {
+      if (newer) throw readonlyError();
+      // свой rebase помечен: сбой или выход посреди него следующий recover() откатит, а чужой — нет
+      const marker = path.join(await this.gitDir(), REBASE_MARKER);
+      fs.writeFileSync(marker, String(process.pid));
       try {
         await this.git(['rebase', '-q', remoteRef]);
+        fs.rmSync(marker, { force: true });
       } catch {
         await this.git(['rebase', '--abort']).catch(() => undefined);
-        await this.replay(base || remote, head, remote);
+        // abort не снял состояние rebase — recover() снимет его по маркеру и вернёт HEAD на ветку, иначе ошибка: replay
+        // на отделённом HEAD посреди rebase сдвинул бы не ту ветку
+        await this.recover();
+        await this.replay(base, head, remote);
       }
     }
-    await this.afterIntegrate();
+    if (!newer) await this.afterIntegrate();
     const now = await this.rev('HEAD');
-    const files = (await this.git(['diff', '--name-only', head, now ?? 'HEAD'])).split('\n').filter(Boolean);
-    return files;
+    return (await this.git(['diff', '--name-only', '-z', head, now ?? 'HEAD'])).split('\0').filter(Boolean);
   }
 
   private show(ref: string, file: string): Promise<string | undefined> {
@@ -526,6 +706,47 @@ export class TeamRepo {
       (s) => s,
       () => undefined,
     );
+  }
+
+  /** Дерево коммита целиком: путь → режим и объект. -z — имена с табом и переводом строки как есть, без кавычек. */
+  private async tree(ref: string): Promise<Map<string, TreeEntry>> {
+    const map = new Map<string, TreeEntry>();
+    for (const rec of (await this.git(['ls-tree', '-r', '-z', '--full-tree', ref])).split('\0')) {
+      const tab = rec.indexOf('\t');
+      if (tab < 0) continue;
+      const [mode, , oid] = rec.slice(0, tab).split(' ');
+      map.set(rec.slice(tab + 1), { mode, oid });
+    }
+    return map;
+  }
+
+  /** Изменения a..b: путь → A, M, D или T (смена типа). -z — имена как есть. */
+  private async changes(a: string, b: string): Promise<Map<string, string>> {
+    const parts = (await this.git(['diff', '--name-status', '-z', '--no-renames', a, b])).split('\0');
+    const map = new Map<string, string>();
+    for (let i = 0; i + 1 < parts.length; i += 2) if (parts[i]) map.set(parts[i + 1], parts[i][0]);
+    return map;
+  }
+
+  /** Двоичные среди изменённых a..b: git сам решает по содержимому (--numstat даёт «-»). */
+  private async binaries(a: string, b: string): Promise<Set<string>> {
+    const set = new Set<string>();
+    for (const rec of (await this.git(['diff', '--numstat', '-z', '--no-renames', a, b])).split('\0')) {
+      const m = rec.match(/^(-|\d+)\t(-|\d+)\t([\s\S]+)$/);
+      if (m && m[1] === '-') set.add(m[3]);
+    }
+    return set;
+  }
+
+  /**
+   * Текст объекта git; ошибка чтения — исключение, а не «файла нет» (иначе перепроигрывание удалило бы файл, D-1). Не
+   * UTF-8 (байты не сходятся после декодирования) или больше MAX_MERGE_BYTES — undefined: такой файл как текст не сливается.
+   */
+  private async blobText(oid: string): Promise<string | undefined> {
+    const size = Number((await this.git(['cat-file', '-s', oid])).trim());
+    if (size > MAX_MERGE_BYTES) return undefined;
+    const text = await this.git(['cat-file', 'blob', oid]);
+    return Buffer.byteLength(text) === size && !text.includes('\uFFFD') ? text : undefined;
   }
 
   /** Три текста через git merge-file; конфликт (ненулевой код) — undefined. */
@@ -546,33 +767,32 @@ export class TeamRepo {
     }
   }
 
-  private async nameStatus(a: string, b: string): Promise<Map<string, 'A' | 'M' | 'D'>> {
-    const out = await this.git(['diff', '--name-status', '--no-renames', a, b]);
-    const map = new Map<string, 'A' | 'M' | 'D'>();
-    for (const line of out.split('\n')) {
-      const m = line.match(/^([AMD])\t(.+)$/);
-      if (m) map.set(m[2], m[1] as 'A' | 'M' | 'D');
-    }
-    return map;
-  }
-
   /**
-   * Перепроигрывание моих коммитов base..head поверх remote (spec §7.4): файл менял только я — моё; только они — их;
-   * оба — задача по полям, YAML по полям, текст через merge-file; не слилось — значение команды, моё в конфликты.
-   * Удалено с одной стороны и изменено с другой — остаётся как у команды, моё в конфликт deleted. Задача с тем же
-   * номером с обеих сторон — моя переименовывается в свободный номер (§5.7). Итог — один коммит с темами моих коммитов.
+   * Перепроигрывание моих коммитов base..head поверх remote (spec §7.4): файл менял только я — моя версия байт в байт
+   * (объект git, текст не читается: двоичные, большие, со странными именами и сменившие тип файлы не портятся и не
+   * теряются, D-1); только они — их; оба — задача по полям, YAML по полям, текст через merge-file; двоичный или не UTF-8,
+   * изменённый обоими, — версия команды, моя — в конфликт с blob. Удалено с одной стороны и изменено с другой — как у
+   * команды, моё в конфликт deleted; если команда правила задачу, которую я удалил, остаются и её комментарии, и ссылки
+   * соседей, снятые тем же удалением; мой новый комментарий к задаче, которую удалила команда, — в конфликт deleted (D-5).
+   * Задача с тем же номером с обеих сторон — моя переименовывается в свободный номер (§5.7) вместе с моими комментариями
+   * к ней (D-4) и моими ссылками на неё (D-14). Итог — один коммит с темами моих коммитов, собранный во временном индексе:
+   * HEAD и рабочая копия не трогаются, пока коммит не готов и конфликты не записаны (D-6).
    */
   private async replay(base: string, head: string, remote: string): Promise<void> {
-    const mine = await this.nameStatus(base, head);
-    const theirs = await this.nameStatus(base, remote);
+    const [mine, theirs, baseTree, headTree, remoteTree] = await Promise.all([this.changes(base, head), this.changes(base, remote), this.tree(base), this.tree(head), this.tree(remote)]);
+    const binary = new Set([...(await this.binaries(base, head)), ...(await this.binaries(base, remote))]);
     const subjects = (await this.git(['log', '--reverse', '--format=%s', `${remote}..${head}`])).split('\n').filter(Boolean);
     const at = this.deps.now().toISOString();
-    const results = new Map<string, string | null>();
+    const out = new Map<string, ReplayOut>();
     const conflicts: TeamConflict[] = [];
-    const renames = new Map<string, string>();
     const theirAuthor = async (file: string) => (await this.git(['log', '-1', '--format=%ae', remote, '--', file]).catch(() => '')).trim() || undefined;
-    const conflict = async (file: string, kind: TeamConflict['kind'], ours: unknown, theirsV: unknown, field?: string): Promise<void> => {
-      const m = file.match(TASK_FILE_RE);
+    const isText = (file: string, ...es: (TreeEntry | undefined)[]) => !binary.has(file) && es.every((e) => !e || REGULAR_MODES.has(e.mode));
+    const textAt = async (t: Map<string, TreeEntry>, file: string) => {
+      const e = t.get(file);
+      return e ? this.blobText(e.oid) : undefined;
+    };
+    const conflict = async (file: string, kind: TeamConflict['kind'], ours: unknown, theirsV: unknown, o: { field?: string; blob?: string } = {}): Promise<void> => {
+      const m = file.match(TASK_FILE_RE) ?? file.match(COMMENT_FILE_RE);
       const project = file.match(PROJECT_FILE_RE)?.[1];
       const doc = file.match(/^projects\/[^/]+\/(prd|architecture|design)\.md$/)?.[1] ?? (file.match(/^projects\/[^/]+\/(docs\/[^/]+\.md)$/)?.[1] as TeamDocName | undefined);
       const by = await theirAuthor(file);
@@ -583,110 +803,237 @@ export class TeamRepo {
         ...(m ? { task: m[2] } : {}),
         ...(doc ? { doc: doc as TeamDocName } : {}),
         kind,
-        ...(field ? { field } : {}),
+        ...(o.field ? { field: o.field } : {}),
         ours,
         theirs: theirsV,
+        ...(o.blob ? { blob: o.blob } : {}),
         ...(by ? { theirsBy: by } : {}),
         at,
       });
     };
-    const fieldConflicts = (file: string, list: FieldConflict[], kind: TeamConflict['kind'] = 'field') => Promise.all(list.map((c) => conflict(file, c.field === 'body' || c.field === 'text' ? 'text' : kind, c.ours, c.theirs, c.field)));
+    /** Сторона конфликта по объекту: текст или, у двоичного, подпись и blob моей версии для «взять моё». */
+    const side = async (file: string, e: TreeEntry | undefined): Promise<{ value: unknown; blob?: string }> => {
+      if (!e) return { value: null };
+      // подмодуль (вложенный репо, добавленный add -A): его коммита в этом репо нет
+      if (e.mode === '160000') return { value: `подмодуль ${e.oid}` };
+      const text = isText(file, e) ? await this.blobText(e.oid) : undefined;
+      if (text !== undefined) return { value: text };
+      const size = Number((await this.git(['cat-file', '-s', e.oid])).trim());
+      return { value: `двоичный файл, ${size} Б`, blob: e.oid };
+    };
+    const entryConflict = async (file: string, kind: TeamConflict['kind'], h: TreeEntry | undefined, r: TreeEntry | undefined) => {
+      const [m, t] = await Promise.all([side(file, h), side(file, r)]);
+      await conflict(file, kind, m.value, t.value, m.blob ? { blob: m.blob } : {});
+    };
+    // поля спринта — обычные поля с «взять моё»; kind sprint — только у двух активных спринтов (D-13)
+    const fieldConflicts = (file: string, list: FieldConflict[]) =>
+      Promise.all(list.map((c) => conflict(file, c.field === 'body' || c.field === 'text' ? 'text' : 'field', c.ours, c.theirs, { field: c.field })));
     // номера задач сквозные по команде (§5.7): занятые — в дереве команды (любой проект) и в моём, чтобы свободный номер
-    // не совпал и с моей же новой задачей
-    const idsIn = async (ref: string) => new Set((await this.git(['ls-tree', '-r', '--name-only', ref])).split('\n').map((n) => n.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x)));
-    const remoteIds = await idsIn(remote);
-    // свободный номер — и за последним выданным с обеих сторон (lastTask): номер удалённой задачи не возвращается
-    const last = Math.max(lastTaskOf(await this.show(remote, 'teamwork.yaml')), lastTaskOf(await this.show(head, 'teamwork.yaml')));
-    let knownIds: Set<string> | undefined;
-    const allKnownIds = async () => (knownIds ??= new Set([...remoteIds, ...(await idsIn(head))]));
+    // не совпал и с моей же новой задачей; и за последним выданным с обеих сторон (lastTask)
+    const idsIn = (t: Map<string, TreeEntry>) => new Set([...t.keys()].map((f) => f.match(TASK_FILE_RE)?.[2]).filter((x): x is string => Boolean(x)));
+    const remoteIds = idsIn(remoteTree);
+    const knownIds = new Set([...remoteIds, ...idsIn(headTree)]);
+    const last = Math.max(lastTaskOf(await textAt(remoteTree, 'teamwork.yaml')), lastTaskOf(await textAt(headTree, 'teamwork.yaml')));
+    // моя новая задача с номером, уже занятым в репо команды (тем же путём или в другом проекте), получает свободный
+    // номер: её ещё никто не видел
+    const renames = new Map<string, { to: string; slug: string }>();
     for (const [file, st] of mine) {
+      const m = file.match(TASK_FILE_RE);
+      if (!m || st !== 'A' || !remoteIds.has(m[2]) || remoteTree.get(file)?.oid === headTree.get(file)?.oid) continue;
+      const to = nextTaskId(knownIds, m[2].split('-')[0], last);
+      knownIds.add(to);
+      renames.set(m[2], { to, slug: m[1] });
+      subjects.push(`${m[2]} → ${to}: номер уже занят`);
+    }
+    for (const [file, st] of mine) {
+      const h = st === 'D' ? undefined : headTree.get(file);
+      const tm = file.match(TASK_FILE_RE);
+      const rn = tm && st === 'A' ? renames.get(tm[2]) : undefined;
+      if (tm && rn && h) {
+        const newFile = `projects/${tm[1]}/tasks/${rn.to}.md`;
+        const text = await this.blobText(h.oid);
+        if (text === undefined) out.set(newFile, h);
+        else {
+          const t = parseTask(text, file);
+          out.set(newFile, { text: t.error ? text.replace(new RegExp(`^id: ${tm[2]}$`, 'm'), `id: ${rn.to}`) : serializeTask({ ...t, id: rn.to, file: newFile }), mode: h.mode });
+        }
+        continue;
+      }
+      // мои комментарии к своей переименованной задаче — за ней (D-4)
+      const cm = file.match(COMMENT_FILE_RE);
+      const crn = cm && st === 'A' ? renames.get(cm[2]) : undefined;
+      if (cm && crn && crn.slug === cm[1] && h) {
+        out.set(`projects/${cm[1]}/comments/${crn.to}/${cm[3]}`, h);
+        continue;
+      }
       const ts = theirs.get(file);
-      const mineText = st === 'D' ? undefined : await this.show(head, file);
-      const task = file.match(TASK_FILE_RE);
-      if (task && st === 'A' && mineText !== undefined && remoteIds.has(task[2]) && mineText !== (ts ? await this.show(remote, file) : undefined)) {
-        // мой номер уже занят в репо команды (тем же путём или задачей другого проекта): моя задача получает свободный
-        // номер, её ещё никто не видел
-        const prefix = task[2].split('-')[0];
-        const ids = await allKnownIds();
-        const fresh = nextTaskId(ids, prefix, last);
-        ids.add(fresh);
-        renames.set(task[2], fresh);
-        const t = parseTask(mineText, file);
-        const newFile = `projects/${task[1]}/tasks/${fresh}.md`;
-        results.set(newFile, t.error ? mineText.replace(new RegExp(`^id: ${task[2]}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
-        subjects.push(`${task[2]} → ${fresh}: номер уже занят`);
-        continue;
-      }
       if (!ts) {
-        results.set(file, mineText ?? null);
+        out.set(file, h ?? null);
         continue;
       }
-      const theirText = ts === 'D' ? undefined : await this.show(remote, file);
-      const baseText = st === 'A' ? undefined : await this.show(base, file);
-      if (mineText === undefined || theirText === undefined) {
-        if (mineText === undefined && theirText === undefined) continue;
-        await conflict(file, 'deleted', mineText ?? null, theirText ?? null);
+      const r = ts === 'D' ? undefined : remoteTree.get(file);
+      if (!h || !r) {
+        if (h || r) await entryConflict(file, 'deleted', h, r);
         continue;
       }
-      if (mineText === theirText) continue;
-      if (task) {
-        const r = await mergeTaskTexts(baseText, mineText, theirText, file, (b, m, t) => this.mergeText(b, m, t));
-        results.set(file, r.text);
-        await fieldConflicts(file, r.conflicts);
+      if (h.oid === r.oid) {
+        // содержимое то же, разошёлся только режим (исполняемый, тип): менял его я — мой, иначе команды
+        if (h.mode !== r.mode && baseTree.get(file)?.mode === r.mode) out.set(file, h);
+        continue;
+      }
+      const b = st === 'A' ? undefined : baseTree.get(file);
+      const texts = isText(file, b, h, r) ? await Promise.all([b ? this.blobText(b.oid) : Promise.resolve(''), this.blobText(h.oid), this.blobText(r.oid)]) : undefined;
+      if (!texts || texts.some((x) => x === undefined)) {
+        // двоичный (или не UTF-8) и изменён обоими: в репо — версия команды, моя — blob в конфликте
+        await entryConflict(file, 'text', h, r);
+        continue;
+      }
+      const [baseText, mineText, theirText] = texts as string[];
+      if (tm) {
+        const res = await mergeTaskTexts(b ? baseText : undefined, mineText, theirText, file, (x, y, z) => this.mergeText(x, y, z));
+        out.set(file, { text: res.text, mode: r.mode });
+        await fieldConflicts(file, res.conflicts);
       } else if (/\.ya?ml$/.test(file)) {
-        const r = mergeYamlTexts(baseText, mineText, theirText);
-        results.set(file, r.text);
-        await fieldConflicts(file, r.conflicts, /\/sprints\//.test(file) ? 'sprint' : 'field');
+        const res = mergeYamlTexts(b ? baseText : undefined, mineText, theirText);
+        out.set(file, { text: res.text, mode: r.mode });
+        await fieldConflicts(file, res.conflicts);
       } else {
-        const merged = await this.mergeText(baseText ?? '', mineText, theirText);
-        if (merged !== undefined) results.set(file, merged);
+        const merged = await this.mergeText(baseText, mineText, theirText);
+        if (merged !== undefined) out.set(file, { text: merged, mode: r.mode });
         else await conflict(file, 'text', mineText, theirText);
       }
     }
-    // ссылки blockedBy моих же неотправленных задач на переименованный номер
-    if (renames.size) {
-      for (const [file, text] of results) {
-        if (text === null || !TASK_FILE_RE.test(file)) continue;
+    // задача, которую я удалил, а команда правила, остаётся (конфликт deleted): её комментарии, удалённые тем же моим
+    // удалением, тоже остаются (D-5)
+    const revived = new Set(
+      conflicts.flatMap((c) => {
+        const m = c.kind === 'deleted' && c.ours === null ? c.file.match(TASK_FILE_RE) : null;
+        return m ? [`${m[1]}/${m[2]}`] : [];
+      }),
+    );
+    for (const [file, o] of [...out]) {
+      const cm = file.match(COMMENT_FILE_RE);
+      if (cm && o === null && revived.has(`${cm[1]}/${cm[2]}`)) out.delete(file);
+    }
+    if (renames.size || revived.size) {
+      const blocked = async (t: Map<string, TreeEntry>, file: string) => {
+        const text = await textAt(t, file);
+        const x = text === undefined ? undefined : parseTask(text, file);
+        return x && !x.error ? x.blockedBy : [];
+      };
+      for (const [file, o] of [...out]) {
+        const tm = file.match(TASK_FILE_RE);
+        if (!tm || o === null) continue;
+        const text = 'text' in o ? o.text : await this.blobText(o.oid);
+        if (text === undefined) continue;
         const t = parseTask(text, file);
-        if (t.error || !t.blockedBy.some((b) => renames.has(b))) continue;
-        results.set(file, serializeTask({ ...t, blockedBy: t.blockedBy.map((b) => renames.get(b) ?? b) }));
+        if (t.error) continue;
+        const [inBase, inTheirs] = await Promise.all([blocked(baseTree, file), blocked(remoteTree, file)]);
+        // моя ссылка на свою переименованную задачу (её нет ни в базе, ни у команды) идёт за новым номером (D-14)
+        let next = t.blockedBy.map((x) => (renames.has(x) && !inBase.includes(x) && !inTheirs.includes(x) ? renames.get(x)!.to : x));
+        // ссылка на задачу, которую команда оставила: была в базе и у команды, снял её мой коммит удаления (D-5)
+        for (const x of inBase) if (revived.has(`${tm[1]}/${x}`) && inTheirs.includes(x) && !next.includes(x)) next = [...next, x];
+        if (next.join('\n') !== t.blockedBy.join('\n')) out.set(file, { text: updateTaskText(text, { blockedBy: next }), mode: o.mode });
       }
     }
-    await this.git(['reset', '-q', '--hard', remote]);
-    for (const [file, text] of results) {
-      if (text === null) this.remove(file);
-      else this.writeFile(file, text);
+    // мой новый комментарий к задаче, которую команда удалила, — в конфликт deleted, а не сиротой в репо (D-5)
+    for (const [file, o] of [...out]) {
+      const cm = file.match(COMMENT_FILE_RE);
+      if (!cm || o === null || 'text' in o || mine.get(file) !== 'A') continue;
+      const taskFile = `projects/${cm[1]}/tasks/${cm[2]}.md`;
+      if (!baseTree.has(taskFile) || theirs.get(taskFile) !== 'D' || out.get(taskFile)) continue;
+      out.delete(file);
+      await entryConflict(file, 'deleted', o, undefined);
     }
-    await this.git(['add', '-A']);
-    const staged = (await this.git(['diff', '--cached', '--name-only'])).trim();
-    if (staged) {
+    // файл и папка с одним путём (у меня a стала папкой a/b, а у команды a осталась файлом): такое дерево не собрать —
+    // моё в конфликт, а не ошибка синхронизации на каждом повторе
+    const parents = (f: string) => f.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'));
+    const files = new Set(remoteTree.keys());
+    for (const [f, o] of out) {
+      if (o === null) files.delete(f);
+      else files.add(f);
+    }
+    const folders = new Set([...files].flatMap(parents));
+    for (const [file, o] of [...out]) {
+      if (o === null || !(folders.has(file) || parents(file).some((d) => files.has(d)))) continue;
+      out.delete(file);
+      files.delete(file);
+      if ('text' in o) await conflict(file, 'deleted', o.text, null);
+      else await entryConflict(file, 'deleted', o, undefined);
+    }
+    const commit = await this.replayCommit(remote, out, subjects);
+    // конфликты и переезд работы — до сдвига ветки: сбой после них повторит перепроигрывание, а повтор конфликты не задвоит
+    const known = this.local().conflicts;
+    const fresh = conflicts.filter((c) => !known.some((x) => sameConflict(x, c)));
+    for (const c of fresh) if (c.blob) await this.git(['update-ref', `${CONFLICT_REF}${c.id}`, c.blob]);
+    if (fresh.length || renames.size) {
+      this.saveLocal((l) => {
+        l.conflicts.push(...fresh);
+        for (const [from, { to }] of renames) moveWork(l, from, to);
+      });
+    }
+    await this.git(['reset', '-q', '--hard', commit]);
+  }
+
+  /**
+   * Коммит поверх parent из итога перепроигрывания во временном индексе (GIT_INDEX_FILE): объекты — как есть, тексты —
+   * hash-object, удалённые — force-remove. HEAD, индекс клона и рабочая копия не трогаются; дерево не изменилось — parent.
+   */
+  private async replayCommit(parent: string, out: Map<string, ReplayOut>, subjects: string[]): Promise<string> {
+    const tmp = fs.mkdtempSync(path.join(this.deps.tmpDir, 'agentgraph-replay-'));
+    const env = { GIT_INDEX_FILE: path.join(tmp, 'index') };
+    try {
+      await this.git(['read-tree', parent], GIT_TIMEOUT, env);
+      const remove: string[] = [];
+      const add: string[] = [];
+      let n = 0;
+      for (const [file, o] of out) {
+        if (o === null) {
+          remove.push(file);
+          continue;
+        }
+        let oid = 'oid' in o ? o.oid : '';
+        if ('text' in o) {
+          const f = path.join(tmp, `blob-${n++}`);
+          fs.writeFileSync(f, o.text);
+          oid = (await this.git(['hash-object', '-w', '--no-filters', '--', f])).trim();
+        }
+        add.push('--cacheinfo', o.mode, oid, file);
+      }
+      for (let i = 0; i < remove.length; i += 200) await this.git(['update-index', '--force-remove', '--', ...remove.slice(i, i + 200)], GIT_TIMEOUT, env);
+      for (let i = 0; i < add.length; i += 800) await this.git(['update-index', '--add', ...add.slice(i, i + 800)], GIT_TIMEOUT, env);
+      const tree = (await this.git(['write-tree'], GIT_TIMEOUT, env)).trim();
+      if (tree === (await this.git(['rev-parse', `${parent}^{tree}`])).trim()) return parent;
       const subject = subjects.length === 1 ? subjects[0] : `Слияние с командой: ${subjects.length} изменений`;
       const body = subjects.length > 1 ? subjects.map((s) => `- ${s}`).join('\n') : '';
-      await this.git(['commit', '-q', '--no-verify', '-m', subject, ...(body ? ['-m', body] : [])]);
-    }
-    if (conflicts.length || renames.size) {
-      this.saveLocal((l) => {
-        l.conflicts.push(...conflicts);
-        for (const [from, to] of renames) {
-          if (l.work[from]) {
-            l.work[to] = [...(l.work[to] ?? []), ...l.work[from]];
-            delete l.work[from];
-          }
-        }
-      });
+      // commit-tree сам commit.gpgSign не читает, а git commit читает: подпись — как у остальных коммитов клона
+      const sign = (await this.git(['config', '--bool', '--get', 'commit.gpgsign']).catch(() => '')).trim() === 'true';
+      return (await this.git(['commit-tree', ...(sign ? ['-S'] : []), tree, '-p', parent, '-m', subject, ...(body ? ['-m', body] : [])])).trim();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 
-  /** После слияния: совпавшие номера задач между проектами (§5.7) и два активных спринта (§7.4.4). */
+  /**
+   * После слияния: совпавшие номера задач между проектами (§5.7), два активных спринта (§7.4.4), незавершённые задачи
+   * закрытых спринтов (D-17).
+   */
   private async afterIntegrate(): Promise<void> {
     await this.renameDuplicateIds();
     await this.demoteSecondSprint();
+    await this.returnFromClosedSprints();
+  }
+
+  /** Пути, которые различаются между a и b, с фильтром git (A, AM…); -z — имена как есть. */
+  private async diffNames(a: string, b: string, filter: string): Promise<Set<string>> {
+    return new Set((await this.git(['diff', '--name-only', '-z', `--diff-filter=${filter}`, a, b])).split('\0').filter(Boolean));
   }
 
   /**
    * После слияния своя неотправленная задача получает свободный номер (§5.7), если её номер уже занят в команде: задачей
    * другого проекта (после чистого rebase; общий путь дал бы конфликт и переименование в replay) или выдан там и удалён —
-   * файла у команды нет, но её lastTask этот номер помнит. Мою задачу ещё никто не видел, ссылок на неё нет.
+   * файла у команды нет, но её lastTask этот номер помнит. Мою задачу ещё никто не видел: за ней переезжают мои
+   * комментарии к ней (D-4) и мои ссылки на неё в моих новых и изменённых задачах, которых нет у команды (D-14).
    */
   private async renameDuplicateIds(): Promise<void> {
     const byId = new Map<string, string[]>();
@@ -703,7 +1050,8 @@ export class TeamRepo {
     const teamLast = hasRemote ? lastTaskOf(await this.show(remoteRef, 'teamwork.yaml')) : 0;
     const dups = [...byId].filter(([, files]) => files.length > 1);
     if (!dups.length && !teamLast) return;
-    const mineAdded = new Set((await this.git(['diff', '--name-only', '--diff-filter=A', ...(hasRemote ? [remoteRef, 'HEAD'] : [await this.emptyTree(), 'HEAD'])])).split('\n').filter(Boolean));
+    const since = hasRemote ? remoteRef : await this.emptyTree();
+    const mineAdded = await this.diffNames(since, 'HEAD', 'A');
     const ids = new Set(byId.keys());
     const last = Math.max(lastTaskOf(this.read('teamwork.yaml')), teamLast);
     const wanted: { id: string; file: string; why: string }[] = [];
@@ -727,26 +1075,67 @@ export class TeamRepo {
       const t = parseTask(text, file);
       this.writeFile(newFile, t.error ? text.replace(new RegExp(`^id: ${id}$`, 'm'), `id: ${fresh}`) : serializeTask({ ...t, id: fresh, file: newFile }));
       this.remove(file);
+      const dir = `projects/${slug}/comments/${id}`;
+      for (const name of this.list(dir)) {
+        if (!mineAdded.has(`${dir}/${name}`)) continue;
+        const to = this.abs(`projects/${slug}/comments/${fresh}/${name}`);
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.renameSync(this.abs(`${dir}/${name}`), to);
+      }
+      // пустая папка старого номера не нужна (git её и так не хранит)
+      if (!fs.existsSync(this.abs(dir)) || !fs.readdirSync(this.abs(dir)).length) this.remove(dir);
       renames.set(id, fresh);
       subjects.push(`${id} → ${fresh}: ${why}`);
     }
     if (!renames.size) return;
-    for (const file of mineAdded) {
+    for (const file of await this.diffNames(since, 'HEAD', 'AM')) {
       if (!TASK_FILE_RE.test(file) || !this.exists(file)) continue;
-      const t = parseTask(this.read(file) ?? '', file);
+      const text = this.read(file) ?? '';
+      const t = parseTask(text, file);
       if (t.error || !t.blockedBy.some((b) => renames.has(b))) continue;
-      this.writeFile(file, serializeTask({ ...t, blockedBy: t.blockedBy.map((b) => renames.get(b) ?? b) }));
+      const theirsText = hasRemote ? await this.show(remoteRef, file) : undefined;
+      const theirs = theirsText === undefined ? undefined : parseTask(theirsText, file);
+      const theirsBlocked = theirs && !theirs.error ? theirs.blockedBy : [];
+      const next = t.blockedBy.map((b) => (renames.has(b) && !theirsBlocked.includes(b) ? renames.get(b)! : b));
+      if (next.join('\n') !== t.blockedBy.join('\n')) this.writeFile(file, updateTaskText(text, { blockedBy: next }));
     }
     await this.git(['add', '-A']);
     await this.git(['commit', '-q', '--no-verify', '-m', subjects.length === 1 ? subjects[0] : 'Номера задач заняты', ...(subjects.length > 1 ? ['-m', subjects.map((x) => `- ${x}`).join('\n')] : [])]);
     this.saveLocal((l) => {
-      for (const [from, to] of renames) {
-        if (l.work[from]) {
-          l.work[to] = [...(l.work[to] ?? []), ...l.work[from]];
-          delete l.work[from];
+      for (const [from, to] of renames) moveWork(l, from, to);
+    });
+  }
+
+  /**
+   * Незавершённая задача в закрытом спринте не видна ни в бэклоге, ни на доске: так бывает, когда закрытие спринта
+   * разошлось с одновременным переносом задачи в него. После слияния она возвращается в бэклог (D-17). Снимается только
+   * поле sprint, без updatedAt: правка одинакова на всех клонах и конфликтов не даёт.
+   */
+  private async returnFromClosedSprints(): Promise<void> {
+    const moved: string[] = [];
+    for (const slug of this.dirs('projects')) {
+      const closed = new Set<number>();
+      for (const name of this.list(`projects/${slug}/sprints`, (n) => /^\d+\.ya?ml$/.test(n))) {
+        try {
+          const s = parseSprint(this.read(`projects/${slug}/sprints/${name}`) ?? '', Number(name.split('.')[0]));
+          if (s.status === 'closed') closed.add(s.number);
+        } catch {
+          // битый спринт пропускаем: его покажет экран
         }
       }
-    });
+      if (!closed.size) continue;
+      for (const name of this.list(`projects/${slug}/tasks`, (n) => /\.md$/i.test(n))) {
+        const file = `projects/${slug}/tasks/${name}`;
+        const text = this.read(file) ?? '';
+        const t = parseTask(text, file);
+        if (t.error || t.sprint === undefined || !closed.has(t.sprint) || t.status === 'done') continue;
+        this.writeFile(file, updateTaskText(text, { sprint: undefined }));
+        moved.push(`${t.id}: в бэклог — спринт ${t.sprint} закрыт`);
+      }
+    }
+    if (!moved.length) return;
+    await this.git(['add', '-A']);
+    await this.git(['commit', '-q', '--no-verify', '-m', moved.length === 1 ? moved[0] : 'Задачи закрытых спринтов — в бэклог', ...(moved.length > 1 ? ['-m', moved.map((x) => `- ${x}`).join('\n')] : [])]);
   }
 
   private emptyTree(): Promise<string> {
@@ -790,18 +1179,23 @@ export class TeamRepo {
     if (conflicts.length) this.saveLocal((l) => l.conflicts.push(...conflicts));
   }
 
-  /** Локальные коммиты, которых нет в репо команды. Нет origin-ветки (пустой репо до первого push) — все коммиты. */
+  /**
+   * Что не ушло в репо команды: коммиты HEAD и ветки (клон мог остаться посреди rebase с отделённым HEAD, а мои коммиты —
+   * только на ветке, D-2), которых нет в origin. Нет origin-ветки (пустой репо до первого push) — все коммиты.
+   */
+  private async unpushedRange(): Promise<string[]> {
+    const branch = this.branch();
+    const tips = ['HEAD', ...((await this.rev(`refs/heads/${branch}`)) ? [`refs/heads/${branch}`] : [])];
+    return (await this.rev(`origin/${branch}`)) ? [...tips, '--not', `origin/${branch}`] : tips;
+  }
+
   async unpushed(): Promise<number> {
-    const remoteRef = `origin/${this.branch()}`;
-    const range = (await this.rev(remoteRef)) ? `${remoteRef}..HEAD` : 'HEAD';
-    const n = (await this.git(['rev-list', '--count', range]).catch(() => '0')).trim();
+    const n = (await this.git(['rev-list', '--count', ...(await this.unpushedRange())]).catch(() => '0')).trim();
     return Number(n) || 0;
   }
 
   async unpushedSubjects(): Promise<string[]> {
-    const remoteRef = `origin/${this.branch()}`;
-    const range = (await this.rev(remoteRef)) ? `${remoteRef}..HEAD` : 'HEAD';
-    return (await this.git(['log', '--format=%s', range]).catch(() => '')).split('\n').filter(Boolean);
+    return (await this.git(['log', '--format=%s', ...(await this.unpushedRange())]).catch(() => '')).split('\n').filter(Boolean);
   }
 
   async syncState(): Promise<TeamSync> {
@@ -832,10 +1226,26 @@ export class TeamRepo {
       });
   }
 
+  /**
+   * Версия файла клона с этим хэшем текста (textHash) — сейчас или в одном из последних коммитов по нему: base, с которым
+   * клиент открыл форму настроек или проекта (D-10). Не нашлась — undefined.
+   */
+  async versionByHash(rel: string, hash: string, limit = 50): Promise<string | undefined> {
+    const now = this.read(rel);
+    if (now !== undefined && textHash(now) === hash) return now;
+    const commits = (await this.git(['log', `-n${limit}`, '--format=%H', '--', rel]).catch(() => '')).split('\n').filter(Boolean);
+    for (const c of commits) {
+      const text = await this.show(c, rel);
+      if (text !== undefined && textHash(text) === hash) return text;
+    }
+    return undefined;
+  }
+
   // ---------- таймеры (spec §7.3)
 
   startTimers(hasSubscribers: () => boolean): void {
     this.hasSubscribers = hasSubscribers;
+    this.timersOn = true;
     this.schedulePoll();
   }
 
@@ -851,8 +1261,17 @@ export class TeamRepo {
     this.pollTimer.unref();
   }
 
-  /** Остановить таймеры и дождаться текущей операции; дальше клон только читается. */
+  /**
+   * Остановить таймеры и дождаться текущей операции; дальше клон только читается: запись отвечает 409 busy, отправка и
+   * получение, вставшие в очередь, ничего не делают (D-15).
+   */
   async stop(): Promise<void> {
+    this.closed = true;
+    await this.halt();
+  }
+
+  /** Таймеры сняты, очередь дождалась; closed не ставится — отключение после отказа возвращает клон в работу. */
+  private async halt(): Promise<void> {
     this.stopped = true;
     if (this.pushTimer) clearTimeout(this.pushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
@@ -861,13 +1280,28 @@ export class TeamRepo {
     await this.chain.catch(() => undefined);
   }
 
-  /** Отключить команду: удалить клон. С неотправленными изменениями без force — 409 unpushed со списком (spec §8.2). */
+  /**
+   * Отключить команду: удалить клон (spec §8.2). Сначала остановка и ожидание очереди — считать неотправленное, пока идёт
+   * запись или отправка, нельзя (D-11). Неотправленные коммиты или нерешённые конфликты (мои версии в local.json пропадут
+   * вместе с ним) без force — 409 unpushed со списком, клон снова работает: таймеры и отложенная отправка возвращаются.
+   */
   async disconnect(force: boolean): Promise<void> {
+    await this.halt();
     const unpushed = await this.unpushed();
-    if (unpushed && !force) {
-      throw new TeamError(409, `Не отправлено: ${unpushed} изменений. Они пропадут вместе с клоном.`, 'unpushed', { unpushed, commits: await this.unpushedSubjects() });
+    // «два активных спринта» (sprint без поля) — сообщение без моей версии: терять в нём нечего
+    const conflicts = this.local().conflicts.filter((c) => !(c.kind === 'sprint' && !c.field)).length;
+    if ((unpushed || conflicts) && !force) {
+      const commits = await this.unpushedSubjects();
+      // сервис команд за это время остановился (выход): клон остаётся остановленным
+      if (!this.closed) {
+        this.stopped = false;
+        if (this.timersOn) this.schedulePoll();
+        if (unpushed) this.schedulePush();
+      }
+      const what = [unpushed ? `не отправлено: ${unpushed} изменений` : '', conflicts ? `нерешённых конфликтов: ${conflicts}` : ''].filter(Boolean).join('; ');
+      throw new TeamError(409, `${what[0].toUpperCase()}${what.slice(1)}. Они пропадут вместе с клоном.`, 'unpushed', { unpushed, commits, conflicts });
     }
-    await this.stop();
+    this.removed = true;
     fs.rmSync(this.dir, { recursive: true, force: true });
   }
 }
@@ -907,7 +1341,7 @@ export async function checkRemote(url: string, deps: RepoDeps = defaultRepoDeps(
   try {
     heads = await remoteHeads(u, deps.exec);
   } catch (err) {
-    return { kind: 'error', error: errMsg(err) };
+    return { kind: 'error', error: scrub(errMsg(err)) };
   }
   if (!heads.length) return { kind: 'empty' };
   const branch = pickBranch(heads)!;
@@ -934,7 +1368,7 @@ export async function checkRemote(url: string, deps: RepoDeps = defaultRepoDeps(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return { kind: 'not_empty' };
-    return { kind: 'error', error: errMsg(err) };
+    return { kind: 'error', error: scrub(errMsg(err)) };
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -987,6 +1421,8 @@ export async function createTeam(req: CreateTeamRequest, deps: RepoDeps = defaul
     const me = await repo.requireIdentity();
     await repo.git(['symbolic-ref', 'HEAD', 'refs/heads/main']);
     if (!copyTemplate(repo.repoDir, deps.templateDir).includes('teamwork.yaml')) throw new TeamError(500, `Шаблон репо команды не найден: ${deps.templateDir}`);
+    // .gitignore — кодом, а не файлом шаблона: electron-builder не кладёт .gitignore в сборку приложения
+    if (!repo.exists('.gitignore')) repo.writeFile('.gitignore', `${OS_JUNK.join('\n')}\n`);
     const member: TeamMember = { name: me.name, email: me.email };
     repo.writeFile('teamwork.yaml', renderTeamConfig(repo.read('teamwork.yaml')!, { title, prefix, member }));
     await repo.git(['add', '-A']);
@@ -1002,7 +1438,7 @@ export async function createTeam(req: CreateTeamRequest, deps: RepoDeps = defaul
     });
   } catch (err) {
     fs.rmSync(dir, { recursive: true, force: true });
-    throw err instanceof TeamError ? err : new TeamError(400, `Не удалось создать команду: ${errMsg(err)}`);
+    throw err instanceof TeamError ? err : new TeamError(400, `Не удалось создать команду: ${scrub(errMsg(err))}`);
   }
   return repo;
 }
@@ -1046,8 +1482,10 @@ export async function joinTeam(req: JoinTeamRequest, deps: RepoDeps = defaultRep
       const me = await repo.requireIdentity();
       if (!cfg.members.some((m) => m.email === me.email)) {
         await repo.write(`Участник добавлен: ${me.name}`, (r) => {
-          const fresh = parseTeamConfig(r.read('teamwork.yaml') ?? '');
-          r.writeFile('teamwork.yaml', updateYaml(r.read('teamwork.yaml') ?? '', { members: [...fresh.members, { name: me.name, email: me.email }] }));
+          // участники как в файле, с их неизвестными полями (spec §5.9, D-9): я — в конец списка
+          const text = r.read('teamwork.yaml') ?? '';
+          const raw = (parseYaml(text) as { members?: unknown } | null)?.members;
+          r.writeFile('teamwork.yaml', updateYaml(text, { members: [...(Array.isArray(raw) ? raw : []), { name: me.name, email: me.email }] }));
         });
         added = true;
         await repo.push().catch(() => undefined);
@@ -1057,6 +1495,6 @@ export async function joinTeam(req: JoinTeamRequest, deps: RepoDeps = defaultRep
   } catch (err) {
     await repo.stop();
     fs.rmSync(dir, { recursive: true, force: true });
-    throw err instanceof TeamError ? err : new TeamError(400, `Не удалось подключиться: ${errMsg(err)}`);
+    throw err instanceof TeamError ? err : new TeamError(400, `Не удалось подключиться: ${scrub(errMsg(err))}`);
   }
 }

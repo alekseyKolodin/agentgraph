@@ -7,21 +7,22 @@
 // добавляет сессия work волны 2 — их маршруты не заняты. Репо кода добавляется выбором моей папки: POST …/repo-info читает её
 // origin и ветку по умолчанию из git, а папка (repos[].local в create/update проекта) хранится только в local.json → repoPaths.
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { parseFlow } from './flows.js';
 import { defaultBranch, exec, originUrl, parseRemote, repoRoot, type Exec } from './git.js';
 import { describeProjects } from './projects.js';
 import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
 import type { TeamDrafts } from './teamwork-drafts.js';
-import { PROJECT_TEMPLATE_DIR, projectDocs, TEMPLATE_DIR } from './teamwork-template.js';
-import { checkRemote, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
+import { PROJECT_DOC_FILES, PROJECT_TEMPLATE_DIR, projectDocs, renderDoc, TEMPLATE_DIR } from './teamwork-template.js';
+import { checkRemote, COMMENT_FILE_RE, CONFLICT_REF, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import {
   commentFileName, composeTask, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextTaskId, parseComment,
   parseProject, parseRequirements, parseSprint, parseTask, PROJECT_STATUSES, rankNear, remoteProblem, replaceSection, shareableUrl, requirementMax, sectionHash, serializeComment,
   serializeProject, serializeSprint, serializeTask, sortTasks, splitSections, sprintSummary, sprintView, TASK_ID_RE, TASK_STATUSES, TASK_TYPES, taskChangeMessage,
   taskFrontmatter, taskView, TEAM_SLUG_RE, teamsDir, textHash, updateYaml, type ProjectConfig, type ProjectRepo, type SprintFile, type TaskFile, type TeamConfig,
 } from './teamwork.js';
-import { addedRequirementRepeats, compareTasks, validRank, type RequirementKind } from './teamwork.js';
+import { addedRequirementRepeats, compareTasks, mergeField, mergeFieldMine, placeRank, TASK_BRANCH_RE, updateTaskText, validRank, type RequirementKind } from './teamwork.js';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
   TeamMine, TeamMineProject, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
@@ -92,6 +93,36 @@ const strArr = (v: unknown, field: string): string[] => {
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/i;
 const DOC_UPDATED: Record<string, string> = { prd: 'ТЗ обновлено', architecture: 'архитектура обновлена', design: 'дизайн обновлён' };
 
+/** YAML-файл как объект для слияния полей и правки элементов по месту; не объект или не разбирается — пустой. */
+function rawYaml(text: string): Record<string, unknown> {
+  try {
+    const v: unknown = parseYaml(text);
+    return isRecord(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Элемент списка из файла по ключу (участник по email, репо кода по key) — со всеми его полями, в том числе неизвестными. */
+function elementBy(list: unknown, key: 'email' | 'key', id: string): Record<string, unknown> | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const norm = (v: string) => (key === 'email' ? v.trim().toLowerCase() : v.trim());
+  return list.find((x): x is Record<string, unknown> => isRecord(x) && typeof x[key] === 'string' && norm(x[key] as string) === norm(id));
+}
+
+/**
+ * Известные поля из запроса поверх элемента из файла (spec §5.9, D-9): неизвестные поля элемента остаются на своих местах,
+ * известное поле, которого нет в запросе, снимается.
+ */
+function overlay(from: Record<string, unknown> | undefined, value: Record<string, unknown>, known: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...(from ?? {}) };
+  for (const k of known) {
+    if (value[k] === undefined) delete out[k];
+    else out[k] = value[k];
+  }
+  return out;
+}
+
 /** Ключ репо из имени папки: латиница в нижнем регистре, цифры, дефис и подчёркивание (KEY_RE); ничего не осталось — repo. */
 export function repoKeyFrom(name: string): string {
   const k = name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 41).replace(/[-_]+$/, '');
@@ -141,7 +172,9 @@ export class TeamService {
   private stopped = false;
 
   constructor(private readonly deps: TeamServiceDeps = {}) {
-    this.repoDeps = { ...defaultRepoDeps(), ...(deps.timers === false ? { pushDelayMs: Infinity } : {}), ...(deps.repo ?? {}) };
+    // timers: false — отправка только явная, даже если deps.repo принёс pushDelayMs (например, целиком defaultRepoDeps()):
+    // иначе через 3 с после записи уходила бы фоновая синхронизация посреди теста
+    this.repoDeps = { ...defaultRepoDeps(), ...(deps.repo ?? {}), ...(deps.timers === false ? { pushDelayMs: Infinity } : {}) };
   }
 
   root(): string {
@@ -193,7 +226,7 @@ export class TeamService {
         out.push(await this.summary(repo));
       } catch (err) {
         // teamwork.yaml не читается: команда в списке остаётся, причина — в строке синхронизации
-        out.push({ slug, title: slug, prefix: '', remote: repo.local().remote, members: 0, projects: [], sync: { ...(await repo.syncState()), error: errMsg(err) } });
+        out.push({ slug, title: slug, prefix: '', remote: shareableUrl(repo.local().remote), members: 0, projects: [], sync: { ...(await repo.syncState()), error: errMsg(err) } });
       }
     }
     return out;
@@ -308,31 +341,57 @@ export class TeamService {
     return detail;
   }
 
+  /**
+   * Правка полей YAML-файла клона от версии, с которой клиент открыл форму (D-10). base — textHash файла из ответа GET:
+   * файл с тех пор не менялся или base нет (старый клиент) — присланное ложится поверх текущего; менялся — каждое
+   * присланное поле сливается трёхсторонне от версии base из истории клона, так что чужие правки других полей, ключей
+   * колонок и участников остаются, а одно место, изменённое и мной, и командой по-разному, — 409 conflict с текущим
+   * видом. Версии base в истории нет — тоже 409. mine строит присланные поля поверх версии base (элементы списков — с их
+   * неизвестными полями, D-9). Возвращает патч для updateYaml.
+   */
+  private async patchFrom(r: TeamRepo, rel: string, base: string | undefined, mine: (was: Record<string, unknown>) => Record<string, unknown>, current: () => Promise<unknown>, what: string): Promise<Record<string, unknown>> {
+    const text = r.read(rel) ?? '';
+    const old = base && textHash(text) !== base ? await r.versionByHash(rel, base) : text;
+    if (old === undefined) throw new TeamError(409, `${what} изменились, а версии, с которой открыта форма, в истории нет: открой форму заново`, 'conflict', { current: await current() });
+    const was = rawYaml(old);
+    const cur = rawYaml(text);
+    const patch: Record<string, unknown> = {};
+    const clash: string[] = [];
+    for (const [k, v] of Object.entries(mine(was))) {
+      const m = mergeField(k, was[k], v, cur[k]);
+      if (m.conflict) clash.push(k);
+      else patch[k] = m.value;
+    }
+    if (clash.length) throw new TeamError(409, `${what} уже изменил кто-то другой: ${clash.join(', ')}`, 'conflict', { current: await current() });
+    return patch;
+  }
+
+  /**
+   * PUT настроек команды (spec §12): название, названия колонок, участники, flow по умолчанию. Правка идёт внутри очереди
+   * по текущему teamwork.yaml, а не по config() до неё: колонки — по ключам, участники — по email с их неизвестными полями
+   * (spec §5.9, D-9); с base — слияние с чужими правками и 409 на одно место (patchFrom, D-10).
+   */
   async updateTeam(slug: string, body: unknown): Promise<TeamDetail> {
     const repo = this.repo(slug);
     if (!isRecord(body)) bad('Тело запроса — объект');
     const b = body as Record<string, unknown>;
-    const patch: Record<string, unknown> = {};
     const changes: string[] = [];
-    if (b.title !== undefined) {
-      patch.title = reqStr(b.title, 'title', 'Название не может быть пустым');
-      changes.push('название');
-    }
+    const title = b.title !== undefined ? reqStr(b.title, 'title', 'Название не может быть пустым') : undefined;
+    if (title !== undefined) changes.push('название');
+    let columns: Partial<TeamColumns> | undefined;
     if (b.columns !== undefined) {
       if (!isRecord(b.columns)) bad('Поле columns — объект с названиями колонок');
-      const cols = b.columns as Record<string, unknown>;
-      const current = repo.config().columns;
-      const next: TeamColumns = { ...current };
-      for (const k of Object.keys(cols)) {
+      columns = {};
+      for (const [k, v] of Object.entries(b.columns as Record<string, unknown>)) {
         if (!TASK_STATUSES.includes(k as TeamTaskStatus)) bad(`Колонки фиксированы: ${TASK_STATUSES.join(', ')}; лишний ключ ${k}`);
-        next[k as TeamTaskStatus] = reqStr(cols[k], `columns.${k}`, `Название колонки ${k} не может быть пустым`);
+        columns[k as TeamTaskStatus] = reqStr(v, `columns.${k}`, `Название колонки ${k} не может быть пустым`);
       }
-      patch.columns = next;
       changes.push('колонки');
     }
+    let members: TeamMember[] | undefined;
     if (b.members !== undefined) {
       if (!Array.isArray(b.members)) bad('Поле members — список участников');
-      const members: TeamMember[] = [];
+      members = [];
       for (const m of b.members as unknown[]) {
         if (!isRecord(m)) bad('Участник — объект с name и email');
         const email = reqStr(m.email, 'email', 'У участника нужен email').toLowerCase();
@@ -343,22 +402,35 @@ export class TeamService {
         members.push({ name: optStr(m.name, 'name') || email, email, ...(github ? { github } : {}), ...(gitlab ? { gitlab } : {}) });
       }
       if (!members.length) bad('В команде должен остаться хотя бы один участник');
-      patch.members = members;
       changes.push('участники');
     }
+    let defaultFlow: string | null | undefined;
     if (b.defaultFlow !== undefined) {
-      if (b.defaultFlow === null || b.defaultFlow === '') patch.defaultFlow = undefined;
-      else {
-        const f = reqStr(b.defaultFlow, 'defaultFlow');
-        if (!FLOW_NAME_RE.test(f)) bad(`Недопустимое имя flow: ${f}`);
-        if (!this.flowNames(repo).includes(f)) bad(`Flow ${f} нет в репо команды (flows/${f}.yaml)`);
-        patch.defaultFlow = f;
-      }
+      defaultFlow = b.defaultFlow === null || b.defaultFlow === '' ? null : reqStr(b.defaultFlow, 'defaultFlow');
+      if (defaultFlow && !FLOW_NAME_RE.test(defaultFlow)) bad(`Недопустимое имя flow: ${defaultFlow}`);
       changes.push('flow по умолчанию');
     }
     if (b.prefix !== undefined && optStr(b.prefix, 'prefix')?.toUpperCase() !== repo.config().prefix) bad('Префикс номеров задач после создания не меняется');
+    const base = optStr(b.base, 'base');
     if (!changes.length) return this.detail(repo);
-    await repo.write(`Настройки команды: ${changes.join(', ')}`, (r) => r.writeFile('teamwork.yaml', updateYaml(r.read('teamwork.yaml') ?? '', patch)));
+    await repo.write(`Настройки команды: ${changes.join(', ')}`, async (r) => {
+      if (defaultFlow && !this.flowNames(r).includes(defaultFlow)) bad(`Flow ${defaultFlow} нет в репо команды (flows/${defaultFlow}.yaml)`);
+      const patch = await this.patchFrom(
+        r,
+        'teamwork.yaml',
+        base,
+        (was) => ({
+          ...(title !== undefined ? { title } : {}),
+          ...(columns ? { columns: { ...(isRecord(was.columns) ? was.columns : {}), ...columns } } : {}),
+          ...(members ? { members: members.map((m) => overlay(elementBy(was.members, 'email', m.email), m, ['name', 'email', 'github', 'gitlab'])) } : {}),
+          ...(defaultFlow !== undefined ? { defaultFlow: defaultFlow ?? undefined } : {}),
+        }),
+        () => this.detail(r),
+        'Настройки команды',
+      );
+      if (members && Array.isArray(patch.members) && !patch.members.length) bad('В команде должен остаться хотя бы один участник');
+      r.writeFile('teamwork.yaml', updateYaml(r.read('teamwork.yaml') ?? '', patch));
+    });
     return this.detail(repo);
   }
 
@@ -410,7 +482,8 @@ export class TeamService {
       slug: repo.slug,
       title: cfg.title,
       prefix: cfg.prefix,
-      remote: repo.local().remote,
+      // ссылка уходит в UI и в ответы API: без логина и токена (S-8)
+      remote: shareableUrl(repo.local().remote),
       members: cfg.members.length,
       projects: this.projectBriefs(repo),
       sync: await repo.syncState(),
@@ -428,6 +501,7 @@ export class TeamService {
       me: await this.me(repo, cfg),
       flows: this.flowNames(repo),
       dir: repo.repoDir,
+      base: textHash(repo.read('teamwork.yaml') ?? ''),
     };
   }
 
@@ -444,20 +518,28 @@ export class TeamService {
 
   /**
    * Решить конфликт: theirs — оставить версию команды (запись просто снимается); mine — записать моё значение коммитом:
-   * поле задачи или YAML, тело задачи, текст документа, удалённый файл. Для двух активных спринтов «моё» нет: задачи
-   * переносятся в активный спринт руками.
+   * поле задачи или YAML (у списков и объектов — мои спорные элементы поверх текущего, D-3), тело задачи, текст документа,
+   * удалённый файл, двоичный файл из blob (D-1). Для двух активных спринтов «моё» нет: задачи переносятся в активный
+   * спринт руками; поле спринта — обычное поле (D-13, у старых записей kind sprint с field).
    */
   async resolveConflict(slug: string, id: string, how: 'theirs' | 'mine'): Promise<TeamConflict[]> {
     const repo = this.repo(slug);
     const c = repo.local().conflicts.find((x) => x.id === id);
     if (!c) throw new TeamError(404, 'Такого конфликта нет: он уже решён');
     if (how === 'mine') {
-      if (c.kind === 'sprint') bad('Для двух активных спринтов «взять моё» нет: перенеси задачи в активный спринт');
+      if (c.kind === 'sprint' && !c.field) bad('Для двух активных спринтов «взять моё» нет: перенеси задачи в активный спринт');
       const label = c.task ?? c.doc ?? c.file;
-      await repo.write(`${label}: взято моё${c.field ? ` (${c.field})` : ''}`, (r) => {
+      await repo.write(`${label}: взято моё${c.field ? ` (${c.field})` : ''}`, async (r) => {
+        const comment = c.file.match(COMMENT_FILE_RE);
+        // мой комментарий к задаче, которую команда удалила: вернуть его — оставить сироту (D-5)
+        if (comment && c.kind === 'deleted' && !r.exists(`projects/${comment[1]}/tasks/${comment[2]}.md`)) throw new TeamError(409, `Задачи ${comment[2]} у команды больше нет: комментарий вернуть некуда`, 'conflict');
+        if (c.blob) return r.restoreBlob(c.file, c.blob);
         const current = r.read(c.file);
         if (c.kind === 'deleted') {
-          if (c.ours === null || c.ours === undefined) r.remove(c.file);
+          const task = c.file.match(TASK_FILE_RE);
+          // моё удаление задачи — целиком, как deleteTask: перепроигрывание оставило её комментарии и ссылки соседей
+          if ((c.ours === null || c.ours === undefined) && task) this.removeTask(r, task[1], task[2]);
+          else if (c.ours === null || c.ours === undefined) r.remove(c.file);
           else r.writeFile(c.file, String(c.ours));
           return;
         }
@@ -467,16 +549,16 @@ export class TeamService {
           const t = parseTask(current, c.file);
           if (t.error) throw new TeamError(409, `Задача ${c.task} не читается (${t.error})`, 'conflict');
           if (c.field === 'body') return r.writeFile(c.file, composeTask(taskFrontmatter(t), String(c.ours)));
-          const fm = taskFrontmatter(t);
-          if (c.ours === undefined || c.ours === null) delete fm[c.field!];
-          else fm[c.field!] = c.ours;
-          return r.writeFile(c.file, composeTask(fm, t.body));
+          const v = mergeFieldMine(c.field!, c.theirs, c.ours, taskFrontmatter(t)[c.field!]);
+          return r.writeFile(c.file, updateTaskText(current, { [c.field!]: v ?? undefined }));
         }
-        if (/\.ya?ml$/.test(c.file) && c.field) return r.writeFile(c.file, updateYaml(current, { [c.field]: c.ours ?? undefined }));
+        if (/\.ya?ml$/.test(c.file) && c.field) return r.writeFile(c.file, updateYaml(current, { [c.field]: mergeFieldMine(c.field, c.theirs, c.ours, rawYaml(current)[c.field]) ?? undefined }));
         r.writeFile(c.file, String(c.ours));
       });
     }
     repo.saveLocal((l) => (l.conflicts = l.conflicts.filter((x) => x.id !== id)));
+    // через очередь: update-ref параллельно с fetch той же команды мог бы споткнуться о packed-refs.lock
+    if (c.blob) await repo.enqueue(() => repo.git(['update-ref', '-d', `${CONFLICT_REF}${c.id}`])).catch(() => undefined);
     if (how === 'theirs') this.emit({ team: slug, projects: c.project ? [c.project] : [] });
     return repo.local().conflicts;
   }
@@ -579,6 +661,7 @@ export class TeamService {
       ...(cfg.createdBy ? { createdBy: cfg.createdBy } : {}),
       ...(space ? { space } : {}),
       dir: repo.abs(`projects/${cfg.slug}`),
+      base: textHash(repo.read(`projects/${cfg.slug}/project.yaml`) ?? ''),
       docs: await this.docBriefs(repo, cfg.slug),
       sprints: this.readSprints(repo, cfg.slug).map(sprintView),
     };
@@ -651,13 +734,21 @@ export class TeamService {
       if (r.exists(`projects/${slug}`)) throw new TeamError(409, `Проект ${slug} уже есть`, 'not_empty');
       cfg = { slug, title, summary, status: 'active', repos, createdAt: this.repoDeps.now().toISOString(), createdBy: me.email, extra: {} };
       r.writeFile(`projects/${slug}/project.yaml`, serializeProject(cfg));
-      const docs = projectDocs({ title, summary }, [r.abs(PROJECT_TEMPLATE_DIR), path.join(this.repoDeps.templateDir ?? TEMPLATE_DIR, PROJECT_TEMPLATE_DIR)]);
-      for (const [file, text] of Object.entries(docs)) r.writeFile(`projects/${slug}/${file}`, text);
+      // заготовки из project-template/ репо команды читаются через r.read (проверка пути, S-7), нет — из шаблона agentgraph
+      const fallback = projectDocs({ title, summary }, [path.join(this.repoDeps.templateDir ?? TEMPLATE_DIR, PROJECT_TEMPLATE_DIR)]);
+      for (const file of PROJECT_DOC_FILES) {
+        const own = r.read(`${PROJECT_TEMPLATE_DIR}/${file}`);
+        r.writeFile(`projects/${slug}/${file}`, own !== undefined ? renderDoc(own, { title, summary }) : fallback[file]);
+      }
     });
     this.saveRepoPaths(repo, local);
     return this.projectView(repo, cfg);
   }
 
+  /**
+   * PUT проекта: название, суть, статус, репо кода. Как и настройки команды — внутри очереди по текущему project.yaml,
+   * репо кода — по key с их неизвестными полями (D-9), с base — слияние с чужими правками и 409 на одно место (D-10).
+   */
   async updateProject(team: string, slug: string, body: unknown): Promise<TeamProject> {
     const repo = this.repo(team);
     this.readProjectConfig(repo, slug);
@@ -680,12 +771,28 @@ export class TeamService {
       changes.push(st === 'archived' ? 'в архив' : 'снова активен');
     }
     let local: Record<string, string> = {};
+    let repos: ProjectRepo[] | undefined;
     if (b.repos !== undefined) {
-      ({ repos: patch.repos, local } = this.parseRepos(b.repos));
+      ({ repos, local } = this.parseRepos(b.repos));
       changes.push('репо кода');
     }
     if (b.slug !== undefined && b.slug !== slug) bad('Slug проекта не меняется');
-    if (changes.length) await repo.write(`${slug}: ${changes.join(', ')}`, (r) => r.writeFile(`projects/${slug}/project.yaml`, updateYaml(r.read(`projects/${slug}/project.yaml`) ?? '', patch)));
+    const base = optStr(b.base, 'base');
+    const rel = `projects/${slug}/project.yaml`;
+    if (changes.length) {
+      await repo.write(`${slug}: ${changes.join(', ')}`, async (r) => {
+        if (!r.exists(rel)) throw new TeamError(404, `Проекта ${slug} нет`);
+        const merged = await this.patchFrom(
+          r,
+          rel,
+          base,
+          (was) => ({ ...patch, ...(repos ? { repos: repos.map((x) => overlay(elementBy(was.repos, 'key', x.key), x, ['key', 'url', 'defaultBranch'])) } : {}) }),
+          () => this.projectView(r, this.readProjectConfig(r, slug)),
+          'Проект',
+        );
+        r.writeFile(rel, updateYaml(r.read(rel) ?? '', merged));
+      });
+    }
     this.saveRepoPaths(repo, local);
     return this.projectView(repo, this.readProjectConfig(repo, slug));
   }
@@ -776,7 +883,10 @@ export class TeamService {
         const max = requirementMax(next);
         const last = { FR: Math.max(cfg.lastRequirement?.FR ?? 0, max.FR), NFR: Math.max(cfg.lastRequirement?.NFR ?? 0, max.NFR) };
         if (last.FR !== (cfg.lastRequirement?.FR ?? 0) || last.NFR !== (cfg.lastRequirement?.NFR ?? 0)) {
-          r.writeFile(`projects/${slug}/project.yaml`, updateYaml(r.read(`projects/${slug}/project.yaml`) ?? '', { lastRequirement: last }));
+          // остальные ключи lastRequirement (неизвестные этой версии) остаются (spec §5.9, D-9)
+          const ptext = r.read(`projects/${slug}/project.yaml`) ?? '';
+          const was = rawYaml(ptext).lastRequirement;
+          r.writeFile(`projects/${slug}/project.yaml`, updateYaml(ptext, { lastRequirement: { ...(isRecord(was) ? was : {}), ...last } }));
         }
       }
     });
@@ -1018,7 +1128,7 @@ export class TeamService {
       }
       if (patch.branch !== undefined) {
         const br = patch.branch === null ? undefined : optStr(patch.branch, 'branch') || undefined;
-        if (br && (br.startsWith('-') || /\s/.test(br))) bad(`Недопустимое имя ветки: ${br}`);
+        if (br && !TASK_BRANCH_RE.test(br)) bad(`Недопустимое имя ветки: ${br} (латиница, цифры, «._/-», без ведущего «-»)`);
         if (br) next.branch = br;
         else delete next.branch;
         if (br !== cur.branch) changes.push(br ? `ветка → ${br}` : 'ветка снята');
@@ -1050,8 +1160,9 @@ export class TeamService {
         };
         const after = neighbour(place.after, 'after');
         const before = neighbour(place.before, 'before');
-        // соседи поменялись местами или совпали по rank (одновременные переносы), rank правлен руками — rankNear встаёт после after
-        const rank = rankNear(after?.rank, before?.rank);
+        // соседи совпали по rank или поменялись местами (одновременные переносы), rank правлен руками — между after и
+        // ближайшим rank своего списка больше него, а не в конец (D-12)
+        const rank = placeRank(all.filter((t) => !t.error && t.id !== id && t.sprint === next.sprint).map((t) => t.rank), after?.rank, before?.rank);
         if (rank !== cur.rank) {
           next.rank = rank;
           changes.push('порядок');
@@ -1073,14 +1184,18 @@ export class TeamService {
     this.taskId(id);
     await repo.write(`${id}: удалена`, (r) => {
       if (!r.exists(`projects/${slug}/tasks/${id}.md`)) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
-      r.remove(`projects/${slug}/tasks/${id}.md`);
-      r.remove(`projects/${slug}/comments/${id}`);
-      // ссылки на удалённую задачу в blockedBy соседей снимаются тем же коммитом
-      for (const t of this.readTasks(r, slug)) {
-        if (t.error || !t.blockedBy.includes(id)) continue;
-        r.writeFile(t.file, serializeTask({ ...t, blockedBy: t.blockedBy.filter((b) => b !== id) }));
-      }
+      this.removeTask(r, slug, id);
     });
+  }
+
+  /** Удаление задачи целиком: файл, её комментарии и ссылки blockedBy соседей — одним коммитом (вызывающий пишет). */
+  private removeTask(r: TeamRepo, slug: string, id: string): void {
+    r.remove(`projects/${slug}/tasks/${id}.md`);
+    r.remove(`projects/${slug}/comments/${id}`);
+    for (const t of this.readTasks(r, slug)) {
+      if (t.error || !t.blockedBy.includes(id)) continue;
+      r.writeFile(t.file, serializeTask({ ...t, blockedBy: t.blockedBy.filter((b) => b !== id) }));
+    }
   }
 
   /** Запуск или сессия по задаче на этом компьютере — в local.json → work (spec §6); тот же kind и id — обновляется. */
