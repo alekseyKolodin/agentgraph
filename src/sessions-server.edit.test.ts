@@ -145,8 +145,11 @@ test('запуск: своё пространство и папка flow — в 
     for (const d of [spaceDir('cart'), FLOWS_DIR]) assert.ok(st.permissions.ask.includes(`Edit(/${d}/**)`), `${b}: ${d}`);
     assert.ok(st.permissions.deny.includes(`Edit(/${spaceDir('else')}/**)`), b);
     assert.ok(!st.permissions.deny.some((r) => r.includes(spaceDir('cart'))), b);
-    assert.deepEqual(st.hooks.PreToolUse.at(-1)!.matcher, 'Edit|Write|MultiEdit|NotebookEdit');
-    assert.equal(st.hooks.PreToolUse.at(-1)!.hooks[0].onFailure, b.includes('new') ? 'block' : undefined);
+    const write = st.hooks.PreToolUse.find((h) => h.matcher === 'Edit|Write|MultiEdit|NotebookEdit');
+    assert.ok(write);
+    assert.equal(write.hooks[0].onFailure, b.includes('new') ? 'block' : undefined);
+    // Bash — последним и без onFailure: block: сбой сервера не останавливает каждую команду
+    assert.deepEqual([st.hooks.PreToolUse.at(-1)!.matcher, st.hooks.PreToolUse.at(-1)!.hooks[0].onFailure], ['Bash', undefined]);
     assert.deepEqual(st.hooks.PostToolUse.map((h) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
     // версия — от claude --version этого бинарника: новый спрашивает и в bypassPermissions, старый там отказывает
     const doc = path.join(spaceDir('cart'), 'docs', 'a.md');
@@ -170,11 +173,20 @@ test('правка файла своего пространства: вопро�
   assert.equal(ask.permissionDecision, 'ask');
   assert.match(ask.permissionDecisionReason, /^agentgraph: пространство shop — карта \(CLAUDE\.md\)/);
   assert.equal((await s.pre('Write', { file_path: path.join(spaceDir('blog'), 'CLAUDE.md'), content: 'x' })).permissionDecision, 'deny');
-  // bypassPermissions и dontAsk: claude показывает вопрос хука и там — тот же вопрос; чужое — отказ и там
+  // bypassPermissions: claude показывает вопрос хука и там — тот же вопрос; dontAsk: вопрос до человека не дойдёт —
+  // отказ с причиной; чужое — отказ в обоих
+  assert.equal((await s.pre('Write', { file_path: map, content: 'x' }, { permission_mode: 'bypassPermissions' })).permissionDecision, 'ask');
+  const quiet = await s.pre('Write', { file_path: map, content: 'x' }, { permission_mode: 'dontAsk' });
+  assert.deepEqual([quiet.permissionDecision, /В режиме dontAsk claude не показывает вопрос/.test(quiet.permissionDecisionReason)], ['deny', true]);
   for (const permission_mode of ['bypassPermissions', 'dontAsk']) {
-    assert.equal((await s.pre('Write', { file_path: map, content: 'x' }, { permission_mode })).permissionDecision, 'ask', permission_mode);
     assert.equal((await s.pre('Write', { file_path: path.join(spaceDir('blog'), 'CLAUDE.md'), content: 'x' }, { permission_mode })).permissionDecision, 'deny', permission_mode);
   }
+  // Bash в bypassPermissions: команда со своим пространством — вопрос; с проектом — решает claude; в acceptEdits хук
+  // команды не сверяет (claude спрашивает сам)
+  const cp = await s.pre('Bash', { command: `cp a.md ${path.join(spaceDir('shop'), 'b.md')}` }, { permission_mode: 'bypassPermissions', cwd: proj });
+  assert.deepEqual([cp.permissionDecision, /упоминает папку пространства shop/.test(cp.permissionDecisionReason)], ['ask', true]);
+  assert.equal(await s.pre('Bash', { command: 'npm test' }, { permission_mode: 'bypassPermissions', cwd: proj }), undefined);
+  assert.equal(await s.pre('Bash', { command: `cp a.md ${path.join(spaceDir('shop'), 'b.md')}` }, { cwd: proj }), undefined);
   // человек ответил «да» — claude записал файл и прислал PostToolUse: UI получает событие
   const got = await events(async () => {
     fs.writeFileSync(map, '# магазин и склад\n');

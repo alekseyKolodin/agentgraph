@@ -40,7 +40,7 @@ import {
   mcpReply, parseFlowWriteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
   type TeamTaskUpdateArgs,
 } from './sessions-mcp.js';
-import { classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, type EditScope, type EditTarget } from './session-edit.js';
+import { bashDecision, classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, type EditScope, type EditTarget } from './session-edit.js';
 import { plannedFlowFile, saveFlowYaml } from './flows.js';
 import { parseTeamworkLink } from './teamwork-status.js';
 import { teamsCwdProblem } from './teamwork-trust.js';
@@ -941,6 +941,7 @@ export class SessionManager {
       askDetail: (tool, args) => this.askDetail(s, tool, args),
       writeGuard: (tool, args, call) => this.writeGuard(s, tool, args, call),
       afterWrite: (tool, args, call) => this.afterWrite(s, tool, args, call),
+      bashGuard: (command, call) => bashDecision(this.editScope(s, call), command),
       claudeVersion: () => s.rec.claudeVersion,
     });
     const p = r.patch;

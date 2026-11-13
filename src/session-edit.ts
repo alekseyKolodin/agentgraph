@@ -5,9 +5,11 @@
 //   вопрос   — своё пространство (выбранное сейчас, в том числе на ходу, и то, в папке которого сессия открыта) и папка
 //              flow; space.json, карта, состояние и файл flow проверяются до вопроса по тексту, который получится после
 //              записи (те же проверки, что у API), — не прошёл проверку — отказ с ошибками, человек его не видит;
-//              вопрос — в любом режиме, bypassPermissions и dontAsk тоже (у старого claude там вопрос заменяет
-//              отказом handleHook, sessions.ts: ASK_IN_ANY_MODE_SINCE);
+//              вопрос — в default, acceptEdits, auto и bypassPermissions (у старого claude в bypassPermissions вопрос
+//              заменяет отказом preToolDecision, sessions.ts: ASK_IN_ANY_MODE_SINCE); в dontAsk — отказ с причиной:
+//              правило ask claude там превращает в отказ без вопроса;
 //   пусто    — проект и всё прочее: решают правила --settings и режим, как раньше.
+// Bash хук записи не видит: в bypassPermissions его команды сверяет bashDecision (эвристика по тексту команды).
 // Хук PostToolUse проверяет проверенный файл ещё раз на диске (сломался — откат на снимок до записи) и говорит
 // серверу, что обновить в UI. Чистая логика без HTTP: состояние сессии и события — sessions-server.ts.
 import fs from 'node:fs';
@@ -108,6 +110,74 @@ export function classifyEdit(scope: EditScope, tool: string, input: Record<strin
   const cfg = real(configDir(), '/');
   const broad = cfg === path.parse(cfg).root || fold(cfg) === fold(real(os.homedir(), '/')) || fold(real(scope.cwd, '/')) === fold(cfg);
   if (!broad && fold(path.dirname(p)) === fold(cfg)) return { deny: `${raw} — служебный файл agentgraph: настройки правят в agentgraph, на странице настроек.` };
+  return undefined;
+}
+
+/** Текст команды для сверки путей: без кавычек и обратных слэшей, // и /./ схлопнуты, без учёта регистра. */
+const commandText = (command: string): string => fold(command.replace(/["'\\]/g, '').replace(/\/\.(?=\/)/g, '').replace(/\/{2,}/g, '/'));
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** За упоминанием пути — конец, «/», пробел или разделитель команды: папка feat не ловит feat-2 и flows — flows-old. */
+const AFTER = '(?=$|[/\\s;&|)<>`])';
+/** Перед относительным путём — начало, пробел, «=» или разделитель команды, можно с «./». */
+const BEFORE_REL = '(?:^|[\\s=;&|(<>`])(?:\\./)?';
+
+/** Как путь dir может быть написан в команде: как есть, realpath, ~/…, $HOME/…, ${HOME}/… и относительно cwd. */
+function pathForms(dir: string, home: string, cwd: string): { abs: string[]; rel: string[] } {
+  const abs = new Set([dir, real(dir, '/')]);
+  const rel = new Set<string>();
+  for (const f of [...abs]) {
+    if (isInside(fold(f), fold(home)) && fold(f) !== fold(home)) for (const h of ['~', '$HOME', '${HOME}']) abs.add(h + f.slice(home.length));
+    if (isInside(fold(f), fold(cwd)) && fold(f) !== fold(cwd)) rel.add(f.slice(cwd.length + 1));
+  }
+  return { abs: [...abs], rel: [...rel] };
+}
+
+const mentions = (text: string, forms: { abs: string[]; rel: string[] }): boolean =>
+  forms.abs.some((f) => new RegExp(escapeRe(fold(f)) + AFTER).test(text)) || forms.rel.some((f) => new RegExp(BEFORE_REL + escapeRe(fold(f)) + AFTER).test(text));
+
+/**
+ * Bash в bypassPermissions: правило ask на своё пространство и папку flow держит Edit и Write, а файловую команду Bash
+ * claude в этом режиме пускает молча (check-sdk-hooks, session-edit: cp в своё пространство записал файл без вопроса;
+ * в default и acceptEdits он спрашивал сам, в dontAsk — отказывал). Эвристика по тексту команды (кавычки и «\» убраны,
+ * // и /./ схлопнуты, без учёта регистра): команда упоминает папку своего пространства или папку flow — как есть,
+ * realpath, ~/…, $HOME/…, относительно рабочей папки — либо идёт из рабочей папки внутри них — вопрос. Та же команда
+ * упоминает и закрытое (чужое пространство, папку пространств целиком, теги, команды) — отказ: одобрение вопроса не
+ * должно касаться закрытого, пусть модель разделит команду. Путь, собранный из переменных, эвристика не поймает — это
+ * граница режима без вопросов; закрытое без своего и для Bash держит правило deny.
+ */
+export function bashDecision(scope: EditScope, command: string): { decision: 'ask' | 'deny'; reason: string } | undefined {
+  const text = commandText(command);
+  const home = real(os.homedir(), '/');
+  const cwd = real(scope.toolCwd && path.isAbsolute(scope.toolCwd) ? scope.toolCwd : scope.cwd, '/');
+  // как называть папку: «упоминает папку …» и «выполняется из папки …»
+  const roots = [
+    ...scope.spaces.map((slug) => ({ dir: path.join(spacesDir(), slug), acc: `папку пространства ${slug}`, gen: `папки пространства ${slug}` })),
+    { dir: scope.flowsDir, acc: 'папку flow', gen: 'папки flow' },
+  ];
+  for (const r of roots) {
+    const hit = mentions(text, pathForms(r.dir, home, cwd));
+    if (!hit && !under(cwd, r.dir)) continue;
+    const closed = closedMention(text, scope.spaces, home, cwd);
+    if (closed) return { decision: 'deny', reason: `Команда Bash трогает и ${r.acc}, и ${closed}: одобрение правки своего не должно касаться закрытого — раздели команду, закрытое agentgraph не даст изменить` };
+    return { decision: 'ask', reason: `Команда Bash ${hit ? `упоминает ${r.acc}` : `выполняется из ${r.gen}`} (${r.dir}): в режиме bypassPermissions claude пустил бы её без вопроса, а правки там — только с разрешения пользователя` };
+  }
+  return undefined;
+}
+
+/** Закрытое в тексте команды: чужое пространство или папка пространств целиком, папка тегов, папка команд. */
+function closedMention(text: string, own: string[], home: string, cwd: string): string | undefined {
+  if (mentions(text, pathForms(tagsDir(), home, cwd))) return 'папку тегов знаний';
+  if (mentions(text, pathForms(teamsDir(), home, cwd))) return 'папку команд Teamwork';
+  const mine = new Set(own.map(fold));
+  const forms = pathForms(spacesDir(), home, cwd);
+  for (const f of [...forms.abs.map((x) => ({ re: escapeRe(fold(x)) })), ...forms.rel.map((x) => ({ re: BEFORE_REL + escapeRe(fold(x)) }))]) {
+    // за папкой пространств: «/слаг» — своё или чужое; ничего или разделитель — вся папка пространств
+    for (const m of text.matchAll(new RegExp(f.re + '(?:/([^/\\s;&|)<>`]*))?' + AFTER, 'g'))) {
+      const slug = m[1];
+      if (!slug) return 'папку пространств целиком';
+      if (!mine.has(slug)) return `пространство ${slug}`;
+    }
+  }
   return undefined;
 }
 

@@ -69,8 +69,9 @@ test('sessionArgs: новый разговор — --session-id, названи�
     const h = settings.hooks[e][0].hooks[0];
     assert.deepEqual([h.type, h.url, h.headers], ['http', 'http://127.0.0.1:4755/api/sessions/11111111-2222-4333-8444-555555555555/hook', { 'X-Agentgraph-Session': 'tok123' }]);
   }
-  // PreToolUse — на инструменты agentgraph, которые пишут, и на запись файлов: остальные инструменты хук не задерживает
-  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), [...ASK_FULL, 'Edit|Write|MultiEdit|NotebookEdit']);
+  // PreToolUse — на инструменты agentgraph, которые пишут, на запись файлов и на Bash (сверка в bypassPermissions):
+  // остальные инструменты хук не задерживает
+  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), [...ASK_FULL, 'Edit|Write|MultiEdit|NotebookEdit', 'Bash']);
   // PostToolUse — только запись файлов: проверка записанного и событие для UI
   assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher: string }) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
   // //путь — абсолютный путь в правилах разрешений
@@ -290,7 +291,8 @@ test('sessionSettings: инструменты agentgraph, которые пиш�
   const ask = ASK_FULL;
   const hooksOf = (v?: string) => (sessionSettings(launch(v ? { claudeVersion: v } : {})) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> }; permissions: { ask: string[] } });
   for (const v of [undefined, '2.1.285', '2.1.317']) assert.deepEqual(hooksOf(v).permissions.ask, ask, String(v));
-  assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), [...ask, 'Edit|Write|MultiEdit|NotebookEdit'].map((m) => [m, 'block']));
+  // Bash — без onFailure: block: эвристика bypassPermissions не останавливает каждую команду, когда сервер недоступен
+  assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), [...[...ask, 'Edit|Write|MultiEdit|NotebookEdit'].map((m) => [m, 'block']), ['Bash', undefined]]);
   // папки с вопросом: сама папка и всё внутри
   assert.deepEqual((sessionSettings(launch({ askDirs: ['/cfg/spaces', '/flows'] })) as { permissions: { ask: string[] } }).permissions.ask.slice(ask.length), ['Edit(//cfg/spaces)', 'Edit(//cfg/spaces/**)', 'Edit(//flows)', 'Edit(//flows/**)']);
   // старый claude ключа не знает — ему не шлём; неизвестная версия — тоже
@@ -486,12 +488,17 @@ test('хуки: режим разрешений основного разгов�
   assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash' }, deps()).reply, {});
 });
 
-test('хуки: инструменты agentgraph с вопросом спрашивают в любом режиме, bypassPermissions и dontAsk тоже (claude 2.1.285+); не прошедший проверку вызов — отказ без вопроса в любом режиме', () => {
+test('хуки: инструменты agentgraph с вопросом спрашивают в любом режиме, bypassPermissions тоже (claude 2.1.285+); в dontAsk — отказ с причиной; не прошедший проверку вызов — отказ без вопроса в любом режиме', () => {
   const decide = (tool: string, mode?: string, detail?: HookDeps['askDetail']) =>
     handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, ...(mode ? { permission_mode: mode } : {}) }, { ...deps(), claudeVersion: () => '2.1.285 (Claude Code)', ...(detail ? { askDetail: detail } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
   const modes = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions', 'dontAsk'];
   for (const mode of modes) {
-    for (const tool of ASK_FULL) assert.equal(decide(tool, mode).permissionDecision, 'ask', `${mode} ${tool}`);
+    for (const tool of ASK_FULL) {
+      const d = decide(tool, mode);
+      // dontAsk: правило ask claude там превращает в отказ без вопроса — отказываем сами, модель узнаёт причину
+      if (mode === 'dontAsk') assert.deepEqual([d.permissionDecision, /В режиме dontAsk claude не показывает вопрос.*Shift\+Tab/.test(d.permissionDecisionReason)], ['deny', true], tool);
+      else assert.equal(d.permissionDecision, 'ask', `${mode} ${tool}`);
+    }
     // askDetail сказал { deny } (схема flow не прошла): человека не спрашиваем, модель получает ошибки
     const bad = decide('mcp__agentgraph__flow_write', mode, () => ({ deny: 'phases: Required' }));
     assert.deepEqual([bad.permissionDecision, bad.permissionDecisionReason], ['deny', 'phases: Required'], mode);
@@ -499,7 +506,7 @@ test('хуки: инструменты agentgraph с вопросом спраш
   assert.match(decide('mcp__agentgraph__flow_write', 'default', () => 'flows/x.yaml: новый flow').permissionDecisionReason, /flow запишется.*\. flows\/x\.yaml: новый flow$/);
 });
 
-test('хуки: claude старше 2.1.285 или неизвестной версии в bypassPermissions и dontAsk вместо вопроса — отказ (и инструменту agentgraph, и записи); в остальных режимах — вопрос; отказ записи остаётся отказом', () => {
+test('хуки: claude старше 2.1.285 или неизвестной версии в bypassPermissions вместо вопроса — отказ (и инструменту agentgraph, и записи); в dontAsk — отказ режима при любой версии; в остальных режимах — вопрос; отказ записи остаётся отказом', () => {
   const pre = (tool: string, mode: string, version: string | undefined, guard?: HookDeps['writeGuard']) =>
     handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: '/sp/own/CLAUDE.md' }, permission_mode: mode }, { ...deps(), claudeVersion: () => version, ...(guard ? { writeGuard: guard } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
   const askWrite: HookDeps['writeGuard'] = () => ({ decision: 'ask', reason: 'карта пространства' });
@@ -507,7 +514,8 @@ test('хуки: claude старше 2.1.285 или неизвестной вер
     for (const mode of ['bypassPermissions', 'dontAsk']) {
       for (const d of [pre('mcp__agentgraph__space_map_write', mode, version), pre('Write', mode, version, askWrite)]) {
         assert.equal(d.permissionDecision, 'deny', `${mode} ${version}`);
-        assert.match(d.permissionDecisionReason, new RegExp(`В режиме ${mode} claude ${version === '2.1.284 (Claude Code)' ? '2\\.1\\.284' : 'неизвестной версии'} может не показать вопрос.*2\\.1\\.285`));
+        if (mode === 'dontAsk') assert.match(d.permissionDecisionReason, /В режиме dontAsk claude не показывает вопрос/);
+        else assert.match(d.permissionDecisionReason, new RegExp(`В режиме ${mode} claude ${version === '2.1.284 (Claude Code)' ? '2\\.1\\.284' : 'неизвестной версии'} может не показать вопрос.*2\\.1\\.285`));
       }
       assert.equal(pre('Write', mode, version, () => ({ decision: 'deny', reason: 'чужое пространство' })).permissionDecisionReason, 'чужое пространство');
     }
@@ -517,6 +525,32 @@ test('хуки: claude старше 2.1.285 или неизвестной вер
     }
   }
   assert.equal(pre('Write', 'bypassPermissions', '2.1.318 (Claude Code)', askWrite).permissionDecision, 'ask');
+  // dontAsk и у нового claude: вопрос до человека не дойдёт — отказ с причиной, а не тихий отказ правила ask
+  const dontAsk = pre('Write', 'dontAsk', '2.1.318 (Claude Code)', askWrite);
+  assert.deepEqual([dontAsk.permissionDecision, dontAsk.permissionDecisionReason.startsWith('карта пространства. В режиме dontAsk')], ['deny', true]);
+});
+
+test('хуки: Bash сверяется со своим пространством и папкой flow только в bypassPermissions — вопрос с причиной (у старого claude — отказ), своё вместе с закрытым — отказ; в остальных режимах проверка не зовётся; упавшая проверка — вопрос', () => {
+  let called = 0;
+  const guard: HookDeps['bashGuard'] = (command, call) => {
+    called++;
+    assert.equal(call.cwd, '/proj');
+    if (command.includes('/sp/other')) return { decision: 'deny', reason: 'Команда Bash трогает и своё, и чужое' };
+    return command.includes('/sp/own') ? { decision: 'ask', reason: 'Команда Bash упоминает папку пространства own' } : undefined;
+  };
+  const bash = (command: unknown, mode: string, o: Partial<HookDeps> = {}) =>
+    handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, permission_mode: mode, cwd: '/proj' }, { ...deps(), claudeVersion: () => '2.1.318 (Claude Code)', bashGuard: guard, ...o }).reply as { hookSpecificOutput?: { permissionDecision: string; permissionDecisionReason: string } };
+  assert.deepEqual(bash('cp a /sp/own/x.md', 'bypassPermissions').hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'Команда Bash упоминает папку пространства own' });
+  assert.deepEqual(bash('npm test', 'bypassPermissions'), {});
+  assert.equal(called, 2);
+  for (const mode of ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk']) assert.deepEqual(bash('cp a /sp/own/x.md', mode), {}, mode);
+  assert.equal(called, 2);
+  assert.match(bash('cp a /sp/own/x.md', 'bypassPermissions', { claudeVersion: () => '2.1.284' }).hookSpecificOutput!.permissionDecisionReason, /В режиме bypassPermissions claude 2\.1\.284 может не показать вопрос/);
+  assert.deepEqual(bash(42, 'bypassPermissions'), {});
+  // своё и закрытое в одной команде — отказ проверки, а не вопрос
+  assert.deepEqual(bash('cp /sp/own/a /sp/other/b', 'bypassPermissions').hookSpecificOutput, { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'Команда Bash трогает и своё, и чужое' });
+  const broken = bash('ls', 'bypassPermissions', { bashGuard: () => { throw new Error('нет папки'); } }).hookSpecificOutput!;
+  assert.deepEqual([broken.permissionDecision, broken.permissionDecisionReason], ['ask', 'Проверка команды не удалась (нет папки)']);
 });
 
 test('хуки: id разговора не UUID в историю разговоров не попадает (он ушёл бы в --resume)', () => {

@@ -40,7 +40,7 @@ export const TEAM_TASK_UPDATE_TOOL = 'team_task_update';
 export const TEAM_DOC_WRITE_TOOL = 'team_doc_write';
 export const TEAM_TASK_UPDATE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_TASK_UPDATE_TOOL}`;
 export const TEAM_DOC_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_DOC_WRITE_TOOL}`;
-/** Инструменты, о каждом вызове которых claude спрашивает человека в любом режиме: хук PreToolUse отвечает ask. */
+/** Инструменты, о каждом вызове которых спрашивают человека: хук PreToolUse отвечает ask (в dontAsk — отказ с причиной). */
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
   [SPACE_WRITE_FULL]: 'agentgraph: документ пространства увидят все следующие сессии и запуски',
@@ -53,14 +53,24 @@ const ASK_TOOLS: Record<string, string> = {
 };
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';
-/** Режимы без вопросов: bypassPermissions пропускает проверки, dontAsk отклоняет всё, что не разрешено заранее. */
+/**
+ * Режимы без вопросов: bypassPermissions пропускает проверки, dontAsk отклоняет всё, что не разрешено заранее. В dontAsk
+ * preToolDecision отказывает раньше проверки версии (правило ask claude там превращает в отказ без вопроса).
+ */
 export const NO_ASK_MODES = ['bypassPermissions', 'dontAsk'];
 /**
- * С этой версии claude показывает вопрос хука («ask») и в NO_ASK_MODES — измерено сценарием ask-modes
- * scripts/check-sdk-hooks.mts на Claude Code из Agent SDK 0.3.285. claude старше или неизвестной версии в этих режимах
- * вместо вопроса получает отказ: правка с разрешения человека не должна стать тихой.
+ * С этой версии claude показывает вопрос хука («ask») и в bypassPermissions — измерено сценарием ask-modes
+ * scripts/check-sdk-hooks.mts на Claude Code из Agent SDK 0.3.285. claude старше или неизвестной версии там вместо
+ * вопроса получает отказ: правка с разрешения человека не должна стать тихой.
  */
 export const ASK_IN_ANY_MODE_SINCE = '2.1.285';
+/**
+ * Режимы, где хук сверяет команды Bash со своим пространством и папкой flow: в bypassPermissions claude пускает
+ * файловую команду в папку под правилом ask без вопроса (check-sdk-hooks, session-edit). В default и acceptEdits он
+ * спрашивает сам, в dontAsk отказывает; auto не измерен (на haiku недоступен) — хук там не ставим, чтобы не спрашивать
+ * на каждую команду в режиме, который предлагает форма.
+ */
+export const BASH_GUARD_MODES = ['bypassPermissions'];
 /** Инструменты записи файлов: хук PreToolUse сверяет путь в момент вызова, PostToolUse — проверяет записанное. */
 const WRITE_MATCHER = WRITE_TOOLS.join('|');
 
@@ -362,7 +372,9 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
       ...Object.fromEntries(HTTP_HOOKS.map((e) => [e, http])),
       // хук записи — у каждой сессии: путь сверяется в момент вызова (handleHook → writeGuard, session-edit.ts) —
       // чужое пространство, теги, папка команд — отказ, своё пространство и flow — вопрос с проверкой до записи
-      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }],
+      // Bash — без onFailure: block: эвристика для bypassPermissions (BASH_GUARD_MODES) не должна останавливать каждую
+      // команду, когда сервер agentgraph недоступен
+      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }, { matcher: 'Bash', hooks: http[0].hooks }],
       // после записи: проверенный файл (space.json, карта, состояние, flow) — ещё раз на диске, UI — обновить
       PostToolUse: [{ matcher: WRITE_MATCHER, hooks: http[0].hooks }],
     },
@@ -604,7 +616,14 @@ export type HookDeps = {
   afterWrite?: (tool: string, input: Record<string, unknown>, call: WriteCall) => string | undefined;
   /** Версия claude этой сессии (claude --version): от неё — вопрос или отказ в NO_ASK_MODES. Нет — неизвестна. */
   claudeVersion?: () => string | undefined;
+  /**
+   * Команда Bash в BASH_GUARD_MODES: ask — она трогает своё пространство или папку flow; deny — заодно и закрытое;
+   * undefined — ни то, ни другое.
+   */
+  bashGuard?: (command: string, call: WriteCall) => WriteVerdict | undefined;
 };
+/** Что нужно решению PreToolUse: сессия терминала и сценарий check-sdk-hooks решают одной функцией. */
+export type PreToolDeps = Pick<HookDeps, 'askDetail' | 'writeGuard' | 'claudeVersion' | 'bashGuard'>;
 
 /** Что хук записи знает о вызове из входа хука. */
 export type WriteCall = { cwd?: string; toolUseId?: string };
@@ -619,6 +638,60 @@ const CLAUDE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 const withContext = (event: string, text: string) => (text ? { hookSpecificOutput: { hookEventName: event, additionalContext: text } } : {});
 const preToolReply = (decision: 'deny' | 'ask', reason: string) => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason } });
+
+/**
+ * Ответ хука PreToolUse: вопрос человеку, отказ с причиной или {} (решают правила и режим claude).
+ * - Вопрос в dontAsk не дойдёт до человека: правило ask из --settings claude там превращает в отказ без вопроса
+ *   (check-sdk-hooks: space-session, session-edit), — отказываем сами, с причиной для модели.
+ * - bypassPermissions: вопрос хука claude показывает с ASK_IN_ANY_MODE_SINCE (ask-modes); старше или неизвестной
+ *   версии — отказ: правка с разрешения человека не должна стать тихой.
+ */
+export function preToolDecision(input: HookInput, deps: PreToolDeps): Record<string, unknown> {
+  const call: WriteCall = { cwd: input.cwd, toolUseId: input.tool_use_id };
+  const mode = input.permission_mode;
+  const ask = (reason: string) => {
+    if (mode === 'dontAsk') return preToolReply('deny', `${reason}. В режиме dontAsk claude не показывает вопрос, а это действие — только с разрешения пользователя: отклонено. Попроси пользователя переключить режим (Shift+Tab).`);
+    const version = deps.claudeVersion?.();
+    if (!mode || !NO_ASK_MODES.includes(mode) || versionAtLeast(version, ASK_IN_ANY_MODE_SINCE)) return preToolReply('ask', reason);
+    const v = version?.match(/\d+\.\d+\.\d+/)?.[0];
+    return preToolReply('deny', `В режиме ${mode} claude ${v ?? 'неизвестной версии'} может не показать вопрос (он проверен с ${ASK_IN_ANY_MODE_SINCE}), а это действие — только с разрешения пользователя: отклонено. Попроси пользователя переключить режим (Shift+Tab) или обновить claude.`);
+  };
+  const tool = input.tool_name ?? '';
+  if (WRITE_TOOLS.includes(tool) && deps.writeGuard) {
+    let v: WriteVerdict | undefined;
+    try {
+      v = deps.writeGuard(tool, input.tool_input ?? {}, call);
+    } catch (err) {
+      // упавшая проверка не пропускает запись
+      v = { decision: 'deny', reason: `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.` };
+    }
+    return !v ? {} : v.decision === 'ask' ? ask(v.reason) : preToolReply('deny', v.reason);
+  }
+  if (tool === 'Bash') {
+    if (!deps.bashGuard || !BASH_GUARD_MODES.includes(mode ?? '')) return {};
+    const command = input.tool_input?.command;
+    let v: WriteVerdict | undefined;
+    try {
+      v = typeof command === 'string' ? deps.bashGuard(command, call) : undefined;
+    } catch (err) {
+      // эвристика, а не граница: упала — спрашиваем, а не отказываем
+      v = { decision: 'ask', reason: `Проверка команды не удалась (${err instanceof Error ? err.message : String(err)})` };
+    }
+    return !v ? {} : v.decision === 'ask' ? ask(v.reason) : preToolReply('deny', v.reason);
+  }
+  // session_new запускает claude с текстом модели, space_* и flow_write пишут то, что получат все следующие сессии и
+  // запуски: спрашиваем человека в любом режиме (в dontAsk и у старого claude в bypassPermissions — отказ, см. выше)
+  const why = ASK_TOOLS[tool];
+  if (!why) return {};
+  let detail: string | { deny: string } | undefined;
+  try {
+    detail = deps.askDetail?.(tool, input.tool_input ?? {});
+  } catch {
+    detail = undefined;
+  }
+  if (detail && typeof detail === 'object') return preToolReply('deny', detail.deny);
+  return ask(detail ? `${why}. ${detail}` : why);
+}
 
 /**
  * Ответ на хук и правка состояния. «Завершена» отсюда не ставится: только по выходу процесса — SessionEnd с reason
@@ -662,40 +735,8 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       return { reply: {}, patch: WAIT_NOTIFICATIONS.includes(input.notification_type ?? '') ? { ...patch, status: 'waiting' } : patch };
     case 'PermissionRequest':
       return { reply: permissionReply(input, deps.readTargets(ctx()), deps.realpath), patch };
-    case 'PreToolUse': {
-      const call: WriteCall = { cwd: input.cwd, toolUseId: input.tool_use_id };
-      // вопрос человеку; в режиме без вопросов у claude, где вопрос хука там не проверен, — отказ
-      const ask = (reason: string) => {
-        const mode = input.permission_mode;
-        const version = deps.claudeVersion?.();
-        if (!mode || !NO_ASK_MODES.includes(mode) || versionAtLeast(version, ASK_IN_ANY_MODE_SINCE)) return preToolReply('ask', reason);
-        const v = version?.match(/\d+\.\d+\.\d+/)?.[0];
-        return preToolReply('deny', `В режиме ${mode} claude ${v ?? 'неизвестной версии'} может не показать вопрос (он проверен с ${ASK_IN_ANY_MODE_SINCE}), а это действие — только с разрешения пользователя: отклонено. Попроси пользователя переключить режим (Shift+Tab) или обновить claude.`);
-      };
-      if (WRITE_TOOLS.includes(input.tool_name ?? '') && deps.writeGuard) {
-        let v: WriteVerdict | undefined;
-        try {
-          v = deps.writeGuard(input.tool_name!, input.tool_input ?? {}, call);
-        } catch (err) {
-          // упавшая проверка не пропускает запись
-          v = { decision: 'deny', reason: `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.` };
-        }
-        return { reply: !v ? {} : v.decision === 'ask' ? ask(v.reason) : preToolReply('deny', v.reason), patch };
-      }
-      // session_new запускает claude с текстом модели, space_* и flow_write пишут то, что получат все следующие сессии и
-      // запуски: спрашиваем человека в любом режиме — auto, bypassPermissions и dontAsk тоже (вопрос хука claude
-      // показывает везде с ASK_IN_ANY_MODE_SINCE; старше — отказ в NO_ASK_MODES)
-      const why = ASK_TOOLS[input.tool_name ?? ''];
-      if (!why) return { reply: {}, patch };
-      let detail: string | { deny: string } | undefined;
-      try {
-        detail = deps.askDetail?.(input.tool_name!, input.tool_input ?? {});
-      } catch {
-        detail = undefined;
-      }
-      if (detail && typeof detail === 'object') return { reply: preToolReply('deny', detail.deny), patch };
-      return { reply: ask(detail ? `${why}. ${detail}` : why), patch };
-    }
+    case 'PreToolUse':
+      return { reply: preToolDecision(input, deps), patch };
     case 'PostToolUse': {
       if (!WRITE_TOOLS.includes(input.tool_name ?? '') || !deps.afterWrite) return { reply: {}, patch };
       let note: string | undefined;

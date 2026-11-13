@@ -16,7 +16,8 @@
 // spaces/ — отказ хука записи), session-edit (обычная сессия с пространством: карта, документ и flow — с вопросом
 // в каждом режиме, flow не по схеме — отказ до вопроса, чужое пространство и settings.json папки настроек — отказ
 // правилом deny; Bash cp в своё пространство — не молча, Bash > в чужое — не пишется), ask-modes (показывает ли claude
-// вопрос хука «ask» в каждом режиме — на этом стоит вопрос agentgraph и в bypassPermissions, и в dontAsk).
+// вопрос хука «ask» в каждом режиме — на этом стоит вопрос agentgraph в bypassPermissions). В dontAsk своё — отказ
+// хука с причиной: правило ask claude там превращает в отказ без вопроса (прогон 2026-11-13).
 // Каждая проверка засчитывается по двум доказательствам: попытка (в логе хука или — если Claude Code отклонил вызов
 // правилом deny до хука — в ответе модели и результате инструмента) и состояние файлов на диске. Нет попытки —
 // «не воспроизведено», а не «прошло». Несколько проверок идут в одной сессии: первые ходы Claude Code дорогие (запись
@@ -42,8 +43,8 @@ const { ArtifactStore, countDenial, nodeProbe } = await import('../src/artifact-
 const { buildRequest, phaseGuard, renderPhasePrompt } = await import('../src/runner.js');
 const { createSpace, dataDirsGuard, phaseProtectedRoots, spaceDir, spacesDir } = await import('../src/spaces.js');
 const { tagsDir } = await import('../src/tags.js');
-const { launchDirs, sessionSettings } = await import('../src/sessions.js');
-const { cwdSpace, editDecision } = await import('../src/session-edit.js');
+const { ASK_IN_ANY_MODE_SINCE, launchDirs, preToolDecision, sessionSettings } = await import('../src/sessions.js');
+const { bashDecision, cwdSpace, editDecision } = await import('../src/session-edit.js');
 const { saveFlowYaml } = await import('../src/flows.js');
 const { FLOWS_DIR } = await import('../src/paths.js');
 const { ARTIFACT_TOOLS_ENABLED } = await import('../src/artifact-tools.js');
@@ -750,18 +751,38 @@ await scenario('data-modes', () =>
   }),
 );
 
-// ---------- сессии терминала: правила permissions из sessionSettings, как в --settings у claude, и хук записи
-// PreToolUse — у сессии терминала его ответ строит handleHook → editDecision (session-edit.ts), здесь — тот же
-// editDecision с тем же ответом (Claude Code из SDK не старше ASK_IN_ANY_MODE_SINCE, поэтому вопрос — в любом режиме).
+// ---------- сессии терминала: правила permissions из sessionSettings, как в --settings у claude, и хук PreToolUse —
+// тот же preToolDecision (sessions.ts), что у сессии терминала: запись — editDecision, Bash в bypassPermissions —
+// bashDecision, режим dontAsk — отказ с причиной (Claude Code из SDK не старше ASK_IN_ANY_MODE_SINCE).
 // canUseTool записывает вопросы и отвечает «нет», как человек: правка своего пространства и flow должна дойти до
 // вопроса (и не записаться) в каждом режиме, чужое — отклониться без вопроса.
 
-/** Хук записи сессии терминала: решение editDecision по входу хука (рабочая папка claude — из него). */
+/** Хук PreToolUse сессии терминала: preToolDecision по входу хука (рабочая папка claude и режим — из него). */
 const editHook = (scope: Omit<EditScope, 'toolCwd'>): HookCallback => async (input) => {
   if (input.hook_event_name !== 'PreToolUse') return {};
-  const d = editDecision({ ...scope, ...(input.cwd ? { toolCwd: input.cwd } : {}) }, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
-  return d ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: d.decision, permissionDecisionReason: d.reason } } : {};
+  const at = (cwd?: string): EditScope => ({ ...scope, ...(cwd ? { toolCwd: cwd } : {}) });
+  return preToolDecision(
+    {
+      hook_event_name: 'PreToolUse',
+      tool_name: input.tool_name,
+      tool_input: (input.tool_input ?? {}) as Record<string, unknown>,
+      ...(input.permission_mode ? { permission_mode: input.permission_mode } : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      tool_use_id: input.tool_use_id,
+    },
+    {
+      writeGuard: (tool, args, call) => {
+        const d = editDecision(at(call.cwd), tool, args);
+        return d && { decision: d.decision, reason: d.reason };
+      },
+      bashGuard: (command, call) => bashDecision(at(call.cwd), command),
+      claudeVersion: () => ASK_IN_ANY_MODE_SINCE,
+    },
+  ) as Awaited<ReturnType<HookCallback>>;
 };
+/** Своё пространство и flow: вопрос — в любом режиме, кроме dontAsk; там — отказ хука с причиной. */
+const ownWant = (mode: PermissionMode, o: StepOpts = {}): ['ask' | 'deny', StepOpts] =>
+  mode === 'dontAsk' ? ['deny', { ...o, reason: /В режиме dontAsk claude не показывает вопрос/, label: 'отказ хука с причиной (в dontAsk вопрос не показать)' }] : ['ask', o];
 
 /** Вопрос человеку (canUseTool): инструмент, путь или команда и вход целиком — по нему шаги различают одну цель. */
 type Ask = { tool: string; file: string; input: Record<string, unknown> };
@@ -893,11 +914,14 @@ await scenario('space-session', () =>
       const raw = rawCalls.slice(rawRound);
       const step = (name: string, tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean, o?: StepOpts) => checkStep(sc, mode, name, mine, raw, asks.slice(round), tool, f, want, changed, o);
       const metaChanged = () => read(meta) !== before.meta;
-      step('своя карта', 'Edit', map, 'ask', () => read(map) !== before.map);
-      // space.json: верный — вопрос; шире разумного — отказ хука до вопроса (проверкой, а не режимом); то и другое — в любом режиме
-      step('свой space.json, верный', 'Write', meta, 'ask', metaChanged, { match: isGood });
+      const [w, o] = ownWant(mode);
+      step('своя карта', 'Edit', map, w, () => read(map) !== before.map, o);
+      // space.json: верный — вопрос (в dontAsk — отказ с причиной); шире разумного — отказ хука до вопроса (проверкой,
+      // а не режимом) в любом режиме
+      const [wm, om] = ownWant(mode, { match: isGood });
+      step('свой space.json, верный', 'Write', meta, wm, metaChanged, om);
       step('свой space.json с папкой /', 'Write', meta, 'deny', metaChanged, { match: isBad, reason: /корень диска/, label: 'отказ хука до вопроса' });
-      step('своё .CLAUDE/ в другом регистре', 'Write', steps.dotUpper, 'ask', () => fs.existsSync(steps.dotUpper) || fs.existsSync(path.join(cwd, '.claude', 'settings.json')));
+      step('своё .CLAUDE/ в другом регистре', 'Write', steps.dotUpper, w, () => fs.existsSync(steps.dotUpper) || fs.existsSync(path.join(cwd, '.claude', 'settings.json')), o);
       step('чужое пространство', 'Edit', steps.other, 'rule', () => read(steps.other) !== before.other);
       step('tags/', 'Write', steps.tag, 'rule', () => fs.existsSync(steps.tag));
       step('SPACES/ в другом регистре', 'Edit', steps.upper, 'rule', () => read(path.join(spaceDir('delta'), 'CLAUDE.md')) !== before.upper);
@@ -924,7 +948,9 @@ await scenario('session-edit', () =>
     const own = ['alpha'];
     // папка пространства — в --add-dir, как у сессии, запущенной с ним: в acceptEdits без правила ask запись прошла бы молча
     const dirs = launchDirs([spaceDir('alpha')], project, filesDir, [], { spaces: own, flowsDir: FLOWS_DIR });
-    const { permissions } = sessionSettings({ id: 'check', token: 'check', port: 1, claudeSessionId: '00000000-0000-4000-8000-000000000000', resume: false, name: 'check', ...dirs }) as { permissions: { deny: string[]; ask: string[] } };
+    const editSettings = sessionSettings({ id: 'check', token: 'check', port: 1, claudeSessionId: '00000000-0000-4000-8000-000000000000', resume: false, name: 'check', ...dirs }) as { permissions: { deny: string[]; ask: string[] }; hooks: { PreToolUse: { matcher: string; hooks: Record<string, unknown>[] }[] } };
+    const { permissions } = editSettings;
+    const bashHook = editSettings.hooks.PreToolUse.find((h) => h.matcher === 'Bash');
     const calls: Call[] = [];
     const asks: Ask[] = [];
     // Bash — как у сессии терминала: не разрешён заранее; хук записи его не видит, решают правила и режим Claude Code
@@ -946,6 +972,8 @@ await scenario('session-edit', () =>
     add(sc, 'своё пространство — в permissions.ask', permissions.ask.includes(`Edit(/${spaceDir('alpha')}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
     add(sc, 'папка flow — в permissions.ask', permissions.ask.includes(`Edit(/${FLOWS_DIR}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
     add(sc, 'чужое пространство — в permissions.deny', permissions.deny.includes(`Edit(/${spaceDir('beta')}/**)`) ? 'ok' : 'FAIL', permissions.deny.join(', '));
+    // хук Bash: сверка команд в bypassPermissions; без onFailure: block — сбой сервера не останавливает команды
+    add(sc, 'хук Bash в --settings', bashHook && !('onFailure' in (bashHook.hooks[0] ?? {})) ? 'ok' : 'FAIL', bashHook ? `PreToolUse Bash${'onFailure' in (bashHook.hooks[0] ?? {}) ? ' с onFailure' : ''}` : 'sessionSettings не поставил хук Bash');
     let round = 0;
     let rawRound = 0;
     const cost = await perMode(sc, options, SESSION_MODES, (mode) => ((round = asks.length), (rawRound = rawCalls.length), [
@@ -960,20 +988,26 @@ await scenario('session-edit', () =>
     ].map((s) => `One step this turn: ${s}`)), (mode, mine) => {
       const raw = rawCalls.slice(rawRound);
       const mineAsks = asks.slice(round);
-      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean) => checkStep(sc, mode, name, mine, raw, mineAsks, tool, f, want, changed);
-      step('карта своего пространства', 'Edit', map, 'ask', () => read(map) !== before.map);
-      step('документ своего пространства', 'Write', doc, 'ask', () => fs.existsSync(doc));
-      step('flow (схема в порядке)', 'Edit', flow, 'ask', () => read(flow) !== before.flow);
+      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean, o?: StepOpts) => checkStep(sc, mode, name, mine, raw, mineAsks, tool, f, want, changed, o);
+      const [w, o] = ownWant(mode);
+      step('карта своего пространства', 'Edit', map, w, () => read(map) !== before.map, o);
+      step('документ своего пространства', 'Write', doc, w, () => fs.existsSync(doc), o);
+      step('flow (схема в порядке)', 'Edit', flow, w, () => read(flow) !== before.flow, o);
       step('flow не по схеме', 'Write', broken, 'deny', () => fs.existsSync(broken));
       step('чужое пространство', 'Edit', other, 'rule', () => read(other) !== before.other);
       step('settings.json папки настроек', 'Write', settingsFile, 'rule', () => read(settingsFile) !== before.settings);
       // Bash мимо хука записи: своё пространство не должно меняться без вопроса, чужое — никак. В default вопрос был бы
-      // и без правила ask (Bash не разрешён заранее) — значимы acceptEdits и bypassPermissions
+      // и без правила ask (Bash не разрешён заранее) — значимы acceptEdits (спрашивает сам claude) и bypassPermissions
+      // (спрашивает хук: bashDecision по тексту команды)
       const bash = (f: string) => mine.filter((c) => c.tool === 'Bash' && String(c.input.command ?? '').includes(f));
       const bashAsked = (f: string) => mineAsks.some((a) => a.tool === 'Bash' && a.file.includes(f));
       const ownTry = bash(bashOwn(mode));
       const ownMade = fs.existsSync(bashOwn(mode));
-      add(sc, `${mode}: Bash cp в своё пространство — не молча`, !ownTry.length ? 'не воспроизведено' : ownMade && !bashAsked(bashOwn(mode)) ? 'FAIL' : 'ok', `${ownTry.map(fmt).join('; ') || 'попыток нет'}; вопрос ${bashAsked(bashOwn(mode)) ? 'был' : 'не задавался'}; файл ${ownMade ? 'ПОЯВИЛСЯ' : 'не появился'}`);
+      // в dontAsk — отказ без вопроса (файла нет); в остальных режимах — вопрос был и файла нет (canUseTool отвечает
+      // «нет»): «файла нет без вопроса» там значило бы, что cp упал по другой причине, а не что его спросили
+      const ownAsked = bashAsked(bashOwn(mode));
+      const ownOk = mode === 'dontAsk' ? !ownMade : ownAsked && !ownMade;
+      add(sc, `${mode}: Bash cp в своё пространство — ${mode === 'dontAsk' ? 'отказ' : 'с вопросом'}`, !ownTry.length ? 'не воспроизведено' : ownOk ? 'ok' : 'FAIL', `${ownTry.map(fmt).join('; ') || 'попыток нет'}; вопрос ${ownAsked ? 'был' : 'не задавался'}; файл ${ownMade ? 'ПОЯВИЛСЯ' : 'не появился'}`);
       const otherTry = bash(bashOther(mode));
       const otherMade = fs.existsSync(bashOther(mode));
       add(sc, `${mode}: Bash > в чужое пространство — не пишется`, otherMade ? 'FAIL' : !otherTry.length ? 'не воспроизведено' : 'ok', `${otherTry.map(fmt).join('; ') || 'попыток нет'}; вопрос ${bashAsked(bashOther(mode)) ? 'был' : 'не задавался'}; файл ${otherMade ? 'ПОЯВИЛСЯ' : 'не появился'}`);
@@ -984,7 +1018,8 @@ await scenario('session-edit', () =>
 );
 
 // ---------- ask-modes: предпосылка вопроса agentgraph — claude показывает вопрос, когда хук PreToolUse ответил ask, в
-// каждом режиме, bypassPermissions и dontAsk тоже. Нет вопроса — FAIL: правка, которой agentgraph велит спросить,
+// каждом режиме, bypassPermissions тоже (без правила ask в --settings — и в dontAsk; с правилом ask dontAsk отказывает
+// без вопроса, поэтому там agentgraph отказывает сам). Нет вопроса — FAIL: правка, которой agentgraph велит спросить,
 // в этом режиме не дойдёт до человека. Контроль — та же запись без хука: показывает, что режим и правда переключился
 // (в bypassPermissions и acceptEdits файл появляется без вопроса) и что вопрос дал именно хук
 

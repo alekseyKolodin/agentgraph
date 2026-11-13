@@ -11,7 +11,7 @@ const prevHome = process.env.AGENTGRAPH_HOME;
 const prevCfg = process.env.AGENTGRAPH_CONFIG_DIR;
 process.env.AGENTGRAPH_HOME = home;
 process.env.AGENTGRAPH_CONFIG_DIR = path.join(home, 'cfg');
-const { classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, textAfter } = await import('./session-edit.js');
+const { bashDecision, classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, textAfter } = await import('./session-edit.js');
 const { createSpace, spaceDir, spacesDir } = await import('./spaces.js');
 const { saveFlowYaml } = await import('./flows.js');
 const { FLOWS_DIR } = await import('./paths.js');
@@ -301,4 +301,51 @@ test('после записи: откат нового сломанного flow
   const rt = (classifyEdit(scope(), 'Write', { file_path: path.join(FLOWS_DIR, 'root-bad.yaml'), content: '' }) as { target: import('./session-edit.js').EditTarget }).target;
   recheckEdit(rt, null);
   assert.ok(fs.existsSync(FLOWS_DIR));
+});
+
+test('Bash: команда с папкой своего пространства или папкой flow (как есть, ~/, $HOME/, в другом регистре) или из рабочей папки внутри них — причина для вопроса; проект, чужое пространство и сессия без пространства — нет', () => {
+  const prev = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const b = (cmd: string, o: Partial<Scope> = {}) => bashDecision(scope(o), cmd);
+    const rel = path.relative(home, spaceDir('feat'));
+    assert.match(b(`cp a.md ${own('notes.md')}`)?.reason ?? '', /^Команда Bash упоминает папку пространства feat \(.*\): в режиме bypassPermissions/);
+    assert.ok(b(`echo x > ~/${rel}/CLAUDE.md`), '~/');
+    assert.ok(b(`cat "$HOME/${rel}/STATE.md"`), '$HOME');
+    assert.ok(b(`ls \${HOME}/${rel}`), '${HOME}');
+    assert.ok(b(`ls ${spaceDir('feat').toUpperCase()}`), 'регистр');
+    assert.match(b(`sed -i '' s/a/b/ ${path.join(FLOWS_DIR, 'lib', 'fix-bug.yaml')}`)?.reason ?? '', /упоминает папку flow/);
+    assert.match(b('touch CLAUDE.md', { toolCwd: spaceDir('feat') })?.reason ?? '', /выполняется из папки пространства feat/);
+    assert.equal(b(`npm test && cp a ${path.join(proj, 'b')}`), undefined);
+    // чужое пространство для Bash держит правило deny из --settings, эвристика его не касается
+    assert.equal(b(`cp a ${path.join(spaceDir('other'), 'x.md')}`), undefined);
+    assert.equal(b(`cp a ${own('x.md')}`, { spaces: [] }), undefined);
+    // граница пути: своё feat не ловит соседнее feat-2, папка flow — flows-old
+    createSpace('feat-2');
+    assert.equal(b(`cp a ${path.join(spaceDir('feat-2'), 'x.md')}`), undefined);
+    assert.equal(b(`cp a ${FLOWS_DIR}-old/x.yaml`), undefined);
+    // кавычки, обратный слэш, // и /./ не уводят мимо
+    assert.ok(b(`cp a "$HOME"/${rel}/x.md`), '"$HOME"');
+    assert.ok(b(`cp a ~/"${rel}/x.md"`), 'кавычки внутри');
+    assert.ok(b(`cp a ${spacesDir()}//feat/./x.md`), '// и /./');
+    // относительный путь от рабочей папки: папка flow внутри проекта сессии (репо agentgraph)
+    const repoCwd = path.dirname(FLOWS_DIR);
+    assert.match(b(`sed -i '' s/a/b/ flows/lib/fix-bug.yaml`, { cwd: repoCwd })?.reason ?? '', /упоминает папку flow/);
+    assert.ok(b('cp x ./flows/', { cwd: repoCwd }), './flows/');
+    assert.equal(b('cat src/flows.ts my-flows/a', { cwd: repoCwd }), undefined);
+    // своё вместе с закрытым — отказ: одобрение вопроса не должно касаться закрытого
+    const mixed = (cmd: string) => b(cmd);
+    assert.match(JSON.stringify(mixed(`cp ${own('CLAUDE.md')} ${path.join(spaceDir('other'), 'CLAUDE.md')}`)), /"decision":"deny".*пространство other.*раздели команду/);
+    assert.match(mixed(`cp ${own('a')} ${path.join(tagsDir(), 'qa', 'b')}`)?.reason ?? '', /папку тегов знаний/);
+    assert.match(mixed(`cp ${own('a')} ${path.join(teamsDir(), 't')}`)?.reason ?? '', /папку команд Teamwork/);
+    assert.match(mixed(`rm -rf ${own('a')} ${spacesDir()}`)?.reason ?? '', /папку пространств целиком/);
+    assert.equal(mixed(`cp ${own('a')} ${own('b')}`)?.decision, 'ask');
+    // папка flow через ссылку: команда с настоящим путём ловится по realpath
+    const link = path.join(home, 'flows-link');
+    fs.symlinkSync(FLOWS_DIR, link);
+    assert.ok(b(`cp a ${path.join(FLOWS_DIR, 'x.yaml')}`, { flowsDir: link }), 'realpath');
+  } finally {
+    if (prev === undefined) delete process.env.HOME;
+    else process.env.HOME = prev;
+  }
 });
