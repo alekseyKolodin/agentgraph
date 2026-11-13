@@ -2,7 +2,8 @@
 // список с поиском и новым пространством над ним; справа — пространство: шапка с действиями (новая сессия, сессия в
 // папке пространства, удалить), вкладки «Карта» (CLAUDE.md), «Состояние» (STATE.md), «Документы», «Контекст» (что
 // уходит модели) и «Настройки» (заголовок, папки); сессии и запуски пространства — колонкой справа или ниже.
-// Каждое открытие страницы (переход, в том числе на тот же адрес) перечитывает список и пространство с сервера.
+// Каждое открытие страницы (переход, в том числе на тот же адрес) перечитывает список и пространство с сервера; правка
+// пространства сессией терминала (событие space) — тоже, если здесь нет несохранённого.
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Link, matchPath, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,6 +13,7 @@ import {
   useFeature, useSpaces,
 } from '../../api';
 import { setSessionSpace } from '../../api/sessions';
+import { onSpaceChanged } from '../../api/spaces';
 import { Badge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -143,6 +145,29 @@ export function SpacesScreen() {
     setMsg(NO_MSG);
     void load(slug);
   }, [location.key]);
+
+  // сессия терминала поменяла это пространство (с вопросом пользователю): правок здесь нет и на момент ответа — перечитать
+  // молча; есть — их не затирать: список документов — с диска, а если поменялись поля формы (карта, состояние, настройки) —
+  // сказать (сохранение карты или состояния поверх получит 409). База правки (mtime) остаётся прежней
+  useEffect(
+    () =>
+      onSpaceChanged((changed, part) => {
+        if (cur.current.space?.slug !== changed) return;
+        const my = seq.current;
+        void fetchSpace(changed).then(
+          (fresh) => {
+            if (my !== seq.current || cur.current.space?.slug !== changed) return;
+            if (!dirtyNow()) return fill(fresh);
+            setSpace((prev) => (prev ? { ...prev, docs: fresh.docs } : prev));
+            if (part === 'doc' || part === 'other') return;
+            setConflict(true);
+            setMsg({ cls: 'msg err', text: t('Пространство изменили в сессии: перечитай с диска, прежде чем сохранять') });
+          },
+          () => {},
+        );
+      }),
+    [],
+  );
 
   const setNewOpen = (open: boolean) => {
     if (open) {
@@ -530,7 +555,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                     to={`/sessions?space=${encodeURIComponent(s.slug)}`}
                     title={t('Новая сессия Claude Code в терминале в этом пространстве: карта — памятью, состояние и документы — в контексте') + (workdir ? `\n${t('Папка: {path}', { path: workdir.path })}` : '')}
                   >{t('Новая сессия')}</Link>
-                  <Link className="btn small ghost" to={`/sessions?space=${encodeURIComponent(s.slug)}&cwd=${encodeURIComponent(s.dir)}`} title={t('Сессия в самой папке пространства: Claude правит карту и документы как обычный проект, ты подтверждаешь правки')}>{t('Сессия в папке')}</Link>
+                  <Link className="btn small ghost" to={`/sessions?space=${encodeURIComponent(s.slug)}&cwd=${encodeURIComponent(s.dir)}`} title={t('Сессия в самой папке пространства: Claude работает в ней как в проекте, каждую правку пространства ты подтверждаешь')}>{t('Сессия в папке')}</Link>
                 </>
               )}
               <button type="button" className="btn small ghost danger" onClick={onRemove}>{t('Удалить')}</button>
@@ -569,7 +594,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               </p>
               <textarea name="map" className={styles.mono} rows={18} spellCheck={false} placeholder={MAP_PLACEHOLDER} value={form.map} onChange={(e) => edit('map', e.target.value)} />
               <div className={styles.fieldFoot}>
-                <span className={cx('small', mapLong ? 'warn' : 'muted')}>{mapLong ? t('Карта длинная: она уходит в каждый запрос модели — вынеси подробности в документы') : t('Карту правишь ты; агент её не меняет — только сессия в папке пространства с твоим подтверждением')}</span>
+                <span className={cx('small', mapLong ? 'warn' : 'muted')}>{mapLong ? t('Карта длинная: она уходит в каждый запрос модели — вынеси подробности в документы') : t('Карту правишь ты или сессия Claude — каждую её правку ты подтверждаешь; этапы запусков её не меняют')}</span>
                 <span className="muted small mono">{fieldCount(form.map)}</span>
               </div>
             </div>

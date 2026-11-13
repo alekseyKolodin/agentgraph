@@ -103,7 +103,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -182,7 +182,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team'>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -224,6 +224,8 @@ const servers = new Set<http.Server>();
 let updater: Updater | null = null;
 /** Подписка на «сессия ждёт тебя»: одна на поднятые серверы, адрес в уведомлении — первого startServer; снимает stopServer. */
 let sessionWaits: (() => void) | null = null;
+/** Подписка на правки сессий терминала (пространство, flow): событие space или flows общего потока; снимает stopServer. */
+let sessionEdits: (() => void) | null = null;
 /**
  * Пустые рабочие папки запусков в папке настроек (configDir()/workdirs/<id запуска>/<имя>): черновик Teamwork без репо кода
  * (startRun emptyCwd). Не в папке запусков: она бывает внутри репо agentgraph (ROOT = APP_DIR), и агент подхватил бы его
@@ -257,6 +259,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
   }
   // WebSocket экрана сессии терминала: upgrade обходит handle(), проверки Host и Origin — в sessions-server.ts
   server.on('upgrade', sessionsUpgrade);
+  // сессия поменяла пространство или flow (MCP или правкой файла с вопросом): открытые экраны перечитают
+  sessionEdits ??= onSessionEdit((e) => homeBroadcast(e.kind === 'space' ? { type: 'space', runId: '', flow: '', space: e.slug, spacePart: e.part } : { type: 'flows', runId: '', flow: '' }));
   sessionWaits ??= onSessionWaiting((v) => {
     const session = { id: v.id, name: v.name, ...(v.space ? { space: v.space } : {}) };
     homeBroadcast({ type: 'session', runId: '', flow: '', session });
@@ -295,6 +299,8 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   await sessionsStopped;
   sessionWaits?.();
   sessionWaits = null;
+  sessionEdits?.();
+  sessionEdits = null;
   // клоны команд: таймеры снимаются, текущая запись или push дожидается; опрос PR — тоже
   teamChanges?.();
   teamChanges = null;

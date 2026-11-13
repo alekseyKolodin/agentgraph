@@ -4,16 +4,19 @@
 // на UserPromptSubmit и PostToolBatch) с бюджетом, разбор хуков и решение «продолжить разговор или начать новый».
 // Контекст заходит только штатными механизмами Claude Code: папка пространства — в --add-dir, и его CLAUDE.md claude
 // грузит памятью сам; хуки из --settings отвечают additionalContext (шапка пространства, документы, состояние, строки
-// тегов знаний); полный текст тега знаний отдаёт knowledge_read, документ пространства пишет space_write MCP-сервера
-// agentgraph (sessions-mcp.ts). --append-system-prompt не используется: он замораживается на первом запросе. Процессы и
-// экран — sessions-pty.ts, маршруты — sessions-server.ts.
+// тегов знаний); полный текст тега знаний отдаёт knowledge_read MCP-сервера agentgraph (sessions-mcp.ts). Своё
+// пространство и flow сессия меняет только с вопросом пользователю — инструментами space_*/flow_write или правкой
+// файлов, которую решает хук записи (session-edit.ts). --append-system-prompt не используется: он замораживается на
+// первом запросе. Процессы и экран — sessions-pty.ts, маршруты — sessions-server.ts.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
 import { isInside, WRITE_TOOLS } from './artifacts.js';
+import { configDir } from './settings.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
-import { existingSpacePaths, META_FILE, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
+import { existingSpacePaths, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 import { teamsDir } from './teamwork.js';
 
 /** Имя MCP-сервера в конфиге claude: не knowledge, чтобы не столкнуться с сервером пользователя. */
@@ -23,6 +26,15 @@ export const SESSION_NEW_TOOL = 'session_new';
 export const SESSION_NEW_FULL = `mcp__${SESSION_MCP_SERVER}__${SESSION_NEW_TOOL}`;
 /** Запись документа пространства: как session_new — не в SESSION_ALLOWED_TOOLS, PreToolUse велит спросить всегда. */
 export const SPACE_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_WRITE_TOOL}`;
+/** Карта, состояние и настройки пространства сессии, flow в папке flow: тоже всегда с вопросом. */
+export const SPACE_MAP_WRITE_TOOL = 'space_map_write';
+export const SPACE_STATE_WRITE_TOOL = 'space_state_write';
+export const SPACE_SETTINGS_TOOL = 'space_settings';
+export const FLOW_WRITE_TOOL = 'flow_write';
+export const SPACE_MAP_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_MAP_WRITE_TOOL}`;
+export const SPACE_STATE_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_STATE_WRITE_TOOL}`;
+export const SPACE_SETTINGS_FULL = `mcp__${SESSION_MCP_SERVER}__${SPACE_SETTINGS_TOOL}`;
+export const FLOW_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${FLOW_WRITE_TOOL}`;
 /** Инструменты сессии из задачи Teamwork (spec §9.5): статус, PR и комментарий задачи; документ проекта. Оба всегда с вопросом. */
 export const TEAM_TASK_UPDATE_TOOL = 'team_task_update';
 export const TEAM_DOC_WRITE_TOOL = 'team_doc_write';
@@ -32,12 +44,21 @@ export const TEAM_DOC_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_DOC_WRITE
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
   [SPACE_WRITE_FULL]: 'agentgraph: документ пространства увидят все следующие сессии и запуски',
+  [SPACE_MAP_WRITE_FULL]: 'agentgraph: карту пространства получат памятью все следующие сессии и запуски',
+  [SPACE_STATE_WRITE_FULL]: 'agentgraph: состояние пространства получат следующие сессии и запуски',
+  [SPACE_SETTINGS_FULL]: 'agentgraph: настройки пространства (space.json) — его папки чтения откроются всем сессиям и запускам',
+  [FLOW_WRITE_FULL]: 'agentgraph: flow запишется в папку flow — его возьмут следующие запуски',
   [TEAM_TASK_UPDATE_FULL]: 'agentgraph: изменение задачи Teamwork уйдёт коммитом в репо команды',
   [TEAM_DOC_WRITE_FULL]: 'agentgraph: документ проекта Teamwork уйдёт коммитом в репо команды',
 };
+/**
+ * Режимы, в которых claude вопрос не покажет: bypassPermissions пропускает «ask», dontAsk отклоняет сам. Там, где
+ * agentgraph велит спросить, в этих режимах хук отвечает отказом: правка с разрешения человека не станет тихой.
+ */
+export const NO_ASK_MODES = ['bypassPermissions', 'dontAsk'];
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';
-/** Инструменты записи файлов: у сессии в папке пространства хук PreToolUse сверяет путь в момент вызова. */
+/** Инструменты записи файлов: хук PreToolUse сверяет путь в момент вызова, PostToolUse — проверяет записанное. */
 const WRITE_MATCHER = WRITE_TOOLS.join('|');
 
 /** Версия claude не ниже нужной («2.1.317 (Claude Code)» и подобные); неизвестная — нет. */
@@ -198,50 +219,75 @@ export function mapLoadedAt(spaceDir: string, cwd: string): boolean {
   return isInside(cwd, spaceDir) || (!isInside(spaceDir, cwd) && plainPath(spaceDir));
 }
 
+/** Что launchDirs знает о сессии сверх папок: свои пространства и папка flow — их правка с вопросом. */
+export type LaunchEdit = {
+  /** Свои пространства (слаги): выбранное у сессии и то, в папке которого она открыта. */
+  spaces?: string[];
+  /** Папка flow (FLOWS_DIR). */
+  flowsDir?: string;
+};
+
 /**
- * --add-dir и запрет записи. --add-dir открывает и запись, поэтому всё, что он открыл, вся папка тегов
- * (~/.agentgraph/tags), вся папка пространств (~/.agentgraph/spaces: карты, состояния, документы — документ пишется только
- * инструментом space_write с подтверждением), вся папка команд Teamwork (~/.agentgraph/teams: клоны репо команд) и
- * артефакты прошлых запусков закрыты правилом Edit (оно же запрещает Write).
- * Пути внутри cwd или содержащие его не трогаем: это сам проект, запрет закрыл бы его; папки тегов, пространств и
- * артефакты закрываем и внутри проекта — не закрываем, только если в них лежит сам cwd. Сессия, открытая в папке
- * пространства, правит его карту и документы как обычный проект, но space.json (его пути станут --add-dir других сессий)
- * закрыт и тогда — denyFiles. Путь со спецсимволами правило не поймает — такой папки нет ни в --add-dir, ни в запретах.
- * filesDir — папка файлов, перетащенных в терминал.
+ * --add-dir, запреты и вопросы записи. --add-dir открывает и запись, поэтому всё, что он открыл (кроме своего
+ * пространства и папки flow), вся папка тегов (~/.agentgraph/tags), вся папка команд Teamwork (~/.agentgraph/teams: клоны
+ * репо команд), артефакты прошлых запусков, служебные файлы папки настроек (settings.json, jira-token…) и все
+ * пространства, кроме своих, закрыты правилом Edit (оно же запрещает Write; что из этого Claude Code применяет к
+ * файловым командам Bash — его дело, поэтому запрет не снимается и там, где хук записи отказал бы сам). Без своего
+ * пространства закрыта вся папка пространств, как раньше.
+ * Своё пространство и папка flow — вопросом (permissions.ask держит его и в acceptEdits, и в auto) на каждую правку:
+ * их сессия правит с разрешения пользователя (решение владельца). Правила — снимок на старте: пространство, заведённое
+ * потом, и выбранное на ходу закрыты хуком записи (session-edit.ts) — выбранное на ходу правится инструментами space_*
+ * сразу, а файлами — после «Перезапустить» (правила пересчитываются).
+ * Пути внутри cwd или содержащие его не трогаем: это сам проект, запрет закрыл бы его; папки тегов, команд, пространств и
+ * артефакты закрываем и внутри проекта — не закрываем, только если в них лежит сам cwd. Путь со спецсимволами правило не
+ * поймает — такой папки нет ни в --add-dir, ни в запретах (решает хук). filesDir — папка файлов, перетащенных в терминал.
  */
 export function launchDirs(
   readDirs: string[],
   cwd: string,
   filesDir: string,
   protectedDirs: string[] = [],
+  edit: LaunchEdit = {},
 ): { addDirs: string[]; denyDirs: string[]; denyFiles: string[]; askDirs: string[] } {
   const add = readDirs.filter((d) => !isInside(cwd, d) && !isInside(d, cwd) && plainPath(d));
   const spaces = spacesDir();
-  // папка команд Teamwork (клоны репо команд) закрыта так же, как теги и пространства: данные команды меняет только API
-  const guard = [tagsDir(), spaces, teamsDir(), ...protectedDirs].filter((d) => !isInside(cwd, d) && plainPath(d));
-  let denyFiles: string[] = [];
-  let askDirs: string[] = [];
-  const inSpace: string[] = [];
-  if (isInside(cwd, spaces) && plainPath(spaces)) {
-    // сессия в папке пространства («Сессия в папке»): своё пространство она правит как проект, но каждая правка — с
-    // вопросом (permissions.ask держит его и в acceptEdits, и в auto), без .claude/ (настройки и скиллы грузятся во все
-    // сессии пространства) и без space.json (его пути станут --add-dir других сессий); остальные пространства закрыты
-    const cur = path.relative(spaces, cwd).split(path.sep)[0];
-    const own = cur ? path.join(spaces, cur) : undefined;
+  const flows = edit.flowsDir;
+  const own = new Set((edit.spaces ?? []).map((s) => path.join(spaces, s)));
+  const cur = isInside(cwd, spaces) ? path.relative(spaces, cwd).split(path.sep)[0] : '';
+  if (cur) own.add(path.join(spaces, cur));
+  // папка команд Teamwork (клоны репо команд) закрыта так же, как теги: данные команды меняет только API; без своего
+  // пространства — и вся папка пространств
+  const guard = [tagsDir(), teamsDir(), ...(own.size ? [] : [spaces]), ...protectedDirs].filter((d) => !isInside(cwd, d) && plainPath(d));
+  const others: string[] = [];
+  const denyFiles = own.size ? [path.join(spaces, '.migrated.json')] : [];
+  if (own.size) {
     for (const name of readdirSafe(spaces)) {
       const d = path.join(spaces, name);
-      if (d !== own && plainPath(d) && fs.lstatSync(d, { throwIfNoEntry: false })?.isDirectory()) inSpace.push(d);
+      if (own.has(d) || !plainPath(d)) continue;
+      const st = fs.lstatSync(d, { throwIfNoEntry: false });
+      if (st?.isDirectory()) others.push(d);
+      else if (st && !denyFiles.includes(d)) denyFiles.push(d);
     }
-    if (own) {
-      inSpace.push(path.join(own, '.claude'));
-      askDirs = [own];
-    }
-    denyFiles = [path.join(spaces, '*', META_FILE), path.join(spaces, '.migrated.json')];
   }
-  const all = [...guard, ...add, ...inSpace];
-  const deny = all.filter((d, i) => all.indexOf(d) === i && !all.some((o) => o !== d && isInside(d, o) && guard.includes(o)));
+  denyFiles.push(...configFiles(cwd));
+  // папки чтения внутри своего пространства и папки flow запретом не закрываем: их правку решают вопрос и хук записи
+  const open = add.filter((d) => ![...own].some((o) => isInside(d, o)) && !(flows && isInside(d, flows)));
+  const all = [...guard, ...open, ...others];
+  const deny = all.filter((d, i) => all.indexOf(d) === i && !all.some((o) => o !== d && isInside(d, o) && (guard.includes(o) || others.includes(o))));
+  const askDirs = [...(own.size ? [...own] : []), ...(flows ? [flows] : [])].filter(plainPath);
   // ~/.agentgraph может быть ссылкой: правило с лексическим путём реальный путь не поймало бы — добавляем и его
-  return { addDirs: [...add, filesDir], denyDirs: withRealpaths(deny), denyFiles: withRealpaths(denyFiles), askDirs: withRealpaths(askDirs) };
+  return { addDirs: [...add, filesDir], denyDirs: withRealpaths(deny), denyFiles: withRealpaths(denyFiles.filter(plainPath)), askDirs: withRealpaths(askDirs) };
+}
+
+/**
+ * Служебные файлы прямо в папке настроек agentgraph (settings.json, jira-token…): закрыты правилом. Папки внутри — не
+ * здесь (пространства, теги, команды — выше; рабочие папки и worktree — проекты сессий). Папка настроек шире разумного
+ * (домашняя, корень) — не трогаем: запрет закрыл бы чужие файлы; cwd в ней самой — тоже (это проект).
+ */
+function configFiles(cwd: string): string[] {
+  const cfg = path.resolve(configDir());
+  if (cfg === path.parse(cfg).root || cfg === os.homedir() || cwd === cfg || !plainPath(cfg)) return [];
+  return readdirSafe(cfg).map((n) => path.join(cfg, n)).filter((f) => fs.lstatSync(f, { throwIfNoEntry: false })?.isFile());
 }
 
 function readdirSafe(dir: string): string[] {
@@ -279,9 +325,9 @@ export type SessionLaunch = {
   name: string;
   addDirs: string[];
   denyDirs: string[];
-  /** Отдельные файлы (или шаблоны с *) под запретом Edit: space.json, когда сессия открыта в папке пространства. */
+  /** Отдельные файлы (или шаблоны с *) под запретом Edit: служебные файлы папок настроек и пространств. */
   denyFiles?: string[];
-  /** Папки, правка в которых всегда с вопросом (permissions.ask): своё пространство сессии, открытой в его папке. */
+  /** Папки, правка в которых всегда с вопросом (permissions.ask): папка пространств и папка flow. */
   askDirs?: string[];
   /** Версия claude, если известна: от неё зависит onFailure у HTTP-хука PreToolUse. */
   claudeVersion?: string;
@@ -307,19 +353,20 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
   // дальше — с onFailure: block (claude 2.1.295+; старый ключа не знает, и ему его не шлём) вызов блокируется
   const askHook = { ...http[0].hooks[0], ...(versionAtLeast(l.claudeVersion, HOOK_ON_FAILURE_SINCE) ? { onFailure: 'block' } : {}) };
   const dirRules = (d: string) => [`Edit(/${d})`, `Edit(/${d}/**)`];
-  // сессия в папке пространства: запреты на другие пространства — снимок на старте, а заведённые потом и новые папки в
-  // spaces/ ловит хук записи в момент вызова (handleHook → writeGuard)
-  const writeHook = l.askDirs?.length ? [{ matcher: WRITE_MATCHER, hooks: [askHook] }] : [];
   return {
     hooks: {
       SessionStart: [{ hooks: [{ type: 'command', command: curl, timeout: 10 }] }],
       ...Object.fromEntries(HTTP_HOOKS.map((e) => [e, http])),
-      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), ...writeHook],
+      // хук записи — у каждой сессии: путь сверяется в момент вызова (handleHook → writeGuard, session-edit.ts) —
+      // чужое пространство, теги, папка команд — отказ, своё пространство и flow — вопрос с проверкой до записи
+      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }],
+      // после записи: проверенный файл (space.json, карта, состояние, flow) — ещё раз на диске, UI — обновить
+      PostToolUse: [{ matcher: WRITE_MATCHER, hooks: http[0].hooks }],
     },
     // //путь — абсолютный путь в правилах разрешений; Edit закрывает все инструменты записи файлов, правило Write(путь)
     // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит.
-    // ask — session_new и space_write спрашивают и без хука (явное правило ask держит вопрос и в auto), плюс своё
-    // пространство сессии, открытой в его папке
+    // ask — инструменты agentgraph спрашивают и без хука (явное правило ask держит вопрос и в auto), плюс папка
+    // пространств и папка flow: сбой хука или старый claude не делают правку там тихой
     permissions: {
       deny: [...l.denyDirs.flatMap(dirRules), ...(l.denyFiles ?? []).map((f) => `Edit(/${f})`)],
       ask: [...Object.keys(ASK_TOOLS), ...(l.askDirs ?? []).flatMap(dirRules)],
@@ -474,6 +521,8 @@ export type HookInput = {
   permission_mode?: string;
   /** Рабочая папка claude в момент хука: от неё — относительные пути инструментов. */
   cwd?: string;
+  /** id вызова инструмента: PreToolUse и PostToolUse одного вызова — по нему (снимок файла до записи). */
+  tool_use_id?: string;
 };
 
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
@@ -485,7 +534,7 @@ export function parseHookInput(raw: unknown): HookInput | undefined {
   if (!event) return undefined;
   const input = r.tool_input && typeof r.tool_input === 'object' && !Array.isArray(r.tool_input) ? (r.tool_input as Record<string, unknown>) : undefined;
   const out: HookInput = { hook_event_name: event };
-  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode', 'cwd'] as const) {
+  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode', 'cwd', 'tool_use_id'] as const) {
     const v = str(r[k]);
     if (v !== undefined) out[k] = v;
   }
@@ -538,11 +587,23 @@ export type HookDeps = {
   /** Что они разрешают читать (sessionReadTargets). */
   readTargets: (ctx: SessionCtx) => ReadTargets;
   realpath: (p: string) => string;
-  /** Подробности к вопросу PreToolUse: что сделает этот вызов (папка, пространство, режим новой сессии; какой документ). */
-  askDetail?: (tool: string, input: Record<string, unknown>) => string | undefined;
-  /** Запись файла (сессия в папке пространства): строка — отказ с этим объяснением; undefined — решают правила и режим. */
-  writeGuard?: (tool: string, input: Record<string, unknown>, cwd?: string) => string | undefined;
+  /**
+   * Подробности к вопросу PreToolUse: что сделает этот вызов (папка, пространство, режим новой сессии; какой документ).
+   * { deny } — вызов не пройдёт проверку (схема flow, папки пространства): отказ с причиной, без вопроса человеку.
+   */
+  askDetail?: (tool: string, input: Record<string, unknown>) => string | { deny: string } | undefined;
+  /**
+   * Запись файла: deny — отказ с объяснением, ask — вопрос человеку с подробностями (своё пространство, flow);
+   * undefined — решают правила и режим. call — вход хука: рабочая папка claude, режим и id вызова.
+   */
+  writeGuard?: (tool: string, input: Record<string, unknown>, call: WriteCall) => WriteVerdict | undefined;
+  /** После записи (PostToolUse): строка — что сказать модели (проверка на диске не прошла, файл откачен). */
+  afterWrite?: (tool: string, input: Record<string, unknown>, call: WriteCall) => string | undefined;
 };
+
+/** Что хук записи знает о вызове из входа хука. */
+export type WriteCall = { cwd?: string; mode?: string; toolUseId?: string };
+export type WriteVerdict = { decision: 'deny' | 'ask'; reason: string };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
 const WAIT_NOTIFICATIONS = ['permission_prompt', 'idle_prompt', 'elicitation_dialog'];
@@ -552,6 +613,7 @@ const READ_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path', Gl
 const CLAUDE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const withContext = (event: string, text: string) => (text ? { hookSpecificOutput: { hookEventName: event, additionalContext: text } } : {});
+const preToolReply = (decision: 'deny' | 'ask', reason: string) => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason } });
 
 /**
  * Ответ на хук и правка состояния. «Завершена» отсюда не ставится: только по выходу процесса — SessionEnd с reason
@@ -596,27 +658,43 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
     case 'PermissionRequest':
       return { reply: permissionReply(input, deps.readTargets(ctx()), deps.realpath), patch };
     case 'PreToolUse': {
+      const call: WriteCall = { cwd: input.cwd, mode: input.permission_mode, toolUseId: input.tool_use_id };
       if (WRITE_TOOLS.includes(input.tool_name ?? '') && deps.writeGuard) {
-        let deny: string | undefined;
+        let v: WriteVerdict | undefined;
         try {
-          deny = deps.writeGuard(input.tool_name!, input.tool_input ?? {}, input.cwd);
+          v = deps.writeGuard(input.tool_name!, input.tool_input ?? {}, call);
         } catch (err) {
           // упавшая проверка не пропускает запись
-          deny = `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.`;
+          v = { decision: 'deny', reason: `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.` };
         }
-        return { reply: deny ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: deny } } : {}, patch };
+        return { reply: v ? preToolReply(v.decision, v.reason) : {}, patch };
       }
-      // session_new запускает claude с текстом модели, space_write пишет документ для всех следующих сессий:
-      // спрашиваем человека в любом режиме, auto тоже
+      // session_new запускает claude с текстом модели, space_* и flow_write пишут то, что получат все следующие сессии и
+      // запуски: спрашиваем человека в любом режиме, auto тоже; где claude вопрос не покажет — отказ
       const why = ASK_TOOLS[input.tool_name ?? ''];
       if (!why) return { reply: {}, patch };
-      let detail: string | undefined;
+      if (input.permission_mode && NO_ASK_MODES.includes(input.permission_mode)) {
+        return { reply: preToolReply('deny', `В режиме ${input.permission_mode} claude не задаст вопрос, а этот вызов — только с разрешения пользователя: отклонён. Попроси пользователя переключить режим (Shift+Tab).`), patch };
+      }
+      let detail: string | { deny: string } | undefined;
       try {
         detail = deps.askDetail?.(input.tool_name!, input.tool_input ?? {});
       } catch {
         detail = undefined;
       }
-      return { reply: { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: detail ? `${why}. ${detail}` : why } }, patch };
+      if (detail && typeof detail === 'object') return { reply: preToolReply('deny', detail.deny), patch };
+      return { reply: preToolReply('ask', detail ? `${why}. ${detail}` : why), patch };
+    }
+    case 'PostToolUse': {
+      if (!WRITE_TOOLS.includes(input.tool_name ?? '') || !deps.afterWrite) return { reply: {}, patch };
+      let note: string | undefined;
+      try {
+        note = deps.afterWrite(input.tool_name!, input.tool_input ?? {}, { cwd: input.cwd, mode: input.permission_mode, toolUseId: input.tool_use_id });
+      } catch (err) {
+        note = `Проверка после записи не удалась: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      // decision: block у PostToolUse не отменяет записанное (это делает afterWrite), а отдаёт причину модели
+      return { reply: note ? { decision: 'block', reason: note } : {}, patch };
     }
     default:
       return { reply: {}, patch };

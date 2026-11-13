@@ -9,7 +9,7 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { HomeEvent, SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager, spaceWriteGuard } from './sessions-server.js';
+import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, tagDir, updateTag } from './tags.js';
@@ -170,9 +170,10 @@ test('создание: claude без shell в папке проекта, окр
   const addDirs = p.args.flatMap((a, i) => (a === '--add-dir' ? [p.args[i + 1]] : []));
   assert.ok(addDirs.includes(spaceDir('checkout')), addDirs.join('\n'));
   assert.equal(p.opts.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD, '1');
-  // и закрыта для записи вместе со всей папкой пространств
-  const deny: string[] = JSON.parse(p.args[p.args.indexOf('--settings') + 1]).permissions.deny;
-  assert.ok(deny.includes(`Edit(/${path.dirname(spaceDir('checkout'))}/**)`), deny.join('\n'));
+  // запись в неё — с вопросом (своё пространство сессии), а не запрет
+  const perms: { deny: string[]; ask: string[] } = JSON.parse(p.args[p.args.indexOf('--settings') + 1]).permissions;
+  assert.ok(perms.ask.includes(`Edit(/${spaceDir('checkout')}/**)`), perms.ask.join('\n'));
+  assert.ok(!perms.deny.some((d) => d.includes(spaceDir('checkout'))), perms.deny.join('\n'));
   assert.deepEqual([r.body.status, r.body.live, r.body.name, r.body.space, r.body.saveState], ['starting', true, 'checkout · rules', 'checkout', true]);
   assert.deepEqual(r.body.chips, [{ slug: 'rules', state: 'pending' }]);
   // запущен с этим пространством: карта — в памяти claude (memory), раздел ждёт SessionStart
@@ -391,51 +392,6 @@ test('удаление пространства: идущая сессия, у �
   await until(async () => !(await view(s.id)).live && !(await view(s.id)).updatingState);
 });
 
-test('сессия в папке пространства: запись в пространство, заведённое после её старта, в новую папку, в своё .claude/ и space.json, в теги и в другом регистре — отказ хука; своё — решают правила', () => {
-  createSpace('wg-alpha');
-  const cwd = spaceDir('wg-alpha');
-  createSpace('wg-gamma');
-  const spaces = path.dirname(cwd);
-  const w = (p: string) => spaceWriteGuard(cwd, 'Write', { file_path: p });
-  assert.equal(w(path.join(cwd, 'CLAUDE.md')), undefined);
-  assert.equal(w('docs/spec.md'), undefined);
-  for (const p of [path.join(spaceDir('wg-gamma'), 'CLAUDE.md'), path.join(spaces, 'brand-new', 'CLAUDE.md'), path.join(spaces, 'x.md'), path.join(path.dirname(spaces), 'SPACES', 'wg-gamma', 'CLAUDE.md'), '../wg-gamma/STATE.md']) {
-    assert.match(w(p) ?? '', /правит только его/, p);
-  }
-  assert.equal(spaceWriteGuard(cwd, 'Read', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
-  // своё .claude/ и space.json — тоже отказ, и в другом регистре (правило в --settings сверяет строки)
-  for (const p of [path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.CLAUDE', 'skills', 'x', 'SKILL.md'), path.join(cwd, 'space.json'), path.join(cwd, 'SPACE.JSON'), '.claude/agents/a.md']) {
-    assert.match(w(p) ?? '', /настройки пространства/, p);
-  }
-  // папка тегов знаний — отказ в любом регистре
-  const tags = path.join(path.dirname(spaces), 'tags');
-  for (const p of [path.join(tags, 'qa', 'notes.md'), path.join(path.dirname(spaces), 'TAGS', 'qa', 'notes.md')]) {
-    assert.match(w(p) ?? '', /папке тегов знаний/, p);
-  }
-  // относительный путь — от рабочей папки claude в момент вызова (вход хука), а не от папки запуска
-  const docs = path.join(cwd, 'docs');
-  assert.match(spaceWriteGuard(cwd, 'Write', { file_path: '../../wg-gamma/CLAUDE.md' }, docs) ?? '', /правит только его/);
-  assert.equal(spaceWriteGuard(cwd, 'Write', { file_path: 'spec.md' }, docs), undefined);
-  // сессия не в папке пространства — хук не мешает
-  assert.equal(spaceWriteGuard(path.join(root, 'proj'), 'Write', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
-});
-
-test('хук записи закрывает папку команд Teamwork в любом регистре и по относительному пути (S-13); чтение и свой проект — не его дело', () => {
-  // claude зовёт этот хук у сессии в папке пространства; сама проверка от рабочей папки не зависит
-  const teams = path.join(root, 'cfg', 'teams');
-  const inSpace = spaceDir('wg-alpha');
-  const proj = path.join(root, 'proj');
-  for (const cwd of [inSpace, proj]) {
-    for (const p of [path.join(teams, 'pay', 'repo', 'flows', 'teamwork-prd.yaml'), path.join(root, 'cfg', 'TEAMS', 'pay', 'trust.json'), path.join(root, 'CFG', 'Teams', 'pay', 'local.json')]) {
-      assert.match(spaceWriteGuard(cwd, 'Edit', { file_path: p }) ?? '', /папке команд Teamwork/, `${cwd}: ${p}`);
-    }
-    assert.equal(spaceWriteGuard(cwd, 'Read', { file_path: path.join(teams, 'pay', 'repo', 'projects', 'p', 'prd.md') }), undefined);
-  }
-  assert.equal(spaceWriteGuard(proj, 'Write', { file_path: path.join(proj, 'src', 'a.ts') }), undefined);
-  // относительный путь — от рабочей папки claude в момент вызова
-  assert.match(spaceWriteGuard(proj, 'Write', { file_path: '../cfg/Teams/pay/repo/x.md' }, proj) ?? '', /папке команд Teamwork/);
-});
-
 test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
   const before = spawned.length;
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'нет') })).status, 400);
@@ -503,7 +459,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   // MCP того же сервера: только POST и только с токеном
   const list = await call<{ result: { tools: unknown[] } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': token });
-  assert.equal(list.body.result.tools.length, 3);
+  assert.equal(list.body.result.tools.length, 7);
   assert.equal((await call('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 404);
   assert.equal((await call('GET', `/api/sessions/${s.id}/mcp`, undefined, { 'X-Agentgraph-Session': token })).status, 405);
 

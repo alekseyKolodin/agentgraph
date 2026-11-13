@@ -1,19 +1,28 @@
 // MCP-сервер agentgraph для сессии терминала: POST /api/sessions/:id/mcp, транспорт streamable HTTP без состояния.
 // Свой обработчик JSON-RPC: knowledgeToolsServer из knowledge-tools.ts построен на createSdkMcpServer и работает
 // только внутри query() Agent SDK, а здесь клиент — отдельный процесс claude. Инструменты: knowledge_read — полный
-// текст тега знаний (только чтение); space_write — записать документ в docs/ пространства сессии; session_new — открыть
-// рядом новую сессию agentgraph; у сессии из задачи Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий
-// её задачи, и team_doc_write — документ проекта команды. Кроме knowledge_read ничего нет в allowedTools, и хук PreToolUse
-// велит claude спрашивать пользователя о каждом вызове. Слаги и пространство берутся в момент вызова: выбранное на ходу доступно сразу.
+// текст тега знаний (только чтение); пространство сессии — space_write (документ в docs/), space_map_write (карта),
+// space_state_write (состояние), space_settings (заголовок, папки чтения, рабочая папка — space.json); flow_write —
+// flow в папке flow (проверка схемой до записи); session_new — открыть рядом новую сессию agentgraph; у сессии из задачи
+// Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий её задачи, и team_doc_write — документ проекта
+// команды. Кроме knowledge_read ничего нет в allowedTools, и хук PreToolUse велит claude спрашивать пользователя о
+// каждом вызове (не прошедший проверку — отклоняет без вопроса). Слаги и пространство берутся в момент вызова:
+// выбранное на ходу доступно сразу.
 import type { SessionView, TeamTaskStatus } from './api-types.js';
 import { knowledgeReadText } from './knowledge-tools.js';
 import { KNOWLEDGE_READ_TOOL } from './tags.js';
-import { DOCS_DIR, SPACE_DOC_TEXT_MAX, SPACE_WRITE_TOOL, WRITE_DOC_EXTS } from './spaces.js';
-import { SESSION_NEW_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL } from './sessions.js';
+import { DOCS_DIR, MAP_FILE, META_FILE, SPACE_DIRS_MAX, SPACE_DOC_TEXT_MAX, SPACE_MAP_MAX, SPACE_STATE_MAX, SPACE_WRITE_TOOL, STATE_FILE, WRITE_DOC_EXTS } from './spaces.js';
+import {
+  FLOW_WRITE_TOOL, SESSION_NEW_TOOL, SPACE_MAP_WRITE_TOOL, SPACE_SETTINGS_TOOL, SPACE_STATE_WRITE_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL,
+} from './sessions.js';
 import { TASK_STATUSES } from './teamwork.js';
+import { FLOW_RUNS_NOTE } from './session-edit.js';
 
-/** Что у сессии на момент вызова: пространство (слаг), теги знаний и задача Teamwork, если сессия открыта из неё. */
-export type McpScope = () => { space?: string; knowledge: string[]; task?: { id: string; team: string; project: string } };
+/**
+ * Что у сессии на момент вызова: пространство (слаг и папка), теги знаний, папка flow и задача Teamwork, если сессия
+ * открыта из неё.
+ */
+export type McpScope = () => { space?: string; spaceDir?: string; knowledge: string[]; flowsDir?: string; task?: { id: string; team: string; project: string } };
 
 /** Параметры session_new: чего нет — берётся у сессии, из которой вызвали; space: null — без пространства. */
 export type SessionNewArgs = { prompt?: string; tags?: string[]; space?: string | null; cwd?: string; name?: string; model?: string };
@@ -21,12 +30,26 @@ export type SessionNewArgs = { prompt?: string; tags?: string[]; space?: string 
 /** Параметры team_task_update: статус, ссылка на PR и комментарий к задаче сессии — что задано, то и меняется. */
 export type TeamTaskUpdateArgs = { status?: TeamTaskStatus; pr?: string; comment?: string };
 
+/** Параметры space_settings: что задано — меняется (dirs — список целиком; cwd: null или "" — снять), что нет — остаётся. */
+export type SpaceSettingsArgs = { title?: string; dirs?: string[]; cwd?: string | null };
+
+/** Параметры flow_write: имя файла, YAML целиком и папка первого уровня для нового flow. */
+export type FlowWriteArgs = { name: string; yaml: string; folder?: string };
+
 export type McpCtx = {
   scope: McpScope;
   /** Новая сессия рядом с этой; ошибка (лимит, нет папки) уходит модели текстом. */
   open: (args: SessionNewArgs) => Promise<SessionView>;
   /** Документ в docs/ пространства сессии; ответ — его путь. Ошибка (нет пространства, имя, размер) — текстом модели. */
   writeDoc: (name: string, text: string) => string;
+  /** Карта пространства сессии целиком; ответ — путь CLAUDE.md. */
+  writeMap: (text: string) => string;
+  /** Состояние пространства сессии целиком (в очереди записи состояния); ответ — путь STATE.md. */
+  writeState: (text: string) => Promise<string>;
+  /** Заголовок, папки чтения и рабочая папка пространства сессии — проверка как у API; ответ — что изменилось. */
+  spaceSettings: (args: SpaceSettingsArgs) => string;
+  /** flow в папке flow (схема и вызовы — до записи); ответ — путь файла. */
+  writeFlow: (args: FlowWriteArgs) => string;
   /** Задача Teamwork сессии: ответ — что изменилось. Нет у сессии без задачи. */
   teamTask?: (args: TeamTaskUpdateArgs) => Promise<string>;
   /** Документ проекта Teamwork (architecture, design, docs/<имя>.md); ответ — путь файла в клоне. Нет у сессии без задачи. */
@@ -40,6 +63,9 @@ const PROTOCOL_FALLBACK = '2025-06-18';
 const str = (description: string) => ({ type: 'string', description });
 
 function tools(scope: ReturnType<McpScope>) {
+  const space = scope.space ? ` (${scope.space})` : ' (у сессии сейчас нет пространства — вызов вернёт ошибку)';
+  const file = (name: string) => (scope.spaceDir ? `${scope.spaceDir}/${name}` : name);
+  const ask = 'Пользователь подтверждает вызов.';
   return [
     {
       name: KNOWLEDGE_READ_TOOL,
@@ -55,9 +81,9 @@ function tools(scope: ReturnType<McpScope>) {
     {
       name: SPACE_WRITE_TOOL,
       description:
-        `Записать документ в ${DOCS_DIR}/ пространства agentgraph этой сессии${scope.space ? ` (${scope.space})` : ' (у сессии сейчас нет пространства — вызов вернёт ошибку)'}: спеку, решение, заметку по фиче. ` +
+        `Записать документ в ${DOCS_DIR}/ пространства agentgraph этой сессии${space}: спеку, решение, заметку по фиче. ` +
         'Файл пишется целиком (новый или поверх старого: сначала прочитай его инструментом Read). Его увидят все следующие сессии и запуски пространства. ' +
-        'Вызывай, когда пользователь просит записать что-то в документы фичи или проекта. Карту (CLAUDE.md) и состояние правит пользователь в agentgraph. Пользователь подтверждает вызов.',
+        `Вызывай, когда пользователь просит записать что-то в документы фичи или проекта. Карту пишет ${SPACE_MAP_WRITE_TOOL}, состояние — ${SPACE_STATE_WRITE_TOOL}, заголовок и папки — ${SPACE_SETTINGS_TOOL}. ${ask}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -65,6 +91,59 @@ function tools(scope: ReturnType<McpScope>) {
           text: str(`Текст документа целиком, до ${SPACE_DOC_TEXT_MAX / 1024} КБ.`),
         },
         required: ['name', 'text'],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    {
+      name: SPACE_MAP_WRITE_TOOL,
+      description:
+        `Переписать карту (${MAP_FILE}) пространства agentgraph этой сессии${space}: суть, где что, куда за чем ходить, договорённости. ` +
+        `Карту получают памятью все следующие сессии и запуски пространства — пиши её как инструкции для них, до ${SPACE_MAP_MAX} знаков; справочное — в документы (${SPACE_WRITE_TOOL}). ` +
+        `Пишется целиком: сначала прочитай текущую инструментом Read (${file(MAP_FILE)}). Вызывай, когда пользователь просит поправить карту. ${ask}`,
+      inputSchema: { type: 'object', properties: { text: str(`Карта целиком (Markdown), до ${SPACE_MAP_MAX} знаков; пусто — карты не будет.`) }, required: ['text'], additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    {
+      name: SPACE_STATE_WRITE_TOOL,
+      description:
+        `Переписать состояние (${STATE_FILE}) пространства agentgraph этой сессии${space} — «где мы сейчас»: что сделано, что в работе, что дальше, открытые вопросы. ` +
+        `Не журнал: текущее состояние целиком, до ${SPACE_STATE_MAX} знаков (сначала прочитай текущее: ${file(STATE_FILE)}). Его получат следующие сессии и запуски. ` +
+        `Вызывай, когда пользователь просит обновить состояние. ${ask}`,
+      inputSchema: { type: 'object', properties: { text: str(`Состояние целиком, до ${SPACE_STATE_MAX} знаков.`) }, required: ['text'], additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    {
+      name: SPACE_SETTINGS_TOOL,
+      description:
+        `Изменить настройки пространства agentgraph этой сессии${space} (${META_FILE}): заголовок, папки чтения, рабочую папку. Что задано — меняется, что нет — остаётся. ` +
+        'Папки чтения откроются на чтение всем сессиям и запускам пространства — добавляй только те, что пользователь назвал. Проверка — как на странице пространства. ' +
+        `Вызывай, когда пользователь просит поменять заголовок или папки пространства. ${ask}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: str('Заголовок одной строкой; "" — без заголовка.'),
+          dirs: { type: 'array', items: { type: 'string' }, description: `Папки и файлы только для чтения — абсолютные пути, список целиком (до ${SPACE_DIRS_MAX}); [] — без папок.` },
+          cwd: { type: ['string', 'null'], description: 'Рабочая папка (проект) — абсолютный путь к существующей папке; её подставят формы сессии и запуска. null или "" — снять.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+    {
+      name: FLOW_WRITE_TOOL,
+      description:
+        `Создать или переписать flow agentgraph — YAML в папке flow${scope.flowsDir ? ` ${scope.flowsDir}` : ''}. До записи agentgraph проверяет схему и вызовы flow: ошибки вернутся текстом — исправь и вызови снова. ` +
+        'Существующий flow перезаписывается на месте (сначала прочитай его файл инструментом Read), новый ложится в folder. Начатый запуск идёт по своему снимку; новый запуск, продолжение и вызов из другого flow возьмут эту версию. ' +
+        `Вызывай, когда пользователь просит создать или поправить flow. ${ask}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: str('Имя flow — оно же имя файла: латиница, цифры, дефис (например fix-bug).'),
+          yaml: str('Текст flow целиком (YAML по схеме agentgraph).'),
+          folder: str('Папка первого уровня для нового flow (например example); не задано — корень. Существующий flow остаётся в своей папке.'),
+        },
+        required: ['name', 'yaml'],
         additionalProperties: false,
       },
       annotations: { readOnlyHint: false, destructiveHint: true },
@@ -188,6 +267,48 @@ export function parseTeamTaskArgs(args: Record<string, unknown>): TeamTaskUpdate
   return out;
 }
 
+/** Лишние параметры — ошибка модели (опечатка), а не молча «не задано». */
+function onlyKeys(args: Record<string, unknown>, keys: string[]): void {
+  const extra = Object.keys(args).filter((k) => !keys.includes(k));
+  if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только ${keys.join(', ')}`);
+}
+
+/** Аргумент text у space_map_write и space_state_write: строка, больше ничего. */
+export function parseTextArg(args: Record<string, unknown>): string {
+  onlyKeys(args, ['text']);
+  if (typeof args.text !== 'string') throw new Error('Нужен параметр text — строка');
+  return args.text;
+}
+
+/** Аргументы space_settings: типы и хоть одно поле; пути и заголовок проверит updateSpace (как у API). */
+export function parseSpaceSettingsArgs(args: Record<string, unknown>): SpaceSettingsArgs {
+  onlyKeys(args, ['title', 'dirs', 'cwd']);
+  const out: SpaceSettingsArgs = {};
+  if (args.title !== undefined) {
+    if (typeof args.title !== 'string') throw new Error('title — строка');
+    out.title = args.title.replace(CONTROL_RE, ' ');
+  }
+  if (args.dirs !== undefined) {
+    if (!Array.isArray(args.dirs) || args.dirs.some((d) => typeof d !== 'string')) throw new Error('dirs — список абсолютных путей');
+    out.dirs = args.dirs as string[];
+  }
+  if (args.cwd !== undefined) {
+    if (args.cwd !== null && typeof args.cwd !== 'string') throw new Error('cwd — путь строкой или null');
+    out.cwd = args.cwd;
+  }
+  if (!Object.keys(out).length) throw new Error('Нечего менять: укажи title, dirs или cwd');
+  return out;
+}
+
+/** Аргументы flow_write: имя, YAML, папка — строки; имя и папку проверит flows.ts. */
+export function parseFlowWriteArgs(args: Record<string, unknown>): FlowWriteArgs {
+  onlyKeys(args, ['name', 'yaml', 'folder']);
+  if (typeof args.name !== 'string' || typeof args.yaml !== 'string') throw new Error('Нужны параметры name и yaml — строки');
+  if (args.folder !== undefined && typeof args.folder !== 'string') throw new Error('folder — строка');
+  const folder = typeof args.folder === 'string' ? args.folder.trim() : '';
+  return { name: args.name.trim(), yaml: args.yaml, ...(folder ? { folder } : {}) };
+}
+
 /** Ответ модели об открытой сессии: где она и что дальше — сюда её ответы не придут. */
 function openedText(v: SessionView, prompt: boolean): string {
   const what = [`папка ${v.cwd}`, `пространство: ${v.space ?? 'нет'}`, `теги знаний: ${v.tags.join(', ') || 'нет'}`, ...(v.model ? [`модель ${v.model}`] : [])].join('; ');
@@ -213,6 +334,19 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
       if (typeof args.name !== 'string' || typeof args.text !== 'string') throw new Error('Нужны параметры name и text — строки');
       const file = ctx.writeDoc(args.name.replace(CONTROL_RE, ''), args.text);
       return { content: [{ type: 'text', text: `Документ записан: ${file}. Его увидят следующие сессии и запуски пространства.` }] };
+    }
+    if (name === SPACE_MAP_WRITE_TOOL) {
+      const file = ctx.writeMap(parseTextArg(args));
+      return { content: [{ type: 'text', text: `Карта записана: ${file}. Памятью её получат следующие сессии и запуски пространства; в этой сессии память не перезагрузится — дальше опирайся на записанный текст.` }] };
+    }
+    if (name === SPACE_STATE_WRITE_TOOL) {
+      const file = await ctx.writeState(parseTextArg(args));
+      return { content: [{ type: 'text', text: `Состояние записано: ${file}. Его получат следующие сессии и запуски пространства.` }] };
+    }
+    if (name === SPACE_SETTINGS_TOOL) return { content: [{ type: 'text', text: ctx.spaceSettings(parseSpaceSettingsArgs(args)) }] };
+    if (name === FLOW_WRITE_TOOL) {
+      const file = ctx.writeFlow(parseFlowWriteArgs(args));
+      return { content: [{ type: 'text', text: `Flow записан: ${file}. ${FLOW_RUNS_NOTE}.` }] };
     }
     if (name === KNOWLEDGE_READ_TOOL) {
       const slug = args.slug;
