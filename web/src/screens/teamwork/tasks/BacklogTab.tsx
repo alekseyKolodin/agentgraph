@@ -27,7 +27,7 @@ export type BacklogTabProps = { team: string; project: string };
 type ListKey = 'next' | 'backlog';
 
 export function BacklogTab({ team, project }: BacklogTabProps) {
-  const { td, p, tasks, loaded, members, readonly } = useProjectData(team, project);
+  const { td, p, tasks, loaded, error, members, readonly } = useProjectData(team, project);
   const ops = useTaskOps(team, project);
   const qc = useQueryClient();
   const toast = useToast();
@@ -64,7 +64,8 @@ export function BacklogTab({ team, project }: BacklogTabProps) {
     moveTo(id, to, index, from as ListKey);
   });
 
-  if (!td || !p || !loaded) return <Loading className={styles.hint} />;
+  // список задач не загрузился — ошибка уже над вкладками (ProjectScreen), здесь не ждём вечно
+  if (!td || !p || !loaded) return error ? null : <Loading className={styles.hint} />;
 
   /** «Переместить…» строки: выше, ниже, в начало, в конец и в другой список. */
   const moveItems = (task: TeamTask, l: ListKey): MenuEntry[] => {

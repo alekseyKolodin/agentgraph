@@ -2,6 +2,7 @@
 // Стили — Teamwork.module.css; классы sprint strip общие с макетом Board (st.done / review / in_progress / todo).
 import { Link } from 'react-router';
 import type { TeamMember, TeamTaskStatus } from '@server/api-types';
+import { ApiError, errorText } from '../../api';
 import { STRIP_ORDER } from '../../lib/teamwork/board';
 import { t } from '../../lib/i18n';
 import { initialsOf, TEAMS_PATH } from './shell';
@@ -84,3 +85,17 @@ export function Crumbs({ items }: { items: readonly { to: string; label: string 
 export function ErrorLine({ text }: { text: string }) {
   return text ? <p className="msg err">{text}</p> : null;
 }
+
+/**
+ * Перечитка упала, а данные на экране есть (failView → 'line'): строка над содержимым вместо экрана ошибки — открытые
+ * панели, диалоги и ввод остаются, следующий опрос или событие `team` перечитают снова. gone — текст на 404: того, что на
+ * экране, больше нет (команду отключили, проект или файл удалили) — ввод не пропадает, но и записать его не выйдет.
+ */
+export function StaleLine({ error, gone }: { error: unknown; gone?: string }) {
+  if (!error) return null;
+  const text = gone && error instanceof ApiError && error.status === 404 ? gone : t('Не обновилось: {error} — показано последнее загруженное', { error: errorText(error) });
+  return <p className="msg err" role="status">{text}</p>;
+}
+
+/** Почему запись недоступна: формат репо команды новее этой версии agentgraph (sync.state === 'readonly'). */
+export const readonlyReason = (): string => t('Только чтение: формат репо команды новее');

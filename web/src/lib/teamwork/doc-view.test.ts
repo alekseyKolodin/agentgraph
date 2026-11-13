@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  draftFailed, draftLine, draftStopText, rowsLossless, draftResult, draftRunning, isDocEmpty, isReqSection, lastIssued, latestDraftFor, merge3, readChunks, refTarget, reqKindFor, rowChanges, taskWhere,
+  draftFailed, draftLine, draftStopText, rowsLossless, draftResult, draftRunning, isDocEmpty, isReqSection, lastIssued, latestDraftFor, merge3, readChunks, refTarget, repeatedSections, editMovedDown, reqKindFor, rowChanges, taskWhere,
   wrapMark,
 } from './doc-view';
 import { applyDecisions, trackChanges } from './track';
@@ -237,4 +237,28 @@ test('строки требований без потерь: только тре
   assert.equal(rowsLossless('### Экспорт\n\n- FR-1. Один.\n\n### Импорт\n\n- FR-2. Два.'), false);
   assert.equal(rowsLossless('- FR-1. Один.\n  - уточнение\n- FR-2. Два.'), false);
   assert.equal(rowsLossless(''), true);
+});
+
+test('повторы заголовков: второй и дальше с тем же заголовком, начало документа не в счёт', () => {
+  const secs = [{ heading: '' }, { heading: 'Цель' }, { heading: 'Примеры' }, { heading: 'API' }, { heading: 'Примеры' }, { heading: 'Примеры' }, { heading: '' }];
+  assert.deepEqual([...repeatedSections(secs)], [4, 5]);
+  assert.deepEqual([...repeatedSections([{ heading: 'Цель' }, { heading: 'Требования' }])], []);
+});
+
+test('правка уехала ниже повтора заголовка — только когда первый раздел чужой, а мой ниже', () => {
+  const mine = 'Мой пример.';
+  const sec = (heading: string, body: string) => ({ heading, body: `\n${body}\n` });
+  // pull вставил выше чужой «Примеры»: мой раздел теперь второй
+  assert.equal(editMovedDown([sec('Цель', 'x'), sec('Примеры', 'Чужой.'), sec('Примеры', mine)], 'Примеры', mine), true);
+  // правлю первый из двух повторов, его никто не трогал
+  assert.equal(editMovedDown([sec('Примеры', mine), sec('Примеры', 'Второй.')], 'Примеры', mine), false);
+  // коллега поправил тот же первый раздел: это 409 и обе версии, а не «уехал»
+  assert.equal(editMovedDown([sec('Примеры', 'Правка коллеги.'), sec('Примеры', 'Второй.')], 'Примеры', mine), false);
+  // мой раздел поправили и выше вставили такой же: исходного текста нет нигде, но повторов стало больше, чем на начало правки
+  assert.equal(editMovedDown([sec('Примеры', 'Чужой.'), sec('Примеры', 'Мой, поправленный.')], 'Примеры', mine, 1), true);
+  // повторов столько же, сколько было: правка первого коллегой — 409, а не «уехал»
+  assert.equal(editMovedDown([sec('Примеры', 'Правка коллеги.'), sec('Примеры', 'Второй.')], 'Примеры', mine, 2), false);
+  // заголовок один — не повтор; начало документа — никогда
+  assert.equal(editMovedDown([sec('Примеры', 'Чужой.')], 'Примеры', mine), false);
+  assert.equal(editMovedDown([sec('', 'a'), sec('', 'b')], '', 'b'), false);
 });

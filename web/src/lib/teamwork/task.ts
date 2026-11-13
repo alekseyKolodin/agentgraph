@@ -210,6 +210,9 @@ export function samePlace(list: readonly { id: string }[], dragged: string, inde
 
 export const ESTIMATES: readonly number[] = [1, 2, 3, 5, 8];
 
+/** Требования из поля ввода («FR-1, FR-2» или через пробел): без пустых и повторов, в порядке ввода. */
+export const parseCovers = (text: string): string[] => [...new Set(text.split(/[\s,;]+/).filter(Boolean))];
+
 /** Шаг перехода задачи в «В работу ▸»: у задачи нет репо, а у проекта их несколько — сначала выбор. */
 export const needsRepo = (task: Pick<TeamTask, 'repo'>, project: Pick<TeamProject, 'repos'>): boolean => !task.repo && project.repos.length > 1;
 

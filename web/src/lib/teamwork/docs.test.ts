@@ -142,3 +142,14 @@ test('документы: ссылки в тексте — номера зада
   assert.deepEqual(parts.map((p) => [p.kind, p.text]), [['text', 'a '], ['task', 'PAY-1'], ['text', ' b']]);
   assert.deepEqual(splitRefs('', 'PAY'), []);
 });
+
+test('ограда кода с отступом в 4 пробела — тоже ограда, как на сервере: «## » внутри неё не раздел', () => {
+  const md = '## Код\n\n    ```\n## Примеры\n    ```\n\n## Примеры\n\nНастоящий.\n';
+  // сервер (src/teamwork.ts) видит один раздел «Примеры» — второй; клиент адресует тот же
+  assert.deepEqual(splitSections(md).map((s) => s.heading), ['Код', 'Примеры']);
+  assert.match(splitSections(md)[1]!.body, /Настоящий/);
+});
+
+test('закрывающие «##» заголовка снимаются как на сервере: с пробелом после них — часть заголовка', () => {
+  assert.deepEqual(splitSections('## Примеры ##\n\nа\n\n## Код ## \n\nб\n').map((s) => s.heading), ['Примеры', 'Код ##']);
+});

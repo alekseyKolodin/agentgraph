@@ -30,7 +30,7 @@ export type BoardTabProps = { team: string; project: string };
 const filterKey = (team: string, project: string) => `agentgraph.teamwork.board.${team}.${project}`;
 
 export function BoardTab({ team, project }: BoardTabProps) {
-  const { td, p, tasks, loaded, me, members, readonly } = useProjectData(team, project);
+  const { td, p, tasks, loaded, error, me, members, readonly } = useProjectData(team, project);
   const ops = useTaskOps(team, project);
   const keep = useKeepFocus();
   const href = useTaskHref();
@@ -58,7 +58,8 @@ export function BoardTab({ team, project }: BoardTabProps) {
     keep.focus(id);
   }
 
-  if (!td || !p || !loaded) return <Loading className={styles.hint} />;
+  // список задач не загрузился — ошибка уже над вкладками (ProjectScreen), здесь не ждём вечно
+  if (!td || !p || !loaded) return error ? null : <Loading className={styles.hint} />;
   if (!active || !cols) {
     const note = noSprintText(plannedSprint(p.sprints));
     return (
@@ -262,6 +263,7 @@ const prParts = (label: string): { name: string; state: string } => {
   return i < 0 ? { name: label, state: '' } : { name: label.slice(0, i), state: label.slice(i + 1) };
 };
 
+/** Строка «+ Задача» в колонке: Enter создаёт, поле очищается только после ответа сервера — при ошибке заголовок остаётся. */
 function AddCard({ onCreate, onDone }: { onCreate: (title: string) => Promise<unknown>; onDone: () => void }) {
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
@@ -272,7 +274,9 @@ function AddCard({ onCreate, onDone }: { onCreate: (title: string) => Promise<un
       placeholder={t('Новая задача — Enter, Esc — отмена')}
       value={title}
       autoFocus
-      disabled={busy}
+      // не disabled: отключённое поле теряет фокус, и после ответа (или ошибки) печатать дальше было бы некуда
+      readOnly={busy}
+      aria-busy={busy || undefined}
       onChange={(e) => setTitle(e.target.value)}
       onBlur={() => !title.trim() && onDone()}
       onKeyDown={async (e) => {
@@ -280,12 +284,12 @@ function AddCard({ onCreate, onDone }: { onCreate: (title: string) => Promise<un
           e.preventDefault();
           onDone();
         }
-        if (e.key === 'Enter' && title.trim()) {
+        if (e.key === 'Enter' && title.trim() && !busy) {
           e.preventDefault();
           setBusy(true);
-          await onCreate(title.trim());
+          const created = await onCreate(title.trim());
           setBusy(false);
-          setTitle('');
+          if (created) setTitle('');
         }
       }}
     />

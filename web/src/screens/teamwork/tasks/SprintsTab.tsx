@@ -16,6 +16,7 @@ import {
   closedSprints, closeResult, closeSummary, nextSprintNumber, openCountText, sprintDefaultTitle, sprintResultText, startPatches, startWarnings, startWarningText, type CarryChoice,
 } from '../../../lib/teamwork/sprint';
 import { Loading } from '../../sessions/Loading';
+import { useReturnFocus } from '../focus';
 import { cx, SprintStrip } from '../parts';
 import { projectPath } from '../shell';
 import { useProjectData } from './ops';
@@ -25,9 +26,10 @@ import styles from './Tasks.module.css';
 export type SprintsTabProps = { team: string; project: string };
 
 export function SprintsTab({ team, project }: SprintsTabProps) {
-  const { td, p, tasks, loaded, readonly, members } = useProjectData(team, project);
+  const { td, p, tasks, loaded, error, readonly, members } = useProjectData(team, project);
   const href = useTaskHref();
-  if (!td || !p || !loaded) return <Loading className={styles.hint} />;
+  // список задач не загрузился — ошибка уже над вкладками (ProjectScreen), здесь не ждём вечно
+  if (!td || !p || !loaded) return error ? null : <Loading className={styles.hint} />;
   const active = activeSprint(p.sprints);
   const planned = plannedSprint(p.sprints);
   const closed = closedSprints(p.sprints);
@@ -175,6 +177,7 @@ function StartSprintDialog({ team, project, tasks, onClose }: { team: TeamDetail
   const [extra, setExtra] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -269,6 +272,7 @@ function CloseSprintDialog({ team, project, tasks, sprint, onClose }: { team: Te
   const [choices, setChoices] = useState<Record<string, CarryChoice>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);

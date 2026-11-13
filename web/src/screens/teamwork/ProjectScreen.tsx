@@ -1,6 +1,8 @@
 // Экран проекта (/teamwork/:team/:project/:tab?; spec §11; макеты Overview.dc.html, Main.dc.html): крошки, шапка с названием, сутью,
 // строкой синхронизации команды, участниками и меню ⋯ (переименовать, в архив); восемь вкладок: «Обзор» здесь, остальные —
 // заглушки волны 3 (docs/, tasks/). ?task=ID открывает панель задачи поверх любой вкладки; Esc и × закрывают её.
+// Упавшая фоновая перечитка при данных на экране — строка над вкладками (StaleLine), а не экран ошибки: панель задачи,
+// диалоги и ввод на вкладках не размонтируются.
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -12,13 +14,15 @@ import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
 import { backlogTasks } from '../../lib/teamwork/backlog';
 import { workSignals } from '../../lib/teamwork/board';
+import { changedFields, failView, missingOf, rebaseForm } from '../../lib/teamwork/form';
 import { Loading } from '../sessions/Loading';
 import { ConflictsDialog } from './ConflictsDialog';
 import { DocTab } from './docs/DocTab';
 import { DocsListTab } from './docs/DocsListTab';
 import { UnsavedLine } from './docs/UnsavedLine';
 import { OverviewTab } from './OverviewTab';
-import { Crumbs, cx, ErrorLine, People, Tabs } from './parts';
+import { trapTab, useReturnFocus } from './focus';
+import { Crumbs, cx, ErrorLine, People, readonlyReason, StaleLine, Tabs } from './parts';
 import { PROJECT_TABS, projectPath, projectTabLabel, projectTabOf, TASK_PARAM, TEAMS_PATH, teamPath } from './shell';
 import { SyncLine } from './SyncLine';
 import { BacklogTab } from './tasks/BacklogTab';
@@ -52,20 +56,24 @@ export function ProjectScreen() {
   };
 
   if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Этот сервер не поддерживает Teamwork: обновите agentgraph.')}</p></div>;
+  const td = teamQ.data;
+  const p = projQ.data;
   const err = teamQ.error ?? projQ.error;
-  if (err) {
-    const gone = err instanceof ApiError && err.status === 404;
+  if (failView(err, Boolean(td && p)) === 'screen') {
+    const status = (e: unknown) => (e instanceof ApiError ? e.status : undefined);
+    const missing = missingOf(status(teamQ.error), status(projQ.error));
     return (
       <div className="empty">
-        <h1>{gone ? t('Проекта {slug} нет', { slug: project }) : t('Проект не открылся')}</h1>
-        <p className="muted">{gone ? t('Его нет в репо команды или ссылка устарела.') : errorText(err)}</p>
-        <Link to={teamQ.data ? teamPath(team) : TEAMS_PATH}>{teamQ.data ? t('← Команда') : t('← Все команды')}</Link>
+        <h1>{missing === 'team' ? t('Команды {slug} нет', { slug: team }) : missing === 'project' ? t('Проекта {slug} нет', { slug: project }) : t('Проект не открылся')}</h1>
+        <p className="muted">{missing === 'team' ? t('Её отключили или ссылка устарела.') : missing === 'project' ? t('Его нет в репо команды или ссылка устарела.') : errorText(err)}</p>
+        <Link to={td && missing !== 'team' ? teamPath(team) : TEAMS_PATH}>{td && missing !== 'team' ? t('← Команда') : t('← Все команды')}</Link>
       </div>
     );
   }
-  const td = teamQ.data;
-  const p = projQ.data;
   if (!td || !p || !tab) return <Loading className={styles.loading} />;
+  // строка над вкладками: «проекта больше нет» (404) важнее сбоя команды, иначе её не видно; без них — сбой задач
+  const gone404 = (e: unknown) => e instanceof ApiError && e.status === 404;
+  const lineErr = (gone404(teamQ.error) ? teamQ.error : gone404(projQ.error) ? projQ.error : err) ?? (failView(tasksQ.error, Boolean(tasksQ.data)) === 'line' ? tasksQ.error : null);
   const tasks = tasksQ.data ?? [];
   const signals = workSignals(tasks);
   const tabs = PROJECT_TABS.map((k) => ({
@@ -92,7 +100,12 @@ export function ProjectScreen() {
         </div>
       </div>
       <Tabs items={tabs} active={tab} label={t('Проект')} />
-      {tasksQ.isError && <ErrorLine text={errorText(tasksQ.error)} />}
+      {/* одна строка на упавшую перечитку: команда, проект и задачи падают вместе, когда сервер недоступен */}
+      <StaleLine
+        error={lineErr}
+        gone={lineErr === teamQ.error ? t('Команды {slug} больше нет: её отключили. Показано последнее загруженное, изменения не запишутся.', { slug: team }) : t('Проекта {slug} больше нет в репо команды. Показано последнее загруженное, изменения не запишутся.', { slug: project })}
+      />
+      {tasksQ.isError && !tasksQ.data && <ErrorLine text={t('Задачи не загрузились: {error}', { error: errorText(tasksQ.error) })} />}
       {tab === 'overview' && <OverviewTab team={td} project={p} tasks={tasks} />}
       {(tab === 'prd' || tab === 'architecture' || tab === 'design') && <DocTab team={team} project={project} doc={tab} />}
       {tab === 'docs' && <DocsListTab team={team} project={project} />}
@@ -101,7 +114,8 @@ export function ProjectScreen() {
       {tab === 'sprints' && <SprintsTab team={team} project={project} />}
       {taskId && (
         <TaskDrawer onClose={closeTask}>
-          <TaskPanel team={team} project={project} id={taskId} onClose={closeTask} />
+          {/* key — задача: правка описания, комментарий и выбор зависимости одной задачи не переезжают в другую */}
+          <TaskPanel key={taskId} team={team} project={project} id={taskId} onClose={closeTask} />
         </TaskDrawer>
       )}
       {conflictsOpen && <ConflictsDialog team={team} conflicts={conflictsQ.data ?? []} members={td.memberList} onClose={() => setConflictsOpen(false)} />}
@@ -109,9 +123,14 @@ export function ProjectScreen() {
   );
 }
 
-/** Панель поверх вкладки: затемнение, Esc и клик мимо закрывают; содержимое — TaskPanel волны 3. */
+/**
+ * Панель поверх вкладки: затемнение, Esc и клик мимо закрывают; содержимое — TaskPanel волны 3. Tab ходит по кругу внутри
+ * панели, закрытие возвращает фокус туда, откуда её открыли (карточка, строка, ссылка). Несохранённый ввод панели живёт в
+ * unsaved.ts по задаче, поэтому закрытие его не теряет.
+ */
 function TaskDrawer({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   const panel = useRef<HTMLElement>(null);
+  useReturnFocus(panel);
   // обработчик Esc ставится один раз, а закрытие читает свежий onClose (в нём — текущие параметры адреса)
   const close = useRef(onClose);
   close.current = onClose;
@@ -126,7 +145,7 @@ function TaskDrawer({ children, onClose }: { children: ReactNode; onClose: () =>
   return (
     <>
       <div className={styles.drawerScrim} aria-hidden="true" onClick={onClose} />
-      <aside ref={panel} className={styles.drawer} role="dialog" aria-modal="true" aria-label={t('Задача')} tabIndex={-1}>
+      <aside ref={panel} className={styles.drawer} role="dialog" aria-modal="true" aria-label={t('Задача')} tabIndex={-1} onKeyDown={trapTab}>
         {children}
       </aside>
     </>
@@ -141,6 +160,8 @@ function ProjectMenu({ team, project }: { team: TeamDetail; project: TeamProject
   const [open, setOpen] = useState(false);
   const [rename, setRename] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const ro = team.sync.state === 'readonly' ? readonlyReason() : undefined;
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => {
@@ -170,10 +191,11 @@ function ProjectMenu({ team, project }: { team: TeamDetail; project: TeamProject
   };
   return (
     <div className="menu-wrap" ref={wrap}>
-      <button type="button" className="btn ghost icon-more" aria-label={t('Ещё действия проекта')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>⋯</button>
+      <button ref={btn} type="button" className="btn ghost icon-more" aria-label={t('Ещё действия проекта')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>⋯</button>
       <div className="menu" role="menu" hidden={!open}>
-        <button type="button" role="menuitem" className="menu-item" onClick={() => { setOpen(false); setRename(true); }}>{t('Переименовать…')}</button>
-        <button type="button" role="menuitem" className="menu-item" onClick={() => void archive()}>{project.status === 'archived' ? t('Вернуть из архива') : t('В архив…')}</button>
+        {/* фокус — на ⋯ до открытия окна: пункт меню скроется, а закрытое окно вернёт фокус на ⋯ */}
+        <button type="button" role="menuitem" className="menu-item" disabled={Boolean(ro)} title={ro} onClick={() => { setOpen(false); btn.current?.focus(); setRename(true); }}>{t('Переименовать…')}</button>
+        <button type="button" role="menuitem" className="menu-item" disabled={Boolean(ro)} title={ro} onClick={() => { btn.current?.focus(); void archive(); }}>{project.status === 'archived' ? t('Вернуть из архива') : t('В архив…')}</button>
       </div>
       {rename && <RenameDialog team={team} project={project} onClose={() => setRename(false)} />}
     </div>
@@ -183,10 +205,22 @@ function ProjectMenu({ team, project }: { team: TeamDetail; project: TeamProject
 function RenameDialog({ team, project, onClose }: { team: TeamDetail; project: TeamProject; onClose: () => void }) {
   const qc = useQueryClient();
   const dlg = useRef<HTMLDialogElement>(null);
-  const [title, setTitle] = useState(project.title);
-  const [summary, setSummary] = useState(project.summary);
+  // база формы — проект на момент открытия; перечитанный проект (правка коллеги) обновляет только нетронутые поля, а запись
+  // уносит только тронутые: иначе «Сохранить» вернуло бы старую суть, которую коллега успел поменять
+  const formOf = (x: TeamProject) => ({ title: x.title, summary: x.summary });
+  const [base, setBase] = useState(() => formOf(project));
+  const [form, setForm] = useState(base);
+  const [seen, setSeen] = useState(project);
+  if (seen !== project) {
+    const next = formOf(project);
+    setSeen(project);
+    setForm((f) => rebaseForm(f, base, next));
+    setBase(next);
+  }
+  const { title, summary } = form;
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -196,9 +230,7 @@ function RenameDialog({ team, project, onClose }: { team: TeamDetail; project: T
     setBusy(true);
     setErr('');
     try {
-      const patch: { title?: string; summary?: string } = {};
-      if (title.trim() !== project.title) patch.title = title.trim();
-      if (summary.trim() !== project.summary) patch.summary = summary.trim();
+      const patch = changedFields(form, base);
       if (Object.keys(patch).length) {
         const r = await updateProject(team.slug, project.slug, patch);
         qc.setQueryData(teamKeys.project(team.slug, project.slug), r);
@@ -225,11 +257,11 @@ function RenameDialog({ team, project, onClose }: { team: TeamDetail; project: T
         <h2 id="tw-rename-title">{t('Проект')}</h2>
         <div className={styles.f}>
           <label htmlFor="tw-rn-title">{t('Название')}</label>
-          <input id="tw-rn-title" value={title} autoFocus onChange={(e) => setTitle(e.target.value)} />
+          <input id="tw-rn-title" value={title} autoFocus onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} />
         </div>
         <div className={styles.f}>
           <label htmlFor="tw-rn-summary">{t('Суть одной строкой')}</label>
-          <input id="tw-rn-summary" value={summary} onChange={(e) => setSummary(e.target.value)} />
+          <input id="tw-rn-summary" value={summary} onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))} />
         </div>
         <span className={styles.meta}>{project.slug} · {t('slug не меняется')}</span>
         {err && <p className="msg err">{err}</p>}

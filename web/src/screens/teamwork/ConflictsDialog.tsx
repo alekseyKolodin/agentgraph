@@ -11,6 +11,7 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { memberByEmail, memberLabel } from '../../lib/teamwork/board';
 import { fieldLabel } from '../../lib/teamwork/sync';
+import { useReturnFocus } from './focus';
 import { cx } from './parts';
 import { conflictKindText, conflictValue } from './shell';
 import styles from './Teamwork.module.css';
@@ -26,6 +27,7 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
   const [choice, setChoice] = useState<Record<string, Choice>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);

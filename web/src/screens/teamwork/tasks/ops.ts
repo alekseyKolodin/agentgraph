@@ -10,12 +10,18 @@ import { t } from '../../../lib/i18n';
 import type { Drop } from '../../../lib/teamwork/board';
 import { dropRank } from '../../../lib/teamwork/task';
 
-/** Команда, проект и задачи: те же запросы, что держит экран проекта, — без лишних обращений к серверу. */
+/**
+ * Команда, проект и задачи: те же запросы, что держит экран проекта, — без лишних обращений к серверу. error — список задач
+ * так и не загрузился (без данных): вместо бесконечного ожидания экран показывает ошибку.
+ */
 export function useProjectData(team: string, project: string) {
   const td = useTeam(team).data;
   const p = useProject(team, project).data;
   const q = useTasks(team, project);
-  return { td, p, tasks: q.data ?? [], loaded: Boolean(q.data), me: td?.me.email, members: td?.memberList ?? [], readonly: td?.sync.state === 'readonly' };
+  return {
+    td, p, tasks: q.data ?? [], loaded: Boolean(q.data), error: q.data ? null : q.error,
+    me: td?.me.email, members: td?.memberList ?? [], readonly: td?.sync.state === 'readonly',
+  };
 }
 
 export type TaskOps = ReturnType<typeof useTaskOps>;

@@ -21,7 +21,7 @@ import {
   type TrackRow, type TrackSection, type WordSeg,
 } from '../../../lib/teamwork/track';
 import { Loading } from '../../sessions/Loading';
-import { cx } from '../parts';
+import { cx, StaleLine } from '../parts';
 import { acceptDraft, draftKeys, useDraft } from './api';
 import { DocText, RefCtx, scrollToAnchor } from './DocText';
 import styles from './Docs.module.css';
@@ -37,7 +37,8 @@ type Props = { team: TeamDetail; project: TeamProject; name: TeamDocName; run: s
 export function DraftReview({ team, project, name, run, onClose, onRetry }: Props) {
   const q = useDraft(team.slug, project.slug, run);
   if (q.isPending) return <Loading className={styles.lead} />;
-  if (q.isError) {
+  // перечитка черновика упала, а рецензия уже на экране — строка над ней, решения по правкам остаются
+  if (q.isError && !q.data) {
     return (
       <div className={styles.empty} role="alert">
         <h2>{t('Черновик не открылся')}</h2>
@@ -46,7 +47,12 @@ export function DraftReview({ team, project, name, run, onClose, onRetry }: Prop
       </div>
     );
   }
-  return <Review team={team} project={project} name={name} detail={q.data} onClose={onClose} onRetry={onRetry} />;
+  return (
+    <>
+      <StaleLine error={q.error} />
+      <Review team={team} project={project} name={name} detail={q.data} onClose={onClose} onRetry={onRetry} />
+    </>
+  );
 }
 
 function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamDetail; project: TeamProject; name: TeamDocName; detail: TeamDraftDetail; onClose: () => void; onRetry?: (d: TeamDraftDetail) => void }) {

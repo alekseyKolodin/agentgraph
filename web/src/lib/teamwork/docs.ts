@@ -8,7 +8,8 @@ import { memberByEmail, memberLabel } from './board';
 
 /** Строка требования: «- FR-3. Текст», строго как на сервере (src/teamwork.ts). Группы: вид, номер, текст. */
 export const REQ_RE = /^- (FR|NFR)-(\d+)\.\s+(.*)$/;
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+// ограда — с любым отступом, как на сервере (src/teamwork.ts FENCE_RE): разделы и их адрес у клиента и сервера совпадают
+const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const H2_RE = /^## (.*)$/;
 const H1_RE = /^# (.*)$/;
 
@@ -33,7 +34,9 @@ export function fencedLines(lines: readonly string[]): boolean[] {
   return out;
 }
 
-const cleanHeading = (s: string): string => s.replace(/\s+#+\s*$/, '').trim();
+// закрывающие «##» — как на сервере (src/teamwork.ts splitSections): «## Примеры ## » с пробелом в конце там «Примеры ##», и
+// раздел адресуется этим заголовком
+const cleanHeading = (s: string): string => s.replace(/[ \t]+#+$/, '').trim();
 
 export type DocSection = {
   /** Заголовок без «## »; пустой — текст до первого раздела (название документа и вступление). */

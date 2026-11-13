@@ -2,7 +2,9 @@
 // месте (статус, спринт, исполнитель, оценка, тип, репо), «Ждёт» и «Блокирует» со статусом и исполнителем, блок «Работа»
 // (мои запуски и сессии по задаче из local.json, ветка, PR) с «В работу ▸», описание и критерии приёмки с галочками,
 // обсуждение. Оболочка (TaskDrawer в ProjectScreen) даёт затемнение, Esc и клик мимо; поля и редакторы гасят Esc у себя.
-import { useState, type KeyboardEvent } from 'react';
+// Несохранённый ввод — описание в правке, комментарий, новый критерий — живёт в unsaved.ts по (команда, проект, задача):
+// закрытие панели и переход к другой задаче его не теряют, и у каждой задачи он свой.
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamComment, TeamDetail, TeamMember, TeamProject, TeamTask, TeamTaskStatus, TeamTaskType } from '@server/api-types';
@@ -18,6 +20,7 @@ import { activeSprint, blocking, prLabel, STATUSES, TASK_TYPES, workState } from
 import { plannedSprint } from '../../../lib/teamwork/backlog';
 import { addCriterion, criteriaOf, criteriaTitle, descriptionOf, ESTIMATES, removeCriterion, toggleCriterion, withDescription } from '../../../lib/teamwork/task';
 import { Loading } from '../../sessions/Loading';
+import { getUnsaved, guardUnsaved, unsavedKey, useUnsaved } from '../unsaved';
 import { cx } from '../parts';
 import tw from '../Teamwork.module.css';
 import { useProjectData, useTaskOps, type TaskOps } from './ops';
@@ -35,8 +38,25 @@ const keepEsc = (e: KeyboardEvent, cancel?: () => void) => {
   return true;
 };
 
+/** Esc в поле ввода: уйти из поля на панель, набранное остаётся; следующий Esc закроет панель. */
+const leaveField = (e: KeyboardEvent<HTMLElement>) => () => {
+  const panel = e.currentTarget.closest<HTMLElement>('[aria-modal="true"]');
+  if (panel) panel.focus();
+  else e.currentTarget.blur();
+};
+
+/** Ключ несохранённого поля панели: у каждой задачи свой. */
+const fieldKey = (team: string, project: string, id: string, field: 'desc' | 'saving' | 'comment' | 'sending' | 'crit') => unsavedKey('task', team, project, id, field);
+
+// перезагрузка страницы с набранным в панели задачи (описание с изменениями, комментарий, критерий) — вопрос браузера
+guardUnsaved((k, v) => {
+  if (!k.startsWith(unsavedKey('task', ''))) return false;
+  if (k.endsWith('\u0000desc')) return typeof v === 'object' && v !== null && !same((v as DescEdit).text, (v as DescEdit).from);
+  return (k.endsWith('\u0000comment') || k.endsWith('\u0000crit')) && typeof v === 'string' && v.trim() !== '';
+});
+
 export function TaskPanel({ team, project, id, onClose }: TaskPanelProps) {
-  const { td, p, tasks, loaded, members, readonly } = useProjectData(team, project);
+  const { td, p, tasks, loaded, members, readonly, error } = useProjectData(team, project);
   const ops = useTaskOps(team, project);
   const toast = useToast();
   const { askConfirm } = useConfirm();
@@ -44,6 +64,15 @@ export function TaskPanel({ team, project, id, onClose }: TaskPanelProps) {
   const close = (
     <button type="button" className="btn ghost small" aria-label={t('Закрыть')} title={t('Закрыть (Esc)')} onClick={onClose}>×</button>
   );
+  // список задач не загрузился (ссылка ?task= с главной, сервер недоступен) — ошибка вместо бесконечного ожидания
+  if (!loaded && error) {
+    return (
+      <>
+        <div className={styles.dTop}><span className={styles.id}>{id}</span><span className={styles.grow} />{close}</div>
+        <p className="msg err">{t('Задачи не загрузились: {error}', { error: errorText(error) })}</p>
+      </>
+    );
+  }
   if (!loaded || !td || !p) return <Loading className={styles.hint} />;
   if (!task) {
     return (
@@ -94,8 +123,8 @@ export function TaskPanel({ team, project, id, onClose }: TaskPanelProps) {
           <Title task={task} ops={ops} readonly={readonly} />
           <Fields task={task} tasks={tasks} td={td} p={p} ops={ops} members={members} readonly={readonly} />
           <Work task={task} td={td} p={p} readonly={readonly} />
-          <Description task={task} ops={ops} readonly={readonly} />
-          <Criteria task={task} ops={ops} readonly={readonly} />
+          <Description team={team} project={project} task={task} ops={ops} readonly={readonly} />
+          <Criteria team={team} project={project} task={task} ops={ops} readonly={readonly} />
           <Comments team={team} project={project} task={task} members={members} readonly={readonly} />
           <Foot task={task} members={members} />
         </>
@@ -305,43 +334,98 @@ function Work({ task, td, p, readonly }: { task: TeamTask; td: TeamDetail; p: Te
   );
 }
 
-function Description({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; readonly: boolean }) {
+/** Правка описания: набранный текст и описание на момент «Править» — с ним сравнивается, не поменял ли его кто-то другой. */
+type DescEdit = { text: string; from: string };
+const same = (a: string, b: string) => a.trim() === b.trim();
+
+/**
+ * Фокус внутри box (кнопка, поле) — на панель задачи: элемент сейчас размонтируется или отключится, а фокус не должен
+ * выпасть из ловушки панели в body.
+ */
+const keepInPanel = (box: HTMLElement | null) => {
+  if (box && box.contains(document.activeElement)) box.closest<HTMLElement>('[aria-modal="true"]')?.focus();
+};
+
+function Description({ team, project, task, ops, readonly }: { team: string; project: string; task: TeamTask; ops: TaskOps; readonly: boolean }) {
+  const { askConfirm } = useConfirm();
   const desc = descriptionOf(task.body);
-  const [edit, setEdit] = useState<string>();
-  const save = () => {
-    const v = edit ?? '';
+  const key = fieldKey(team, project, task.id, 'desc');
+  const [edit, setEdit] = useUnsaved<DescEdit>(key);
+  // идёт сохранение — и у панели, открытой заново во время запроса: Esc и «Отмена» не бросают отправленный текст
+  const [savingFlag, setSaving] = useUnsaved<boolean>(fieldKey(team, project, task.id, 'saving'));
+  const saving = Boolean(savingFlag);
+  const box = useRef<HTMLElement>(null);
+  const area = useRef<HTMLTextAreaElement>(null);
+  // описание поменяли, пока правили (pull, коллега, 409): видно до сохранения, а не перетирается молча; во время своего
+  // сохранения в кэше уже свой текст — это не чужая правка
+  const moved = edit !== undefined && !saving && !same(desc, edit.from);
+  /** Редактор закрывается только после ответа сервера: при 409 или сбое сети текст остаётся в нём, а не пропадает. */
+  const save = async () => {
+    if (!edit || saving) return;
+    const v = edit.text;
+    if (same(v, desc)) {
+      keepInPanel(box.current);
+      return setEdit(undefined);
+    }
+    if (moved && !(await askConfirm(t('Описание изменили, пока вы правили. Заменить его вашим текстом?'), { ok: t('Заменить') }))) return;
+    // кнопки на время запроса неактивны: фокус с них — в поле, иначе он выпал бы из панели
+    if (box.current?.contains(document.activeElement) && document.activeElement !== area.current) area.current?.focus();
+    setSaving(true);
+    const r = await ops.patch(task.id, (cur) => ({ body: withDescription(cur.body, v) }), (x) => ({ ...x, body: withDescription(x.body, v) }));
+    setSaving(undefined);
+    if (!r) return;
+    // пока шёл запрос, текст могли поправить ещё: снимается только отправленный, остальное — правка от новой версии. Панель
+    // могли закрыть и открыть заново: тогда редактор — у нового экземпляра, ищем его раздел по задаче
+    if (getUnsaved<DescEdit>(key)?.text === v) keepInPanel(box.current ?? document.querySelector<HTMLElement>(`section[data-desc="${CSS.escape(task.id)}"]`));
+    setEdit((cur) => (!cur || cur.text === v ? undefined : { ...cur, from: descriptionOf(r.body) }));
+  };
+  const cancel = async () => {
+    if (!edit || saving) return;
+    if (!same(edit.text, edit.from) && !(await askConfirm(t('Бросить правку описания? Изменения пропадут.'), { ok: t('Бросить'), danger: true }))) return;
+    keepInPanel(box.current);
     setEdit(undefined);
-    if (v.trim() === desc.trim()) return;
-    void ops.patch(task.id, (cur) => ({ body: withDescription(cur.body, v) }), (x) => ({ ...x, body: withDescription(x.body, v) }));
   };
   return (
-    <section aria-label={t('Описание')}>
+    <section ref={box} aria-label={t('Описание')} data-desc={task.id}>
       <div className={styles.secHead}>
         <h3 className={styles.cap} style={{ margin: 0 }}>{t('Описание')}</h3>
-        {!readonly && edit === undefined && <button type="button" className="btn ghost small" onClick={() => setEdit(desc)}>{t('Править')}</button>}
+        {!readonly && edit === undefined && <button type="button" className="btn ghost small" onClick={() => setEdit({ text: desc, from: desc })}>{t('Править')}</button>}
       </div>
       {edit !== undefined ? (
         <div className={styles.f}>
+          {moved && (
+            <div className="msg warn" role="status">
+              {t('Описание изменили, пока вы правили: «Сохранить» заменит его вашим текстом.')}
+              <details>
+                <summary>{t('Версия команды')}</summary>
+                {desc ? <div className={styles.md}><MdText text={desc} /></div> : <p className={styles.hint}>{t('Описания нет.')}</p>}
+              </details>
+            </div>
+          )}
           <textarea
+            ref={area}
             className={styles.inp}
             aria-label={t('Описание')}
             style={{ minHeight: 140 }}
-            value={edit}
+            value={edit.text}
             autoFocus
-            onChange={(e) => setEdit(e.target.value)}
+            onChange={(e) => {
+              const text = e.target.value;
+              setEdit((cur) => ({ text, from: cur?.from ?? desc }));
+            }}
             onKeyDown={(e) => {
-              if (keepEsc(e, () => setEdit(undefined))) return;
+              if (keepEsc(e, () => void cancel())) return;
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                save();
+                void save();
               }
             }}
           />
           <div className={styles.dfoot}>
             <span className={styles.hint}>{t('markdown · ⌘Enter — сохранить, Esc — отмена')}</span>
             <span className={styles.grow} />
-            <button type="button" className="btn ghost small" onClick={() => setEdit(undefined)}>{t('Отмена')}</button>
-            <button type="button" className="btn small primary" onClick={save}>{t('Сохранить')}</button>
+            <button type="button" className="btn ghost small" disabled={saving} onClick={() => void cancel()}>{t('Отмена')}</button>
+            <button type="button" className="btn small primary" disabled={saving} onClick={() => void save()}>{saving ? t('Сохраняю…') : t('Сохранить')}</button>
           </div>
         </div>
       ) : desc ? (
@@ -353,9 +437,11 @@ function Description({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; re
   );
 }
 
-function Criteria({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; readonly: boolean }) {
+function Criteria({ team, project, task, ops, readonly }: { team: string; project: string; task: TeamTask; ops: TaskOps; readonly: boolean }) {
   const list = criteriaOf(task.body);
-  const [add, setAdd] = useState('');
+  const [addDraft, setAddDraft] = useUnsaved<string>(fieldKey(team, project, task.id, 'crit'));
+  const add = addDraft ?? '';
+  const setAdd = (v: string) => setAddDraft(v || undefined);
   const toggle = (i: number, done: boolean) =>
     void ops.patch(task.id, (cur) => ({ body: toggleCriterion(cur.body, i, done) }), (x) => {
       const body = toggleCriterion(x.body, i, done);
@@ -363,11 +449,13 @@ function Criteria({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; reado
       return { ...x, body, acceptance: { done: c.filter((y) => y.done).length, total: c.length } };
     });
   const remove = (i: number) => void ops.patch(task.id, (cur) => ({ body: removeCriterion(cur.body, i) }), (x) => ({ ...x, body: removeCriterion(x.body, i) }));
-  const append = () => {
+  /** Критерий сразу в списке, поле пустое для следующего; запись не прошла (409, сеть) — текст возвращается в поле, если оно пустое. */
+  const append = async () => {
     const v = add.trim();
     if (!v) return;
     setAdd('');
-    void ops.patch(task.id, (cur) => ({ body: addCriterion(cur.body, v) }), (x) => ({ ...x, body: addCriterion(x.body, v) }));
+    const r = await ops.patch(task.id, (cur) => ({ body: addCriterion(cur.body, v) }), (x) => ({ ...x, body: addCriterion(x.body, v) }));
+    if (!r) setAddDraft((cur) => cur || v);
   };
   return (
     <section aria-label={t('Критерии приёмки')}>
@@ -395,10 +483,10 @@ function Criteria({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; reado
             value={add}
             onChange={(e) => setAdd(e.target.value)}
             onKeyDown={(e) => {
-              if (keepEsc(e, () => setAdd(''))) return;
+              if (keepEsc(e, leaveField(e))) return;
               if (e.key === 'Enter') {
                 e.preventDefault();
-                append();
+                void append();
               }
             }}
           />
@@ -410,27 +498,42 @@ function Criteria({ task, ops, readonly }: { task: TeamTask; ops: TaskOps; reado
 
 function Comments({ team, project, task, members, readonly }: { team: string; project: string; task: TeamTask; members: readonly TeamMember[]; readonly: boolean }) {
   const qc = useQueryClient();
+  const toast = useToast();
+  const area = useRef<HTMLTextAreaElement>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => void (alive.current = false);
+  }, []);
   const q = useComments(team, project, task.id);
   const now = useNow(30_000);
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useUnsaved<string>(fieldKey(team, project, task.id, 'comment'));
+  const text = saved ?? '';
+  const setText = (v: string) => setSaved(v || undefined);
+  // отправка идёт и тогда, когда панель уже закрыли или открыли другую задачу: вернувшись, второй раз её не отправить
+  const [sending, setSending] = useUnsaved<boolean>(fieldKey(team, project, task.id, 'sending'));
+  const busy = Boolean(sending);
   const [err, setErr] = useState('');
   const list: TeamComment[] = q.data ?? [];
   const send = async () => {
     const v = text.trim();
     if (!v || busy) return;
-    setBusy(true);
+    // кнопка на время отправки неактивна: фокус с неё — в поле (оно только для чтения), иначе он выпал бы из панели
+    if (document.activeElement instanceof HTMLButtonElement && document.activeElement.closest('section') === area.current?.closest('section')) area.current?.focus();
+    setSending(true);
     setErr('');
     try {
       const c = await addComment(team, project, task.id, v);
       qc.setQueryData<TeamComment[]>(teamKeys.comments(team, project, task.id), (all) => [...(all ?? []), c]);
       void qc.invalidateQueries({ queryKey: teamKeys.tasks(team, project) });
       void qc.invalidateQueries({ queryKey: teamKeys.team(team) });
-      setText('');
+      setSaved(undefined);
     } catch (e) {
-      setErr(errorText(e));
+      // панель уже закрыли или открыли другую задачу — ошибка всплывашкой, текст остаётся у задачи
+      if (alive.current) setErr(errorText(e));
+      else toast(t('Комментарий к {id} не отправился: {error}', { id: task.id, error: errorText(e) }));
     } finally {
-      setBusy(false);
+      setSending(undefined);
     }
   };
   return (
@@ -453,13 +556,16 @@ function Comments({ team, project, task, members, readonly }: { team: string; pr
         <div className={styles.composer}>
           <label className={styles.lbl} htmlFor="tw-tp-comment">{t('Комментарий')}</label>
           <textarea
+            ref={area}
             id="tw-tp-comment"
             placeholder={t('Напишите команде…')}
             value={text}
-            disabled={busy}
+            readOnly={busy}
+            aria-busy={busy || undefined}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (keepEsc(e, () => setText(''))) return;
+              // Esc не стирает комментарий: только уводит из поля, текст остаётся у этой задачи
+              if (keepEsc(e, leaveField(e))) return;
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 void send();

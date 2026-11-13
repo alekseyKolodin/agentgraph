@@ -566,7 +566,6 @@ export const teamwork: Record<string, string> = {
   'спринт {n}': 'sprint {n}',
   'начало': 'beginning',
   'правка': 'editing',
-  'не сохранено': 'not saved',
   'Открыть несохранённый раздел': 'Open the unsaved section',
   'Документ не читается: {error}': 'The document can’t be read: {error}',
   'Файла {file} нет в репо команды': '{file} is not in the team repo',
@@ -715,4 +714,25 @@ export const teamwork: Record<string, string> = {
   'ничего#deps': 'nothing',
   'Отправить сейчас': 'Push now',
   'Черновик с агентом…': 'Draft with an agent…',
+  // --- fix-web: ошибка перечитки поверх данных, несохранённый ввод, повтор заголовка раздела
+  'Не обновилось: {error} — показано последнее загруженное': 'Couldn’t refresh: {error} — showing the last loaded version',
+  'Задачи не загрузились: {error}': 'Couldn’t load tasks: {error}',
+  'Бросить правку flow «{name}»? Изменения пропадут.': 'Discard the edit of flow “{name}”? The changes will be lost.',
+  'Бросить правку описания? Изменения пропадут.': 'Discard the description edit? The changes will be lost.',
+  'Заголовок «{section}» в документе не один: на месте правится только первый такой раздел. Переименуйте повтор в {file}, чтобы править и его.':
+    'The document has more than one “{section}” heading: only the first such section can be edited in place. Rename the repeat in {file} to edit it too.',
+  'повтор заголовка — не правится здесь': 'repeated heading — not editable here',
+  'Команды {slug} больше нет: её отключили. Показано последнее загруженное, изменения не запишутся.':
+    'Team {slug} is gone: it was disconnected. Showing the last loaded version; changes won’t be saved.',
+  'Проекта {slug} больше нет в репо команды. Показано последнее загруженное, изменения не запишутся.':
+    'Project {slug} is no longer in the team repo. Showing the last loaded version; changes won’t be saved.',
+  'Файла {file} больше нет в репо команды. Показано последнее загруженное, изменения не запишутся.':
+    '{file} is no longer in the team repo. Showing the last loaded version; changes won’t be saved.',
+  'Заголовок «{section}» теперь в документе не один: не понять, какой раздел вы правили, на месте правка не сохранится. Ваша несохранённая правка:':
+    'The document now has more than one “{section}” heading: it’s unclear which section you were editing, so the edit can’t be saved in place. Your unsaved edit:',
+  'Описание изменили, пока вы правили. Заменить его вашим текстом?': 'The description changed while you were editing. Replace it with your text?',
+  'Описание изменили, пока вы правили: «Сохранить» заменит его вашим текстом.': 'The description changed while you were editing: “Save” replaces it with your text.',
+  'Версия команды': 'Team’s version',
+  'Комментарий к {id} не отправился: {error}': 'The comment on {id} wasn’t sent: {error}',
+  'Проект не создан: {error}': 'The project wasn’t created: {error}',
 };

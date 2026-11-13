@@ -23,8 +23,10 @@ import {
 } from '../../../lib/teamwork/deps';
 import { draftStopText } from '../../../lib/teamwork/doc-view';
 import { proposalCoverage } from '../../../lib/teamwork/docs';
-import { ESTIMATES } from '../../../lib/teamwork/task';
-import { cx } from '../parts';
+import { ESTIMATES, parseCovers } from '../../../lib/teamwork/task';
+import { setUnsaved, unsavedKey, useUnsaved } from '../unsaved';
+import { useReturnFocus } from '../focus';
+import { cx, StaleLine } from '../parts';
 import tw from '../Teamwork.module.css';
 import { acceptSplit, draftRunning, startDraft, taskKeys, useDraft, useDrafts } from './api';
 import { Assignee } from './parts';
@@ -53,6 +55,8 @@ export function SplitArea({ team, project, tasks, readonly }: { team: TeamDetail
   const finish = (run: string) => {
     markDone(team.slug, project.slug, run);
     setDone(readDone(team.slug, project.slug));
+    // предложение принято или отклонено — его правки больше не нужны
+    setUnsaved(proposalKey(team.slug, project.slug, run), undefined);
   };
   const started = () => {
     setAsking(false);
@@ -105,6 +109,7 @@ function SplitStart({ team, project, onClose, onStarted }: { team: string; proje
   const [brief, setBrief] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -146,6 +151,13 @@ type View = 'graph' | 'list';
 const GRAPH = { ...GRAPH_DEFAULTS, nodeH: 82 };
 const VIEW_KEY = 'agentgraph.teamwork.splitView';
 
+/**
+ * Правки предложения (поля задач, связи, снятые галочки) — в unsaved.ts по запуску: смена вкладки размонтирует бэклог, а
+ * вернувшись, человек видит свои правки, а не исходное предложение агента. Снимаются при принятии и отклонении.
+ */
+type ProposalDraft = { proposal: TeamProposedTask[]; off: string[] };
+const proposalKey = (team: string, project: string, run: string) => unsavedKey('split', team, project, run);
+
 const existingOf = (draft: TeamDraftExisting[] | undefined, tasks: TeamTask[]): ExistingTask[] =>
   draft ?? tasks.filter((x) => !x.error).map((x) => ({ id: x.id, status: x.status, title: x.title, assignee: x.assignee, sprint: x.sprint, estimate: x.estimate }));
 
@@ -159,8 +171,11 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
   const q = useDraft(team.slug, project.slug, draft.run);
   const prd = useDoc(team.slug, project.slug, 'prd').data;
   const d = q.data;
-  const [proposal, setProposal] = useState<TeamProposedTask[]>();
-  const [off, setOff] = useState<string[]>([]);
+  const [saved, setSaved] = useUnsaved<ProposalDraft>(proposalKey(team.slug, project.slug, draft.run));
+  const proposal = saved?.proposal;
+  const off = saved?.off ?? [];
+  const setProposal = (fn: (list: TeamProposedTask[] | undefined) => TeamProposedTask[]) => setSaved((s) => ({ off: s?.off ?? [], proposal: fn(s?.proposal) }));
+  const setOff = (fn: (list: string[]) => string[]) => setSaved((s) => (s ? { ...s, off: fn(s.off) } : s));
   const [view, setViewState] = useState<View>(() => (LS.get<string>(VIEW_KEY, 'graph') === 'list' ? 'list' : 'graph'));
   const [selected, setSelected] = useState<string>();
   const [chainOn, setChainOn] = useState(false);
@@ -168,7 +183,7 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   useEffect(() => {
-    if (d?.tasks && !proposal) setProposal(d.tasks);
+    if (d?.tasks && !proposal) setSaved({ proposal: d.tasks, off: [] });
   }, [d]);
   const setView = (v: View) => {
     setViewState(v);
@@ -182,7 +197,8 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
   const graph = useMemo(() => layoutGraph(all, existing, layoutRep, GRAPH), [all, existing, layoutRep]);
   const focus = selected && graph.nodes.some((n) => n.key === selected) ? focusGraph(graph, selected) : undefined;
 
-  if (q.isError) return <div className={styles.prop}><p className="msg err">{errorText(q.error)}</p></div>;
+  // перечитка черновика упала, а он уже на экране — строка в шапке, правки предложения не прячутся
+  if (q.isError && !d) return <div className={styles.prop}><p className="msg err">{errorText(q.error)}</p></div>;
   if (!d) return null;
   const head = (
     <div className={styles.propH}>
@@ -193,10 +209,12 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
       <Link to={`/run/${encodeURIComponent(d.run)}`}>{t('Открыть запуск')}</Link>
     </div>
   );
+  const stale = <StaleLine error={q.error} />;
   if (d.error || !proposal) {
     return (
       <section className={styles.prop} aria-label={t('Предложение агента')}>
         {head}
+        {stale}
         {d.error && <p className="msg err">{d.error}</p>}
         {!d.error && d.status !== 'done' && <p className="msg">{t('Задач нет: {why}.', { why: draftStopText(d.status) })}</p>}
         <div className={styles.propF}>
@@ -250,6 +268,7 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
   return (
     <section className={styles.prop} aria-label={t('Предложение агента')}>
       {head}
+      {stale}
       {cover && (
         <div className={styles.cov}>
           <div className={styles.frs} role="img" aria-label={cover.text}>
@@ -543,6 +562,9 @@ function Inspector({ task, all, index, picked, existing, report, errors, project
   ];
   const wave = report.waves[task.key];
   const id = `tw-insp-${task.key}`;
+  // требования — сырой текст поля: запятая в конце набора остаётся, пока пишут следующее; в предложение — разобранный
+  // список на каждый ввод, поле приводится к виду «FR-1, FR-2» при уходе из него (Inspector пересоздаётся по задаче)
+  const [coversText, setCoversText] = useState(() => task.covers.join(', '));
   return (
     <aside className={styles.insp} aria-label={t('Задача {key}', { key: keyLabel(task.key) })}>
       <div className={styles.inspH}>
@@ -572,7 +594,18 @@ function Inspector({ task, all, index, picked, existing, report, errors, project
           {task.repo && !project.repos.some((r) => r.key === task.repo) && <option value={task.repo}>{task.repo}</option>}
         </select>
         <label htmlFor={`${id}-covers`}>{t('Требования')}</label>
-        <input id={`${id}-covers`} className={styles.mono} value={task.covers.join(', ')} disabled={readonly} placeholder="FR-1, FR-2" onChange={(e) => onEdit({ covers: e.target.value.split(/[\s,]+/).filter(Boolean) })} />
+        <input
+          id={`${id}-covers`}
+          className={styles.mono}
+          value={coversText}
+          disabled={readonly}
+          placeholder="FR-1, FR-2"
+          onChange={(e) => {
+            setCoversText(e.target.value);
+            onEdit({ covers: parseCovers(e.target.value) });
+          }}
+          onBlur={() => setCoversText(parseCovers(coversText).join(', '))}
+        />
         <label htmlFor={`${id}-desc`}>{t('Описание')}</label>
         <textarea id={`${id}-desc`} value={task.description} disabled={readonly} onChange={(e) => onEdit({ description: e.target.value })} />
         <label htmlFor={`${id}-acc`}>{t('Критерии')}</label>
