@@ -130,14 +130,20 @@ function readUpdates(v: unknown): SpaceUpdate[] {
 
 export function readSpaceMeta(slug: string): SpaceMeta | undefined {
   const file = metaFile(slug);
-  let raw: Record<string, unknown>;
+  let text: string | undefined;
   try {
-    const text = readRegular(file, { max: META_READ_MAX });
+    text = readRegular(file, { max: META_READ_MAX });
     if (text === undefined) return undefined;
-    raw = JSON.parse(text) as Record<string, unknown>;
+    return parseSpaceMeta(slug, text);
   } catch (err) {
     throw new Error(`Не читается пространство ${slug}: ${(err as Error).message}`);
   }
+}
+
+/** Текст space.json → SpaceMeta, терпимо: чужие типы и относительные пути отбрасываются. Не JSON — ошибка. */
+export function parseSpaceMeta(slug: string, text: string): SpaceMeta {
+  const parsed = JSON.parse(text) as unknown;
+  const raw = (parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>;
   const now = new Date(0).toISOString();
   const title = typeof raw.title === 'string' ? cleanLine(raw.title, SPACE_TITLE_MAX) : '';
   const dirs = strList(raw.dirs).filter((d) => path.isAbsolute(d));
@@ -475,6 +481,84 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
   return readSpace(slug)!;
 }
 
+/** Поля space.json: что пишет writeMeta. Лишний ключ — опечатка («dir» вместо «dirs»), а не новое поле. */
+const META_KEYS = ['slug', 'title', 'autoTitle', 'createdAt', 'updatedAt', 'dirs', 'cwd', 'history', 'migratedFrom'];
+/**
+ * Поля, которые API не даёт менять: history и migratedFrom открывают артефакты своих запусков всем сессиям и этапам
+ * пространства (spaceArtifactDirs), createdAt — экземпляр пространства (заведённое заново — другое).
+ */
+const META_FIXED = ['createdAt', 'history', 'migratedFrom'] as const;
+
+/**
+ * Текст space.json, который пишет не API (сессия терминала правит файл): та же проверка, что у PUT /api/spaces —
+ * меняются только заголовок, папки чтения (checkSpaceDirs: абсолютные, не шире разумного — они станут --add-dir всех
+ * сессий пространства) и рабочая папка (checkSpaceCwd), — и сверх неё то, что API гарантирует сам: JSON-объект, слаг —
+ * имя папки, типы полей, без лишних ключей. Ошибки — все сразу одним SpaceError 400 (модель исправит за один заход).
+ * prev — space.json до правки: неизменённые папки не перепроверяются (как у API, который проверяет только переданные
+ * поля — удалённая рабочая папка не мешает поправить заголовок), а createdAt, history и migratedFrom должны остаться
+ * как были. null — прежнего нет или он сломан: эти поля должны быть пустыми. undefined — сверять не с чем (проверка после
+ * записи без снимка): папки проверяются все, служебные поля — нет.
+ */
+export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta | null): SpaceMeta {
+  if (!SPACE_SLUG_RE.test(slug)) throw new SpaceError(400, `Папка «${slug}» — не слаг пространства: ${META_FILE} в ней не читается`);
+  if (Buffer.byteLength(text) > META_READ_MAX) throw new SpaceError(400, `${META_FILE} больше ${META_READ_MAX / 1024} КБ`);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    throw new SpaceError(400, `${META_FILE} — не JSON: ${(err as Error).message}`);
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new SpaceError(400, `${META_FILE} — JSON-объект`);
+  const r = raw as Record<string, unknown>;
+  const problems: string[] = [];
+  const extra = Object.keys(r).filter((k) => !META_KEYS.includes(k));
+  if (extra.length) problems.push(`лишние поля: ${extra.join(', ')} (есть только ${META_KEYS.join(', ')})`);
+  if (r.slug !== undefined && r.slug !== slug) problems.push(`slug — имя папки пространства (${slug}): его не меняют`);
+  if (r.title !== undefined && typeof r.title !== 'string') problems.push('title — строка');
+  if (r.autoTitle !== undefined && typeof r.autoTitle !== 'boolean') problems.push('autoTitle — true или false');
+  for (const k of ['createdAt', 'updatedAt'] as const) {
+    if (r[k] !== undefined && (typeof r[k] !== 'string' || !Number.isFinite(Date.parse(r[k] as string)))) problems.push(`${k} — дата ISO строкой`);
+  }
+  if (r.history !== undefined && !Array.isArray(r.history)) problems.push('history — список');
+  if (r.migratedFrom !== undefined && (!r.migratedFrom || typeof r.migratedFrom !== 'object' || Array.isArray(r.migratedFrom))) problems.push('migratedFrom — объект');
+  const next = parseSpaceMeta(slug, text);
+  if (prev !== undefined) {
+    // служебные поля — как были (нормализованные так же, как их читает agentgraph)
+    const base: Partial<SpaceMeta> = prev ?? { history: [] };
+    const changed = META_FIXED.filter((k) => (k !== 'createdAt' || prev) && JSON.stringify(next[k] ?? null) !== JSON.stringify(base[k] ?? null));
+    if (changed.length) problems.push(`${changed.join(', ')} ведёт agentgraph: их не меняют (меняются title, dirs, cwd)`);
+  }
+  const sameDirs = prev && JSON.stringify(r.dirs ?? []) === JSON.stringify(prev.dirs ?? []);
+  const sameCwd = prev && (r.cwd ?? undefined) === prev.cwd;
+  let dirs: string[] = Array.isArray(r.dirs) ? (r.dirs as string[]) : [];
+  let cwd = typeof r.cwd === 'string' ? r.cwd : undefined;
+  if (r.dirs !== undefined && !sameDirs) {
+    try {
+      dirs = checkSpaceDirs(r.dirs);
+    } catch (err) {
+      problems.push((err as Error).message);
+    }
+  }
+  if (r.cwd !== undefined && !sameCwd) {
+    try {
+      cwd = checkSpaceCwd(r.cwd);
+    } catch (err) {
+      problems.push((err as Error).message);
+    }
+  }
+  if (problems.length) throw new SpaceError(400, `${META_FILE} не пройдёт проверку agentgraph: ${problems.join('; ')}`);
+  const { dirs: _d, cwd: _c, ...rest } = next;
+  return { ...rest, ...(dirs.length ? { dirs } : {}), ...(cwd ? { cwd } : {}) };
+}
+
+/** Длина карты и состояния, записанных мимо API: те же пределы, что у PUT /api/spaces и сессии состояния. */
+export function checkSpaceTextFile(name: string, text: string): void {
+  if (name === MAP_FILE && text.length > SPACE_MAP_MAX) throw new SpaceError(400, `Карта длиннее ${SPACE_MAP_MAX} знаков (${text.length}): справочное вынеси в документы ${DOCS_DIR}/`);
+  if (name === STATE_FILE && text.trim().length > SPACE_STATE_MAX) {
+    throw new SpaceError(400, `Состояние длиннее ${SPACE_STATE_MAX} знаков (${text.trim().length}): это «где мы сейчас», а не журнал — сократи`);
+  }
+}
+
 /**
  * Саммари тега задачи, которое изменилось после переноса: старая версия agentgraph (откат, другой checkout на той же
  * папке настроек) дописывает его, а перенос был разовым снимком. Сравнивается mtime: с учтённым (summaryMtimeMs), а у
@@ -696,7 +780,7 @@ const kb = (n: number) => (n < 1024 ? `${n} Б` : `${Math.max(1, Math.round(n / 
 export const spaceTitle = (s: Pick<SpaceMeta, 'slug' | 'title' | 'autoTitle'>): string => (s.title && !s.autoTitle ? `«${s.title}» (${s.slug})` : s.slug);
 
 export type SpaceContextOpts = {
-  /** Кому: сессии терминала (документ пишет space_write) или этапу запуска (папка только для чтения). */
+  /** Кому: сессии терминала (меняет пространство с вопросом пользователю) или этапу запуска (папка только для чтения). */
   where: 'session' | 'phase';
   /** Карта уже загружена памятью: папка пространства была в --add-dir (доп. директориях) при старте процесса. */
   mapLoaded: boolean;
@@ -757,7 +841,7 @@ export function spaceContext(space: Space, o: SpaceContextOpts): string {
     else if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.slice(0, dirsMax).join(', ')}${paths.length > dirsMax ? `, …и ещё ${paths.length - dirsMax}` : ''}`);
     lines.push(
       o.where === 'session'
-        ? `Папка пространства только для чтения: карту и состояние правит пользователь на странице пространства, документ в ${DOCS_DIR}/ записывай инструментом ${SPACE_WRITE_TOOL} (спросит пользователя).`
+        ? `Пространство меняется только с разрешения пользователя — agentgraph спросит его о каждой правке: карту пиши инструментом space_map_write, состояние — space_state_write, документ в ${DOCS_DIR}/ — ${SPACE_WRITE_TOOL}, заголовок и папки — space_settings; остальное в папке пространства — правкой файлов. Меняй, только когда пользователь просит.`
         : 'Папка пространства только для чтения: состояние после запуска запишет agentgraph.',
     );
     const state = clampState(space.state);

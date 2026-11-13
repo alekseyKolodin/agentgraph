@@ -3,8 +3,8 @@
 // им же пользуются форма запуска и форма сессии.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ModelContextView, Space, SpaceContextView, SpaceDetail, SpaceDoc, SpaceDocText, SpaceDraftBody, SpaceDraftEstimate, SpaceDraftFailure, SpaceDraftModel, SpaceDraftReply, SpaceGroupsEstimate,
-  SpaceGroupsReply, SpaceListItem,
+  ModelContextView, Space, SpaceContextView, SpaceDetail, SpaceDoc, SpaceDocText, SpaceDraftBody, SpaceDraftEstimate, SpaceDraftFailure, SpaceDraftModel, SpaceDraftReply, SpaceEditPart,
+  SpaceGroupsEstimate, SpaceGroupsReply, SpaceListItem,
 } from '@server/api-types';
 import { api } from './client';
 import { aiStream, type FlowAiProgressEvent } from './flows';
@@ -47,6 +47,22 @@ export const fetchModelContext = (space: string, tags: string[], cwd = '') =>
  */
 export function useModelContext(space: string, tags: string[], cwd: string, enabled: boolean) {
   return useQuery({ queryKey: [...keys.spaces, 'model-context', space, tags.join(','), cwd], queryFn: () => fetchModelContext(space, tags, cwd), enabled, staleTime: 15_000 });
+}
+
+/**
+ * Сессия терминала поменяла пространство (событие space общего потока, useHomeEvents): открытый экран пространства
+ * перечитывает его сам — он грузит пространство не запросом React Query, а в форму.
+ */
+type SpaceChange = { slug: string; part?: SpaceEditPart };
+const spaceChanges = new EventTarget();
+export const emitSpaceChanged = (slug: string, part?: SpaceEditPart) => void spaceChanges.dispatchEvent(new CustomEvent<SpaceChange>('changed', { detail: { slug, part } }));
+export function onSpaceChanged(fn: (slug: string, part?: SpaceEditPart) => void): () => void {
+  const h = (e: Event) => {
+    const d = (e as CustomEvent<SpaceChange>).detail;
+    fn(d.slug, d.part);
+  };
+  spaceChanges.addEventListener('changed', h);
+  return () => spaceChanges.removeEventListener('changed', h);
 }
 
 /** GET /api/spaces: список для страницы и выбора пространства в формах. */

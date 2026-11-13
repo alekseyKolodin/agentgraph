@@ -1,12 +1,14 @@
 // Общий поток событий всех запусков (ui/app.js connectEvents): главная, счётчик вопросов, «Сейчас», лента и уведомления.
 // Живёт в оболочке, на любом экране: без него, пока открыт один запуск, вопрос из другого flow было не увидеть. Сюда же
-// приходит «сессия терминала закончила ход и ждёт тебя» (session): список сессий — сразу, уведомление — если вкладка не на виду.
+// приходит «сессия терминала закончила ход и ждёт тебя» (session): список сессий — сразу, уведомление — если вкладка не на виду;
+// и «сессия поменяла пространство или flow» (space, flows): списки и открытое пространство перечитываются.
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeEvent } from '@server/api-types';
 import { keys, useEventStream, useFeature } from '../../api';
 import { sessionKeys } from '../../api/sessions';
+import { emitSpaceChanged } from '../../api/spaces';
 import { teamKeys } from '../../api/teamwork';
 import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
@@ -101,6 +103,17 @@ export function useHomeEvents(): void {
       // в клоне команды Teamwork что-то поменялось (запись или pull): все запросы команд — заново; запусков это не касается
       if (e.type === 'team') {
         soon(teamKeys.all);
+        return;
+      }
+      // сессия терминала поменяла пространство (с вопросом пользователю): список, превью «Модель получит» и открытый экран
+      if (e.type === 'space') {
+        soon(keys.spaces);
+        if (e.space) emitSpaceChanged(e.space, e.spacePart);
+        return;
+      }
+      // …или файл в папке flow: список flow в сайдбаре
+      if (e.type === 'flows') {
+        soon(keys.flows);
         return;
       }
       // событие сессии терминала — не запуска: главную, запуски и ленту оно не меняет

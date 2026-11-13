@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionView } from './api-types.js';
-import { mcpReply, type McpCtx, type SessionNewArgs } from './sessions-mcp.js';
+import { mcpReply, type FlowWriteArgs, type McpCtx, type SessionNewArgs, type SpaceSettingsArgs } from './sessions-mcp.js';
 import { createTag, deleteTag, updateTag } from './tags.js';
 
 function withConfigDir(fn: () => Promise<void>) {
@@ -22,12 +22,21 @@ function withConfigDir(fn: () => Promise<void>) {
   };
 }
 
-type Scope = { space?: string; knowledge: string[] };
-const scope: Scope = { space: 'feat', knowledge: ['k'] };
-/** Контекст MCP: пространство и теги — из now, session_new — в opened, space_write — в written (или ошибка, если fail). */
+type Scope = { space?: string; spaceDir?: string; knowledge: string[]; flowsDir?: string };
+const scope: Scope = { space: 'feat', spaceDir: '/cfg/spaces/feat', knowledge: ['k'], flowsDir: '/home/flows' };
+/**
+ * Контекст MCP: пространство и теги — из now, session_new — в opened, space_write — в written, карта, состояние,
+ * настройки и flow — в saved (или ошибка, если fail).
+ */
 function ctxOf(now: () => Scope = () => scope, fail?: string) {
   const opened: SessionNewArgs[] = [];
   const written: [string, string][] = [];
+  const saved: [string, unknown][] = [];
+  const keep = (what: string, v: unknown, out: string) => {
+    if (fail) throw new Error(fail);
+    saved.push([what, v]);
+    return out;
+  };
   const ctx: McpCtx = {
     scope: now,
     open: async (args) => {
@@ -40,8 +49,12 @@ function ctxOf(now: () => Scope = () => scope, fail?: string) {
       written.push([name, text]);
       return `/cfg/spaces/feat/docs/${name}`;
     },
+    writeMap: (text) => keep('map', text, '/cfg/spaces/feat/CLAUDE.md'),
+    writeState: async (text) => keep('state', text, '/cfg/spaces/feat/STATE.md'),
+    spaceSettings: (a: SpaceSettingsArgs) => keep('settings', a, 'Настройки пространства feat записаны: заголовок → «Корзина».'),
+    writeFlow: (a: FlowWriteArgs) => keep('flow', a, `/home/flows/${a.name}.yaml`),
   };
-  return { ctx, opened, written };
+  return { ctx, opened, written, saved };
 }
 const { ctx } = ctxOf();
 const rpc = (method: string, params?: unknown, id: unknown = 1) => ({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) });
@@ -62,18 +75,57 @@ test('MCP: tools/list — knowledge_read только на чтение, space_w
   const { ctx } = ctxOf(() => now);
   type Tool = { name: string; description: string; annotations: unknown; inputSchema: { properties: Record<string, { description: string }> } };
   const list = async () => ((await mcpReply(rpc('tools/list'), ctx)).body as { result: { tools: Tool[] } }).result.tools;
+  const write = { readOnlyHint: false, destructiveHint: true };
   assert.deepEqual((await list()).map((t) => [t.name, t.annotations]), [
     ['knowledge_read', { readOnlyHint: true }],
-    ['space_write', { readOnlyHint: false, destructiveHint: true }],
+    ['space_write', write],
+    ['space_map_write', write],
+    ['space_state_write', write],
+    ['space_settings', write],
+    ['flow_write', write],
     ['session_new', { readOnlyHint: false, destructiveHint: false }],
   ]);
-  assert.equal((await list())[0].inputSchema.properties.slug.description, 'Слаг области знаний: k');
-  assert.match((await list())[1].description, /docs\/ пространства agentgraph этой сессии \(feat\)/);
-  assert.match((await list())[2].inputSchema.properties.space.description, /как у этой сессии: feat; null — без пространства/);
-  assert.match((await list())[2].inputSchema.properties.tags.description, /теги этой сессии: k;/);
+  const by = async (name: string) => (await list()).find((t) => t.name === name)!;
+  assert.equal((await by('knowledge_read')).inputSchema.properties.slug.description, 'Слаг области знаний: k');
+  assert.match((await by('space_write')).description, /docs\/ пространства agentgraph этой сессии \(feat\)/);
+  // «карту и состояние правит пользователь» больше не говорим: у них свои инструменты
+  assert.ok(!(await by('space_write')).description.includes('правит пользователь'));
+  assert.match((await by('space_write')).description, /Карту пишет space_map_write, состояние — space_state_write/);
+  assert.match((await by('space_map_write')).description, /\(feat\).*прочитай текущую инструментом Read \(\/cfg\/spaces\/feat\/CLAUDE\.md\)/s);
+  assert.match((await by('space_state_write')).description, /до 2500 знаков/);
+  assert.match((await by('flow_write')).description, /в папке flow \/home\/flows\. До записи agentgraph проверяет схему/);
+  for (const t of ['space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write']) assert.match((await by(t)).description, /Пользователь подтверждает вызов\.$/, t);
+  assert.match((await by('session_new')).inputSchema.properties.space.description, /как у этой сессии: feat; null — без пространства/);
+  assert.match((await by('session_new')).inputSchema.properties.tags.description, /теги этой сессии: k;/);
   now = { knowledge: ['k', 'fe'] };
-  assert.equal((await list())[0].inputSchema.properties.slug.description, 'Слаг области знаний: k, fe');
-  assert.match((await list())[1].description, /нет пространства — вызов вернёт ошибку/);
+  assert.equal((await by('knowledge_read')).inputSchema.properties.slug.description, 'Слаг области знаний: k, fe');
+  for (const t of ['space_write', 'space_map_write', 'space_state_write', 'space_settings']) assert.match((await by(t)).description, /нет пространства — вызов вернёт ошибку/, t);
+});
+
+test('MCP: space_map_write, space_state_write, space_settings и flow_write — аргументы в контекст, ответ — куда записано; лишнее и не те типы — ошибка без записи', async () => {
+  const { ctx, saved } = ctxOf();
+  assert.match((await callWith(ctx, 'space_map_write', { text: '# Корзина' })).content[0].text, /^Карта записана: \/cfg\/spaces\/feat\/CLAUDE\.md\. Памятью её получат следующие сессии/);
+  assert.match((await callWith(ctx, 'space_state_write', { text: 'Суть: корзина' })).content[0].text, /^Состояние записано: \/cfg\/spaces\/feat\/STATE\.md/);
+  assert.match((await callWith(ctx, 'space_settings', { title: 'Корзина\x1b', dirs: ['/specs'], cwd: null })).content[0].text, /^Настройки пространства feat записаны/);
+  assert.match((await callWith(ctx, 'flow_write', { name: ' fix-bug ', yaml: 'name: fix-bug', folder: ' lib ' })).content[0].text, /^Flow записан: \/home\/flows\/fix-bug\.yaml\. Начатый запуск идёт по своему снимку; новый запуск, продолжение и вызов из другого flow возьмут эту версию\.$/);
+  assert.deepEqual(saved, [
+    ['map', '# Корзина'],
+    ['state', 'Суть: корзина'],
+    // управляющие символы заголовка — пробелом; cwd: null — снять
+    ['settings', { title: 'Корзина ', dirs: ['/specs'], cwd: null }],
+    ['flow', { name: 'fix-bug', yaml: 'name: fix-bug', folder: 'lib' }],
+  ]);
+  const bad: [string, unknown][] = [
+    ['space_map_write', {}], ['space_map_write', { text: 1 }], ['space_map_write', { text: 'x', file: 'CLAUDE.md' }],
+    ['space_state_write', { state: 'x' }],
+    ['space_settings', {}], ['space_settings', { dirs: '/x' }], ['space_settings', { dirs: [1] }], ['space_settings', { cwd: 5 }], ['space_settings', { title: 'x', history: [] }],
+    ['flow_write', { name: 'x' }], ['flow_write', { name: 'x', yaml: 1 }], ['flow_write', { name: 'x', yaml: 'y', folder: 2 }], ['flow_write', { name: 'x', yaml: 'y', path: '/etc' }],
+  ];
+  for (const [tool, args] of bad) assert.equal((await callWith(ctx, tool, args)).isError, true, `${tool} ${JSON.stringify(args)}`);
+  assert.equal(saved.length, 4);
+  // ошибка записи (нет пространства, схема flow) — текстом модели
+  const failed = await callWith(ctxOf(undefined, 'Невалидный flow:\nphases: Required').ctx, 'flow_write', { name: 'x', yaml: 'name: x' });
+  assert.deepEqual([failed.isError, failed.content[0].text], [true, 'Невалидный flow:\nphases: Required']);
 });
 
 type ToolResult = { result: { content: Array<{ text: string }>; isError?: boolean } };
@@ -148,15 +200,15 @@ test('MCP: инструменты задачи Teamwork — только у се
   const withTask: McpCtx = { ...base, teamTask: async (a) => (updates.push(a), `Задача PAY-12: ${JSON.stringify(a)}`), teamDoc: async (name, text) => (docs.push([name, text]), `/teams/team/repo/projects/export/${name}.md`) };
   type Tool = { name: string; description: string; annotations: unknown; inputSchema: { properties: Record<string, { enum?: string[] }> } };
   const list = ((await mcpReply(rpc('tools/list'), withTask)).body as { result: { tools: Tool[] } }).result.tools;
-  assert.deepEqual(list.slice(3).map((t) => [t.name, t.annotations]), [
+  assert.deepEqual(list.slice(7).map((t) => [t.name, t.annotations]), [
     ['team_task_update', { readOnlyHint: false, destructiveHint: true }],
     ['team_doc_write', { readOnlyHint: false, destructiveHint: true }],
   ]);
-  assert.match(list[3].description, /PAY-12 \(команда team, проект export\)/);
-  assert.deepEqual(list[3].inputSchema.properties.status.enum, ['todo', 'in_progress', 'review', 'done']);
+  assert.match(list[7].description, /PAY-12 \(команда team, проект export\)/);
+  assert.deepEqual(list[7].inputSchema.properties.status.enum, ['todo', 'in_progress', 'review', 'done']);
   // без задачи инструментов в списке нет, а вызов — ошибка
   const plain = ((await mcpReply(rpc('tools/list'), ctx)).body as { result: { tools: Tool[] } }).result.tools;
-  assert.deepEqual(plain.map((t) => t.name), ['knowledge_read', 'space_write', 'session_new']);
+  assert.deepEqual(plain.map((t) => t.name), ['knowledge_read', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'session_new']);
   const noTask = await callWith(ctx, 'team_task_update', { status: 'review' });
   assert.deepEqual([noTask.isError, noTask.content[0].text], [true, 'Эта сессия не открыта из задачи Teamwork: инструмент недоступен']);
   // статус, PR и комментарий — как есть; пустые строки — как не заданные; управляющие символы вычищаются

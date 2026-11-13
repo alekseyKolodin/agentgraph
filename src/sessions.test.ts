@@ -6,8 +6,9 @@ import path from 'node:path';
 import {
   childPermissionMode, contextDelta, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionCtx,
   resumeTarget, safeRealpath, sessionArgs, sessionContext, sessionDirs, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_PROMPT_MAX,
-  sessionSettings, versionAtLeast, type HookDeps, type HookState, type SessionLaunch,
+  sessionSettings, versionAtLeast, type HookDeps, type HookState, type SessionLaunch, type WriteCall,
 } from './sessions.js';
+import { configDir } from './settings.js';
 import { createTag, readTag, tagDir, tagsDir, updateTag } from './tags.js';
 import { addSpaceDoc, createSpace, readSpace, spaceDir, spacesDir, writeSpaceState } from './spaces.js';
 import { teamsDir } from './teamwork.js';
@@ -47,6 +48,8 @@ const launch = (o: Partial<SessionLaunch> = {}): SessionLaunch => ({
 });
 
 const flagValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+/** Инструменты agentgraph с вопросом в любом режиме — порядок как в sessionSettings. */
+const ASK_FULL = ['session_new', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'team_task_update', 'team_doc_write'].map((t) => `mcp__agentgraph__${t}`);
 
 test('sessionArgs: новый разговор — --session-id, название через =, хуки и MCP одним JSON, без модели и режима', () => {
   const args = sessionArgs(launch({ name: '-dash name' }));
@@ -62,12 +65,14 @@ test('sessionArgs: новый разговор — --session-id, названи�
   // HTTP-хуки на SessionStart Claude Code пропускает: только командой, -f и || true
   assert.equal(start.type, 'command');
   assert.match(start.command, /^curl -sSf --max-time 5 .*'X-Agentgraph-Session: tok123'.*'http:\/\/127\.0\.0\.1:4755\/api\/sessions\/11111111-2222-4333-8444-555555555555\/hook' \|\| true$/);
-  for (const e of ['UserPromptSubmit', 'PostToolBatch', 'Stop', 'StopFailure', 'Notification', 'SessionEnd', 'PermissionRequest', 'PreToolUse']) {
+  for (const e of ['UserPromptSubmit', 'PostToolBatch', 'Stop', 'StopFailure', 'Notification', 'SessionEnd', 'PermissionRequest', 'PreToolUse', 'PostToolUse']) {
     const h = settings.hooks[e][0].hooks[0];
     assert.deepEqual([h.type, h.url, h.headers], ['http', 'http://127.0.0.1:4755/api/sessions/11111111-2222-4333-8444-555555555555/hook', { 'X-Agentgraph-Session': 'tok123' }]);
   }
-  // PreToolUse — только на session_new, space_write и инструменты задачи Teamwork: остальные инструменты хук не задерживает
-  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write']);
+  // PreToolUse — на инструменты agentgraph, которые пишут, и на запись файлов: остальные инструменты хук не задерживает
+  assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), [...ASK_FULL, 'Edit|Write|MultiEdit|NotebookEdit']);
+  // PostToolUse — только запись файлов: проверка записанного и событие для UI
+  assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher: string }) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
@@ -194,71 +199,99 @@ test('sessionEnv: вычищает только маркеры хоста и с�
 });
 
 test(
-  'launchDirs: пути внутри проекта и содержащие его не трогаются; запрет записи — на всю папку тегов, всю папку пространств, папку команд, артефакты и открытые папки',
+  'launchDirs: пути внутри проекта и содержащие его не трогаются; запрет записи — на папку тегов, команд, чужие пространства, артефакты, открытые папки и служебные файлы настроек; своё пространство и папка flow — вопросом',
   withConfigDir(() => {
     const root = tagsDir();
     const spaces = spacesDir();
     const art = '/ag/runs/r1/artifacts';
-    const r = launchDirs(['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, `${spaces}/feat`, `${teamsDir()}/pay/repo`, '/odd(dir)', '/glob[1]', art], '/p/shop', '/s/files', [art]);
-    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, `${spaces}/feat`, `${teamsDir()}/pay/repo`, art, '/s/files']);
-    assert.deepEqual(r.denyDirs, [root, spaces, teamsDir(), art, '/specs']);
-    assert.deepEqual(r.denyFiles, []);
+    fs.mkdirSync(path.join(spaces, 'feat'), { recursive: true });
+    fs.mkdirSync(path.join(spaces, 'other'), { recursive: true });
+    fs.writeFileSync(path.join(configDir(), 'settings.json'), '{}');
+    fs.writeFileSync(path.join(configDir(), 'jira-token'), 'x');
+    const reads = ['/p/shop/docs', '/p', '/specs', `${root}/a/attachments`, `${spaces}/feat`, `${spaces}/other/docs`, `${teamsDir()}/pay/repo`, '/odd(dir)', '/glob[1]', art, '/flows/lib'];
+    const r = launchDirs(reads, '/p/shop', '/s/files', [art], { spaces: ['feat'], flowsDir: '/flows' });
+    assert.deepEqual(r.addDirs, ['/specs', `${root}/a/attachments`, `${spaces}/feat`, `${spaces}/other/docs`, `${teamsDir()}/pay/repo`, art, '/flows/lib', '/s/files']);
+    // своё пространство и папка чтения в папке flow запретом не закрыты: их правку решают вопрос и хук записи; чужое — закрыто
+    assert.deepEqual(r.denyDirs, [root, teamsDir(), art, '/specs', path.join(spaces, 'other')]);
+    assert.deepEqual(r.denyFiles, [path.join(spaces, '.migrated.json'), path.join(configDir(), 'jira-token'), path.join(configDir(), 'settings.json')]);
+    assert.deepEqual(r.askDirs, [path.join(spaces, 'feat'), '/flows']);
+    // без своего пространства — закрыта вся папка пространств, как раньше; папка flow — по-прежнему вопросом
+    const none = launchDirs([], '/p/shop', '/s/files', [], { flowsDir: '/flows' });
+    assert.ok(none.denyDirs.includes(spaces));
+    assert.deepEqual(none.askDirs, ['/flows']);
   }),
 );
 
 test(
-  'launchDirs: проект в домашней папке — папки тегов, пространств и артефакты внутри него всё равно закрыты для записи',
+  'launchDirs: проект в домашней папке — папки тегов, пространств, команд и артефакты внутри него всё равно закрыты для записи',
   withConfigDir((home) => {
     const root = tagsDir();
     const art = path.join(home, 'ag', 'runs', 'r1', 'artifacts');
     const r = launchDirs([art], home, '/s/files', [art]);
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs, [root, spacesDir(), teamsDir(), art]);
+    assert.deepEqual(r.denyDirs, [root, teamsDir(), spacesDir(), art]);
     // cwd внутри папки тегов — её не закрываем: это и есть проект; папка команд закрыта всё равно
-    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, [spacesDir(), teamsDir()]);
+    assert.deepEqual(launchDirs([], path.join(root, 'a'), '/s/files').denyDirs, [teamsDir(), spacesDir()]);
     // сессия в клоне команды (терминал из задачи открывается в worktree репо кода, но если открыли сам клон) — он проект
     assert.deepEqual(launchDirs([], path.join(teamsDir(), 'pay', 'repo'), '/s/files').denyDirs, [root, spacesDir()]);
   }),
 );
 
 test(
-  'launchDirs: сессия в папке пространства правит его карту и документы — с вопросом на каждую правку; .claude/, space.json и другие пространства закрыты',
+  'launchDirs: сессия в папке пространства правит его целиком — карту, документы, space.json и .claude/ — с вопросом на каждую правку; другие пространства закрыты',
   withConfigDir(() => {
     const own = path.join(spacesDir(), 'feat');
     const other = path.join(spacesDir(), 'other');
-    fs.mkdirSync(own, { recursive: true });
+    fs.mkdirSync(path.join(own, '.claude'), { recursive: true });
     fs.mkdirSync(other, { recursive: true });
     const r = launchDirs([own], own, '/s/files');
     assert.deepEqual(r.addDirs, ['/s/files']);
-    assert.deepEqual(r.denyDirs.sort(), [tagsDir(), teamsDir(), other, path.join(own, '.claude')].sort());
-    assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '*', 'space.json'), path.join(spacesDir(), '.migrated.json')]);
+    // .claude/ и space.json своего больше не закрыты
+    assert.deepEqual(r.denyDirs.sort(), [tagsDir(), teamsDir(), other].sort());
+    assert.deepEqual(r.denyFiles, [path.join(spacesDir(), '.migrated.json')]);
     assert.deepEqual(r.askDirs, [own]);
-    const settings = sessionSettings(launch({ ...r, claudeVersion: '2.1.317' })) as { permissions: { ask: string[] }; hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> } };
+    const settings = sessionSettings(launch({ ...r, claudeVersion: '2.1.317' })) as { permissions: { ask: string[]; deny: string[] }; hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> } };
     assert.ok(settings.permissions.ask.includes(`Edit(/${own}/**)`));
-    // и хук записи: пространства, заведённые после старта, ловятся в момент вызова; сбой хука блокирует запись
+    assert.ok(!settings.permissions.deny.some((d) => d.includes('.claude') || d.includes('space.json')));
+    // своё пространство выбрано и открыто в его же папке — одно и то же
+    assert.deepEqual(launchDirs([own], own, '/s/files', [], { spaces: ['feat'] }).askDirs, [own]);
+    // хук записи — у каждой сессии, и в папке пространства, и вне её; сбой хука блокирует запись
     assert.deepEqual(settings.hooks.PreToolUse.filter((h) => h.matcher.includes('Edit')).map((h) => [h.matcher, h.hooks[0].onFailure]), [['Edit|Write|MultiEdit|NotebookEdit', 'block']]);
-    // вне папки пространств вопроса на папку нет, хука записи — тоже
-    const plain = launchDirs([own], '/p', '/s/files');
-    assert.deepEqual(plain.askDirs, []);
-    assert.ok(!(sessionSettings(launch({ ...plain })) as { hooks: { PreToolUse: Array<{ matcher: string }> } }).hooks.PreToolUse.some((h) => h.matcher.includes('Edit')));
-    // хук записи: отказ — deny с причиной, нет отказа — пустой ответ (решают правила и режим), упал — тоже отказ
-    const write = (guard: HookDeps['writeGuard']) => handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/x' } }, { ...deps(), writeGuard: guard }).reply;
-    assert.deepEqual(write(() => 'нельзя'), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'нельзя' } });
-    assert.deepEqual(write(() => undefined), {});
-    assert.match(JSON.stringify(write(() => { throw new Error('boom'); })), /Проверка записи не удалась \(boom\)/);
-    // рабочая папка claude из входа хука доходит до проверки: от неё — относительные пути
-    let seen: string | undefined;
-    const input = parseHookInput({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'a.md' }, cwd: '/sp/own/docs' })!;
-    handleHook(state(), input, { ...deps(), writeGuard: (_t, _i, cwd) => { seen = cwd; return undefined; } });
-    assert.equal(seen, '/sp/own/docs');
+    const plain = sessionSettings(launch({ ...launchDirs([own], '/p', '/s/files') })) as { hooks: { PreToolUse: Array<{ matcher: string }> } };
+    assert.ok(plain.hooks.PreToolUse.some((h) => h.matcher.includes('Edit')));
   }),
 );
 
-test('sessionSettings: session_new, space_write и инструменты задачи Teamwork — в permissions.ask (вопрос и без хука); onFailure: block у хука — только claude 2.1.295+', () => {
-  const ask = ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write'];
+test('хуки: запись файла — решение writeGuard: deny и ask с причиной, нет решения — пустой ответ (решают правила и режим), упал — отказ', () => {
+  const write = (guard: HookDeps['writeGuard']) => handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: '/x' } }, { ...deps(), writeGuard: guard }).reply;
+  assert.deepEqual(write(() => ({ decision: 'deny', reason: 'нельзя' })), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'нельзя' } });
+  assert.deepEqual(write(() => ({ decision: 'ask', reason: 'карта пространства' })), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'карта пространства' } });
+  assert.deepEqual(write(() => undefined), {});
+  assert.match(JSON.stringify(write(() => { throw new Error('boom'); })), /"deny".*Проверка записи не удалась \(boom\)/);
+  // рабочая папка claude, режим и id вызова из входа хука доходят до проверки: от папки — относительные пути, id — снимок
+  let seen: WriteCall | undefined;
+  const input = parseHookInput({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'a.md' }, cwd: '/sp/own/docs', permission_mode: 'acceptEdits', tool_use_id: 'tu1' })!;
+  handleHook(state(), input, { ...deps(), writeGuard: (_t, _i, call) => { seen = call; return undefined; } });
+  assert.deepEqual(seen, { cwd: '/sp/own/docs', mode: 'acceptEdits', toolUseId: 'tu1' });
+});
+
+test('хуки: PostToolUse записи — что сказал afterWrite, уходит модели decision: block с причиной; упал — тоже; не запись — пусто', () => {
+  const post = (tool: string, after: HookDeps['afterWrite']) => handleHook(state(), { hook_event_name: 'PostToolUse', tool_name: tool, tool_input: { file_path: '/x' }, tool_use_id: 'tu1' }, { ...deps(), afterWrite: after }).reply;
+  assert.deepEqual(post('Write', () => 'space.json сломан — возвращена версия до записи'), { decision: 'block', reason: 'space.json сломан — возвращена версия до записи' });
+  assert.deepEqual(post('Edit', () => undefined), {});
+  assert.match(String(post('Edit', () => { throw new Error('boom'); }).reason), /Проверка после записи не удалась: boom/);
+  let called = false;
+  assert.deepEqual(post('Bash', () => { called = true; return 'x'; }), {});
+  assert.equal(called, false);
+});
+
+test('sessionSettings: инструменты agentgraph, которые пишут, — в permissions.ask (вопрос и без хука), как и папки askDirs; onFailure: block у хука — только claude 2.1.295+', () => {
+  const ask = ASK_FULL;
   const hooksOf = (v?: string) => (sessionSettings(launch(v ? { claudeVersion: v } : {})) as { hooks: { PreToolUse: Array<{ matcher: string; hooks: Array<Record<string, unknown>> }> }; permissions: { ask: string[] } });
   for (const v of [undefined, '2.1.285', '2.1.317']) assert.deepEqual(hooksOf(v).permissions.ask, ask, String(v));
-  assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), ask.map((m) => [m, 'block']));
+  assert.deepEqual(hooksOf('2.1.317').hooks.PreToolUse.map((h) => [h.matcher, h.hooks[0].onFailure]), [...ask, 'Edit|Write|MultiEdit|NotebookEdit'].map((m) => [m, 'block']));
+  // папки с вопросом: сама папка и всё внутри
+  assert.deepEqual((sessionSettings(launch({ askDirs: ['/cfg/spaces', '/flows'] })) as { permissions: { ask: string[] } }).permissions.ask.slice(ask.length), ['Edit(//cfg/spaces)', 'Edit(//cfg/spaces/**)', 'Edit(//flows)', 'Edit(//flows/**)']);
   // старый claude ключа не знает — ему не шлём; неизвестная версия — тоже
   assert.ok(hooksOf('2.1.285').hooks.PreToolUse.every((h) => !('onFailure' in h.hooks[0])));
   assert.ok(hooksOf().hooks.PreToolUse.every((h) => !('onFailure' in h.hooks[0])));
@@ -266,7 +299,7 @@ test('sessionSettings: session_new, space_write и инструменты зад
 });
 
 test(
-  'launchDirs: ~/.agentgraph — ссылка: запрет записи и по лексическому пути, и по настоящему',
+  'launchDirs: ~/.agentgraph — ссылка: запрет и вопрос записи и по лексическому пути, и по настоящему',
   withConfigDir((root) => {
     const real = path.join(root, 'real-cfg');
     fs.mkdirSync(path.join(real, 'spaces'), { recursive: true });
@@ -279,6 +312,10 @@ test(
     try {
       const r = launchDirs([], '/p', '/s/files');
       for (const d of [path.join(link, 'spaces'), path.join(real, 'spaces'), path.join(link, 'tags'), path.join(real, 'tags'), path.join(link, 'teams'), path.join(real, 'teams')]) assert.ok(r.denyDirs.includes(d), d);
+      // своё пространство — вопросом по обоим путям
+      fs.mkdirSync(path.join(real, 'spaces', 'feat'));
+      const mine = launchDirs([], '/p', '/s/files', [], { spaces: ['feat'] });
+      for (const d of [path.join(link, 'spaces', 'feat'), path.join(real, 'spaces', 'feat')]) assert.ok(mine.askDirs.includes(d), d);
     } finally {
       process.env.AGENTGRAPH_CONFIG_DIR = prev;
     }
@@ -435,17 +472,34 @@ test(
   }),
 );
 
-test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про session_new, space_write и инструменты задачи Teamwork', () => {
+test('хуки: режим разрешений основного разговора запоминается, сабагента — нет; PreToolUse спрашивает только про инструменты agentgraph, которые пишут', () => {
   assert.equal(handleHook(state(), { hook_event_name: 'UserPromptSubmit', prompt: 'x', permission_mode: 'plan' }, deps()).patch.permissionMode, 'plan');
   assert.equal(handleHook(state({ permissionMode: 'plan' }), { hook_event_name: 'Stop', permission_mode: 'plan' }, deps()).patch.permissionMode, undefined);
   assert.equal(handleHook(state(), { hook_event_name: 'PostToolBatch', agent_id: 'a1', permission_mode: 'auto' }, deps()).patch.permissionMode, undefined);
   assert.deepEqual(parseHookInput({ hook_event_name: 'Stop', permission_mode: 'auto' }), { hook_event_name: 'Stop', permission_mode: 'auto' });
-  for (const tool of ['mcp__agentgraph__session_new', 'mcp__agentgraph__space_write', 'mcp__agentgraph__team_task_update', 'mcp__agentgraph__team_doc_write']) {
+  for (const tool of ASK_FULL) {
     const ask = handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, permission_mode: 'auto' }, deps()).reply;
     assert.equal((ask.hookSpecificOutput as { permissionDecision: string }).permissionDecision, 'ask', tool);
   }
   assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__knowledge_read' }, deps()).reply, {});
   assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash' }, deps()).reply, {});
+});
+
+test('хуки: в bypassPermissions и dontAsk claude вопрос не покажет — инструменты agentgraph с вопросом отклоняются; не прошедший проверку вызов — отказ без вопроса', () => {
+  const decide = (tool: string, mode?: string, detail?: HookDeps['askDetail']) =>
+    handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, ...(mode ? { permission_mode: mode } : {}) }, { ...deps(), ...(detail ? { askDetail: detail } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  for (const mode of ['bypassPermissions', 'dontAsk']) {
+    for (const tool of ASK_FULL) {
+      const d = decide(tool, mode);
+      assert.equal(d.permissionDecision, 'deny', `${mode} ${tool}`);
+      assert.match(d.permissionDecisionReason, new RegExp(`В режиме ${mode} claude не задаст вопрос`));
+    }
+  }
+  for (const mode of ['default', 'acceptEdits', 'auto', 'plan']) assert.equal(decide('mcp__agentgraph__flow_write', mode).permissionDecision, 'ask', mode);
+  // askDetail сказал { deny } (схема flow не прошла): человека не спрашиваем, модель получает ошибки
+  const bad = decide('mcp__agentgraph__flow_write', 'default', () => ({ deny: 'phases: Required' }));
+  assert.deepEqual([bad.permissionDecision, bad.permissionDecisionReason], ['deny', 'phases: Required']);
+  assert.match(decide('mcp__agentgraph__flow_write', 'default', () => 'flows/x.yaml: новый flow').permissionDecisionReason, /flow запишется.*\. flows\/x\.yaml: новый flow$/);
 });
 
 test('хуки: id разговора не UUID в историю разговоров не попадает (он ушёл бы в --resume)', () => {

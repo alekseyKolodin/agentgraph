@@ -198,15 +198,15 @@ export const space: Record<string, string> = {
   'Перенесено из тега задачи {tag}: его папка осталась на месте': 'Moved from the {tag} task tag: its folder stayed in place',
   'Новая сессия Claude Code в терминале в этом пространстве: карта — памятью, состояние и документы — в контексте':
     'A new Claude Code session in a terminal in this space: the map as memory, the state and documents in context',
-  'Сессия в самой папке пространства: Claude правит карту и документы как обычный проект, ты подтверждаешь правки':
-    'A session in the space folder itself: Claude edits the map and documents like a regular project, you approve the edits',
+  'Сессия в самой папке пространства: Claude работает в ней как в проекте, каждую правку пространства ты подтверждаешь':
+    'A session in the space folder itself: Claude works in it like in a project, you approve every edit to the space',
   'Сессия в папке': 'Session in the folder',
   'Перечитать с диска': 'Reload from disk',
   'Сохранить карту, состояние и настройки (⌘S)': 'Save the map, state and settings (⌘S)',
   'CLAUDE.md пространства — карта: суть, где что, куда за чем ходить, договорённости. Claude Code загружает её памятью в каждую сессию и этап пространства, как CLAUDE.md репозитория. Держи её короткой: подробности — в документы, их агент откроет сам':
     'The space\'s CLAUDE.md is its map: the gist, where things are, where to go for what, agreements. Claude Code loads it as memory into every session and phase of the space, like a repository\'s CLAUDE.md. Keep it short: details go into documents, the agent opens them itself',
   'Карта длинная: она уходит в каждый запрос модели — вынеси подробности в документы': 'The map is long: it goes into every model request — move the details into documents',
-  'Карту правишь ты; агент её не меняет — только сессия в папке пространства с твоим подтверждением': 'You edit the map; the agent doesn\'t change it — only a session in the space folder, with your approval',
+  'Карту правишь ты или сессия Claude — каждую её правку ты подтверждаешь; этапы запусков её не меняют': 'You edit the map, or a Claude session does — you approve each of its edits; flow phases don\'t change it',
   'Суть · Где код · Ключевые решения · Что осталось · Где читать подробнее': 'Gist · Where the code is · Key decisions · What\'s left · Where to read more',
   'Длиннее {n} знаков — обрежется при сохранении': 'Longer than {n} characters — it will be cut on save',
   '«Где мы сейчас»: его переписывает короткая сессия после сессии терминала и запуска «готово» в пространстве; правка руками доживёт до следующей такой записи. Модели оно идёт как данные, а не как инструкции':
@@ -362,4 +362,5 @@ export const space: Record<string, string> = {
   'Черновик сохранён': 'Draft saved',
   'Карты ещё нет. Модель может набросать её по описанию и проекту или по сессиям и запускам этого пространства: проверенные команды, устройство, подводные камни, куда за чем — и документы-навыки. Ты посмотришь черновик и сохранишь то, что верно.': 'No map yet. A model can sketch it from a description and the project or from this space’s sessions and runs: verified commands, architecture, pitfalls, where to look for what — plus skill documents. You review the draft and save what’s right.',
   'Модель перепишет карту по проекту или по сессиям и запускам; ты увидишь разницу с текущей и сохранишь выбранное': 'The model rewrites the map from the project or from sessions and runs; you see the diff with the current one and save what you choose',
+  'Пространство изменили в сессии: перечитай с диска, прежде чем сохранять': 'A session changed this space: reload from disk before saving',
 };

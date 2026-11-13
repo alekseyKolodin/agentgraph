@@ -13,27 +13,35 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  RunTeamworkLink, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, SpaceSession,
-  TeamTask, TeamTaskWork,
+  RunTeamworkLink, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
+  SpaceEditPart, SpaceSession, TeamTask, TeamTaskWork,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { nothingToName, pickSessionTitle } from './session-title.js';
 import type { RunTitleReport } from './run-title.js';
-import { ROOT, RUNS_DIR } from './paths.js';
+import { FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
-import { cleanLine, createSpace, existingSpacePaths, META_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, writeSpaceDoc, writeSpaceState, WRITE_DOC_EXTS, SpaceError } from './spaces.js';
+import {
+  cleanLine, createSpace, existingSpacePaths, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
+  writeSpaceState, WRITE_DOC_EXTS, SpaceError,
+} from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
-import { canonical, isInside, toolPath, WRITE_TOOLS } from './artifacts.js';
-import { nodeProbe } from './artifact-store.js';
+import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import { configDir } from './settings.js';
 import {
-  findClaude, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath, sessionArgs, sessionEnv,
-  childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL,
-  TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState, type SessionCtx,
+  findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
+  sessionArgs, sessionEnv, childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_MAP_WRITE_FULL,
+  SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
+  type SessionCtx, type WriteCall,
 } from './sessions.js';
-import { mcpReply, parseSessionNewArgs, parseTeamTaskArgs, type McpReply, type SessionNewArgs, type TeamTaskUpdateArgs } from './sessions-mcp.js';
+import {
+  mcpReply, parseFlowWriteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
+  type TeamTaskUpdateArgs,
+} from './sessions-mcp.js';
+import { classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, type EditScope, type EditTarget } from './session-edit.js';
+import { plannedFlowFile, saveFlowYaml } from './flows.js';
 import { parseTeamworkLink } from './teamwork-status.js';
 import { teamsCwdProblem } from './teamwork-trust.js';
 import { teamsDir } from './teamwork.js';
@@ -153,7 +161,17 @@ type Live = {
   seenStatus?: SessionStatus;
   /** С какого момента сессия ждёт тебя (статус waiting). */
   waitingSince?: string;
+  /** Пространства, папки которых открыты правилами этого процесса claude (остальные закрыты deny на старте). */
+  launched?: string[];
+  /**
+   * Вызовы записи, о которых спросили, по id: куда пишут (посчитано до вопроса — пространство могли сменить, пока он
+   * висел) и снимок проверенного файла до записи (null — файла не было) для отката, если запись его сломала.
+   */
+  edits: Map<string, { target: EditTarget; before?: string | null }>;
 };
+
+/** Снимков до записи на сессию не больше: вызов, который человек отклонил, PostToolUse не пришлёт. */
+const EDITS_MAX = 32;
 
 export type SessionDeps = {
   kit: () => Promise<PtyKit | null>;
@@ -498,9 +516,14 @@ export class SessionManager {
     fs.mkdirSync(filesDir, { recursive: true });
     const ctx = this.ctx(r);
     const artifacts = sessionReadTargets(ctx, this.deps.runsDir).dirs.filter((d) => isInside(d, this.deps.runsDir));
-    const dirs = launchDirs(sessionDirs(ctx, this.deps.runsDir), r.cwd, filesDir, artifacts);
-    s.token = randomBytes(32).toString('hex');
     const claudeVersion = this.binVersions.get(bin);
+    // свои пространства на старте: их папки правила открывают вопросу, остальные закрыты — выбранное на ходу правится
+    // инструментами space_* сразу, файлами — после «Перезапустить» (хук записи объясняет это модели)
+    const own = ownSpaces(r);
+    const dirs = launchDirs(sessionDirs(ctx, this.deps.runsDir), r.cwd, filesDir, artifacts, { spaces: own, flowsDir: FLOWS_DIR });
+    s.launched = own;
+    s.edits.clear();
+    s.token = randomBytes(32).toString('hex');
     const args = sessionArgs({ id: r.id, token: s.token, port, ...conv, name: r.name, ...dirs, model: r.model, permissionMode: r.permissionMode, ...(claudeVersion ? { claudeVersion } : {}) });
     // CLAUDE.md ищется только в папках пространства и тегов: папка перетащенных файлов — не повод
     const proc = kit.spawn(bin, args, { name: 'xterm-256color', ...size, cwd: r.cwd, env: sessionEnv(this.deps.env(), dirs.addDirs.length > 1) });
@@ -905,10 +928,15 @@ export class SessionManager {
     };
     const r = handleHook(state, input, {
       readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
-      readTargets: (ctx) => sessionReadTargets(ctx, this.deps.runsDir),
+      // папку flow сессия читает без вопроса: flow правят с разрешения пользователя, а прочитать их нужно до правки
+      readTargets: (ctx) => {
+        const t = sessionReadTargets(ctx, this.deps.runsDir);
+        return { ...t, dirs: [...t.dirs, FLOWS_DIR] };
+      },
       realpath: safeRealpath,
       askDetail: (tool, args) => this.askDetail(s, tool, args),
-      writeGuard: (tool, args, toolCwd) => spaceWriteGuard(s.rec.cwd, tool, args, toolCwd),
+      writeGuard: (tool, args, call) => this.writeGuard(s, tool, args, call),
+      afterWrite: (tool, args, call) => this.afterWrite(s, tool, args, call),
     });
     const p = r.patch;
     if (p.claudeSessionIds) s.rec.claudeSessionIds = p.claudeSessionIds;
@@ -934,6 +962,43 @@ export class SessionManager {
     return r.reply;
   }
 
+  /** Что сессия правит с вопросом сейчас: её пространства на момент вызова, папка flow, режим и рабочая папка claude. */
+  private editScope(s: Live, call: WriteCall): EditScope {
+    return {
+      cwd: s.rec.cwd,
+      ...(call.cwd ? { toolCwd: call.cwd } : {}),
+      spaces: ownSpaces(s.rec),
+      ...(s.launched ? { launched: s.launched } : {}),
+      ...(call.mode ? { mode: call.mode } : {}),
+      flowsDir: FLOWS_DIR,
+    };
+  }
+
+  /** Хук PreToolUse записи: решение session-edit.ts; у вопроса — цель и снимок до записи для проверки после неё. */
+  private writeGuard(s: Live, tool: string, args: Record<string, unknown>, call: WriteCall): { decision: 'deny' | 'ask'; reason: string } | undefined {
+    const d = editDecision(this.editScope(s, call), tool, args);
+    if (d?.decision === 'ask' && call.toolUseId) {
+      s.edits.delete(call.toolUseId);
+      s.edits.set(call.toolUseId, { target: d.target, ...(d.before !== undefined ? { before: d.before } : {}) });
+      while (s.edits.size > EDITS_MAX) s.edits.delete(s.edits.keys().next().value!);
+    }
+    return d && { decision: d.decision, reason: d.reason };
+  }
+
+  /**
+   * Хук PostToolUse записи: проверенный файл — ещё раз на диске (сломан — откат), UI пространства или flow — обновить.
+   * Цель — та, о которой спросили; вызова без вопроса (старый claude, сбой хука) — по пути сейчас.
+   */
+  private afterWrite(s: Live, tool: string, args: Record<string, unknown>, call: WriteCall): string | undefined {
+    const asked = call.toolUseId ? s.edits.get(call.toolUseId) : undefined;
+    if (call.toolUseId) s.edits.delete(call.toolUseId);
+    const c = asked ? { target: asked.target } : classifyEdit(this.editScope(s, call), tool, args);
+    if (!c || !('target' in c)) return undefined;
+    const note = recheckEdit(c.target, asked?.before);
+    editedBy(c.target);
+    return note;
+  }
+
   /**
    * MCP дочернего claude: пространство и теги знаний на момент вызова, документ пространства, новая сессия рядом; у сессии
    * из задачи Teamwork — её задача и документы проекта.
@@ -945,17 +1010,46 @@ export class SessionManager {
       scope: () => {
         const c = this.ctx(s.rec);
         return {
-          ...(c.space ? { space: c.space.slug } : {}),
+          ...(c.space ? { space: c.space.slug, spaceDir: c.space.dir } : {}),
           knowledge: c.knowledge.map((x) => x.slug),
+          flowsDir: FLOWS_DIR,
           ...(team ? { task: { id: team.link.task!, team: team.link.team, project: team.link.project } } : {}),
         };
       },
       open: (args) => this.openFrom(s, args, port),
       writeDoc: (name, text) => {
-        const space = this.ctx(s.rec).space;
-        if (!space) throw new Error('У этой сессии нет пространства: документ некуда записать. Пространство выбирают в agentgraph, в строке сессии');
+        const space = this.spaceOf(s, 'документ');
         const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
+        editedBy({ kind: 'space', slug: space.slug, part: 'doc' });
         return path.join(space.dir, 'docs', doc.name);
+      },
+      writeMap: (text) => {
+        const space = this.spaceOf(s, 'карту');
+        updateSpace(space.slug, { map: text });
+        editedBy({ kind: 'space', slug: space.slug, part: 'map' });
+        return path.join(space.dir, MAP_FILE);
+      },
+      writeState: async (text) => {
+        const space = this.spaceOf(s, 'состояние');
+        if (text.trim().length > SPACE_STATE_MAX) throw new Error(`Состояние длиннее ${SPACE_STATE_MAX} знаков (${text.trim().length}): сократи до «где мы сейчас»`);
+        // в очереди записи состояния пространства: сессия состояния, идущая сейчас, не затрёт запись и не будет затёрта
+        await queueSpaceState(space.slug, async () => writeSpaceState(space.slug, text, { id: s.rec.id, at: new Date().toISOString(), kind: 'session', title: s.rec.name }));
+        editedBy({ kind: 'space', slug: space.slug, part: 'state' });
+        return path.join(space.dir, STATE_FILE);
+      },
+      spaceSettings: (args) => {
+        const space = this.spaceOf(s, 'настройки');
+        const detail = spaceSettingsDetail(space.slug, args);
+        updateSpace(space.slug, settingsPatch(args));
+        editedBy({ kind: 'space', slug: space.slug, part: 'meta' });
+        return `Настройки пространства ${space.slug} записаны: ${detail}.`;
+      },
+      writeFlow: (args) => {
+        // существующий flow в другой папке — ошибка, а не тихая запись на старое место
+        plannedFlowFile(args.name, args.folder);
+        const { file } = saveFlowYaml(args.name, args.yaml, args.folder ?? '');
+        editedBy({ kind: 'flow' });
+        return file;
       },
       ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
     });
@@ -1022,9 +1116,11 @@ export class SessionManager {
 
   /**
    * Подробности вопроса PreToolUse — что сделает вызов: у session_new папка, пространство с папками чтения, режим и начало
-   * первого сообщения; у space_write — какой файл и перезапишет ли он документ. Ошибка разбора — тоже подробность.
+   * первого сообщения; у space_write — какой файл и перезапишет ли он документ; у space_map_write и space_state_write —
+   * размер; у space_settings — что изменится; у flow_write — куда ляжет flow. Ошибка разбора session_new — тоже
+   * подробность; не прошедшие проверку space_* и flow_write — { deny }: человеку незачем подтверждать то, что не запишется.
    */
-  private askDetail(s: Live, tool: string, input: Record<string, unknown>): string | undefined {
+  private askDetail(s: Live, tool: string, input: Record<string, unknown>): string | { deny: string } | undefined {
     const kb = (n: number) => (n < 1024 ? `${n} Б` : `${Math.max(1, Math.round(n / 1024))} КБ`);
     if (tool === SESSION_NEW_FULL) {
       try {
@@ -1050,6 +1146,27 @@ export class SessionManager {
       const old = space.docs.find((d) => d.name === input.name);
       return `${path.join(space.dir, 'docs', name)}: ${old ? `перезапишет документ (${kb(old.size)} → ${kb(size)})` : `новый документ, ${kb(size)}`}`;
     }
+    if (tool === SPACE_MAP_WRITE_FULL || tool === SPACE_STATE_WRITE_FULL || tool === SPACE_SETTINGS_FULL) {
+      const space = this.ctx(s.rec).space;
+      if (!space) return { deny: 'У этой сессии нет пространства: писать некуда. Пространство выбирают в agentgraph, в строке сессии.' };
+      try {
+        if (tool === SPACE_SETTINGS_FULL) return `Пространство ${space.slug}: ${spaceSettingsDetail(space.slug, parseSpaceSettingsArgs(input))}`;
+        const text = parseTextArg(input);
+        const map = tool === SPACE_MAP_WRITE_FULL;
+        const [max, len, old] = map ? [SPACE_MAP_MAX, text.length, space.map.length] : [SPACE_STATE_MAX, text.trim().length, space.state.trim().length];
+        if (len > max) return { deny: `${map ? 'Карта' : 'Состояние'} длиннее ${max} знаков (${len}): ${map ? 'справочное вынеси в документы (space_write)' : 'это «где мы сейчас», а не журнал — сократи'}.` };
+        return `${path.join(space.dir, map ? MAP_FILE : STATE_FILE)}: ${old ? `перепишет (${old} → ${len} знаков)` : `новый текст, ${len} знаков`}`;
+      } catch (err) {
+        return { deny: errMsg(err) };
+      }
+    }
+    if (tool === FLOW_WRITE_FULL) {
+      try {
+        return flowWriteDetail(parseFlowWriteArgs(input));
+      } catch (err) {
+        return { deny: `${errMsg(err)}. Flow не записан — исправь и вызови снова.` };
+      }
+    }
     if (tool === TEAM_TASK_UPDATE_FULL || tool === TEAM_DOC_WRITE_FULL) {
       const link = s.rec.teamwork;
       if (!link?.task || !teamworkHooks) return 'Сессия не открыта из задачи Teamwork: вызов вернёт ошибку';
@@ -1069,6 +1186,13 @@ export class SessionManager {
       }
     }
     return undefined;
+  }
+
+  /** Пространство сессии сейчас для инструментов space_*; нет — ошибка текстом модели. */
+  private spaceOf(s: Live, what: string): Space {
+    const space = this.ctx(s.rec).space;
+    if (!space) throw new Error(`У этой сессии нет пространства: ${what} некуда записать. Пространство выбирают в agentgraph, в строке сессии`);
+    return space;
   }
 
   /** Версия claude по пути: из кэша, иначе спросить (claude --version); неизвестная — undefined. */
@@ -1312,42 +1436,49 @@ export class SessionManager {
 }
 
 function newLive(rec: SessionRecord, status: SessionStatus): Live {
-  return { rec, token: '', pty: null, status, injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Map(), updatingState: false };
+  return { rec, token: '', pty: null, status, injected: null, started: false, trustNow: false, sawTrust: false, spawnedAt: 0, lastHookAt: 0, sockets: new Map(), updatingState: false, edits: new Map() };
 }
 
 /** Ходов после прошлого обновления состояния. */
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
 /**
- * Запись сессии по пути в момент вызова (хук PreToolUse записи; claude зовёт его у сессии в папке пространства — у
- * остальных папки данных закрывают правила Edit из launchDirs). Папка команд Teamwork (клоны репо команд) — отказ при любой
- * рабочей папке: запрет Edit в --settings сверяет строки, и путь в другом регистре (APFS) или через ссылку прошёл бы мимо.
- * Сессия в папке пространства («Сессия в папке»), кроме того: в папке пространств — только своё пространство, и в нём
- * не .claude/ и не space.json; папка тегов знаний — нет. Запреты в --settings — снимок на старте и сверка строк;
- * пространство, заведённое потом, новая папка в spaces/ и путь в другом регистре ловятся здесь. Путь — по realpath,
- * относительный — от рабочей папки claude в момент вызова (toolCwd из входа хука). Остальное — undefined: решают правила.
+ * Свои пространства сессии: выбранное сейчас (если оно есть на диске) и то, в папке которого она открыта. Их сессия
+ * правит с вопросом пользователю (session-edit.ts); остальные — нет.
  */
-export function spaceWriteGuard(cwd: string, tool: string, input: Record<string, unknown>, toolCwd?: string): string | undefined {
-  if (!WRITE_TOOLS.includes(tool)) return undefined;
-  const raw = toolPath(tool, input);
-  if (typeof raw !== 'string' || !raw.trim()) return undefined;
-  const base = toolCwd && path.isAbsolute(toolCwd) ? toolCwd : cwd;
-  const fold = (p: string) => canonical(p, base, nodeProbe).normalize('NFC').toLowerCase();
-  const p = fold(raw);
-  if (isInside(p, fold(teamsDir()))) return `${raw} — в папке команд Teamwork: документы и задачи команды меняются через её экран в agentgraph, а правки агентов — через принятие черновика.`;
-  const root = path.resolve(spacesDir());
-  if (!isInside(cwd, root) || cwd === root) return undefined;
-  const own = path.join(root, path.relative(root, cwd).split(path.sep)[0]);
-  if (isInside(p, fold(tagsDir()))) return `${raw} — в папке тегов знаний: теги правят на странице «Знания» в agentgraph.`;
-  if (!isInside(p, fold(root))) return undefined;
-  const mine = fold(own);
-  if (!isInside(p, mine)) {
-    return `Сессия в папке пространства ${path.basename(own)} правит только его: ${raw} — в другом пространстве или в папке пространств. Другие пространства правят на их страницах в agentgraph.`;
+function ownSpaces(r: SessionRecord): string[] {
+  let current: string | undefined;
+  try {
+    current = r.space && readSpaceMeta(r.space) ? r.space : undefined;
+  } catch {
+    current = r.space; // space.json сломан: сессия может его починить (проверка — до записи)
   }
-  if (isInside(p, path.join(mine, '.claude')) || p === path.join(mine, META_FILE)) {
-    return `${raw} — настройки пространства: .claude/ грузится во все его сессии, а ${META_FILE} задаёт папки другим сессиям. Их правят в agentgraph, на странице пространства.`;
+  const at = cwdSpace(r.cwd);
+  return [...new Set([...(current ? [current] : []), ...(at ? [at] : [])])];
+}
+
+/** Аргументы space_settings → правка updateSpace: cwd null — снять, остальное как задано. */
+function settingsPatch(a: SpaceSettingsArgs): Parameters<typeof updateSpace>[1] {
+  return { ...(a.title !== undefined ? { title: a.title } : {}), ...(a.dirs !== undefined ? { dirs: a.dirs } : {}), ...(a.cwd !== undefined ? { cwd: a.cwd ?? '' } : {}) };
+}
+
+/**
+ * Что поменяла сессия: пространство (слаг и часть — UI с несохранённой правкой карты не пугает правка документа) или
+ * папку flow — server.ts рассылает событие, UI перечитывает.
+ */
+export type SessionEdit = { kind: 'space'; slug: string; part: SpaceEditPart } | { kind: 'flow' };
+const editSubs = new Set<(e: SessionEdit) => void>();
+
+/** Запись прошла (MCP или файл): подписчики узнают, что обновить. */
+function editedBy(t: EditTarget | SessionEdit): void {
+  const e: SessionEdit = t.kind === 'space' ? { kind: 'space', slug: t.slug, part: t.part === 'claude' ? 'other' : t.part } : { kind: 'flow' };
+  for (const fn of editSubs) {
+    try {
+      fn(e);
+    } catch (err) {
+      console.error('сессия: событие правки —', errMsg(err));
+    }
   }
-  return undefined;
 }
 
 /** Новое пространство по слагу из формы; папка без space.json с чужими файлами — 409, как у POST /api/spaces. */
@@ -1677,6 +1808,11 @@ export async function spaceSessions(slug: string): Promise<SpaceSession[]> {
 }
 /** Остановка сервера: WebSocket и claude. */
 export const stopSessions = (timeoutMs?: number) => (manager ? manager.stopAll(timeoutMs) : Promise.resolve());
+/** Сессия поменяла пространство или flow (инструментом MCP или правкой файла); возвращает отписку. */
+export function onSessionEdit(fn: (e: SessionEdit) => void): () => void {
+  editSubs.add(fn);
+  return () => void editSubs.delete(fn);
+}
 /** Работавшая сессия закончила ход (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
 export function onSessionWaiting(fn: (v: SessionView) => void): () => void {
   waitSubs.add(fn);
