@@ -152,7 +152,7 @@ function tools(scope: ReturnType<McpScope>) {
       name: SESSION_NEW_TOOL,
       description:
         'Открыть новую сессию Claude Code в agentgraph — отдельный терминал рядом с этим, вкладка «Сессии». Вызывай, когда пользователь просит открыть или начать новую сессию либо вынести задачу в отдельную. ' +
-        'Чего не задал — как у этой сессии: папка, пространство, теги знаний, модель; режим разрешений — всегда как у этой. Новая сессия этот разговор не видит: всё нужное для задачи пиши в prompt. Пользователь подтверждает вызов.',
+        'Чего не задал — как у этой сессии: папка, пространство, теги знаний, модель. Режим разрешений не задаётся: в той же папке и пространстве — как у этой сейчас (bypassPermissions и dontAsk — обычный, с вопросами), в другой — обычный. Новая сессия этот разговор не видит: всё нужное для задачи пиши в prompt. Пользователь подтверждает вызов.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -226,7 +226,7 @@ const CONTROL_RE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
  */
 export function parseSessionNewArgs(args: Record<string, unknown>): SessionNewArgs {
   const extra = Object.keys(args).filter((k) => !NEW_KEYS.includes(k));
-  if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только ${NEW_KEYS.join(', ')}; режим разрешений — всегда как у этой сессии`);
+  if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только ${NEW_KEYS.join(', ')}; режим разрешений выбирает agentgraph`);
   const out: SessionNewArgs = {};
   for (const k of ['prompt', 'cwd', 'name', 'model'] as const) {
     const v = args[k];

@@ -36,7 +36,7 @@ fs.mkdirSync(path.join(spaceDir('feat'), 'docs'), { recursive: true });
 const leaf = (name: string) => `name: ${name}\nphases:\n  - { name: a, tools: [], prompt: x }\n`;
 saveFlowYaml('fix-bug', leaf('fix-bug'), 'lib');
 
-const scope = (o: Partial<Scope> = {}): Scope => ({ cwd: proj, spaces: ['feat'], flowsDir: FLOWS_DIR, mode: 'default', ...o });
+const scope = (o: Partial<Scope> = {}): Scope => ({ cwd: proj, spaces: ['feat'], flowsDir: FLOWS_DIR, ...o });
 const decide = (file: string, input: Record<string, unknown> = { content: 'x' }, o: Partial<Scope> = {}, tool = 'Write') => editDecision(scope(o), tool, { file_path: file, ...input });
 const own = (name: string) => path.join(spaceDir('feat'), name);
 
@@ -85,17 +85,6 @@ test('запись: регистр, ссылка и относительный �
   assert.equal(decide(path.join(link, 'CLAUDE.md'))?.decision, 'deny');
   // .CLAUDE/ своего — тоже .claude/
   assert.match(decide(own('.CLAUDE/settings.json'))!.reason, /\.claude\//);
-});
-
-test('запись: в bypassPermissions и dontAsk вопрос не задать — правка своего пространства и flow отклоняется; в остальных режимах — вопрос', () => {
-  for (const mode of ['bypassPermissions', 'dontAsk']) {
-    for (const file of [own('CLAUDE.md'), path.join(FLOWS_DIR, 'lib', 'fix-bug.yaml')]) {
-      const d = decide(file, { content: leaf('fix-bug') }, { mode });
-      assert.equal(d?.decision, 'deny', `${mode} ${file}`);
-      assert.match(d!.reason, new RegExp(`В режиме ${mode} claude не задаст вопрос`));
-    }
-  }
-  for (const mode of ['default', 'acceptEdits', 'auto', 'plan']) assert.equal(decide(own('docs/a.md'), undefined, { mode })?.decision, 'ask', mode);
 });
 
 test('запись: у claude без onFailure: block пространство, выбранное на ходу, файлами не правится — подсказка про инструменты space_* и «Перезапустить»', () => {

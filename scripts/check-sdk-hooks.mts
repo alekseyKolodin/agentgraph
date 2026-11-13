@@ -11,15 +11,16 @@
 // data-dirs (этап flow без артефактов пишет в карту пространства, в другое пространство и в tags/ в другом регистре —
 // tags/ до этапа не было, — в папку запусков и сабагентом), data-modes (отказ guard папок данных при каждом
 // permission_mode), space-session (сессия в папке пространства: своё целиком — карта, space.json, .claude/ — с вопросом
-// в default, acceptEdits и auto, отказ хука в bypassPermissions и dontAsk; space.json не по проверке API — отказ до
-// вопроса; чужое пространство, tags/, путь в другом регистре, пространство, заведённое после старта, и новая папка в
+// в каждом режиме; space.json не по проверке API — отказ хука до вопроса в каждом режиме; чужое пространство, tags/ и
+// путь в другом регистре — отказ правилом deny из --settings, пространство, заведённое после старта, и новая папка в
 // spaces/ — отказ хука записи), session-edit (обычная сессия с пространством: карта, документ и flow — с вопросом
-// по тем же режимам, flow не по схеме — отказ до вопроса, чужое пространство и settings.json папки настроек — отказ;
-// Bash cp в своё пространство — не молча, Bash > в чужое — не пишется), ask-modes (факт: показывает ли claude вопрос
-// хука «ask» в каждом режиме — на этом стоит отказ agentgraph в bypassPermissions и dontAsk).
-// Каждая проверка засчитывается по двум доказательствам: попытка в логе хука (инструмент, путь, agent_id, режим) и
-// состояние файлов на диске. Нет попытки — «не воспроизведено», а не «прошло». Несколько проверок идут в одной
-// сессии: первые ходы Claude Code дорогие (запись кэша), последующие почти бесплатны.
+// в каждом режиме, flow не по схеме — отказ до вопроса, чужое пространство и settings.json папки настроек — отказ
+// правилом deny; Bash cp в своё пространство — не молча, Bash > в чужое — не пишется), ask-modes (показывает ли claude
+// вопрос хука «ask» в каждом режиме — на этом стоит вопрос agentgraph и в bypassPermissions, и в dontAsk).
+// Каждая проверка засчитывается по двум доказательствам: попытка (в логе хука или — если Claude Code отклонил вызов
+// правилом deny до хука — в ответе модели и результате инструмента) и состояние файлов на диске. Нет попытки —
+// «не воспроизведено», а не «прошло». Несколько проверок идут в одной сессии: первые ходы Claude Code дорогие (запись
+// кэша), последующие почти бесплатны.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -171,10 +172,27 @@ function instrument(options: Options, calls: Call[], pre?: HookCallback): Option
 type RunOut = { cost: number; text: string; init?: Extract<SDKMessage, { type: 'system'; subtype: 'init' }>; errors: string[] };
 /** Аргументы tool_use, как их написала модель главной сессии: id → путь. */
 const rawPaths = new Map<string, unknown>();
+/**
+ * Вызов инструмента, как его написала модель главной сессии, и что вернул инструмент. Так видна и попытка, которую
+ * Claude Code отклонил правилом deny из --settings ещё до хука: Edit/Write в закрытую папку хук не видит.
+ */
+type RawCall = { id: string; tool: string; input: Record<string, unknown>; result?: { error: boolean; text: string } };
+const rawCalls: RawCall[] = [];
+const blockText = (c: unknown): string =>
+  typeof c === 'string' ? c : Array.isArray(c) ? c.map((x: { text?: unknown }) => (typeof x?.text === 'string' ? x.text : '')).join(' ') : '';
 function noteRaw(msg: SDKMessage): void {
-  if (msg.type !== 'assistant' || msg.parent_tool_use_id) return;
-  for (const b of msg.message.content as { type: string; id?: string; input?: Record<string, unknown> }[]) {
-    if (b.type === 'tool_use' && b.id) rawPaths.set(b.id, b.input?.file_path);
+  if ((msg.type !== 'assistant' && msg.type !== 'user') || msg.parent_tool_use_id) return;
+  const content = msg.message.content;
+  if (!Array.isArray(content)) return;
+  for (const b of content as { type: string; id?: string; name?: string; input?: Record<string, unknown>; tool_use_id?: string; is_error?: boolean; content?: unknown }[]) {
+    if (msg.type === 'assistant' && b.type === 'tool_use' && b.id) {
+      rawPaths.set(b.id, b.input?.file_path);
+      rawCalls.push({ id: b.id, tool: b.name ?? '', input: b.input ?? {} });
+    }
+    if (msg.type === 'user' && b.type === 'tool_result' && b.tool_use_id) {
+      const r = rawCalls.find((x) => x.id === b.tool_use_id);
+      if (r) r.result = { error: b.is_error === true, text: blockText(b.content) };
+    }
   }
 }
 async function session(prompt: string, options: Options): Promise<RunOut> {
@@ -240,9 +258,10 @@ function deniedNew(sc: string, name: string, calls: Call[], match: (c: Call) => 
 
 /**
  * Потоковая сессия с переключением permission_mode (setPermissionMode) между ходами: для каждого режима — свой ход
- * step(mode), затем check(mode, вызовы этого хода). Первые ходы дорогие (кэш), следующие почти бесплатны.
+ * step(mode) (массив — по ходу на шаг: так модель не пропускает шаги после отказа), затем check(mode, вызовы этих
+ * ходов). Первые ходы дорогие (кэш), следующие почти бесплатны.
  */
-async function perMode(sc: string, options: Options, modes: PermissionMode[], step: (mode: PermissionMode) => string, check: (mode: PermissionMode, mine: Call[]) => void, calls: Call[]): Promise<number> {
+async function perMode(sc: string, options: Options, modes: PermissionMode[], step: (mode: PermissionMode) => string | string[], check: (mode: PermissionMode, mine: Call[]) => void, calls: Call[]): Promise<number> {
   const queue: SDKUserMessage[] = [];
   let wake: (() => void) | undefined;
   let closed = false;
@@ -256,6 +275,7 @@ async function perMode(sc: string, options: Options, modes: PermissionMode[], st
   const q = query({ prompt: input(), options });
   const it = q[Symbol.asyncIterator]();
   let cost = 0;
+  let over = '';
   const untilResult = async () => {
     for (;;) {
       const { value, done } = await it.next();
@@ -263,11 +283,16 @@ async function perMode(sc: string, options: Options, modes: PermissionMode[], st
       noteRaw(value);
       if (value.type === 'result') {
         cost = value.total_cost_usd;
+        if (value.subtype === 'error_max_budget_usd' || value.subtype === 'error_max_turns') over = value.subtype;
         return;
       }
     }
   };
   for (const mode of modes) {
+    if (over) {
+      add(sc, mode, 'не воспроизведено', `пропущено: сессия упёрлась в лимит (${over}, $${cost.toFixed(3)}) — подними maxBudgetUsd/maxTurns или --modes с этим режимом первым`);
+      continue;
+    }
     try {
       await q.setPermissionMode(mode);
     } catch (err) {
@@ -275,9 +300,11 @@ async function perMode(sc: string, options: Options, modes: PermissionMode[], st
       continue;
     }
     const n = calls.length;
-    queue.push({ type: 'user', message: { role: 'user', content: `${RULES}\n\n${step(mode)}` }, parent_tool_use_id: null } as SDKUserMessage);
-    wake?.();
-    await untilResult();
+    for (const text of [step(mode)].flat()) {
+      queue.push({ type: 'user', message: { role: 'user', content: `${RULES}\n\n${text}` }, parent_tool_use_id: null } as SDKUserMessage);
+      wake?.();
+      await untilResult();
+    }
     check(mode, calls.slice(n));
   }
   closed = true;
@@ -329,10 +356,13 @@ const RULES = [
   'the files hold only placeholder text. The sandbox is expected to deny some of the calls below: a denial is a valid test result, not a problem.',
   'Please make the calls in order, passing the file paths exactly as written (do not rewrite them into absolute paths), and report what each tool returned.',
   'A step "Read+Edit" means: call Read on that file_path, then call Edit on the same file_path, also when the Read was denied — the test needs the sandbox decision on the Edit itself.',
+  'A step "Read+Write" means the same with Write: call Read on that file_path, then Write on the same file_path with the given content, also when the Read was denied.',
   'Report only results that came from real tool calls. If a call is denied or fails, just note it and move on; no retries, no other tools.',
   'At the end reply with one line per step: step number and the tool results.',
 ].join(' ');
 const readEdit = (file: string, from: string, to: string) => `Read+Edit: file_path "${file}", old_string "${from}", new_string "${to}".`;
+// Write в существующий файл без Read Claude Code отклоняет до хука («File has not been read yet») — поэтому Read перед ним
+const readWrite = (file: string, content: string) => `Read+Write: file_path "${file}", content '${content}'.`;
 const tilde = (abs: string) => `~/${path.relative(os.homedir(), abs)}`;
 const rel = (abs: string) => path.relative(project, abs);
 
@@ -722,18 +752,22 @@ await scenario('data-modes', () =>
 
 // ---------- сессии терминала: правила permissions из sessionSettings, как в --settings у claude, и хук записи
 // PreToolUse — у сессии терминала его ответ строит handleHook → editDecision (session-edit.ts), здесь — тот же
-// editDecision с тем же ответом. canUseTool записывает вопросы и отвечает «нет», как человек: правка своего
-// пространства и flow должна дойти до вопроса (и не записаться), чужое — отклониться хуком без вопроса.
+// editDecision с тем же ответом (Claude Code из SDK не старше ASK_IN_ANY_MODE_SINCE, поэтому вопрос — в любом режиме).
+// canUseTool записывает вопросы и отвечает «нет», как человек: правка своего пространства и flow должна дойти до
+// вопроса (и не записаться) в каждом режиме, чужое — отклониться без вопроса.
 
-/** Хук записи сессии терминала: решение editDecision по входу хука (режим и рабочая папка claude — из него). */
-const editHook = (scope: Omit<EditScope, 'mode' | 'toolCwd'>): HookCallback => async (input) => {
+/** Хук записи сессии терминала: решение editDecision по входу хука (рабочая папка claude — из него). */
+const editHook = (scope: Omit<EditScope, 'toolCwd'>): HookCallback => async (input) => {
   if (input.hook_event_name !== 'PreToolUse') return {};
-  const d = editDecision({ ...scope, mode: input.permission_mode, ...(input.cwd ? { toolCwd: input.cwd } : {}) }, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
+  const d = editDecision({ ...scope, ...(input.cwd ? { toolCwd: input.cwd } : {}) }, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
   return d ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: d.decision, permissionDecisionReason: d.reason } } : {};
 };
 
+/** Вопрос человеку (canUseTool): инструмент, путь или команда и вход целиком — по нему шаги различают одну цель. */
+type Ask = { tool: string; file: string; input: Record<string, unknown> };
+
 /** Опции сессии терминала: Edit и Write не разрешены заранее — решают хук, правила и режим; вопросы — в asks. */
-function terminalOptions(cwd: string, addDirs: string[], permissions: Record<string, unknown>, calls: Call[], hook: HookCallback, asks: { tool: string; file: string }[], tools = ['Read', 'Edit', 'Write']): Options {
+function terminalOptions(cwd: string, addDirs: string[], permissions: Record<string, unknown>, calls: Call[], hook: HookCallback, asks: Ask[], tools = ['Read', 'Edit', 'Write']): Options {
   const base = sessionOptions({ prompt: '', cwd, tools, model: args.model, persist: false, foreground: true });
   return instrument({
     ...base,
@@ -742,39 +776,70 @@ function terminalOptions(cwd: string, addDirs: string[], permissions: Record<str
     settings: { permissions },
     allowDangerouslySkipPermissions: true,
     canUseTool: async (tool, input) => {
-      asks.push({ tool, file: String(input.file_path ?? input.command ?? '') });
+      asks.push({ tool, file: String(input.file_path ?? input.command ?? ''), input });
       return { behavior: 'deny', message: 'The user declined this edit (test).' };
     },
     persistSession: false,
-    maxBudgetUsd: 1,
-    maxTurns: 40,
+    // по ходу на шаг: ходов много (8–9 на режим), но каждый — один-два вызова
+    maxBudgetUsd: 2,
+    maxTurns: 200,
   }, calls, hook);
 }
 
-/** Режимы, в которых claude вопрос показывает: там своё — «с вопросом»; в остальных хук отклоняет сам. */
-const ASKING_MODES = ['default', 'acceptEdits', 'auto'];
-const SESSION_MODES = (args.modes.split(',') as PermissionMode[]).filter((m) => m !== 'plan');
+/** Режимы сессий; без вопросов — первыми: если лимит сессии оборвёт её, пропадут менее важные. */
+const NO_ASK_FIRST = ['bypassPermissions', 'dontAsk'];
+const SESSION_MODES = (args.modes.split(',') as PermissionMode[]).filter((m) => m !== 'plan').sort((a, b) => Number(NO_ASK_FIRST.includes(b)) - Number(NO_ASK_FIRST.includes(a)));
+/** Текст отказа Claude Code по правилу deny из --settings (Edit/Write в закрытую папку — до хука, validateInput). */
+const DENY_RULE_RE = /denied by your permission settings/;
+const fmtRaw = (r: RawCall) =>
+  `${r.tool}(до хука) ${short(r.input.file_path ?? r.input.command)} → ${r.result ? (r.result.error ? `ошибка: ${r.result.text.slice(0, 100)}` : 'выполнен') : 'без ответа'}`;
+
+type StepOpts = {
+  /** Какой вход — этот шаг (у двух шагов в один файл разное содержимое). */
+  match?: (input: Record<string, unknown>) => boolean;
+  /** deny: причина отказа хука должна совпасть. */
+  reason?: RegExp;
+  /** Подпись итога вместо стандартной. */
+  label?: string;
+};
 
 /**
- * Проверка одного шага: по пути, как его написала модель. want: ask — вопрос был (в режимах без вопроса — отказ хука
- * без вопроса), deny — хук отклонил каждую попытку и вопроса не было; файл в обоих случаях не изменён.
+ * Проверка одного шага по пути, как его написала модель. want: ask — вопрос был (в любом режиме); deny — каждую
+ * попытку отклонил хук записи, вопроса не было; rule — без вопроса отклонило правило deny из --settings: Claude Code
+ * отказывает до хука («denied by your permission settings»), и хук попытку не видит. Отказал только хук — FAIL: правило
+ * не сработало, а Bash держит именно оно. Файл в любом случае не изменён. Попытка — вызов в логе хука (mine) или в
+ * ответе модели (raw — вызовы модели за эти ходы), asks — вопросы за эти ходы.
  */
-function checkStep(sc: string, mode: PermissionMode, name: string, mine: Call[], asked: (tool: string, f: string) => boolean, tool: string, f: string, want: 'ask' | 'deny', changed: () => boolean): void {
-  const t = mine.filter((c) => c.tool === tool && asWritten(c) === f);
-  const q = asked(tool, f);
+function checkStep(sc: string, mode: PermissionMode, name: string, mine: Call[], raw: RawCall[], asks: Ask[], tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean, o: StepOpts = {}): void {
+  const fits = (input: Record<string, unknown>) => !o.match || o.match(input);
+  const t = mine.filter((c) => c.tool === tool && asWritten(c) === f && fits(c.input));
+  const outside = raw.filter((r) => r.tool === tool && r.input.file_path === f && fits(r.input) && !mine.some((c) => c.id === r.id));
+  const q = asks.some((a) => a.tool === tool && a.file === f && fits(a.input));
   const ch = changed();
-  const byHook = t.length > 0 && t.every((c) => c.decision === 'deny');
-  const expect = want === 'ask' && ASKING_MODES.includes(mode) ? 'ask' : 'deny';
-  const detail = `${t.map(fmt).join('; ') || 'попыток нет'}; вопрос ${q ? 'был' : 'не задавался'}; файл ${ch ? 'ИЗМЕНЁН' : 'не изменён'}`;
-  const ok = expect === 'ask' ? q && !ch : byHook && !q && !ch;
-  add(sc, `${mode}: ${name} — ${expect === 'ask' ? 'с вопросом' : 'отказ хука'}`, ch ? 'FAIL' : !t.length ? 'не воспроизведено' : ok ? 'ok' : 'FAIL', detail);
+  const byRule = (r: RawCall) => !!r.result?.error && DENY_RULE_RE.test(r.result.text);
+  const passed = outside.some((r) => r.result && !r.result.error);
+  let status: Status;
+  let note = '';
+  if (ch) status = 'FAIL';
+  else if (!t.length && !outside.length) status = 'не воспроизведено';
+  else if (want === 'ask') status = q ? 'ok' : t.length || passed || outside.some(byRule) ? 'FAIL' : 'не воспроизведено';
+  else if (q || passed || t.some((c) => c.decision !== 'deny')) status = 'FAIL';
+  else if (want === 'deny') status = !t.length ? 'не воспроизведено' : !o.reason || t.every((c) => o.reason!.test(c.reason ?? '')) ? 'ok' : 'FAIL';
+  else if (!outside.length) {
+    status = 'FAIL';
+    note = '; правило deny не сработало — отказал только хук';
+  } else status = outside.every(byRule) ? 'ok' : 'не воспроизведено';
+  const tries = [...t.map((c) => (want === 'deny' && o.reason ? `${fmt(c)} (${c.reason?.slice(0, 120)})` : fmt(c))), ...outside.map(fmtRaw)];
+  const detail = `${tries.join('; ') || 'попыток нет'}; вопрос ${q ? 'был' : 'не задавался'}; файл ${ch ? 'ИЗМЕНЁН' : 'не изменён'}${note}`;
+  add(sc, `${mode}: ${name} — ${o.label ?? { ask: 'с вопросом', deny: 'отказ хука', rule: 'отказ правилом deny' }[want]}`, status, detail);
 }
 
 // ---------- space-session: сессия в папке пространства («Сессия в папке») правит его целиком — карту, space.json,
-// .claude/ — с вопросом; space.json, не прошедший проверку, хук отклоняет до вопроса; чужое — отказ хука
+// .claude/ — с вопросом в каждом режиме; space.json, не прошедший проверку, хук отклоняет до вопроса; чужое — отказ
 
 await scenario('space-session', () =>
   withConfig('cfg-session', async (cfg) => {
+    const raw0 = rawCalls.length;
     createSpace('alpha', { gist: 'ALPHA-MAP' });
     createSpace('beta', { gist: 'BETA-MAP' });
     createSpace('delta', { gist: 'DELTA-MAP' });
@@ -790,65 +855,66 @@ await scenario('space-session', () =>
     // заведено после старта: в правилах --settings его нет — отклонить может только хук
     createSpace('gamma', { gist: 'GAMMA-MAP' });
     const calls: Call[] = [];
-    const asks: { tool: string; file: string }[] = [];
+    const asks: Ask[] = [];
     const options = terminalOptions(cwd, dirs.addDirs, permissions, calls, editHook({ cwd, spaces: own, flowsDir: FLOWS_DIR }), asks);
     const map = path.join(cwd, 'CLAUDE.md');
     const meta = path.join(cwd, 'space.json');
-    // у каждого шага свой файл: на APFS «SPACES/beta» и «spaces/beta» — один файл, и шаги склеились бы
+    // у каждого шага свой файл: на APFS «SPACES/beta» и «spaces/beta» — один файл, и шаги склеились бы; Write — в новый
+    // файл или после Read: Write в существующий без Read Claude Code отклоняет до хука
     const steps = {
       other: path.join(spaceDir('beta'), 'CLAUDE.md'),
       tag: path.join(tagsDir(), 'qa', 'notes.md'),
       upper: path.join(cfg, 'SPACES', 'delta', 'CLAUDE.md'),
-      late: path.join(spaceDir('gamma'), 'CLAUDE.md'),
+      late: path.join(spaceDir('gamma'), 'LATE.md'),
       fresh: path.join(spacesDir(), 'brand-new', 'CLAUDE.md'),
       dotUpper: path.join(cwd, '.CLAUDE', 'settings.json'),
     };
-    const before = { map: read(map), meta: read(meta), other: read(steps.other), upper: read(path.join(spaceDir('delta'), 'CLAUDE.md')), late: read(steps.late) };
+    const before = { map: read(map), meta: read(meta), other: read(steps.other), upper: read(path.join(spaceDir('delta'), 'CLAUDE.md')) };
     const sc = 'space-session';
     add(sc, 'хук записи в --settings', hookMatcher ? 'ok' : 'FAIL', hookMatcher ? `PreToolUse ${hookMatcher}` : 'sessionSettings не поставил хук записи');
     add(sc, 'своё пространство — в permissions.ask', permissions.ask.includes(`Edit(/${cwd}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
     let round = 0;
-    const asked = (tool: string, f: string) => asks.slice(round).some((a) => a.tool === tool && a.file === f);
+    let rawRound = 0;
     const badMeta = JSON.stringify({ dirs: ['/'] });
     const goodMeta = JSON.stringify({ ...JSON.parse(before.meta), title: 'CHECK' });
-    const cost = await perMode(sc, options, SESSION_MODES, (mode) => (round = asks.length, [
-      `1. ${readEdit(map, 'ALPHA-MAP', `OWN-${mode}`)}`,
-      `2. Write: file_path "${meta}", content '${goodMeta}'.`,
-      `3. Write: file_path "${meta}", content '${badMeta}'.`,
-      `4. Write: file_path "${steps.dotUpper}", content "{}".`,
-      `5. ${readEdit(steps.other, 'BETA-MAP', `OTHER-${mode}`)}`,
-      `6. Write: file_path "${steps.tag}", content "x".`,
-      `7. ${readEdit(steps.upper, 'DELTA-MAP', `UPPER-${mode}`)}`,
-      `8. Write: file_path "${steps.late}", content "LATE-${mode}".`,
-      `9. Write: file_path "${steps.fresh}", content "x".`,
-    ].join('\n')), (mode, mine) => {
-      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny', changed: () => boolean) => checkStep(sc, mode, name, mine, asked, tool, f, want, changed);
+    const isGood = (i: Record<string, unknown>) => String(i.content ?? '').includes('CHECK');
+    const isBad = (i: Record<string, unknown>) => /"dirs"\s*:\s*\[\s*"\/"\s*\]/.test(String(i.content ?? ''));
+    const cost = await perMode(sc, options, SESSION_MODES, (mode) => ((round = asks.length), (rawRound = rawCalls.length), [
+      readEdit(map, 'ALPHA-MAP', `OWN-${mode}`),
+      readWrite(meta, goodMeta),
+      readWrite(meta, badMeta),
+      `Write: file_path "${steps.dotUpper}", content "{}".`,
+      readEdit(steps.other, 'BETA-MAP', `OTHER-${mode}`),
+      `Write: file_path "${steps.tag}", content "x".`,
+      readEdit(steps.upper, 'DELTA-MAP', `UPPER-${mode}`),
+      `Write: file_path "${steps.late}", content "LATE-${mode}".`,
+      `Write: file_path "${steps.fresh}", content "x".`,
+    ].map((s) => `One step this turn: ${s}`)), (mode, mine) => {
+      const raw = rawCalls.slice(rawRound);
+      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean, o?: StepOpts) => checkStep(sc, mode, name, mine, raw, asks.slice(round), tool, f, want, changed, o);
+      const metaChanged = () => read(meta) !== before.meta;
       step('своя карта', 'Edit', map, 'ask', () => read(map) !== before.map);
-      // space.json: верный — вопрос; шире разумного — отказ хука до вопроса (в любом режиме)
-      const metaTries = mine.filter((c) => c.tool === 'Write' && asWritten(c) === meta);
-      const good = metaTries.filter((c) => String(c.input.content).includes('CHECK'));
-      const bad = metaTries.filter((c) => String(c.input.content) === badMeta);
-      const metaChanged = read(meta) !== before.meta;
-      add(sc, `${mode}: свой space.json, верный — ${ASKING_MODES.includes(mode) ? 'с вопросом' : 'отказ хука'}`, metaChanged ? 'FAIL' : !good.length ? 'не воспроизведено' : ASKING_MODES.includes(mode) ? (asked('Write', meta) ? 'ok' : 'FAIL') : good.every((c) => c.decision === 'deny') ? 'ok' : 'FAIL', `${good.map(fmt).join('; ') || 'попыток нет'}; файл ${metaChanged ? 'ИЗМЕНЁН' : 'не изменён'}`);
-      add(sc, `${mode}: свой space.json с папкой / — отказ хука до вопроса`, metaChanged ? 'FAIL' : !bad.length ? 'не воспроизведено' : bad.every((c) => c.decision === 'deny' && /корень диска/.test(c.reason ?? '')) ? 'ok' : 'FAIL', `${bad.map((c) => `${fmt(c)} (${c.reason?.slice(0, 120)})`).join('; ') || 'попыток нет'}`);
+      // space.json: верный — вопрос; шире разумного — отказ хука до вопроса (проверкой, а не режимом); то и другое — в любом режиме
+      step('свой space.json, верный', 'Write', meta, 'ask', metaChanged, { match: isGood });
+      step('свой space.json с папкой /', 'Write', meta, 'deny', metaChanged, { match: isBad, reason: /корень диска/, label: 'отказ хука до вопроса' });
       step('своё .CLAUDE/ в другом регистре', 'Write', steps.dotUpper, 'ask', () => fs.existsSync(steps.dotUpper) || fs.existsSync(path.join(cwd, '.claude', 'settings.json')));
-      step('чужое пространство', 'Edit', steps.other, 'deny', () => read(steps.other) !== before.other);
-      step('tags/', 'Write', steps.tag, 'deny', () => fs.existsSync(steps.tag));
-      step('SPACES/ в другом регистре', 'Edit', steps.upper, 'deny', () => read(path.join(spaceDir('delta'), 'CLAUDE.md')) !== before.upper);
-      step('пространство, заведённое после старта', 'Write', steps.late, 'deny', () => read(steps.late) !== before.late);
+      step('чужое пространство', 'Edit', steps.other, 'rule', () => read(steps.other) !== before.other);
+      step('tags/', 'Write', steps.tag, 'rule', () => fs.existsSync(steps.tag));
+      step('SPACES/ в другом регистре', 'Edit', steps.upper, 'rule', () => read(path.join(spaceDir('delta'), 'CLAUDE.md')) !== before.upper);
+      step('пространство, заведённое после старта', 'Write', steps.late, 'deny', () => fs.existsSync(steps.late));
       step('новая папка в spaces/', 'Write', steps.fresh, 'deny', () => fs.existsSync(steps.fresh));
     }, calls);
-    fs.writeFileSync(path.join(OUT, 'space-session.calls.json'), JSON.stringify({ calls: calls.map(withRaw), asks, permissions }, null, 2));
+    fs.writeFileSync(path.join(OUT, 'space-session.calls.json'), JSON.stringify({ calls: calls.map(withRaw), raw: rawCalls.slice(raw0), asks, permissions }, null, 2));
     return cost;
   }),
 );
 
-// ---------- session-edit: обычная сессия в проекте с пространством правит его и flow с вопросом в каждом режиме, где
-// claude вопрос показывает (в bypassPermissions и dontAsk — отказ хука); flow и space.json, не прошедшие проверку, —
-// отказ до вопроса; чужое пространство и служебный файл настроек — отказ
+// ---------- session-edit: обычная сессия в проекте с пространством правит его и flow с вопросом в каждом режиме;
+// flow, не прошедший проверку, — отказ до вопроса; чужое пространство и служебный файл настроек — отказ
 
 await scenario('session-edit', () =>
   withConfig('cfg-edit', async (cfg) => {
+    const raw0 = rawCalls.length;
     createSpace('alpha', { gist: 'ALPHA-MAP' });
     createSpace('beta', { gist: 'BETA-MAP' });
     fs.writeFileSync(path.join(cfg, 'settings.json'), '{}\n');
@@ -860,13 +926,14 @@ await scenario('session-edit', () =>
     const dirs = launchDirs([spaceDir('alpha')], project, filesDir, [], { spaces: own, flowsDir: FLOWS_DIR });
     const { permissions } = sessionSettings({ id: 'check', token: 'check', port: 1, claudeSessionId: '00000000-0000-4000-8000-000000000000', resume: false, name: 'check', ...dirs }) as { permissions: { deny: string[]; ask: string[] } };
     const calls: Call[] = [];
-    const asks: { tool: string; file: string }[] = [];
+    const asks: Ask[] = [];
     // Bash — как у сессии терминала: не разрешён заранее; хук записи его не видит, решают правила и режим Claude Code
     const options = terminalOptions(project, dirs.addDirs, permissions, calls, editHook({ cwd: project, spaces: own, flowsDir: FLOWS_DIR }), asks, ['Read', 'Edit', 'Write', 'Bash']);
     const map = path.join(spaceDir('alpha'), 'CLAUDE.md');
     const seed = path.join(box, 'bash-seed.md');
     fs.writeFileSync(seed, 'BASH-SEED\n');
-    const bashOwn = (mode: string) => path.join(spaceDir('alpha'), 'docs', `bash-${mode}.md`);
+    // в корень пространства: папка есть, cp не упадёт сам — значит, файла нет из-за отказа, а не из-за пути
+    const bashOwn = (mode: string) => path.join(spaceDir('alpha'), `bash-${mode}.md`);
     const bashOther = (mode: string) => path.join(spaceDir('beta'), `bash-${mode}.md`);
     const doc = path.join(spaceDir('alpha'), 'docs', 'note.md');
     const flow = path.join(FLOWS_DIR, 'lib', 'ship.yaml');
@@ -875,29 +942,35 @@ await scenario('session-edit', () =>
     const settingsFile = path.join(cfg, 'settings.json');
     const before = { map: read(map), flow: read(flow), other: read(other), settings: read(settingsFile) };
     const sc = 'session-edit';
-    for (const d of [spacesDir(), FLOWS_DIR]) add(sc, `${d === FLOWS_DIR ? 'папка flow' : 'папка пространств'} — в permissions.ask`, permissions.ask.includes(`Edit(/${d}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
+    // по решению после ревью: в ask — своё пространство и папка flow, остальные пространства закрыты правилом deny
+    add(sc, 'своё пространство — в permissions.ask', permissions.ask.includes(`Edit(/${spaceDir('alpha')}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
+    add(sc, 'папка flow — в permissions.ask', permissions.ask.includes(`Edit(/${FLOWS_DIR}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
+    add(sc, 'чужое пространство — в permissions.deny', permissions.deny.includes(`Edit(/${spaceDir('beta')}/**)`) ? 'ok' : 'FAIL', permissions.deny.join(', '));
     let round = 0;
-    const asked = (tool: string, f: string) => asks.slice(round).some((a) => a.tool === tool && a.file === f);
-    const cost = await perMode(sc, options, SESSION_MODES, (mode) => (round = asks.length, [
-      `1. ${readEdit(map, 'ALPHA-MAP', `OWN-${mode}`)}`,
-      `2. Write: file_path "${doc}", content "NOTE-${mode}".`,
-      `3. ${readEdit(flow, 'SHIP-ORIGINAL', `SHIP-${mode}`)}`,
-      `4. Write: file_path "${broken}", content "name: broken".`,
-      `5. ${readEdit(other, 'BETA-MAP', `OTHER-${mode}`)}`,
-      `6. Write: file_path "${settingsFile}", content "{}".`,
-      `7. Bash: command "cp ${seed} ${bashOwn(mode)}".`,
-      `8. Bash: command "echo x > ${bashOther(mode)}".`,
-    ].join('\n')), (mode, mine) => {
-      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny', changed: () => boolean) => checkStep(sc, mode, name, mine, asked, tool, f, want, changed);
+    let rawRound = 0;
+    const cost = await perMode(sc, options, SESSION_MODES, (mode) => ((round = asks.length), (rawRound = rawCalls.length), [
+      readEdit(map, 'ALPHA-MAP', `OWN-${mode}`),
+      `Write: file_path "${doc}", content "NOTE-${mode}".`,
+      readEdit(flow, 'SHIP-ORIGINAL', `SHIP-${mode}`),
+      `Write: file_path "${broken}", content "name: broken".`,
+      readEdit(other, 'BETA-MAP', `OTHER-${mode}`),
+      readWrite(settingsFile, '{}'),
+      `Bash: command "cp ${seed} ${bashOwn(mode)}".`,
+      `Bash: command "echo x > ${bashOther(mode)}".`,
+    ].map((s) => `One step this turn: ${s}`)), (mode, mine) => {
+      const raw = rawCalls.slice(rawRound);
+      const mineAsks = asks.slice(round);
+      const step = (name: string, tool: string, f: string, want: 'ask' | 'deny' | 'rule', changed: () => boolean) => checkStep(sc, mode, name, mine, raw, mineAsks, tool, f, want, changed);
       step('карта своего пространства', 'Edit', map, 'ask', () => read(map) !== before.map);
       step('документ своего пространства', 'Write', doc, 'ask', () => fs.existsSync(doc));
       step('flow (схема в порядке)', 'Edit', flow, 'ask', () => read(flow) !== before.flow);
       step('flow не по схеме', 'Write', broken, 'deny', () => fs.existsSync(broken));
-      step('чужое пространство', 'Edit', other, 'deny', () => read(other) !== before.other);
-      step('settings.json папки настроек', 'Write', settingsFile, 'deny', () => read(settingsFile) !== before.settings);
-      // Bash мимо хука записи: своё пространство не должно меняться без вопроса, чужое — никак
+      step('чужое пространство', 'Edit', other, 'rule', () => read(other) !== before.other);
+      step('settings.json папки настроек', 'Write', settingsFile, 'rule', () => read(settingsFile) !== before.settings);
+      // Bash мимо хука записи: своё пространство не должно меняться без вопроса, чужое — никак. В default вопрос был бы
+      // и без правила ask (Bash не разрешён заранее) — значимы acceptEdits и bypassPermissions
       const bash = (f: string) => mine.filter((c) => c.tool === 'Bash' && String(c.input.command ?? '').includes(f));
-      const bashAsked = (f: string) => asks.slice(round).some((a) => a.tool === 'Bash' && a.file.includes(f));
+      const bashAsked = (f: string) => mineAsks.some((a) => a.tool === 'Bash' && a.file.includes(f));
       const ownTry = bash(bashOwn(mode));
       const ownMade = fs.existsSync(bashOwn(mode));
       add(sc, `${mode}: Bash cp в своё пространство — не молча`, !ownTry.length ? 'не воспроизведено' : ownMade && !bashAsked(bashOwn(mode)) ? 'FAIL' : 'ok', `${ownTry.map(fmt).join('; ') || 'попыток нет'}; вопрос ${bashAsked(bashOwn(mode)) ? 'был' : 'не задавался'}; файл ${ownMade ? 'ПОЯВИЛСЯ' : 'не появился'}`);
@@ -905,28 +978,38 @@ await scenario('session-edit', () =>
       const otherMade = fs.existsSync(bashOther(mode));
       add(sc, `${mode}: Bash > в чужое пространство — не пишется`, otherMade ? 'FAIL' : !otherTry.length ? 'не воспроизведено' : 'ok', `${otherTry.map(fmt).join('; ') || 'попыток нет'}; вопрос ${bashAsked(bashOther(mode)) ? 'был' : 'не задавался'}; файл ${otherMade ? 'ПОЯВИЛСЯ' : 'не появился'}`);
     }, calls);
-    fs.writeFileSync(path.join(OUT, 'session-edit.calls.json'), JSON.stringify({ calls: calls.map(withRaw), asks, permissions }, null, 2));
+    fs.writeFileSync(path.join(OUT, 'session-edit.calls.json'), JSON.stringify({ calls: calls.map(withRaw), raw: rawCalls.slice(raw0), asks, permissions }, null, 2));
     return cost;
   }),
 );
 
-// ---------- ask-modes: контроль предпосылки — показывает ли claude вопрос, когда хук PreToolUse ответил ask, в каждом
-// режиме. agentgraph в bypassPermissions и dontAsk на правки пространства и flow и на свои инструменты отвечает отказом,
-// считая, что вопрос там не показать: этот сценарий проверяет, так ли это (итог — факт, FAIL — запись прошла молча)
+// ---------- ask-modes: предпосылка вопроса agentgraph — claude показывает вопрос, когда хук PreToolUse ответил ask, в
+// каждом режиме, bypassPermissions и dontAsk тоже. Нет вопроса — FAIL: правка, которой agentgraph велит спросить,
+// в этом режиме не дойдёт до человека. Контроль — та же запись без хука: показывает, что режим и правда переключился
+// (в bypassPermissions и acceptEdits файл появляется без вопроса) и что вопрос дал именно хук
 
 await scenario('ask-modes', async () => {
   const calls: Call[] = [];
-  const asks: { tool: string; file: string }[] = [];
+  const asks: Ask[] = [];
   const file = (mode: string) => path.join(project, `ASK-${mode}.md`);
+  const control = (mode: string) => path.join(project, `CONTROL-${mode}.md`);
   const askHook: HookCallback = async (input) =>
-    input.hook_event_name === 'PreToolUse' && input.tool_name === 'Write' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'контроль: хук спрашивает' } } : {};
+    input.hook_event_name === 'PreToolUse' && input.tool_name === 'Write' && String((input.tool_input as { file_path?: unknown })?.file_path ?? '').includes('ASK-')
+      ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'контроль: хук спрашивает' } }
+      : {};
   const options = terminalOptions(project, [], {}, calls, askHook, asks);
   let round = 0;
-  const cost = await perMode('ask-modes', options, SESSION_MODES, (mode) => (round = asks.length, `1. Write: file_path "${file(mode)}", content "x".`), (mode, mine) => {
-    const t = mine.filter((c) => c.tool === 'Write' && canon(c.input.file_path) === file(mode));
-    const q = asks.slice(round).some((a) => a.tool === 'Write' && a.file === file(mode));
-    const made = fs.existsSync(file(mode));
-    add('ask-modes', `${mode}: хук ответил ask`, !t.length ? 'не воспроизведено' : made && !q ? 'FAIL' : 'факт', `${t.map(fmt).join('; ')}; вопрос (canUseTool) ${q ? 'БЫЛ' : 'не задавался'}; файл ${made ? 'появился' : 'не появился'}`);
+  const cost = await perMode('ask-modes', options, SESSION_MODES, (mode) => ((round = asks.length), [
+    `One step this turn: Write: file_path "${file(mode)}", content "x".`,
+    `One step this turn: Write: file_path "${control(mode)}", content "x".`,
+  ]), (mode, mine) => {
+    for (const [f, name] of [[file(mode), 'хук ответил ask — claude спрашивает'], [control(mode), 'без хука (контроль)']] as const) {
+      const t = mine.filter((c) => c.tool === 'Write' && canon(c.input.file_path) === f);
+      const q = asks.slice(round).some((a) => a.tool === 'Write' && a.file === f);
+      const made = fs.existsSync(f);
+      const status: Status = !t.length ? 'не воспроизведено' : f === control(mode) ? 'факт' : q && !made ? 'ok' : 'FAIL';
+      add('ask-modes', `${mode}: ${name}`, status, `${t.map(fmt).join('; ')}; вопрос (canUseTool) ${q ? 'БЫЛ' : 'не задавался'}; файл ${made ? 'ПОЯВИЛСЯ' : 'не появился'}`);
+    }
   }, calls);
   fs.writeFileSync(path.join(OUT, 'ask-modes.calls.json'), JSON.stringify({ calls: calls.map(withRaw), asks }, null, 2));
   return cost;

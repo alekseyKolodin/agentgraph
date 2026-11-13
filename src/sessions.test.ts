@@ -268,11 +268,12 @@ test('хуки: запись файла — решение writeGuard: deny и a
   assert.deepEqual(write(() => ({ decision: 'ask', reason: 'карта пространства' })), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'карта пространства' } });
   assert.deepEqual(write(() => undefined), {});
   assert.match(JSON.stringify(write(() => { throw new Error('boom'); })), /"deny".*Проверка записи не удалась \(boom\)/);
-  // рабочая папка claude, режим и id вызова из входа хука доходят до проверки: от папки — относительные пути, id — снимок
+  // рабочая папка claude и id вызова из входа хука доходят до проверки: от папки — относительные пути, id — снимок;
+  // режим проверке не нужен — решение от него не зависит
   let seen: WriteCall | undefined;
   const input = parseHookInput({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'a.md' }, cwd: '/sp/own/docs', permission_mode: 'acceptEdits', tool_use_id: 'tu1' })!;
   handleHook(state(), input, { ...deps(), writeGuard: (_t, _i, call) => { seen = call; return undefined; } });
-  assert.deepEqual(seen, { cwd: '/sp/own/docs', mode: 'acceptEdits', toolUseId: 'tu1' });
+  assert.deepEqual(seen, { cwd: '/sp/own/docs', toolUseId: 'tu1' });
 });
 
 test('хуки: PostToolUse записи — что сказал afterWrite, уходит модели decision: block с причиной; упал — тоже; не запись — пусто', () => {
@@ -485,21 +486,37 @@ test('хуки: режим разрешений основного разгов�
   assert.deepEqual(handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: 'Bash' }, deps()).reply, {});
 });
 
-test('хуки: в bypassPermissions и dontAsk claude вопрос не покажет — инструменты agentgraph с вопросом отклоняются; не прошедший проверку вызов — отказ без вопроса', () => {
+test('хуки: инструменты agentgraph с вопросом спрашивают в любом режиме, bypassPermissions и dontAsk тоже (claude 2.1.285+); не прошедший проверку вызов — отказ без вопроса в любом режиме', () => {
   const decide = (tool: string, mode?: string, detail?: HookDeps['askDetail']) =>
-    handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, ...(mode ? { permission_mode: mode } : {}) }, { ...deps(), ...(detail ? { askDetail: detail } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
-  for (const mode of ['bypassPermissions', 'dontAsk']) {
-    for (const tool of ASK_FULL) {
-      const d = decide(tool, mode);
-      assert.equal(d.permissionDecision, 'deny', `${mode} ${tool}`);
-      assert.match(d.permissionDecisionReason, new RegExp(`В режиме ${mode} claude не задаст вопрос`));
+    handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, ...(mode ? { permission_mode: mode } : {}) }, { ...deps(), claudeVersion: () => '2.1.285 (Claude Code)', ...(detail ? { askDetail: detail } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  const modes = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions', 'dontAsk'];
+  for (const mode of modes) {
+    for (const tool of ASK_FULL) assert.equal(decide(tool, mode).permissionDecision, 'ask', `${mode} ${tool}`);
+    // askDetail сказал { deny } (схема flow не прошла): человека не спрашиваем, модель получает ошибки
+    const bad = decide('mcp__agentgraph__flow_write', mode, () => ({ deny: 'phases: Required' }));
+    assert.deepEqual([bad.permissionDecision, bad.permissionDecisionReason], ['deny', 'phases: Required'], mode);
+  }
+  assert.match(decide('mcp__agentgraph__flow_write', 'default', () => 'flows/x.yaml: новый flow').permissionDecisionReason, /flow запишется.*\. flows\/x\.yaml: новый flow$/);
+});
+
+test('хуки: claude старше 2.1.285 или неизвестной версии в bypassPermissions и dontAsk вместо вопроса — отказ (и инструменту agentgraph, и записи); в остальных режимах — вопрос; отказ записи остаётся отказом', () => {
+  const pre = (tool: string, mode: string, version: string | undefined, guard?: HookDeps['writeGuard']) =>
+    handleHook(state(), { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { file_path: '/sp/own/CLAUDE.md' }, permission_mode: mode }, { ...deps(), claudeVersion: () => version, ...(guard ? { writeGuard: guard } : {}) }).reply.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  const askWrite: HookDeps['writeGuard'] = () => ({ decision: 'ask', reason: 'карта пространства' });
+  for (const version of ['2.1.284 (Claude Code)', undefined, 'мусор']) {
+    for (const mode of ['bypassPermissions', 'dontAsk']) {
+      for (const d of [pre('mcp__agentgraph__space_map_write', mode, version), pre('Write', mode, version, askWrite)]) {
+        assert.equal(d.permissionDecision, 'deny', `${mode} ${version}`);
+        assert.match(d.permissionDecisionReason, new RegExp(`В режиме ${mode} claude ${version === '2.1.284 (Claude Code)' ? '2\\.1\\.284' : 'неизвестной версии'} может не показать вопрос.*2\\.1\\.285`));
+      }
+      assert.equal(pre('Write', mode, version, () => ({ decision: 'deny', reason: 'чужое пространство' })).permissionDecisionReason, 'чужое пространство');
+    }
+    for (const mode of ['default', 'acceptEdits', 'auto']) {
+      assert.equal(pre('mcp__agentgraph__space_map_write', mode, version).permissionDecision, 'ask', `${mode} ${version}`);
+      assert.equal(pre('Write', mode, version, askWrite).permissionDecision, 'ask', `${mode} ${version}`);
     }
   }
-  for (const mode of ['default', 'acceptEdits', 'auto', 'plan']) assert.equal(decide('mcp__agentgraph__flow_write', mode).permissionDecision, 'ask', mode);
-  // askDetail сказал { deny } (схема flow не прошла): человека не спрашиваем, модель получает ошибки
-  const bad = decide('mcp__agentgraph__flow_write', 'default', () => ({ deny: 'phases: Required' }));
-  assert.deepEqual([bad.permissionDecision, bad.permissionDecisionReason], ['deny', 'phases: Required']);
-  assert.match(decide('mcp__agentgraph__flow_write', 'default', () => 'flows/x.yaml: новый flow').permissionDecisionReason, /flow запишется.*\. flows\/x\.yaml: новый flow$/);
+  assert.equal(pre('Write', 'bypassPermissions', '2.1.318 (Claude Code)', askWrite).permissionDecision, 'ask');
 });
 
 test('хуки: id разговора не UUID в историю разговоров не попадает (он ушёл бы в --resume)', () => {

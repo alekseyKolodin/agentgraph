@@ -51,13 +51,16 @@ const ASK_TOOLS: Record<string, string> = {
   [TEAM_TASK_UPDATE_FULL]: 'agentgraph: изменение задачи Teamwork уйдёт коммитом в репо команды',
   [TEAM_DOC_WRITE_FULL]: 'agentgraph: документ проекта Teamwork уйдёт коммитом в репо команды',
 };
-/**
- * Режимы, в которых claude вопрос не покажет: bypassPermissions пропускает «ask», dontAsk отклоняет сам. Там, где
- * agentgraph велит спросить, в этих режимах хук отвечает отказом: правка с разрешения человека не станет тихой.
- */
-export const NO_ASK_MODES = ['bypassPermissions', 'dontAsk'];
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';
+/** Режимы без вопросов: bypassPermissions пропускает проверки, dontAsk отклоняет всё, что не разрешено заранее. */
+export const NO_ASK_MODES = ['bypassPermissions', 'dontAsk'];
+/**
+ * С этой версии claude показывает вопрос хука («ask») и в NO_ASK_MODES — измерено сценарием ask-modes
+ * scripts/check-sdk-hooks.mts на Claude Code из Agent SDK 0.3.285. claude старше или неизвестной версии в этих режимах
+ * вместо вопроса получает отказ: правка с разрешения человека не должна стать тихой.
+ */
+export const ASK_IN_ANY_MODE_SINCE = '2.1.285';
 /** Инструменты записи файлов: хук PreToolUse сверяет путь в момент вызова, PostToolUse — проверяет записанное. */
 const WRITE_MATCHER = WRITE_TOOLS.join('|');
 
@@ -594,15 +597,17 @@ export type HookDeps = {
   askDetail?: (tool: string, input: Record<string, unknown>) => string | { deny: string } | undefined;
   /**
    * Запись файла: deny — отказ с объяснением, ask — вопрос человеку с подробностями (своё пространство, flow);
-   * undefined — решают правила и режим. call — вход хука: рабочая папка claude, режим и id вызова.
+   * undefined — решают правила и режим. call — вход хука: рабочая папка claude и id вызова.
    */
   writeGuard?: (tool: string, input: Record<string, unknown>, call: WriteCall) => WriteVerdict | undefined;
   /** После записи (PostToolUse): строка — что сказать модели (проверка на диске не прошла, файл откачен). */
   afterWrite?: (tool: string, input: Record<string, unknown>, call: WriteCall) => string | undefined;
+  /** Версия claude этой сессии (claude --version): от неё — вопрос или отказ в NO_ASK_MODES. Нет — неизвестна. */
+  claudeVersion?: () => string | undefined;
 };
 
 /** Что хук записи знает о вызове из входа хука. */
-export type WriteCall = { cwd?: string; mode?: string; toolUseId?: string };
+export type WriteCall = { cwd?: string; toolUseId?: string };
 export type WriteVerdict = { decision: 'deny' | 'ask'; reason: string };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
@@ -658,7 +663,15 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
     case 'PermissionRequest':
       return { reply: permissionReply(input, deps.readTargets(ctx()), deps.realpath), patch };
     case 'PreToolUse': {
-      const call: WriteCall = { cwd: input.cwd, mode: input.permission_mode, toolUseId: input.tool_use_id };
+      const call: WriteCall = { cwd: input.cwd, toolUseId: input.tool_use_id };
+      // вопрос человеку; в режиме без вопросов у claude, где вопрос хука там не проверен, — отказ
+      const ask = (reason: string) => {
+        const mode = input.permission_mode;
+        const version = deps.claudeVersion?.();
+        if (!mode || !NO_ASK_MODES.includes(mode) || versionAtLeast(version, ASK_IN_ANY_MODE_SINCE)) return preToolReply('ask', reason);
+        const v = version?.match(/\d+\.\d+\.\d+/)?.[0];
+        return preToolReply('deny', `В режиме ${mode} claude ${v ?? 'неизвестной версии'} может не показать вопрос (он проверен с ${ASK_IN_ANY_MODE_SINCE}), а это действие — только с разрешения пользователя: отклонено. Попроси пользователя переключить режим (Shift+Tab) или обновить claude.`);
+      };
       if (WRITE_TOOLS.includes(input.tool_name ?? '') && deps.writeGuard) {
         let v: WriteVerdict | undefined;
         try {
@@ -667,15 +680,13 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
           // упавшая проверка не пропускает запись
           v = { decision: 'deny', reason: `Проверка записи не удалась (${err instanceof Error ? err.message : String(err)}): вызов отклонён.` };
         }
-        return { reply: v ? preToolReply(v.decision, v.reason) : {}, patch };
+        return { reply: !v ? {} : v.decision === 'ask' ? ask(v.reason) : preToolReply('deny', v.reason), patch };
       }
       // session_new запускает claude с текстом модели, space_* и flow_write пишут то, что получат все следующие сессии и
-      // запуски: спрашиваем человека в любом режиме, auto тоже; где claude вопрос не покажет — отказ
+      // запуски: спрашиваем человека в любом режиме — auto, bypassPermissions и dontAsk тоже (вопрос хука claude
+      // показывает везде с ASK_IN_ANY_MODE_SINCE; старше — отказ в NO_ASK_MODES)
       const why = ASK_TOOLS[input.tool_name ?? ''];
       if (!why) return { reply: {}, patch };
-      if (input.permission_mode && NO_ASK_MODES.includes(input.permission_mode)) {
-        return { reply: preToolReply('deny', `В режиме ${input.permission_mode} claude не задаст вопрос, а этот вызов — только с разрешения пользователя: отклонён. Попроси пользователя переключить режим (Shift+Tab).`), patch };
-      }
       let detail: string | { deny: string } | undefined;
       try {
         detail = deps.askDetail?.(input.tool_name!, input.tool_input ?? {});
@@ -683,13 +694,13 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
         detail = undefined;
       }
       if (detail && typeof detail === 'object') return { reply: preToolReply('deny', detail.deny), patch };
-      return { reply: preToolReply('ask', detail ? `${why}. ${detail}` : why), patch };
+      return { reply: ask(detail ? `${why}. ${detail}` : why), patch };
     }
     case 'PostToolUse': {
       if (!WRITE_TOOLS.includes(input.tool_name ?? '') || !deps.afterWrite) return { reply: {}, patch };
       let note: string | undefined;
       try {
-        note = deps.afterWrite(input.tool_name!, input.tool_input ?? {}, { cwd: input.cwd, mode: input.permission_mode, toolUseId: input.tool_use_id });
+        note = deps.afterWrite(input.tool_name!, input.tool_input ?? {}, { cwd: input.cwd, toolUseId: input.tool_use_id });
       } catch (err) {
         note = `Проверка после записи не удалась: ${err instanceof Error ? err.message : String(err)}`;
       }
