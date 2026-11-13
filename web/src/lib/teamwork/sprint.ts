@@ -71,7 +71,7 @@ export function sprintResultText(s: TeamSprint): string {
   const total = r.done.length + r.carried.length + r.returned.length;
   const parts = [t('готово {done} из {total}', { done: r.done.length, total })];
   if (r.carried.length) parts.push(t('перенесено {n}', { n: r.carried.length }));
-  if (r.returned.length) parts.push(t('в бэклог {n}', { n: r.returned.length }));
+  if (r.returned.length) parts.push(t('вернулось в бэклог {n}', { n: r.returned.length }));
   return parts.join(' · ');
 }
 

@@ -22,7 +22,7 @@ import { plannedSprint, points, pointsWord } from '../../lib/teamwork/backlog';
 import { activeSprint, columnName, memberByEmail, noSprintText, sprintStrip, sprintTasks, workBadge, type WorkState } from '../../lib/teamwork/board';
 import { docFile, docLabel, updatedText } from '../../lib/teamwork/docs';
 import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
-import { cx, ErrorLine, Who } from './parts';
+import { cx, ErrorLine, stripCell, Who } from './parts';
 import { CloneHint, RepoChooser, RepoDraftRow, type RepoTaken } from './RepoPicker';
 import { projectPath } from './shell';
 import styles from './Teamwork.module.css';
@@ -76,7 +76,7 @@ function SprintBlock({ team, project, tasks }: { team: TeamDetail; project: Team
       </div>
       {list.length > 0 && (
         <span className={cx(styles.strip, styles.big)} role="img" aria-label={strip.label} title={strip.label}>
-          {strip.cells.map((s, i) => <span key={i} className={cx(styles.st, styles[s])} />)}
+          {strip.cells.map((s, i) => <span key={i} className={cx(styles.st, stripCell(s))} />)}
         </span>
       )}
       <div className={styles.stats}>
@@ -106,8 +106,8 @@ function AgentsBlock({ tasks }: { tasks: readonly TeamTask[] }) {
   });
   if (!rows.length) return null;
   return (
-    <section aria-label={t('Агенты по проекту')}>
-      <h2 className={styles.cap}>{t('Агенты по проекту на этом компьютере')}</h2>
+    <section aria-label={t('Работа агентов')}>
+      <h2 className={styles.cap}>{t('Работа агентов на этом компьютере')}</h2>
       <div className={styles.rows}>
         {rows.map(({ task, b }) => (
           <div key={task.id} className={cx(styles.hrun, b.state === 'waiting' && styles.wait, b.state === 'failed' && styles.fail)}>
@@ -115,7 +115,6 @@ function AgentsBlock({ tasks }: { tasks: readonly TeamTask[] }) {
             <div className={styles.hrunMain}>
               <div className={styles.hrunTop}>
                 <Link className={styles.hrunTitle} to={b.work.kind === 'run' ? `/run/${encodeURIComponent(b.work.id)}` : `/sessions/${encodeURIComponent(b.work.id)}`}>{task.id} · {task.title}</Link>
-                <span className={styles.hrunMeta}>{b.work.kind === 'run' ? (b.work.title ?? t('запуск')) : t('сессия')}</span>
               </div>
               <span className={styles.hrunSum}>{b.text}</span>
             </div>
@@ -131,7 +130,7 @@ function DocsBlock({ team, project }: { team: TeamDetail; project: TeamProject }
   const byName = new Map(project.docs.map((d) => [d.name, d]));
   const extra = project.docs.filter((d) => d.name.startsWith('docs/'));
   const line = (d: TeamDocBrief | undefined): { text: string; quiet: boolean } => {
-    if (!d || d.size === 0) return { text: t('пусто — заполнит черновик с моделью или вы'), quiet: true };
+    if (!d || d.size === 0) return { text: t('пусто — заполнит агент или вы'), quiet: true };
     const upd = updatedText(d, team.memberList);
     return { text: [upd, docSize(d.size)].filter(Boolean).join(' · '), quiet: false };
   };
@@ -226,7 +225,7 @@ function ReposBlock({ team, project }: { team: TeamDetail; project: TeamProject 
         />
       )}
       {draft && (
-        <form className={styles.repoAdd} aria-label={t('Новое репо кода')} onSubmit={(e) => void add(e)}>
+        <form className={styles.repoAdd} aria-label={t('Добавить репо кода')} onSubmit={(e) => void add(e)}>
           <RepoDraftRow draft={draft} all={[draft]} existing={existing} onChange={(patch) => setDraft({ ...draft, ...patch })} onRemove={() => setDraft(undefined)} />
           {err && <p className="msg err">{err}</p>}
           <div className="row">
@@ -344,7 +343,7 @@ function SpaceBlock({ team, project }: { team: TeamDetail; project: TeamProject 
           onDone={() => { if (project.space) setPick(false); }}
         />
       )}
-      <p>{t('Только у вас. Предлагается в запусках и сессиях по задачам проекта.')}</p>
+      <p>{t('Видно только вам. Подставляется в запуски и сессии по задачам проекта.')}</p>
     </section>
   );
 }

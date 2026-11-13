@@ -124,7 +124,7 @@ export function RepoChooser({ team, taken, onAdd, onClose }: { team: string; tak
               if (typedPath.trim()) void choose(typedPath.trim());
             }}
           />
-          <button type="button" className="btn small" disabled={busy !== '' || !typedPath.trim()} onClick={() => void choose(typedPath.trim())}>{t('Взять папку')}</button>
+          <button type="button" className="btn small" disabled={busy !== '' || !typedPath.trim()} onClick={() => void choose(typedPath.trim())}>{t('Добавить папку')}</button>
         </div>
       )}
       <div className={styles.chooserFoot}>
@@ -184,8 +184,8 @@ export function CloneHint({ url }: { url: string }) {
   const cmd = cloneCommand(url);
   const copy = () => {
     (navigator.clipboard ? navigator.clipboard.writeText(cmd) : Promise.reject(new Error())).then(
-      () => toast(t('Команда скопирована')),
-      () => toast(t('Не скопировалось: выделите команду и скопируйте')),
+      () => toast(t('Скопировано')),
+      () => toast(t('Не скопировалось: выделите текст и скопируйте вручную')),
     );
   };
   return (

@@ -221,11 +221,13 @@ export function workBadge(task: Pick<TeamTask, 'work'>): WorkBadge | undefined {
   const w = pick('waiting') ?? pick('working') ?? pick('failed');
   if (!w) return undefined;
   const state = workState(w);
-  const title = w.title ?? (w.kind === 'session' ? t('сессия Claude Code') : t('запуск'));
+  // у запуска без имени хвоста нет: «идёт запуск · запуск» повторяло само себя
+  const title = w.title ?? (w.kind === 'session' ? t('сессия Claude Code') : undefined);
+  const named = (s: string) => (title ? `${s} · ${title}` : s);
   const text =
-    state === 'waiting' ? `${t('ждёт ответа')} · ${title}`
-    : state === 'working' ? (w.kind === 'session' ? `${t('сессия Claude Code')} · ${t('работает')}` : `${t('идёт запуск')} · ${title}`)
-    : t('запуск остановлен: {why}', { why: statusLabel(w.status ?? '') });
+    state === 'waiting' ? named(t('ждёт ответа'))
+    : state === 'working' ? (w.kind === 'session' ? `${t('сессия Claude Code')} · ${t('работает')}` : named(t('идёт запуск')))
+    : named(t('запуск остановлен: {why}', { why: statusLabel(w.status ?? '') }));
   return { state, text, work: w };
 }
 

@@ -1,4 +1,4 @@
-// «Черновик с моделью…» (весь документ) и «С агентом…» (один раздел): задание, модель, для архитектуры — какие документы
+// «Черновик с агентом…» (весь документ) и «С агентом…» (один раздел): задание, модель, для архитектуры — какие документы
 // писать; «Запустить» стартует черновик POST …/drafts (spec §9.2). Черновик — обычный запуск flow команды: вопросы агента
 // и ход работы — на странице запуска, по готовности правки приходят в документ режимом рецензии.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -106,7 +106,7 @@ export function AgentAsk({ team, project, doc, section, children, buttonClass, d
         {children}
       </button>
       {open && (
-        <div className={cx(styles.pop, left && styles.left)} role="dialog" id={id} aria-label={section !== undefined ? t('Правка с агентом') : t('Черновик с моделью')}>
+        <div className={cx(styles.pop, left && styles.left)} role="dialog" id={id} aria-label={section !== undefined ? t('Правка с агентом') : t('Черновик с агентом')}>
           <label htmlFor={`${id}-brief`}>{section !== undefined ? t('Что поменять в разделе «{section}»?', { section: sectionName(section) }) : t('Что сделать?')}</label>
           <textarea
             id={`${id}-brief`}

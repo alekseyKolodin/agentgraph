@@ -65,7 +65,7 @@ export function readChunks(body: string, withReqs = true): ReadChunk[] {
   return out;
 }
 
-/** Есть ли в документе хоть что-то, кроме заголовков разделов заготовки: пустой ТЗ показывает призыв «Черновик с моделью». */
+/** Есть ли в документе хоть что-то, кроме заголовков разделов заготовки: пустой ТЗ показывает призыв «Черновик с агентом». */
 export function isDocEmpty(md: string): boolean {
   const sections = splitSections(md);
   const withHeading = sections.filter((s) => s.heading);

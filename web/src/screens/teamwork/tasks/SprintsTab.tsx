@@ -139,7 +139,7 @@ function PlanButton({ team, project }: { team: string; project: string }) {
         }
       }}
     >
-      {t('Запланировать')}
+      {t('Запланировать спринт')}
     </button>
   );
 }
@@ -158,7 +158,7 @@ export function StartSprintButton({ team, project, tasks, small }: { team: TeamD
         title={active ? t('Активен «{title}»: сначала завершите его', { title: active.title }) : undefined}
         onClick={() => !active && setOpen(true)}
       >
-        {planned ? t('Запустить') : t('Запустить спринт…')}
+        {planned ? t('Запустить', undefined, 'sprint') : t('Запустить спринт…')}
       </button>
       {open && <StartSprintDialog team={team} project={project} tasks={tasks} onClose={() => setOpen(false)} />}
     </>
@@ -217,7 +217,7 @@ function StartSprintDialog({ team, project, tasks, onClose }: { team: TeamDetail
           <span className={styles.lbl}>{t('Задачи · {sum}', { sum: tasksAndPoints(chosen) })}</span>
           <ul className={styles.pickList}>
             {fixed.map((x) => (
-              <li key={x.id} title={t('Задача уже в этом спринте: убрать — перенесите её в бэклог')}>
+              <li key={x.id} title={t('Задача уже в этом спринте. Чтобы убрать её, перенесите задачу в бэклог')}>
                 <input type="checkbox" checked disabled aria-label={x.id} />
                 <span className={styles.id}>{x.id}</span>
                 <span className={styles.t}>{x.title}</span>
@@ -236,16 +236,16 @@ function StartSprintDialog({ team, project, tasks, onClose }: { team: TeamDetail
           </ul>
         </div>
         {warns.length > 0 && (
-          <ul className={styles.warns} aria-label={t('Предшественники вне спринта')}>
+          <ul className={styles.warns} aria-label={t('Ждут задач вне спринта')}>
             {warns.map((w) => <li key={w.id} className={styles.tWait}>⚠ {startWarningText(w)}</li>)}
           </ul>
         )}
-        {reset > 0 && <p className={styles.hint}>{t('Задачам не в «К работе» статус вернётся в «К работе»: {n}', { n: reset })}</p>}
+        {reset > 0 && <p className={styles.hint}>{t('Статус сбросится на «К работе» у задач: {n}', { n: reset })}</p>}
         {err && <p className="msg err">{err}</p>}
         <div className={styles.dfoot}>
           <span className={styles.grow} />
           <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>{t('Отмена')}</button>
-          <button type="submit" className="btn primary" disabled={busy}>{busy ? t('Запускаю…') : t('Запустить')}</button>
+          <button type="submit" className="btn primary" disabled={busy}>{busy ? t('Запускаю…') : t('Запустить', undefined, 'sprint')}</button>
         </div>
       </form>
     </dialog>

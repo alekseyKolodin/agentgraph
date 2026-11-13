@@ -188,7 +188,7 @@ export function proposalCoverage(
   const covers = items.filter((i) => i.state === 'proposed').map((i) => i.id);
   const none = items.filter((i) => i.state === 'none').map((i) => i.id);
   const parts = [
-    covers.length ? t('Покрывают {ids}', { ids: covers.join(', ') }) : t('Не покрывают ни одного требования'),
+    covers.length ? t('Новые задачи покрывают {ids}', { ids: covers.join(', ') }) : t('Новые задачи не покрывают требований'),
     none.length ? t('{ids} {verb} без задач', { ids: none.join(', '), verb: plural(none.length, 'остаётся', 'остаются', 'остаются') }) : '',
   ];
   return { items, text: parts.filter(Boolean).join(' · ') };

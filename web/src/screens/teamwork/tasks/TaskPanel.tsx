@@ -201,7 +201,7 @@ function Fields({ task, tasks, td, p, ops, members, readonly }: { task: TeamTask
         </select>
       </span>
       <label className={styles.lbl} htmlFor="tw-tp-who">{t('Исполнитель')}</label>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <span className={styles.pickRow}>
         <Assignee email={task.assignee} members={members} />
         <select id="tw-tp-who" className={styles.pick} value={task.assignee ?? ''} disabled={readonly} onChange={(e) => { const v = e.target.value || null; set({ assignee: v }, (x) => ({ ...x, assignee: v ?? undefined })); }}>
           <option value="">{t('Без исполнителя')}</option>
@@ -223,7 +223,7 @@ function Fields({ task, tasks, td, p, ops, members, readonly }: { task: TeamTask
         </select>
       </span>
       <span className={styles.lbl}>{t('Репо и ветка')}</span>
-      <span className={cx(styles.val, styles.mono)} style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+      <span className={styles.repoLine}>
         {p.repos.length > 1 && !readonly ? (
           <select className={cx(styles.pick, styles.mono)} aria-label={t('Репо кода')} value={task.repo ?? ''} onChange={(e) => { const v = e.target.value || null; set({ repo: v }, (x) => ({ ...x, repo: v ?? undefined })); }}>
             <option value="">—</option>
@@ -232,7 +232,7 @@ function Fields({ task, tasks, td, p, ops, members, readonly }: { task: TeamTask
         ) : (
           <span>{task.repo ?? p.repos[0]?.key ?? '—'}</span>
         )}
-        <span title={task.branch}>{task.branch ? `· ${task.branch}` : <span className={styles.hint}>{t('· ветка появится при «В работу»')}</span>}</span>
+        <span title={task.branch}>{task.branch ? `· ${task.branch}` : <span className={styles.hint}>{t('ветка появится при «В работу»')}</span>}</span>
       </span>
       <span className={styles.lbl}>PR</span>
       {task.pr ? (
@@ -251,7 +251,7 @@ function Fields({ task, tasks, td, p, ops, members, readonly }: { task: TeamTask
       <span className={styles.lbl}>{t('Ждёт')}</span>
       <span className={cx(styles.val, styles.wrap)}>
         {task.blockedBy.map((b) => depRow(byId.get(b), b, readonly ? undefined : () => set({ blockedBy: task.blockedBy.filter((x) => x !== b) }, (x) => ({ ...x, blockedBy: x.blockedBy.filter((y) => y !== b) }))))}
-        {!task.blockedBy.length && <span className={styles.hint}>{t('ничего не ждёт')}</span>}
+        {!task.blockedBy.length && <span className={styles.hint}>{t('ничего', undefined, 'deps')}</span>}
         {!readonly && cands.length > 0 && (
           <span className={styles.addDep}>
             <select className={styles.pick} aria-label={t('Новая зависимость')} value={dep} onChange={(e) => setDep(e.target.value)}>
@@ -284,9 +284,10 @@ function Work({ task, td, p, readonly }: { task: TeamTask; td: TeamDetail; p: Te
           <div key={`${w.kind}:${w.id}`} className={styles.run}>
             <span className={cx(tw.dot, st === 'waiting' && tw.wait, st === 'failed' && tw.fail, st === 'done' && tw.ok)} aria-hidden="true" />
             <div className={styles.runMain}>
-              <Link className={styles.runTitle} to={to}>{w.kind === 'session' ? '›_ ' : ''}{w.title ?? (w.kind === 'run' ? t('запуск') : t('сессия Claude Code'))}</Link>
+              <Link className={styles.runTitle} to={to}>{w.kind === 'session' ? '›_ ' : ''}{w.title ?? (w.kind === 'run' ? t('Запуск') : t('Сессия Claude Code'))}</Link>
+              {/* вид работы — только под именем; без имени он уже в заголовке: не «запуск · запуск · идёт» */}
               <span className={cx(styles.runMeta, st === 'waiting' && styles.tWait, st === 'failed' && styles.tFail)}>
-                {w.kind === 'run' ? t('запуск') : t('сессия')} · {statusLabel(w.status ?? 'running')} · {feedTime(w.at, new Date(now))}
+                {[w.title ? (w.kind === 'run' ? t('запуск') : t('сессия')) : '', statusLabel(w.status ?? 'running'), feedTime(w.at, new Date(now))].filter(Boolean).join(' · ')}
               </span>
             </div>
             <Link className="btn small" to={to}>{st === 'waiting' ? t('Ответить') : t('Открыть')}</Link>

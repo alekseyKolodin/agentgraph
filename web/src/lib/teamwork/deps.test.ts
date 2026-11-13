@@ -49,11 +49,11 @@ test('зависимости: неизвестная ссылка и ссылк�
 
 test('зависимости: сводка, цепочка, подписи', () => {
   const r = checkDependencies(SPLIT, EXISTING);
-  assert.deepEqual(depsSummary(SPLIT, EXISTING, r), ['3 волны', 'сразу можно начать 1', 'ждут текущих задач 2', 'циклов нет']);
+  assert.deepEqual(depsSummary(SPLIT, EXISTING, r), ['3 волны', 'сразу можно начать 1', 'ждут задач проекта 2', 'циклов нет']);
   assert.equal(chainText(r), 'Самая длинная цепочка: 1 → 2 → 6 · 6 очков');
   assert.equal(chainText(checkDependencies([], [])), '');
   const c = checkDependencies([p('3', ['5']), p('5', ['3'])], []);
-  assert.deepEqual(depsSummary([p('3', ['5']), p('5', ['3'])], [], c), ['0 волн', 'сразу можно начать 0', 'ждут текущих задач 0', 'цикл: 3 → 5 → 3']);
+  assert.deepEqual(depsSummary([p('3', ['5']), p('5', ['3'])], [], c), ['0 волн', 'сразу можно начать 0', 'ждут задач проекта 0', 'цикл: 3 → 5 → 3']);
   assert.equal(waveText(3), 'волна 3');
   assert.equal(waveText(undefined), 'цикл');
   assert.equal(keyLabel('t12'), '12');
@@ -63,7 +63,7 @@ test('зависимости: сводка, цепочка, подписи', () 
   assert.equal(existingNote({ id: 'a', status: 'todo' }).where, 'в бэклоге');
 });
 
-test('зависимости: панель задачи — «Ждёт», «Открывает», когда можно начать', () => {
+test('зависимости: панель задачи — «Ждёт», «Блокирует», когда можно начать', () => {
   const r = checkDependencies(SPLIT, EXISTING);
   const members = [{ name: 'Алексей Колодин', email: 'alex@x.io' }];
   assert.deepEqual(waitsOn('3', SPLIT, EXISTING, r), [{ id: 'PAY-14', title: 'Шаблон выгрузки для 1С', existing: true, status: 'in_progress', assignee: 'alex@x.io', wave: 1 }]);

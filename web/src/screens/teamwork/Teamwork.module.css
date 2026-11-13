@@ -2,6 +2,8 @@
    вкладками и строкой синхронизации, обзор проекта, диалоги подключения и конфликтов, панель задачи, заглушки волны 3.
    Глубина — только рамками; цвет — только сигнал (ok/wait/fail/live); данные — моно. Тоновые перебивки — в конце файла. */
 .view { container-type: inline-size; }
+/* <Link className="btn"> — кнопка, а не ссылка: без подчёркивания браузера */
+.view :global(a.btn) { text-decoration: none; }
 .sub { margin: 4px 0 0; color: var(--ink-2); max-width: 640px; }
 .sub.mono { font-family: var(--font-mono); font-size: var(--fs-meta); }
 .cap { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); margin: 0 0 8px; }
@@ -37,12 +39,17 @@
 .seg button { border: 0; background: transparent; color: var(--ink-3); padding: 4px 12px; font: inherit; font-size: var(--fs-small); font-weight: 500; cursor: pointer; border-radius: 0; }
 .seg button:hover { color: var(--ink-2); }
 .seg button.on { background: var(--raised); color: var(--ink); }
+/* рамка .seg режет внешнее кольцо фокуса (overflow: hidden) — кольцо внутри кнопки */
+.seg button:focus-visible { box-shadow: inset var(--focus); }
 .f { display: flex; flex-direction: column; gap: 5px; }
 .f label { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .f input, .f select, .f textarea { background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 6px 10px; color: var(--ink); width: 100%; font: inherit; }
 .f input:focus, .f select:focus, .f textarea:focus { outline: none; border-color: var(--live); }
 .f input.mono { font-family: var(--font-mono); font-size: var(--fs-small); }
 .two { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; }
+/* ширина второй колонки — классом, а не style: на узком экране @media ниже складывает их в одну колонку */
+.two-slug { grid-template-columns: minmax(0, 1fr) 200px; }
+.two-prefix { grid-template-columns: minmax(0, 1fr) 160px; }
 .tree { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 12px; font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.7; color: var(--ink-2); margin: 0; white-space: pre; overflow-x: auto; }
 .go { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
@@ -52,7 +59,9 @@
 .crumbs a:hover { color: var(--ink); text-decoration: underline; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .head h1 { margin: 0; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.01em; }
-.head-r { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.head-r { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+/* на телефоне аватары участников уступают место строке синхронизации и «⋯»: иначе «⋯» уезжает одна на свою строку */
+@container (max-width: 520px) { .head-r .people { display: none; } }
 .tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--line); margin: 14px 0 16px; overflow-x: auto; }
 .tab { border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--ink-3); padding: 6px 0; font-weight: 500; white-space: nowrap; text-decoration: none; }
 .tab:hover { color: var(--ink-2); text-decoration: none; }
@@ -62,8 +71,9 @@
 
 /* --- строка синхронизации: клик по тексту синхронизирует сейчас, кнопка — действие состояния */
 .sync { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); flex-wrap: wrap; }
-.sync-text { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-xs); }
-.sync-text:hover { color: var(--ink); }
+/* текст строки — кнопка «синхронизировать сейчас»: без рамки, но с отступами и подсветкой, как .btn.ghost.small */
+.sync-text { border: 0; background: transparent; color: inherit; font: inherit; padding: 3px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-sm); }
+.sync-text:hover:not([disabled]) { color: var(--ink); background: var(--hover); }
 .sync-text[disabled] { cursor: default; color: inherit; }
 .sync-link { font-family: var(--font-sans); color: var(--live); }
 
@@ -94,6 +104,7 @@
 .chooser-list button { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 2fr) minmax(0, 1fr); gap: 10px; align-items: baseline; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 7px 6px; color: var(--ink); font: inherit; font-size: var(--fs-small); cursor: pointer; }
 .chooser-list button:hover:not(:disabled) { background: var(--hover); }
 .chooser-list button:disabled { cursor: default; }
+.chooser-list button:focus-visible { box-shadow: inset var(--focus); }
 .chooser-list button:disabled b { color: var(--ink-3); }
 .chooser-list b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chooser-list .meta { overflow-wrap: anywhere; }
@@ -149,7 +160,6 @@
 .hrun-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .hrun-title { font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: none; flex: 0 1 auto; }
 .hrun-title:hover { text-decoration: underline; }
-.hrun-meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 0; }
 .hrun-sum { font-size: var(--fs-small); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
 .doc:hover { background: var(--hover); }
@@ -192,6 +202,8 @@
 .found { background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .found-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .found-h b { font-weight: 600; }
+/* длинное название переносится рядом с «✓», а не уезжает под него на узком экране */
+.found-h .okmark + b { flex: 1 1 12em; min-width: 0; }
 .found-h .okmark { color: var(--st-ok); font-family: var(--font-mono); }
 .mem { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--ink-2); }
 .mem span { display: inline-flex; align-items: center; gap: 6px; }
@@ -229,7 +241,7 @@
 
 @media (max-width: 800px) {
   .prow { grid-template-columns: minmax(0, 1fr); }
-  .two { grid-template-columns: minmax(0, 1fr); }
+  .two, .two-slug, .two-prefix { grid-template-columns: minmax(0, 1fr); }
   .col-r { max-width: none; }
   .doc { grid-template-columns: 90px minmax(0, 1fr); }
   .opts { grid-template-columns: minmax(0, 1fr); }

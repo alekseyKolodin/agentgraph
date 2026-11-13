@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { TeamConflict, TeamSync } from '@server/api-types';
-import { agoShort, changesWord, conflictText, syncLine, unsavedLine } from './sync';
+import { agoShort, changesWord, conflictText, fieldLabel, syncLine, unsavedLine } from './sync';
 
 const now = Date.parse('2026-11-12T12:00:00Z');
 const sync = (over: Partial<TeamSync>): TeamSync => ({ state: 'ok', unpushed: 0, conflicts: 0, ...over });
@@ -46,4 +46,18 @@ test('синхронизация: несохранённый раздел вме
   assert.deepEqual(unsavedLine(['Требования']), { text: 'не сохранено: раздел «Требования»', tone: 'wait' });
   assert.equal(unsavedLine(['A', 'B'])?.text, 'не сохранено: разделы «A», «B»');
   assert.equal(unsavedLine([]), undefined);
+});
+
+test('подпись поля конфликта: заголовок задачи, название проекта или спринта, незнакомое поле — как в файле', () => {
+  assert.equal(fieldLabel('title', true), 'Заголовок');
+  assert.equal(fieldLabel('title'), 'Название');
+  assert.equal(fieldLabel('blockedBy', true), 'Ждёт');
+  assert.equal(fieldLabel('pr', true), 'PR');
+  assert.equal(fieldLabel('x_custom'), 'x_custom');
+  assert.equal(fieldLabel('constructor'), 'constructor');
+});
+
+test('строка «не отправлено»: без ошибки кнопка отправляет сейчас, с ошибкой — «Повторить»', () => {
+  assert.deepEqual(syncLine(sync({ state: 'pending', unpushed: 2 })).action, { kind: 'retry', label: 'Отправить сейчас' });
+  assert.deepEqual(syncLine(sync({ state: 'pending', unpushed: 2, error: 'нет сети' })).action, { kind: 'retry', label: 'Повторить' });
 });

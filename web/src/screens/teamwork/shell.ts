@@ -2,6 +2,7 @@
 // Логика доски, бэклога, документов и синхронизации — в web/src/lib/teamwork/ (волна ui-logic), здесь её нет.
 import type { RunTeamworkLink, TeamProjectBrief, TeamRemoteCheck } from '@server/api-types';
 import { plural, t } from '../../lib/i18n';
+import { fieldLabel } from '../../lib/teamwork/sync';
 
 const enc = encodeURIComponent;
 
@@ -121,11 +122,11 @@ export function conflictValue(v: unknown): string {
   return JSON.stringify(v, null, 2);
 }
 
-/** Подпись вида конфликта (spec §7.4). */
-export function conflictKindText(kind: 'field' | 'text' | 'deleted' | 'sprint', field?: string): string {
+/** Подпись вида конфликта (spec §7.4); с полем — для подписи группы выбора, без него — рядом с названием поля. */
+export function conflictKindText(kind: 'field' | 'text' | 'deleted' | 'sprint', field?: string, task = false): string {
   switch (kind) {
     case 'field':
-      return field ? t('поле «{field}»: одно поле, разные значения', { field }) : t('одно поле, разные значения');
+      return field ? t('поле «{field}» изменили оба', { field: fieldLabel(field, task) }) : t('поле изменили оба');
     case 'text':
       return t('текст изменили оба');
     case 'deleted':

@@ -41,7 +41,7 @@ export function TeamsScreen() {
     return (
       <div className="empty">
         <h1>Teamwork</h1>
-        <p className="muted">{t('Сервер не умеет Teamwork: обновите agentgraph.')}</p>
+        <p className="muted">{t('Этот сервер не поддерживает Teamwork: обновите agentgraph.')}</p>
       </div>
     );
   }

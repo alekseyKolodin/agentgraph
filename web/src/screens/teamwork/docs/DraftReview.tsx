@@ -124,7 +124,7 @@ function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamD
     // запись заменит чьи-то правки, сделанные после старта черновика, — только с явного согласия
     if (r.lost.length) {
       const list = r.lost.map((x) => `«${x.length > 120 ? `${x.slice(0, 120)}…` : x}»`).join('\n');
-      if (!(await askConfirm(t('Запись заменит правки, сделанные в документе после старта черновика:\n{list}\nЗаписать всё равно?', { list }), { ok: t('Записать'), danger: true }))) {
+      if (!(await askConfirm(t('Запись заменит правки, сделанные в документе после старта черновика:\n{list}\nЗаписать всё равно?', { list }), { ok: t('Записать', undefined, 'draft'), danger: true }))) {
         setBusy(false);
         return;
       }
@@ -191,13 +191,13 @@ function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamD
             <button type="button" className="btn ghost small" aria-label={t('Следующая правка')} title={t('Следующая правка')} disabled={!edits.length} onClick={() => go(1)}>↓</button>
           </span>
           <button type="button" className="btn small" disabled={!unresolved || running} title={conflicts.size ? t('Конфликтные правки — только вручную') : undefined} onClick={() => save({ ...mem, d: acceptRest(edits.filter((e) => !conflicts.has(e.id)), mem.d) })}>{t('Принять остальные')}</button>
-          <span className={styles.seg} role="group" aria-label={t('Вид')}>
+          <span className={styles.seg} role="group" aria-label={t('Вид', undefined, 'view')}>
             <button type="button" className={cx(view === 'doc' && styles.on)} aria-pressed={view === 'doc'} onClick={() => setView('doc')}>{t('Документ')}</button>
             <button type="button" className={cx(view === 'src' && styles.on)} aria-pressed={view === 'src'} onClick={() => setView('src')}>{t('Исходник')}</button>
           </span>
           <span className={styles.grow} />
-          <button type="button" className="btn ghost" onClick={() => void reject()}>{t('Отклонить черновик')}</button>
-          <button type="button" className="btn primary" disabled={!pending.length || busy || running} title={running ? t('Черновик ещё идёт') : undefined} onClick={() => void write()}>
+          <button type="button" className="btn ghost small" onClick={() => void reject()}>{t('Отклонить черновик')}</button>
+          <button type="button" className="btn primary small" disabled={!pending.length || busy || running} title={running ? t('Черновик ещё идёт') : undefined} onClick={() => void write()}>
             {busy ? t('Записываю…') : t('Записать принятые · {n}', { n: pending.length })}
           </button>
         </div>
@@ -239,7 +239,7 @@ function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamD
               g.kind === 'fold' ? (
                 <div key={k} className={styles.fold}>
                   <span>{foldText(g.sections.map((s) => sectionName(s.section.heading)))}</span>
-                  <button type="button" onClick={() => setOpen((o) => new Set([...o, ...g.sections.map((s) => s.section.heading)]))}>{t('Показать')}</button>
+                  <button type="button" className="btn ghost small" onClick={() => setOpen((o) => new Set([...o, ...g.sections.map((s) => s.section.heading)]))}>{t('Показать')}</button>
                 </div>
               ) : (
                 <ReviewSection

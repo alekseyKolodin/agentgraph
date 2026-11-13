@@ -91,9 +91,9 @@ test('документы: покрытие требований задачами
   assert.equal(coverage([reqs[0]!], []).text, 'Задачи есть у 0 из 1 требования');
   const p = proposalCoverage(reqs, [{ covers: ['FR-4'] }], tasks);
   assert.deepEqual(p.items.map((i) => i.state), ['existing', 'existing', 'proposed', 'none']);
-  assert.equal(p.text, 'Покрывают FR-4 · NFR-1 остаётся без задач');
-  assert.equal(proposalCoverage(reqs, [{ covers: ['FR-4', 'NFR-1'] }], tasks).text, 'Покрывают FR-4, NFR-1');
-  assert.equal(proposalCoverage(reqs, [], tasks).text, 'Не покрывают ни одного требования · FR-4, NFR-1 остаются без задач');
+  assert.equal(p.text, 'Новые задачи покрывают FR-4 · NFR-1 остаётся без задач');
+  assert.equal(proposalCoverage(reqs, [{ covers: ['FR-4', 'NFR-1'] }], tasks).text, 'Новые задачи покрывают FR-4, NFR-1');
+  assert.equal(proposalCoverage(reqs, [], tasks).text, 'Новые задачи не покрывают требований · FR-4, NFR-1 остаются без задач');
 });
 
 test('документы: шапка — файл, кто и когда менял, требования, время чтения', () => {

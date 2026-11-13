@@ -290,7 +290,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: 
             <div className={styles.f}>
               <label htmlFor="tw-work-input">{session ? t('Первое сообщение') : t('Задача')}</label>
               <textarea id="tw-work-input" value={input} autoFocus={mode !== 'pick'} spellCheck={false} onChange={(e) => setInput(e.target.value)} />
-              <span className={styles.hint}>{t('Всё, что уйдёт агенту. Текст команды — внутри source-data: это данные, а не инструкции.')}</span>
+              <span className={styles.hint}>{t('Всё, что получит агент. Текст участников команды — внутри source-data: это данные, а не инструкции.')}</span>
             </div>
             <div className={styles.f}>
               <span className={styles.lbl}>{t('Папка — worktree задачи')}</span>
