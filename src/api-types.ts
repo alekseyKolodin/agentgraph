@@ -1610,8 +1610,31 @@ export type TeamRemoteCheck =
 /** GET, PUT /api/teams/:t/local: мои папки репо кода (ссылка → папка) и привязанные к проектам пространства (slug → slug). PUT принимает те же поля, null или пустая строка снимает ключ. */
 export type TeamLocal = { repoPaths: Record<string, string>; projectSpaces: Record<string, string> };
 
-/** GET, PUT /api/teams/:t/flows/:name: flow команды как YAML; spec — FlowSpec из src/schema.ts, если YAML проходит схему, иначе error. PUT принимает { yaml } и отвечает 400 на невалидный. */
-export type TeamFlow<Spec = unknown> = { name: string; yaml: string; file: string; spec?: Spec; error?: string };
+/**
+ * GET, PUT /api/teams/:t/flows/:name: flow команды как YAML; spec — FlowSpec из src/schema.ts, если YAML проходит схему, иначе error. PUT принимает { yaml } и отвечает 400 на невалидный
+ * и на запрещённое flow команды (code flow_forbidden, problems). У flow, проходящего схему: problems — что flow команде нельзя (spec §14), trust — эту версию на
+ * этом компьютере ещё не одобрили (нет — одобрена: совпадает с шаблоном agentgraph, сохранена здесь или одобрена кнопкой). Сохранённая здесь версия одобряется сразу.
+ */
+export type TeamFlow<Spec = unknown> = { name: string; yaml: string; file: string; spec?: Spec; error?: string; problems?: string[]; trust?: TeamFlowTrust };
+
+/**
+ * Flow команды, которому этот компьютер ещё не доверяет (spec §14): тело 409 code flow_untrusted у запуска черновика, разбивки и «В работу» (POST /api/runs с
+ * teamFlow) — { error, code, flow: TeamFlowTrust }. hash — sha256 YAML, его отправляет POST /api/teams/:t/flows/:name/trust { hash }. base — с чем сравнивать:
+ * последняя одобренная здесь версия (trusted) или шаблон agentgraph с тем же именем (template); нет ни той, ни другой — flow новый. commands — shell-команды
+ * условий (type: command), они выполнятся на этом компьютере; tools — инструменты этапов с shell, записью файлов или сетью.
+ */
+export type TeamFlowTrust = {
+  team: string;
+  name: string;
+  hash: string;
+  yaml: string;
+  base?: { kind: 'trusted' | 'template'; yaml: string; at?: string };
+  commands: string[];
+  tools: string[];
+};
+
+/** POST /api/teams/:t/flows/:name/trust { hash }: 200 — версия одобрена; 409 flow_untrusted — flow успел измениться, в теле новая версия. */
+export type TeamFlowTrusted = { name: string; hash: string; trusted: true };
 
 /** Репо кода проекта и где оно лежит у меня (local.json → repoPaths, иначе найдено среди проектов дашборда по origin). */
 export type TeamRepoRef = { key: string; url: string; defaultBranch?: string; local?: string };

@@ -19,6 +19,7 @@ import {
   defaultWorkFlow, myFlowInput, needsRepo, parseWorkFlow, taskRepo, workFlowKey, workRunBody, workSessionBody, type WorkFlow,
 } from '../../../lib/teamwork/task';
 import { useReturnFocus } from '../focus';
+import { useFlowTrust } from '../FlowTrust';
 import { projectPath } from '../shell';
 import { fetchIntake, prepareTaskWorktree, startTaskSession } from './api';
 import { MenuButton, type MenuEntry } from './parts';
@@ -108,6 +109,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: 
   /** Текст под только что выбранный flow команды ещё едет: запуск с текстом прежнего flow не отправляем. */
   const [loadingFlow, setLoadingFlow] = useState(false);
   const [err, setErr] = useState('');
+  const trust = useFlowTrust();
 
   // закрытие формы возвращает фокус туда, откуда её открыли (кнопка «В работу ▸»)
   useReturnFocus(dlg);
@@ -209,7 +211,9 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: 
         void navigate(`/sessions/${encodeURIComponent(s.id)}`);
       } else {
         if (!flow) return setErr(t('Выберите flow'));
-        const r = await startRun(workRunBody(intake, wt, flow, { input, space: spacesOn ? space : '', model, budget }));
+        // flow команды изменили и здесь не одобряли — диалог доверия; «Отмена» — форма остаётся как была
+        const r = await trust.guard(() => startRun(workRunBody(intake, wt, flow, { input, space: spacesOn ? space : '', model, budget })));
+        if (!r) return;
         void qc.invalidateQueries({ queryKey: keys.runs });
         void qc.invalidateQueries({ queryKey: teamKeys.all });
         onClose();
@@ -325,6 +329,7 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: 
           )}
         </div>
       </form>
+      {trust.dialog}
     </dialog>,
     document.body,
   );

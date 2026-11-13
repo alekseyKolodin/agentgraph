@@ -8,6 +8,7 @@ import { errorText } from '../../../api';
 import { t } from '../../../lib/i18n';
 import { docLabel } from '../../../lib/teamwork/docs';
 import { sectionName } from '../../../lib/teamwork/doc-view';
+import { useFlowTrust } from '../FlowTrust';
 import { cx } from '../parts';
 import { draftKeys, startDraft } from './api';
 import styles from './Docs.module.css';
@@ -47,11 +48,13 @@ export function AgentAsk({ team, project, doc, section, children, buttonClass, d
   const [both, setBoth] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const trust = useFlowTrust();
 
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+      // клик в диалоге доверия к flow — продолжение запуска, а не уход из панели
+      if (!wrap.current?.contains(e.target as Node) && !(e.target as Element).closest?.('[data-flow-trust]')) setOpen(false);
     };
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -79,7 +82,9 @@ export function AgentAsk({ team, project, doc, section, children, buttonClass, d
     if (doc !== 'prd') body.what = both && section === undefined ? 'both' : doc;
     if (model) body.model = model;
     try {
-      const d = await startDraft(team, project, body);
+      // flow команды изменили и здесь не одобряли — диалог доверия; «Отмена» — без запуска
+      const d = await trust.guard(() => startDraft(team, project, body));
+      if (!d) return;
       await qc.invalidateQueries({ queryKey: draftKeys.list(team, project) });
       setOpen(false);
       setBrief('');
@@ -140,6 +145,7 @@ export function AgentAsk({ team, project, doc, section, children, buttonClass, d
           {err && <p className="msg err">{err}</p>}
         </div>
       )}
+      {trust.dialog}
     </div>
   );
 }

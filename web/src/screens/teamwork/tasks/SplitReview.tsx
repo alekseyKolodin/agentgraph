@@ -28,6 +28,7 @@ import { setUnsaved, unsavedKey, useUnsaved } from '../unsaved';
 import { useReturnFocus } from '../focus';
 import { cx, StaleLine } from '../parts';
 import tw from '../Teamwork.module.css';
+import { useFlowTrust } from '../FlowTrust';
 import { acceptSplit, draftRunning, startDraft, taskKeys, useDraft, useDrafts } from './api';
 import { Assignee } from './parts';
 import styles from './Tasks.module.css';
@@ -110,6 +111,7 @@ function SplitStart({ team, project, onClose, onStarted }: { team: string; proje
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   useReturnFocus(dlg);
+  const trust = useFlowTrust();
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -118,7 +120,8 @@ function SplitStart({ team, project, onClose, onStarted }: { team: string; proje
     setBusy(true);
     setErr('');
     try {
-      await startDraft(team, project, { kind: 'split', ...(brief.trim() ? { brief: brief.trim() } : {}) });
+      // flow разбивки изменили и здесь не одобряли — диалог доверия; «Отмена» — без запуска, задание остаётся
+      if (!(await trust.guard(() => startDraft(team, project, { kind: 'split', ...(brief.trim() ? { brief: brief.trim() } : {}) })))) return;
       onStarted();
     } catch (e2) {
       setErr(errorText(e2));
@@ -142,6 +145,7 @@ function SplitStart({ team, project, onClose, onStarted }: { team: string; proje
           <button type="submit" className="btn primary" disabled={busy}>{busy ? t('Запускаю…') : t('Разбить')}</button>
         </div>
       </form>
+      {trust.dialog}
     </dialog>
   );
 }

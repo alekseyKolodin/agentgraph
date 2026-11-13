@@ -20,6 +20,8 @@ import { Loading } from '../sessions/Loading';
 import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
 import { ConflictsDialog } from './ConflictsDialog';
 import { guardUnsaved, unsavedKey, useUnsaved } from './unsaved';
+import { useFlowTrust } from './FlowTrust';
+import trustStyles from './FlowTrust.module.css';
 import { Crumbs, cx, ErrorLine, People, readonlyReason, SprintStrip, StaleLine, Tabs, Who } from './parts';
 import { RepoChooser, RepoDraftRow, type RepoTaken } from './RepoPicker';
 import { projectPath, remoteLabel, SLUG_RE, TEAM_TABS, TEAMS_PATH, teamTabLabel, teamTabOf, teamTabPath, type TeamTab } from './shell';
@@ -309,6 +311,14 @@ function ProcessTab({ team }: { team: TeamDetail }) {
   const [seq, setSeq] = useState(0);
   const [msg, setMsg] = useState<Msg>(NO_MSG);
   const [busy, setBusy] = useState(false);
+  const trust = useFlowTrust();
+  // версию из репо команды здесь не одобряли (spec §14): посмотреть дифф и одобрить заранее, а не на запуске
+  const reviewTrust = async () => {
+    if (!flow?.trust || !name) return;
+    if (!(await trust.review(flow.trust))) return;
+    await qc.invalidateQueries({ queryKey: teamKeys.flow(team.slug, name) });
+    setMsg({ text: t('Эта версия одобрена на этом компьютере'), tone: 'ok' });
+  };
   // текст flow сменился (другой flow, сохранение, чужая правка после pull): чистый редактор подхватывает его,
   // редактор с правками — предупреждение, чтобы правка не пропала молча
   const lastYaml = useRef<string | undefined>(undefined);
@@ -361,6 +371,8 @@ function ProcessTab({ team }: { team: TeamDetail }) {
   const save = async () => {
     if (!name) return;
     const text = editor.current?.value() ?? '';
+    // сохранённое здесь одобряется целиком: если в редактор пришла неодобренная версия коллеги, сначала её изменения
+    if (flow?.trust && !(await trust.review(flow.trust))) return;
     setBusy(true);
     setMsg(NO_MSG);
     try {
@@ -399,6 +411,13 @@ function ProcessTab({ team }: { team: TeamDetail }) {
         </div>
         {q.isError && <ErrorLine text={errorText(q.error)} />}
         {flow?.error && <p className="msg warn">{t('Flow не проходит схему: {error}', { error: flow.error })}</p>}
+        {flow?.problems && <p className={cx('msg err', trustStyles.process)}>{t('Этот flow нельзя запускать как flow команды:')}{'\n'}{flow.problems.map((p) => `· ${p}`).join('\n')}</p>}
+        {flow?.trust && !flow.problems && (
+          <p className={cx('msg warn', trustStyles.process)}>
+            {t('Эту версию на этом компьютере не одобряли: запуск попросит её подтвердить.')}{' '}
+            <button type="button" className="btn small" onClick={() => void reviewTrust()}>{t('Посмотреть изменения…')}</button>
+          </p>
+        )}
         {flow && <YamlEditor key={flow.name} ref={editor} className={styles.yaml} value={flow.yaml} seq={seq} />}
         {!flow && !q.isError && <Loading className={styles.loading} />}
         <div className="row">
@@ -407,6 +426,7 @@ function ProcessTab({ team }: { team: TeamDetail }) {
           <span className={msgClass(msg)}>{msg.text}</span>
         </div>
       </div>
+      {trust.dialog}
     </section>
   );
 }

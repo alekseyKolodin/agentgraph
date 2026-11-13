@@ -9,18 +9,24 @@ import path from 'node:path';
 import { readRunFlow, RUN_ID_RE } from './adhoc.js';
 import { ARTIFACTS_DIR, declaredArtifacts } from './artifacts.js';
 import { checkCalls } from './flows.js';
-import { hasPlaceholders, wrapData } from './intake.js';
+import { hasPlaceholders } from './intake.js';
 import type { FlowSpec } from './schema.js';
+import { wrapModelData } from './spaces.js';
 import { TeamError } from './teamwork-repo.js';
 import type { TeamService } from './teamwork-server.js';
+import { teamsAddDirProblem, teamsCwdProblem } from './teamwork-trust.js';
 import { checkDependencies, docLabel, findSection, nextRequirementId, parseProject, replaceSection, sectionHash, splitSections, TASK_TYPES, TEAM_SLUG_RE, textHash } from './teamwork.js';
 import type {
   RunReport, RunSummary, RunTeamworkLink, TeamDoc, TeamDraft, TeamDraftAccepted, TeamDraftDetail, TeamDraftDoc, TeamDraftDocName, TeamDraftExisting, TeamDraftKind,
   TeamDraftNote, TeamDraftStart, TeamProject, TeamProposedTask, TeamTaskType,
 } from './api-types.js';
 
-/** Опции запуска черновика для startRun сервера: разовый (flow не в flows/, его копия — снимок в папке запуска) со ссылкой на черновик. */
-export type DraftRunOptions = { cwd: string; addDirs: string[]; model?: string; maxBudgetUsd?: number; adhoc: true; teamwork: RunTeamworkLink };
+/**
+ * Опции запуска черновика для startRun сервера: разовый (flow не в flows/, его копия — снимок в папке запуска) со ссылкой на
+ * черновик. cwd нет — у проекта нет репо кода: рабочая папка — пустая папка в папке запуска, а не папка проекта в клоне
+ * команды (её .claude/settings.json грузился бы как настройки проекта, spec §14).
+ */
+export type DraftRunOptions = { cwd?: string; addDirs: string[]; model?: string; maxBudgetUsd?: number; adhoc: true; teamwork: RunTeamworkLink };
 
 /** Запуски глазами сервера (server.ts): старт через startRun, список, отчёт run.json и статус запуска, идущего в этом сервере. */
 export type DraftRunDeps = {
@@ -71,8 +77,11 @@ const isDir = (d: string): boolean => Boolean(fs.statSync(d, { throwIfNoEntry: f
 
 // ---------- анкета входа (wave1-flows.md)
 
-/** Значение строки анкеты: inline — на месте; data — блок source-data с новой строки (текст людей); list — список с новой строки. */
-export type FormValue = { inline: string } | { data: string } | { list: string[] };
+/**
+ * Значение строки анкеты: inline — на месте (только то, что собрал сервер); data — блок source-data с новой строки (текст
+ * людей); inline с data — наше значение на месте и текст людей под ним; list — список с новой строки.
+ */
+export type FormValue = { inline: string } | { data: string } | { inline: string; data: string } | { list: string[] };
 
 /**
  * Заполняет анкету `Поле: <…>` по именам полей (без учёта регистра); labels — чем заменить имя поля в заполненной строке.
@@ -90,8 +99,10 @@ export function fillForm(template: string, values: Record<string, FormValue>, la
       const v = byName.get(name);
       if (!v) return line;
       const head = `${m[1]}${label.get(name) ?? m[2].trim()}:`;
+      // текст людей — wrapModelData, как у задач: wrapData не ловит закрывающий тег сущностями и невидимыми символами
+      if ('inline' in v && 'data' in v) return `${head} ${v.inline}\n${wrapModelData(v.data)}`;
       if ('inline' in v) return `${head} ${v.inline}`;
-      if ('data' in v) return `${head}\n${wrapData(v.data)}`;
+      if ('data' in v) return `${head}\n${wrapModelData(v.data)}`;
       return `${head}\n${v.list.map((x) => `- ${x}`).join('\n')}`;
     })
     .join('\n')
@@ -292,9 +303,10 @@ export class TeamDrafts {
   }
 
   /**
-   * Запуск черновика (spec §9.2): flow команды проверяется как любой, текущие документы — в initial артефактов, папка
-   * запуска — локальная папка основного репо кода проекта (или cwd из тела; без репо кода — папка проекта в клоне),
-   * папка проекта и остальные репо — доп. папками; текст людей — только в source-data.
+   * Запуск черновика (spec §9.2): flow команды проверяется как любой и проходит доверие (readTeamFlow, §14), текущие
+   * документы — в initial артефактов, папка запуска — локальная папка основного репо кода проекта (или абсолютный cwd из
+   * тела; без репо кода — пустая папка, её заводит server.ts), папка проекта и остальные репо — доп. папками; текст людей
+   * — только в source-data.
    */
   async start(team: string, slug: string, body: unknown): Promise<TeamDraft> {
     const b = parseStart(body);
@@ -324,7 +336,7 @@ export class TeamDrafts {
     spec.input = this.input(spec, b, project, texts, dirs.roles, b.kind === 'split' ? this.service.tasks(team, slug) : [], this.nextRequirement(team, slug, texts.prd));
     const link: RunTeamworkLink = { team, project: slug, draft: b.kind, ...(b.section !== undefined ? { section: b.section } : {}), brief: b.brief, ...(docs.length ? { docs } : {}) };
     const run = this.deps.start(spec, {
-      cwd: dirs.cwd,
+      ...(dirs.cwd ? { cwd: dirs.cwd } : {}),
       addDirs: dirs.addDirs,
       ...(b.model ? { model: b.model } : {}),
       ...(b.maxBudgetUsd !== undefined ? { maxBudgetUsd: b.maxBudgetUsd } : {}),
@@ -341,26 +353,38 @@ export class TeamDrafts {
     return { FR: nextRequirementId('', 'FR', cfg.lastRequirement), NFR: nextRequirementId('', 'NFR', cfg.lastRequirement) };
   }
 
-  /** Папка запуска, доп. папки и роль каждого репо кода для строки «Репо кода». */
-  private dirs(project: TeamProject, cwdOverride?: string): { cwd: string; addDirs: string[]; roles: string[] } {
+  /**
+   * Папка запуска, доп. папки и роль каждого репо кода для строки «Репо кода». Без репо кода cwd нет: рабочая папка — пустая
+   * папка в папке запуска (server.ts), а папка проекта в клоне команды — только доп. папкой, запись в неё закрыта guard'ом
+   * папки команд (spec §14).
+   */
+  private dirs(project: TeamProject, cwdOverride?: string): { cwd?: string; addDirs: string[]; roles: string[] } {
     const [main] = project.repos;
-    let cwd: string;
+    let cwd: string | undefined;
     if (cwdOverride) {
+      // относительный путь считался бы от папки процесса сервера, а не от чего-то, что видел человек
+      if (!path.isAbsolute(cwdOverride)) bad(`Поле cwd — абсолютный путь: ${cwdOverride}`);
       cwd = path.resolve(cwdOverride);
       if (!isDir(cwd)) bad(`Директория не найдена: ${cwd}`);
     } else if (main) {
       if (!main.local) bad(`Папка репо кода ${main.key} на этом компьютере неизвестна: укажи её в настройках команды (PUT /api/teams/:t/local → repoPaths) или передай cwd`);
       cwd = path.resolve(main.local);
       if (!isDir(cwd)) bad(`Папка репо кода ${main.key} не найдена: ${cwd}`);
-    } else cwd = project.dir;
+    }
+    const inTeams = cwd && teamsCwdProblem(cwd);
+    if (inTeams) bad(inTeams);
     const extra = (r: TeamProject['repos'][number]): string | undefined => (r.local && path.resolve(r.local) !== cwd && isDir(r.local) ? path.resolve(r.local) : undefined);
     const addDirs = [...new Set([project.dir, ...project.repos.map(extra).filter((d): d is string => Boolean(d))].filter((d) => d !== cwd))];
-    // поля project.yaml пишут люди и они идут вне source-data: только одной строкой
+    for (const d of addDirs) {
+      const conf = teamsAddDirProblem(d);
+      if (conf) bad(conf);
+    }
+    // ключ, ссылку и ветку из project.yaml пишут люди: строка «Репо кода» целиком идёт в source-data (fillForm, spec §14)
     const roles = project.repos.map((r) => {
-      const role = (r.local && path.resolve(r.local) === cwd) || (r === main && !main.local) ? 'рабочая папка запуска' : extra(r) ? 'дополнительная папка' : 'локально нет';
+      const role = r.local && path.resolve(r.local) === cwd ? 'рабочая папка запуска' : extra(r) ? 'дополнительная папка' : 'локально нет';
       return `${oneLine(r.key)} — ${oneLine(r.url)}, ветка ${oneLine(r.defaultBranch ?? '') || 'main'}, ${role}`;
     });
-    return { cwd, addDirs, roles };
+    return { ...(cwd ? { cwd } : {}), addDirs, roles };
   }
 
   /**
@@ -370,17 +394,19 @@ export class TeamDrafts {
   private input(spec: FlowSpec, b: Start, project: TeamProject, texts: Partial<Record<TeamDraftDocName, TeamDoc | undefined>>, roles: string[], tasks: ReturnType<DraftService['tasks']>, nextRequirement: { FR: string; NFR: string }): string {
     const own = spec.input?.trim() ?? '';
     const template = hasPlaceholders(spec.input) ? spec.input! : [own, DEFAULT_INPUT[b.kind]].filter(Boolean).join('\n\n');
+    // снаружи source-data — только то, что собрал сервер (слаг, пути, номера); название проекта и заголовок раздела пишут люди
+    const title = oneLine(project.title);
     const values: Record<string, FormValue> = {
-      Проект: { inline: `${project.slug} · «${oneLine(project.title) || project.slug}»` },
+      Проект: title ? { inline: project.slug, data: `Название: ${title}` } : { inline: project.slug },
       'Суть проекта': { data: project.summary.trim() || '(пусто)' },
       'Что сделать': { data: b.brief },
-      Раздел: { inline: b.section !== undefined ? `## ${b.section}` : 'весь документ' },
+      Раздел: b.section !== undefined ? { inline: 'один раздел документа, его заголовок ниже', data: `## ${b.section}` } : { inline: 'весь документ' },
       'Папка проекта': { inline: project.dir },
     };
     if (b.kind === 'prd') values['Новые номера'] = { inline: `${nextRequirement.FR}, ${nextRequirement.NFR}` };
     if (b.kind === 'architecture') values['Что писать'] = { inline: WHAT_LABEL[b.what] };
     if (b.kind === 'split') {
-      values['Репо кода'] = roles.length ? { list: roles } : { inline: '(репо кода не указаны)' };
+      values['Репо кода'] = roles.length ? { data: roles.map((r) => `- ${r}`).join('\n') } : { inline: '(репо кода не указаны)' };
       const lines = tasks.filter((t) => !t.error).map((t) => `- ${t.id} · ${oneLine(t.title)} · ${t.type} · ${t.status} · ${t.assignee ?? '—'} · ${t.covers.join(', ') || '—'} · ${t.blockedBy.join(', ') || '—'}`);
       values['Существующие задачи'] = { data: lines.join('\n') || '(задач ещё нет)' };
     }

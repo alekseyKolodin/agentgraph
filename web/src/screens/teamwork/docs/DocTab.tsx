@@ -17,6 +17,7 @@ import { Loading } from '../../sessions/Loading';
 import { cx, ErrorLine, StaleLine } from '../parts';
 import tw from '../Teamwork.module.css';
 import { AgentAsk, type DraftDoc } from './AgentAsk';
+import { useFlowTrust } from '../FlowTrust';
 import { draftKeys, startDraft, useDrafts } from './api';
 import { HistoryDialog, SourceDialog } from './DocDialogs';
 import { DocView } from './DocView';
@@ -59,6 +60,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
   const [creating, setCreating] = useState(false);
   const readonly = team.sync.state === 'readonly';
   const openEdit = useEdit(team.slug, project.slug, name);
+  const trust = useFlowTrust();
 
   useEffect(() => guardUnload(() => anyEdits().some((e) => isDirty(e, serializeRequirementRows))), []);
 
@@ -78,7 +80,8 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
     if (d.section !== undefined) body.section = d.section;
     if (d.kind === 'architecture') body.what = (d.docs?.length ?? 0) > 1 ? 'both' : ((d.docs?.[0] ?? name) as 'architecture' | 'design');
     try {
-      await startDraft(team.slug, project.slug, body);
+      // flow команды изменили и здесь не одобряли — диалог доверия; «Отмена» — без запуска
+      if (!(await trust.guard(() => startDraft(team.slug, project.slug, body)))) return;
       setReview(null);
       await qc.invalidateQueries({ queryKey: draftKeys.list(team.slug, project.slug) });
     } catch (e) {
@@ -131,6 +134,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
         {stale}
         <p className={styles.hint} style={{ margin: '0 0 10px' }}><button type="button" className={styles.linkBtn} onClick={() => setReview(null)}>{t('← К документу')}</button></p>
         <DraftReview key={`${review}|${name}`} team={team} project={project} name={name} run={review} onClose={() => setReview(null)} onRetry={(d: TeamDraftDetail) => void retry(d)} />
+        {trust.dialog}
       </>
     );
   }
@@ -164,6 +168,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
       )}
       {dialog === 'history' && <HistoryDialog team={team.slug} project={project.slug} name={name} members={team.memberList} onClose={() => setDialog(null)} />}
       {dialog === 'source' && <SourceDialog doc={doc} onClose={() => setDialog(null)} />}
+      {trust.dialog}
     </>
   );
 }

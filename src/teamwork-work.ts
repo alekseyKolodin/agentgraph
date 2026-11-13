@@ -14,7 +14,7 @@ import { SPACE_DOC_TEXT_MAX, wrapModelData } from './spaces.js';
 import { TeamError } from './teamwork-repo.js';
 import type { Reply, TeamService } from './teamwork-server.js';
 import type { TeamworkStatus } from './teamwork-status.js';
-import { docFile, docLabel, FLOW_NAME_RE, TASK_STATUSES } from './teamwork.js';
+import { DOC_FILES, docFile, docLabel, FLOW_NAME_RE, TASK_STATUSES, textHash } from './teamwork.js';
 import type { SessionTeamwork } from './sessions-server.js';
 import type { TeamTaskUpdateArgs } from './sessions-mcp.js';
 import type { RunTeamworkLink, TeamColumns, TeamProject, TeamRepoRef, TeamTask, TeamTaskIntake, TeamTaskPatch, TeamTaskWorktree, WorktreeResult } from './api-types.js';
@@ -50,9 +50,15 @@ export function titleSlug(title: string, max = SLUG_MAX): string {
   return out;
 }
 
-/** Ветка задачи: записанная в файле задачи, иначе tw/<ID>-<slug заголовка> (без слага — tw/<ID>). */
+/** Ветка, которую можно показать агенту снаружи source-data и отдать git: буквы любого алфавита, цифры, . _ / -; без пробелов, кавычек и ведущего «-». */
+const BRANCH_RE = /^(?!-)[\p{L}\p{N}._/-]+$/u;
+
+/**
+ * Ветка задачи: записанная в файле задачи, иначе tw/<ID>-<slug заголовка> (без слага — tw/<ID>). Записанную пишут
+ * участники: не похожая на имя ветки (BRANCH_RE) заменяется своей — она идёт в анкету «Ветка:» снаружи source-data.
+ */
 export function taskBranch(task: Pick<TeamTask, 'id' | 'title' | 'branch'>): string {
-  if (task.branch) return task.branch;
+  if (task.branch && BRANCH_RE.test(task.branch) && !task.branch.includes('..')) return task.branch;
   const slug = titleSlug(task.title);
   return `${TASK_BRANCH_PREFIX}${task.id}${slug ? `-${slug}` : ''}`;
 }
@@ -87,10 +93,16 @@ export function taskText(task: TeamTask, ctx: TaskTextContext): string {
     ...(task.covers.length ? [`Требования ТЗ: ${task.covers.join(', ')}`] : []),
   ];
   const body = task.body.trim().replace(/^## +(.+?)[ \t]*$/gm, '$1:');
-  const docs = ctx.project.docs.flatMap((d) => (docFile(d.name) ? [docFile(d.name)!] : []));
-  const docsLine = docs.length
-    ? `Документы проекта (открой, когда нужно): ${docs.map((f, i) => (i === 0 ? path.join(ctx.project.dir, f) : f)).join(', ')}`
-    : `Документы проекта: папка ${ctx.project.dir}, документов пока нет`;
+  // снаружи source-data — только файлы с именами от agentgraph (prd.md, architecture.md, design.md); имена файлов docs/
+  // пишут участники, поэтому их здесь нет: агент найдёт их в папке сам
+  const files = ctx.project.docs.flatMap((d) => (d.name in DOC_FILES ? [DOC_FILES[d.name as keyof typeof DOC_FILES]] : []));
+  const extra = ctx.project.docs.filter((d) => !(d.name in DOC_FILES) && docFile(d.name)).length;
+  const more = extra ? `; ещё документов в docs/: ${extra}` : '';
+  const docsLine = files.length
+    ? `Документы проекта (открой, когда нужно): ${files.map((f, i) => (i === 0 ? path.join(ctx.project.dir, f) : f)).join(', ')}${more}`
+    : extra
+      ? `Документы проекта (открой, когда нужно): папка ${path.join(ctx.project.dir, 'docs')}, документов: ${extra}`
+      : `Документы проекта: папка ${ctx.project.dir}, документов пока нет`;
   return [`Задача Teamwork ${task.id} · проект ${ctx.project.slug} · команда ${ctx.teamSlug}`, '', DATA_NOTE, wrapModelData([...fields, '', body || 'Описание: (пусто)'].join('\n')), '', docsLine].join('\n');
 }
 
@@ -219,16 +231,46 @@ export async function teamworkWorkRoute(method: string, url: URL, readBody: () =
 /** Документы, которые пишет team_doc_write: архитектура, дизайн и docs/ проекта; ТЗ — только через черновик и принятие. */
 const SESSION_DOC_RE = /^(architecture|design|docs\/[^/]+\.md)$/;
 
-/** Инструменты и события сессии, открытой из задачи, поверх сервиса команды и автоматики статусов. */
+/**
+ * Инструменты и события сессии, открытой из задачи, поверх сервиса команды и автоматики статусов. team_doc_write пишет
+ * документ целиком, поэтому сверяет его с версией, которую сессия видела (S-6): первой — по коммиту клона на старте
+ * сессии, дальше — по своей последней записи или отказу. Документ с тех пор менялся — отказ модели «перечитай и запиши
+ * заново», а не перезапись чужих правок.
+ */
 export function sessionTeamwork(service: TeamService, status: TeamworkStatus): SessionTeamwork {
   const taskOf = (link: RunTeamworkLink): string => {
     if (!link.task) throw new Error('Сессия не привязана к задаче Teamwork');
     return link.task;
   };
+  /** Коммит клона команды на старте сессии (id сессии → HEAD). */
+  const heads = new Map<string, string>();
+  /** Версия документа, которую сессия видела: textHash (CRLF как LF), null — документа не было. Ключ — сессия, команда, проект, документ. */
+  const seen = new Map<string, string | null>();
+  /** Текст, на который сессия уже получила отказ «перечитай»: тот же текст ещё раз — снова отказ (повтор вслепую). */
+  const refused = new Map<string, string>();
+  const key = (session: string, link: RunTeamworkLink, name: string) => [session, link.team, link.project, name].join('\0');
+  const forget = (session: string) => {
+    heads.delete(session);
+    for (const m of [seen, refused]) for (const k of m.keys()) if (k.startsWith(`${session}\0`)) m.delete(k);
+  };
   return {
     check: (link) => status.check(link),
-    started: (link, work) => status.started(link, work),
-    ended: (link, work) => status.ended(link, work),
+    started: async (link, work) => {
+      // вызывают через void: исключение здесь стало бы unhandledRejection — коммит старта просто не запоминается
+      if (work.kind === 'session') {
+        try {
+          const head = (await service.repo(link.team).git(['rev-parse', 'HEAD'])).trim();
+          if (head) heads.set(work.id, head);
+        } catch {
+          // команды нет или git не ответил: первая запись попросит перечитать документ
+        }
+      }
+      return status.started(link, work);
+    },
+    ended: (link, work) => {
+      if (work.kind === 'session') forget(work.id);
+      return status.ended(link, work);
+    },
     label: (link) => {
       try {
         const t = link.task ? service.task(link.team, link.project, link.task) : undefined;
@@ -262,12 +304,47 @@ export function sessionTeamwork(service: TeamService, status: TeamworkStatus): S
       }
       return `Задача ${id}: ${done.join(', ')}. Записано коммитом в репо команды и уйдёт участникам.`;
     },
-    writeDoc: async (link, name, text) => {
+    writeDoc: async (link, name, text, session) => {
       taskOf(link);
       if (!SESSION_DOC_RE.test(name) || !docFile(name)) throw new Error('name: architecture, design или docs/<имя>.md — ТЗ из сессии не пишется');
       if (Buffer.byteLength(text) > SPACE_DOC_TEXT_MAX) throw new Error(`Текст больше ${SPACE_DOC_TEXT_MAX / 1024} КБ`);
-      await service.writeDoc(link.team, link.project, name, text, { message: `${link.project}: ${docLabel(name)} — из сессии по задаче ${link.task}` });
-      return service.repo(link.team).abs(`projects/${link.project}/${docFile(name)}`);
+      const repo = service.repo(link.team);
+      const rel = `projects/${link.project}/${docFile(name)}`;
+      const file = repo.abs(rel);
+      const k = key(session, link, name);
+      // CRLF как LF: git show отдаёт блоб, а рабочая копия с autocrlf — с CRLF
+      const hashOf = (t: string | undefined) => (t === undefined ? null : textHash(t.replace(/\r\n/g, '\n')));
+      const current = repo.read(rel);
+      const now = hashOf(current);
+      const mine = textHash(text);
+      /** Текст, как его запишет writeDoc: с переводом строки в конце. */
+      const written = hashOf(text && !text.endsWith('\n') ? `${text}\n` : text);
+      if (refused.get(k) === mine && written !== now) throw new Error(`Это тот же текст, на который уже был отказ: документ ${file} менялся, и твоя версия затёрла бы чужие правки. Прочитай его через Read и включи их в запись.`);
+      let was = seen.get(k);
+      if (was === undefined) {
+        // первая запись сессии: версия на её старте; коммита старта нет (сервер перезапускался) — неизвестно, что она видела
+        const head = heads.get(session);
+        was = head ? hashOf(await repo.git(['show', `${head}:${rel}`]).catch(() => undefined)) : 'unknown';
+      }
+      // known — документ точно менялся; без коммита старта отказ лишь на всякий случай, и тот же текст после него — можно
+      const reread = (at: string | null, known = true): never => {
+        seen.set(k, at);
+        if (known) refused.set(k, mine);
+        throw new Error(`Документ ${file} изменился после того, как ты его видел (его правили в agentgraph или коллеги по команде): перечитай его через Read и запиши заново, сохранив чужие правки.`);
+      };
+      if (was !== now) reread(now, was !== 'unknown');
+      try {
+        // base — хэш файла как есть: так его сверяет writeDoc внутри очереди
+        await service.writeDoc(link.team, link.project, name, text, { ...(current !== undefined ? { base: textHash(current) } : {}), message: `${link.project}: ${docLabel(name)} — из сессии по задаче ${link.task}` });
+      } catch (err) {
+        // документ поменялся между сверкой и записью в очереди репо (pull, правка в UI)
+        if (err instanceof TeamError && err.code === 'conflict') reread(hashOf(repo.read(rel)));
+        throw err;
+      }
+      // видела — то, что записала сама, а не файл после очереди: pull мог уже влить в него правку коллеги
+      seen.set(k, written);
+      refused.delete(k);
+      return file;
     },
   };
 }

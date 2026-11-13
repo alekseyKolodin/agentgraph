@@ -35,6 +35,8 @@ import {
 } from './sessions.js';
 import { mcpReply, parseSessionNewArgs, parseTeamTaskArgs, type McpReply, type SessionNewArgs, type TeamTaskUpdateArgs } from './sessions-mcp.js';
 import { parseTeamworkLink } from './teamwork-status.js';
+import { teamsCwdProblem } from './teamwork-trust.js';
+import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
@@ -99,7 +101,8 @@ export type SessionTeamwork = {
   /** Подпись задачи для вопроса PreToolUse: «PAY-12 «…» (team/project)». */
   label: (link: RunTeamworkLink) => string;
   updateTask: (link: RunTeamworkLink, args: TeamTaskUpdateArgs) => Promise<string>;
-  writeDoc: (link: RunTeamworkLink, name: string, text: string) => Promise<string>;
+  /** session — id сессии: запись сверяется с версией документа, которую эта сессия видела (teamwork-work.ts). */
+  writeDoc: (link: RunTeamworkLink, name: string, text: string, session: string) => Promise<string>;
 };
 
 /**
@@ -419,6 +422,9 @@ export class SessionManager {
     if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     const cwd = path.resolve(typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : defaultCwd);
     if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Директория не найдена: ${cwd}`);
+    // клон репо команды не бывает рабочей папкой claude (spec §14): его .claude/settings.json (хуки) пишут участники команды
+    const inTeams = teamsCwdProblem(cwd);
+    if (inTeams) throw new SessionError(400, inTeams);
     let tags: string[];
     let space: string | undefined;
     let flags: ReturnType<typeof sessionFlags>;
@@ -699,6 +705,9 @@ export class SessionManager {
     if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
     if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     if (!fs.statSync(s.rec.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Папки сессии больше нет: ${s.rec.cwd}`);
+    // сессия, заведённая до запрета с рабочей папкой в клоне команды, там не продолжается (spec §14)
+    const inTeams = teamsCwdProblem(s.rec.cwd);
+    if (inTeams) throw new SessionError(400, inTeams);
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
     await this.knownVersion(bin);
@@ -948,7 +957,7 @@ export class SessionManager {
         const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
         return path.join(space.dir, 'docs', doc.name);
       },
-      ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text) } : {}),
+      ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
     });
   }
 
@@ -1310,21 +1319,25 @@ function newLive(rec: SessionRecord, status: SessionStatus): Live {
 const newTurns = (r: SessionRecord) => Math.max(0, r.turns - (r.summarizedTurns ?? 0));
 
 /**
- * Запись сессии, открытой в папке пространства («Сессия в папке»): в папке пространств — только своё пространство, и в
- * нём не .claude/ и не space.json; папка тегов знаний — нет. Запреты в --settings — снимок на старте и сверка строк;
- * пространство, заведённое потом, новая папка в spaces/ и путь в другом регистре (APFS) ловятся здесь, в момент вызова.
- * Путь — по realpath, относительный — от рабочей папки claude в момент вызова (toolCwd из входа хука). Сессия не в
- * папке пространства — undefined: решают правила.
+ * Запись сессии по пути в момент вызова (хук PreToolUse записи; claude зовёт его у сессии в папке пространства — у
+ * остальных папки данных закрывают правила Edit из launchDirs). Папка команд Teamwork (клоны репо команд) — отказ при любой
+ * рабочей папке: запрет Edit в --settings сверяет строки, и путь в другом регистре (APFS) или через ссылку прошёл бы мимо.
+ * Сессия в папке пространства («Сессия в папке»), кроме того: в папке пространств — только своё пространство, и в нём
+ * не .claude/ и не space.json; папка тегов знаний — нет. Запреты в --settings — снимок на старте и сверка строк;
+ * пространство, заведённое потом, новая папка в spaces/ и путь в другом регистре ловятся здесь. Путь — по realpath,
+ * относительный — от рабочей папки claude в момент вызова (toolCwd из входа хука). Остальное — undefined: решают правила.
  */
 export function spaceWriteGuard(cwd: string, tool: string, input: Record<string, unknown>, toolCwd?: string): string | undefined {
-  const root = path.resolve(spacesDir());
-  if (!WRITE_TOOLS.includes(tool) || !isInside(cwd, root) || cwd === root) return undefined;
-  const own = path.join(root, path.relative(root, cwd).split(path.sep)[0]);
+  if (!WRITE_TOOLS.includes(tool)) return undefined;
   const raw = toolPath(tool, input);
   if (typeof raw !== 'string' || !raw.trim()) return undefined;
   const base = toolCwd && path.isAbsolute(toolCwd) ? toolCwd : cwd;
   const fold = (p: string) => canonical(p, base, nodeProbe).normalize('NFC').toLowerCase();
   const p = fold(raw);
+  if (isInside(p, fold(teamsDir()))) return `${raw} — в папке команд Teamwork: документы и задачи команды меняются через её экран в agentgraph, а правки агентов — через принятие черновика.`;
+  const root = path.resolve(spacesDir());
+  if (!isInside(cwd, root) || cwd === root) return undefined;
+  const own = path.join(root, path.relative(root, cwd).split(path.sep)[0]);
   if (isInside(p, fold(tagsDir()))) return `${raw} — в папке тегов знаний: теги правят на странице «Знания» в agentgraph.`;
   if (!isInside(p, fold(root))) return undefined;
   const mine = fold(own);

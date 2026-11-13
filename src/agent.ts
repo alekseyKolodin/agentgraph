@@ -1,6 +1,7 @@
 // Одна фаза = одна свежая сессия Claude Code через Agent SDK.
 import { query, type ModelUsage, type Options, type Query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { IMPLICIT_TOOLS } from './schema.js';
+import { teamsAddDirProblem, teamsCwdProblem } from './teamwork-trust.js';
 import type { AskAnswers, AskQuestion, EffortLevel, SessionTokens } from './api-types.js';
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk' | 'plan' | 'auto';
@@ -330,9 +331,16 @@ async function probeWindow(usage: () => Promise<{ rawMaxTokens: number }>, t: To
 
 export async function runSession(req: SessionRequest, log: LogFn, deps: SessionDeps = { query }): Promise<SessionResult> {
   const preface: Preface = { text: '', open: false };
-  const options = sessionOptions(req, preface);
   const started = Date.now();
   const result: SessionResult = { ok: false, subtype: 'no_result', text: '', costUsd: 0, turns: 0, durationMs: 0, errors: [] };
+  let options: Options;
+  try {
+    options = sessionOptions(req, preface);
+  } catch (err) {
+    // отказ до старта (рабочая папка в клоне репо команды) — неудачная сессия с причиной, а не исключение раннеру
+    result.errors.push(err instanceof Error ? err.message : String(err));
+    return result;
+  }
   const tally = newTally();
   let counted = false;
   let done = false;
@@ -381,6 +389,16 @@ export function claudeExecutable(): Pick<Options, 'pathToClaudeCodeExecutable'> 
 
 /** Опции Agent SDK для сессии: инструменты, разрешения, env, вопросы пользователю (preface — текст агента перед ними). */
 export function sessionOptions(req: SessionRequest, preface?: Preface): Options {
+  // последняя линия (spec §14): клон репо команды не бывает рабочей папкой сессии — его .claude/settings.json грузится как
+  // настройки проекта (хуки), а пишут его участники команды. Маршруты отвечают на это 400 раньше
+  const cwdProblem = teamsCwdProblem(req.cwd);
+  if (cwdProblem) throw new Error(cwdProblem);
+  // доп. папки собираются заново на каждый этап: папка проекта из клона, куда pull посреди запуска принёс .claude/
+  // (скиллы, сабагенты, плагины участников), не уходит и следующей сессии
+  for (const d of req.additionalDirectories ?? []) {
+    const conf = teamsAddDirProblem(d);
+    if (conf) throw new Error(conf);
+  }
   const options: Options = {
     ...claudeExecutable(),
     cwd: req.cwd,

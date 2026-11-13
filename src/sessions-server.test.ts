@@ -420,6 +420,22 @@ test('сессия в папке пространства: запись в пр�
   assert.equal(spaceWriteGuard(path.join(root, 'proj'), 'Write', { file_path: path.join(spaceDir('wg-gamma'), 'CLAUDE.md') }), undefined);
 });
 
+test('хук записи закрывает папку команд Teamwork в любом регистре и по относительному пути (S-13); чтение и свой проект — не его дело', () => {
+  // claude зовёт этот хук у сессии в папке пространства; сама проверка от рабочей папки не зависит
+  const teams = path.join(root, 'cfg', 'teams');
+  const inSpace = spaceDir('wg-alpha');
+  const proj = path.join(root, 'proj');
+  for (const cwd of [inSpace, proj]) {
+    for (const p of [path.join(teams, 'pay', 'repo', 'flows', 'teamwork-prd.yaml'), path.join(root, 'cfg', 'TEAMS', 'pay', 'trust.json'), path.join(root, 'CFG', 'Teams', 'pay', 'local.json')]) {
+      assert.match(spaceWriteGuard(cwd, 'Edit', { file_path: p }) ?? '', /папке команд Teamwork/, `${cwd}: ${p}`);
+    }
+    assert.equal(spaceWriteGuard(cwd, 'Read', { file_path: path.join(teams, 'pay', 'repo', 'projects', 'p', 'prd.md') }), undefined);
+  }
+  assert.equal(spaceWriteGuard(proj, 'Write', { file_path: path.join(proj, 'src', 'a.ts') }), undefined);
+  // относительный путь — от рабочей папки claude в момент вызова
+  assert.match(spaceWriteGuard(proj, 'Write', { file_path: '../cfg/Teams/pay/repo/x.md' }, proj) ?? '', /папке команд Teamwork/);
+});
+
 test('ошибки создания: нет папки, лишний режим, тег задачи и несуществующий тег, старые поля — 400, на диске ничего не остаётся', async () => {
   const before = spawned.length;
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'нет') })).status, 400);
@@ -434,6 +450,14 @@ test('ошибки создания: нет папки, лишний режим,
   assert.deepEqual([task.status, /выбери пространство zz-task/.test(task.body.error)], [400, true]);
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'proj'), saveTag: true })).status, 400);
   assert.equal((await call('POST', '/api/sessions', { cwd: path.join(root, 'proj'), space: '../x' })).status, 400);
+  // клон репо команды — не рабочая папка claude: его .claude/settings.json пишут участники команды (S-2)
+  const clone = path.join(root, 'cfg', 'teams', 'pay', 'repo', 'projects', 'p');
+  fs.mkdirSync(clone, { recursive: true });
+  // путь в другом регистре — только на томе, который регистр не различает (APFS): на другом такой папки нет
+  for (const cwd of [clone, path.join(root, 'cfg', 'TEAMS', 'pay', 'repo')].filter((d) => fs.existsSync(d))) {
+    const inTeams = await call<{ error: string }>('POST', '/api/sessions', { cwd });
+    assert.deepEqual([inTeams.status, /папки команд Teamwork/.test(inTeams.body.error)], [400, true], cwd);
+  }
   assert.equal(spawned.length, before);
 });
 
