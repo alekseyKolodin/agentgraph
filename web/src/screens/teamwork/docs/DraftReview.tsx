@@ -146,11 +146,13 @@ function Review({ team, project, name, detail, onClose, onRetry }: { team: TeamD
       toast(t('Записано: {n} {w}', { n: pending.length, w: plural(pending.length, 'правка', 'правки', 'правок') }));
       if (!left) onClose();
     } catch (e) {
+      // conflict — документ успели изменить; running — запуск черновика ещё идёт; остальное (busy, repo_state, readonly —
+      // клон команды занят или в состоянии, которое agentgraph не трогает) — текстом сервера: он говорит, что сделать
       if (e instanceof ApiError && e.status === 409 && e.code === 'conflict') {
         setNotice(t('Документ успели изменить, пока вы решали. Правки пересчитаны на свежую версию: проверьте конфликты и запишите ещё раз.'));
         setShowTheirs(true);
         await qc.invalidateQueries({ queryKey: draftKeys.one(team.slug, project.slug, run) });
-      } else if (e instanceof ApiError && e.status === 409 && e.code === 'busy') setNotice(t('Черновик ещё идёт: дождитесь конца запуска.'));
+      } else if (e instanceof ApiError && e.status === 409 && e.code === 'running') setNotice(t('Черновик ещё идёт: дождитесь конца запуска.'));
       else setNotice(errorText(e));
     } finally {
       setBusy(false);

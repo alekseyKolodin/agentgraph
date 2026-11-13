@@ -383,3 +383,24 @@ test('D-16: stop не ждёт зависший опрос PR дольше ср�
   assert.ok(Date.now() - started < 1_000);
   assert.equal(calls, 1);
 });
+
+test('D-14: вторая сессия по задаче записывается в work сразу, не дожидаясь, пока допишется старт первой', async () => {
+  const f = fake({ export: [task()] }, { me: 'alex@example.com' });
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const update = f.svc.updateTask;
+  // старт первой сессии ждёт очередь клона (сетевой pull)
+  f.svc.updateTask = async (...a) => {
+    await gate;
+    return update(...a);
+  };
+  const st = new TeamworkStatus({ service: f.svc, timers: false, log: () => {} });
+  const link = { team: 'team', project: 'export', task: 'PAY-1' };
+  const first = st.started(link, { kind: 'session', id: 's-1', status: 'running' });
+  const second = st.started(link, { kind: 'session', id: 's-2', status: 'running' });
+  // инструменты второй сессии ищут задачу по work — запись уже есть
+  assert.deepEqual(f.work['PAY-1']?.map((w) => w.id), ['s-1', 's-2']);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(f.tasks.export[0].status, 'in_progress');
+});

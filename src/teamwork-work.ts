@@ -238,9 +238,13 @@ const SESSION_DOC_RE = /^(architecture|design|docs\/[^/]+\.md)$/;
  * заново», а не перезапись чужих правок.
  */
 export function sessionTeamwork(service: TeamService, status: TeamworkStatus): SessionTeamwork {
-  const taskOf = (link: RunTeamworkLink): string => {
-    if (!link.task) throw new Error('Сессия не привязана к задаче Teamwork');
-    return link.task;
+  /** Номер задачи сессии сейчас: у какой задачи в local.json → work записана эта сессия; нет записи — undefined. */
+  const taskNow = (link: RunTeamworkLink, session: string): string | undefined => {
+    try {
+      return service.workTask(link.team, { kind: 'session', id: session });
+    } catch {
+      return undefined;
+    }
   };
   /** Коммит клона команды на старте сессии (id сессии → HEAD). */
   const heads = new Map<string, string>();
@@ -271,16 +275,27 @@ export function sessionTeamwork(service: TeamService, status: TeamworkStatus): S
       if (work.kind === 'session') forget(work.id);
       return status.ended(link, work);
     },
-    label: (link) => {
+    label: (link, session) => {
+      // номер сейчас, а не со старта; записи нет — номер без заголовка: со старым номером может быть уже чужая задача
+      const id = link.task ? taskNow(link, session) : undefined;
       try {
-        const t = link.task ? service.task(link.team, link.project, link.task) : undefined;
-        return t ? `${t.id} «${t.title}» (${link.team}/${link.project})` : `${link.team}/${link.project}`;
+        const t = id ? service.task(link.team, link.project, id) : undefined;
+        return t ? `${t.id} «${t.title}» (${link.team}/${link.project})` : `${link.task ?? ''} (${link.team}/${link.project})`.trim();
       } catch {
-        return `${link.task ?? ''} (${link.team}/${link.project})`.trim();
+        return `${id ?? link.task ?? ''} (${link.team}/${link.project})`.trim();
       }
     },
-    updateTask: async (link, args: TeamTaskUpdateArgs) => {
-      const id = taskOf(link);
+    /**
+     * Задача — та, у которой записана эта сессия, а не номер со старта: мою неотправленную задачу синхронизация могла
+     * переименовать из-за совпавшего номера (spec §5.7), старый номер теперь у чужой задачи, а работа переехала на новый
+     * (D-14, как конец запуска в TeamworkStatus.ended). Номер ищет сервис внутри очереди записей клона (work), так что
+     * синхронизация, идущая в момент вызова, не уведёт запись в чужую задачу. Записи нет нигде — задачу удалили или старт
+     * не записался: 404, а не запись наугад.
+     */
+    updateTask: async (link, args: TeamTaskUpdateArgs, session) => {
+      if (!link.task) throw new Error('Сессия не привязана к задаче Teamwork');
+      const work = { kind: 'session' as const, id: session };
+      let id = link.task;
       const patch: TeamTaskPatch = {};
       if (args.status !== undefined) {
         if (!TASK_STATUSES.includes(args.status)) throw new Error(`status: ${TASK_STATUSES.join(' | ')}`);
@@ -293,19 +308,23 @@ export function sessionTeamwork(service: TeamService, status: TeamworkStatus): S
       if (!Object.keys(patch).length && !args.comment) throw new Error('Нечего менять: укажи status, pr или comment');
       const done: string[] = [];
       if (Object.keys(patch).length) {
-        const t = await service.updateTask(link.team, link.project, id, patch);
+        const t = await service.updateTask(link.team, link.project, link.task, patch, { work });
+        id = t.id;
         const columns = service.repo(link.team).config().columns;
         if (patch.status) done.push(`статус → ${columns[t.status]}`);
         if (patch.pr) done.push(`PR → ${patch.pr.url}`);
       }
       if (args.comment) {
-        await service.addComment(link.team, link.project, id, args.comment);
+        await service.addComment(link.team, link.project, link.task, args.comment, { work });
+        id = taskNow(link, session) ?? id;
         done.push('комментарий добавлен');
       }
       return `Задача ${id}: ${done.join(', ')}. Записано коммитом в репо команды и уйдёт участникам.`;
     },
     writeDoc: async (link, name, text, session) => {
-      taskOf(link);
+      if (!link.task) throw new Error('Сессия не привязана к задаче Teamwork');
+      // документ — проекта, номер задачи нужен только для сообщения коммита: сейчас, а не со старта (D-14)
+      const task = taskNow(link, session) ?? link.task;
       if (!SESSION_DOC_RE.test(name) || !docFile(name)) throw new Error('name: architecture, design или docs/<имя>.md — ТЗ из сессии не пишется');
       if (Buffer.byteLength(text) > SPACE_DOC_TEXT_MAX) throw new Error(`Текст больше ${SPACE_DOC_TEXT_MAX / 1024} КБ`);
       const repo = service.repo(link.team);
@@ -335,7 +354,7 @@ export function sessionTeamwork(service: TeamService, status: TeamworkStatus): S
       if (was !== now) reread(now, was !== 'unknown');
       try {
         // base — хэш файла как есть: так его сверяет writeDoc внутри очереди
-        await service.writeDoc(link.team, link.project, name, text, { ...(current !== undefined ? { base: textHash(current) } : {}), message: `${link.project}: ${docLabel(name)} — из сессии по задаче ${link.task}` });
+        await service.writeDoc(link.team, link.project, name, text, { ...(current !== undefined ? { base: textHash(current) } : {}), message: `${link.project}: ${docLabel(name)} — из сессии по задаче ${task}` });
       } catch (err) {
         // документ поменялся между сверкой и записью в очереди репо (pull, правка в UI)
         if (err instanceof TeamError && err.code === 'conflict') reread(hashOf(repo.read(rel)));

@@ -101,10 +101,12 @@ export const teamwork: Record<string, string> = {
   'Flow для «В работу»': 'Flow for “Start work”',
   '— не выбран —': '— none —',
   'Клон на этом компьютере': 'Clone on this computer',
-  'Отключить команду — удалить её локальный клон. Репо команды останется, подключиться снова можно по ссылке. Если есть неотправленные изменения, agentgraph спросит ещё раз.': 'Disconnecting deletes the team’s local clone. The team repo stays, and you can join again by its URL. If there are unpushed changes, agentgraph asks again.',
+  'Отключить команду — удалить её локальный клон. Репо команды останется, подключиться снова можно по ссылке. Если есть неотправленные изменения или нерешённые конфликты, agentgraph спросит ещё раз.': 'Disconnecting deletes the team’s local clone. The team repo stays, and you can join again by its URL. If there are unpushed changes or unresolved conflicts, agentgraph asks again.',
   'Отключить команду…': 'Disconnect team…',
   'Отключить команду «{title}»? Локальный клон удалится; репо команды и всё, что в нём, останутся. Подключиться снова можно по ссылке.': 'Disconnect team “{title}”? The local clone is deleted; the team repo and everything in it stay. You can join again by its URL.',
-  'Не отправлено изменений: {n}. Они пропадут вместе с клоном.\n{list}\nВсё равно отключить?': 'Unpushed changes: {n}. They are lost with the clone.\n{list}\nDisconnect anyway?',
+  'Не отправлено изменений: {n}.': 'Unpushed changes: {n}.',
+  'Нерешённых конфликтов: {n} — ваши версии из них есть только в этом клоне.': 'Unresolved conflicts: {n} — your versions in them exist only in this clone.',
+  'Это пропадёт вместе с клоном. Всё равно отключить?': 'This is lost with the clone. Disconnect anyway?',
   'Отключить и потерять изменения': 'Disconnect and lose the changes',
   // --- строка синхронизации и конфликты
   'Синхронизировать сейчас: получить изменения команды и отправить свои': 'Sync now: pull the team’s changes and push yours',
@@ -282,6 +284,7 @@ export const teamwork: Record<string, string> = {
   'только чтение: формат новее этой версии agentgraph': 'read-only: the format is newer than this version of agentgraph',
   'Обновить agentgraph': 'Update agentgraph',
   'синхронизировано': 'synced',
+  'не синхронизировано': 'not synced',
   'раздел|разделы|разделы': 'section|sections',
   'не сохранено: {word} {list}': 'not saved: {word} {list}',
   // --- finish (волна 4): «Мои задачи» на главной, запуск по задаче на главной и странице запуска, подписи черновиков
@@ -756,4 +759,7 @@ export const teamwork: Record<string, string> = {
   'Этот flow нельзя запускать как flow команды:': 'This flow cannot run as a team flow:',
   'Эту версию на этом компьютере не одобряли: запуск попросит её подтвердить.': 'This version is not trusted on this computer yet: running it will ask you to confirm.',
   'Посмотреть изменения…': 'Review changes…',
+  // .claude из репо команды в папке проекта (spec §14)
+  'Не применяется из репо команды': 'Not applied from the team repo',
+  'В папке проекта есть {list}. agentgraph не выгружает это в клон: скиллы, сабагенты и плагины из репо команды агентам не достаются — их пишут участники мимо доверия к flow. Правила проекта для агентов задают в CLAUDE.md.': 'The project folder has {list}. agentgraph does not check this out into the clone: agents don’t get skills, subagents or plugins from the team repo — members write them outside flow trust. Project rules for agents go into CLAUDE.md.',
 };

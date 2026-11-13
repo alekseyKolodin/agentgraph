@@ -157,6 +157,40 @@ test('flow шаблона доверены сразу после создани�
   assert.equal(untrustedFlow({ teamDir: fresh, templateDir: newer, team: T, name: 'teamwork-prd', yaml, spec: parseFlow(yaml) })?.base?.kind, 'template');
 });
 
+test('flow шаблона запоминаются одобренными уже при создании и подключении команды, до первого чтения: после обновления agentgraph с новым шаблоном нетронутый flow не спрашивает доверия', async () => {
+  const bare2 = path.join(tmp, 'team2.git');
+  git(tmp, 'init', '-q', '--bare', '-b', 'main', bare2);
+  const carol = actor('carol', 'carol@example.com');
+  const dave = actor('dave', 'dave@example.com');
+  const pinned = (svc: TeamService, team: string) => JSON.parse(fs.readFileSync(path.join(svc.repo(team).dir, TRUST_FILE), 'utf8')).flows as Record<string, { via: string; sha256: string }>;
+  try {
+    const created = await carol.createTeam({ url: bare2, title: 'Вторая', prefix: 'TWO' });
+    const joined = await dave.joinTeam({ url: bare2 });
+    const names = fs.readdirSync(path.join(TEMPLATE_DIR, 'flows')).map((f) => f.replace(/\.yaml$/, '')).sort();
+    // ни один flow ещё не открывали — а в trust.json уже все шаблонные, с хэшем шаблона
+    for (const [svc, team] of [[carol, created.slug], [dave, joined.slug]] as const) {
+      const flows = pinned(svc, team);
+      assert.deepEqual(Object.keys(flows).sort(), names);
+      for (const n of names) assert.deepEqual([flows[n].via, flows[n].sha256], ['template', flowHash(template(n))]);
+    }
+    // agentgraph обновился, шаблон teamwork-prd стал другим: у dave нетронутый flow команды — запуск без вопроса
+    const newer = path.join(tmp, 'newer-template-2');
+    fs.mkdirSync(path.join(newer, 'flows'), { recursive: true });
+    for (const n of names) fs.writeFileSync(path.join(newer, 'flows', `${n}.yaml`), n === 'teamwork-prd' ? template(n).replace('max_budget_usd: 2', 'max_budget_usd: 3') : template(n));
+    assert.notEqual(flowHash(fs.readFileSync(path.join(newer, 'flows', 'teamwork-prd.yaml'), 'utf8')), flowHash(template('teamwork-prd')));
+    const updated = new TeamService({ root: () => path.join(tmp, 'dave', 'teams'), timers: false, repo: { ...defaultRepoDeps(), tmpDir: tmp, templateDir: newer } });
+    try {
+      assert.equal(updated.readTeamFlow(joined.slug, 'teamwork-prd').spec.name, 'teamwork-prd');
+      assert.equal(updated.teamFlow(joined.slug, 'teamwork-prd').trust, undefined);
+    } finally {
+      await updated.stop();
+    }
+  } finally {
+    await carol.stop();
+    await dave.stop();
+  }
+});
+
 test('невидимые и управляющие символы во flow команды — нельзя: bidi, zero-width, одинокий CR; CRLF, табуляция и BOM в начале — можно', () => {
   const y = template('teamwork-split');
   assert.deepEqual(teamFlowTextProblems(y), []);

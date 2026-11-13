@@ -70,9 +70,10 @@
 .tab .mark { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--live); margin-left: 6px; vertical-align: middle; }
 
 /* --- строка синхронизации: клик по тексту синхронизирует сейчас, кнопка — действие состояния */
-.sync { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); flex-wrap: wrap; }
+.sync { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
 /* текст строки — кнопка «синхронизировать сейчас»: без рамки, но с отступами и подсветкой, как .btn.ghost.small */
-.sync-text { border: 0; background: transparent; color: inherit; font: inherit; padding: 3px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-sm); }
+/* причина сбоя — текст сервера с подсказкой и путём: длинная строка переносится от левого края, путь — где угодно */
+.sync-text { border: 0; background: transparent; color: inherit; font: inherit; padding: 3px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: var(--r-sm); text-align: left; overflow-wrap: anywhere; }
 .sync-text:hover:not([disabled]) { color: var(--ink); background: var(--hover); }
 .sync-text[disabled] { cursor: default; color: inherit; }
 .sync-link { font-family: var(--font-sans); color: var(--live); }

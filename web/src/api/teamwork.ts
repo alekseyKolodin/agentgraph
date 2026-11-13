@@ -1,7 +1,8 @@
 // Запросы Teamwork (/api/teams*, spec §12, отчёт волны 1 docs/teamwork/notes/wave1-core.md): команды, проекты, документы,
 // задачи, спринты, комментарии, история, конфликты, локальные настройки и flow команды. Все ключи React Query лежат под
 // ['teams']: событие `team` общего потока (useHomeEvents) сбрасывает их разом — в клоне команды что-то поменялось.
-// Ошибки — ApiError со status и code (409: not_empty, is_team, conflict, unpushed, busy, readonly).
+// Ошибки — ApiError со status и code (409: not_empty, is_team, conflict, unpushed, busy, readonly, repo_state, rewritten,
+// running). conflict — только «успели изменить» (с data.current); остальное показывается текстом сервера.
 import { useQuery } from '@tanstack/react-query';
 import type {
   TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocName, TeamFlow, TeamHistoryItem, TeamLocal, TeamMember, TeamMine, TeamProject, TeamProjectBrief,
@@ -49,7 +50,12 @@ export const createTeam = (body: { url: string; title: string; prefix: string })
 export const joinTeam = (body: { url: string; addMe?: boolean }) => api<TeamDetail>('POST', '/api/teams/join', body);
 export type TeamPatch = { title?: string; columns?: Partial<TeamColumns>; members?: TeamMember[]; defaultFlow?: string | null };
 export const updateTeam = (team: string, patch: TeamPatch) => api<TeamDetail>('PUT', base(team), patch);
-/** Отключить команду (удалить клон). Без force при неотправленных коммитах — 409 unpushed с { unpushed, commits } в data. */
+/** «Добавить меня»: я по git config клона — в участники отдельным коммитом; список не перезаписывается, уже участник — без коммита. */
+export const addTeamMe = (team: string) => api<TeamDetail>('POST', `${base(team)}/members/me`);
+/**
+ * Отключить команду (удалить клон). Без force при неотправленных коммитах или нерешённых конфликтах с моей версией — 409
+ * unpushed с { unpushed, commits, conflicts } в data.
+ */
 export const removeTeam = (team: string, force = false) => api<{ ok: true }>('DELETE', `${base(team)}${force ? '?force=true' : ''}`);
 /** Синхронизировать сейчас: pull и push; ошибка сети — в поле error ответа, не исключением. */
 export const syncTeam = (team: string) => api<TeamSync>('POST', `${base(team)}/sync`);

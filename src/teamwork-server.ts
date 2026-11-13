@@ -1,6 +1,6 @@
 // Teamwork: сервис команды и маршруты /api/teams (spec §12), по образцу integrationsRoute. Сервис читает клоны через
 // TeamRepo и пишет через его очередь (коммит на запись); ответы — типы Teamwork из src/api-types.ts; ошибки — { error } с
-// 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly). Конфликты синхронизации (spec §7.4) —
+// 400, 404, 409 (code: not_empty, is_team, conflict, unpushed, busy, readonly, repo_state, rewritten, running). Конфликты синхронизации (spec §7.4) —
 // GET …/conflicts, DELETE …/conflicts/:id («оставить версию команды»), POST …/conflicts/:id/mine («взять мою»: поле, текст
 // или удалённый файл одним коммитом; «править вручную» — обычный PUT/PATCH). Черновики агентов (…/drafts*) — объект
 // TeamDrafts из teamwork-drafts.ts в deps маршрута; текст задачи для запуска (…/intake) и worktree задачи (…/worktree)
@@ -15,8 +15,8 @@ import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
 import type { TeamDrafts } from './teamwork-drafts.js';
 import { PROJECT_DOC_FILES, PROJECT_TEMPLATE_DIR, projectDocs, renderDoc, TEMPLATE_DIR } from './teamwork-template.js';
-import { flowHash, teamFlowProblems, teamFlowTextProblems, trustFlow, untrustedFlow } from './teamwork-trust.js';
-import { checkRemote, COMMENT_FILE_RE, CONFLICT_REF, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
+import { flowHash, pinTemplateFlows, teamFlowProblems, teamFlowTextProblems, trustFlow, untrustedFlow } from './teamwork-trust.js';
+import { addMember, checkRemote, COMMENT_FILE_RE, isProjectClaude, CONFLICT_REF, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import {
   commentFileName, composeTask, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextTaskId, parseComment,
   parseProject, parseRequirements, parseSprint, parseTask, PROJECT_STATUSES, rankNear, remoteProblem, replaceSection, shareableUrl, requirementMax, sectionHash, serializeComment,
@@ -67,7 +67,11 @@ export type NewTask = {
 };
 
 export type WriteDocOptions = { base?: string; section?: string; hash?: string; message?: string };
-export type TaskWriteOptions = { message?: string; author?: { name: string; email: string } };
+/**
+ * work — задача та, у которой в local.json → work записан этот запуск или сессия, а не номер из аргумента (D-14): номер ищется
+ * внутри очереди записей клона, после синхронизации, которая могла переименовать задачу. Записи нет — 404.
+ */
+export type TaskWriteOptions = { message?: string; author?: { name: string; email: string }; work?: Pick<TeamTaskWork, 'kind' | 'id'> };
 export type NewSprint = { title?: string; goal?: string; start?: boolean; tasks?: string[] };
 export type CloseSprint = { next?: string[]; backlog?: string[] };
 export type TeamFlow = TeamFlowOf<FlowSpec>;
@@ -206,8 +210,17 @@ export class TeamService {
     return this.adopt(repo);
   }
 
+  /**
+   * Клон — в работу сервиса. Flow команды, совпадающие с шаблоном agentgraph, сразу запоминаются одобренными (spec §14):
+   * при создании и подключении команды и при первом открытии клона процессом — так новая версия шаблона после
+   * обновления agentgraph не делает «чужим» нетронутый flow, который до обновления ни разу не открывали. Клон без правил
+   * sparse-checkout (сделан до этой версии) переводится на них в очереди.
+   */
   private adopt(repo: TeamRepo): TeamRepo {
     this.repos.set(repo.slug, repo);
+    this.pinTemplates(repo);
+    // клон до этой версии: .claude из папок проектов убирается сразу, а не при первой записи или опросе (spec §14)
+    if (repo.needsSparse()) void repo.prepareSparse().catch(() => undefined);
     repo.onChange((e) => this.emit(e));
     if (this.deps.timers !== false && !this.stopped) repo.startTimers(this.deps.hasSubscribers ?? (() => false));
     return repo;
@@ -215,6 +228,19 @@ export class TeamService {
 
   private forget(slug: string): void {
     this.repos.delete(slug);
+  }
+
+  /** Flow команды, совпадающие с шаблоном agentgraph, — в trust.json (via template); сбой чтения или записи — не повод не открыть клон. */
+  private pinTemplates(repo: TeamRepo): void {
+    try {
+      const flows = this.flowNames(repo).flatMap((name) => {
+        const yaml = repo.read(this.flowFile(repo, name));
+        return yaml === undefined ? [] : [{ name, yaml }];
+      });
+      pinTemplateFlows(repo.dir, flows, this.repoDeps.templateDir, this.repoDeps.now());
+    } catch {
+      // не запомнилось — flow шаблона одобрен и так, пока шаблон тот же (untrustedFlow)
+    }
   }
 
   // ---------- команды (spec §8.1–8.2, §12)
@@ -319,6 +345,20 @@ export class TeamService {
   async joinTeam(body: { url: string; addMe?: boolean }): Promise<TeamDetail> {
     const { repo } = await joinTeam(body, this.repoDeps, this.root());
     return this.detail(this.adopt(repo));
+  }
+
+  /**
+   * «Добавить меня» (POST /api/teams/:t/members/me): я по git config клона — в участники отдельным коммитом, как при
+   * подключении. Список не перезаписывается: участник, которого добавил или поправил коллега после того, как экран
+   * прочитал список, остаётся. Уже участник — ничего не пишется, ответ тот же.
+   */
+  async addMe(slug: string): Promise<TeamDetail> {
+    const repo = this.repo(slug);
+    const me = await repo.requireIdentity();
+    await repo.write(`Участник добавлен: ${me.name}`, (r) => {
+      addMember(r, me);
+    });
+    return this.detail(repo);
   }
 
   async removeTeam(slug: string, force: boolean): Promise<void> {
@@ -529,6 +569,8 @@ export class TeamService {
     if (!c) throw new TeamError(404, 'Такого конфликта нет: он уже решён');
     if (how === 'mine') {
       if (c.kind === 'sprint' && !c.field) bad('Для двух активных спринтов «взять моё» нет: перенеси задачи в активный спринт');
+      // такой конфликт бывает только у клона старой версии; запись мимо правил sparse-checkout не закоммитится (spec §14)
+      if (isProjectClaude(c.file)) bad(`${c.file} — в .claude папки проекта: agentgraph такие файлы в клон не выгружает и не пишет. Оставь версию команды или поправь репо команды обычным git`);
       const label = c.task ?? c.doc ?? c.file;
       await repo.write(`${label}: взято моё${c.field ? ` (${c.field})` : ''}`, async (r) => {
         const comment = c.file.match(COMMENT_FILE_RE);
@@ -652,6 +694,7 @@ export class TeamService {
       repos.push({ key: r.key, url: r.url, ...(r.defaultBranch ? { defaultBranch: r.defaultBranch } : {}), ...(found ? { local: found } : {}) });
     }
     const space = local.projectSpaces[cfg.slug];
+    const claude = await repo.projectClaude(cfg.slug);
     return {
       slug: cfg.slug,
       title: cfg.title,
@@ -665,6 +708,7 @@ export class TeamService {
       base: textHash(repo.read(`projects/${cfg.slug}/project.yaml`) ?? ''),
       docs: await this.docBriefs(repo, cfg.slug),
       sprints: this.readSprints(repo, cfg.slug).map(sprintView),
+      ...(claude.length ? { claudeSkipped: claude } : {}),
     };
   }
 
@@ -1053,14 +1097,16 @@ export class TeamService {
     return this.changeTask(team, slug, id, patch, { before: move.before, after: move.after }, o);
   }
 
-  private async changeTask(team: string, slug: string, id: string, patch: TeamTaskPatch, place: { before?: string; after?: string }, o: TaskWriteOptions): Promise<TeamTask> {
+  private async changeTask(team: string, slug: string, taskId: string, patch: TeamTaskPatch, place: { before?: string; after?: string }, o: TaskWriteOptions): Promise<TeamTask> {
     const repo = this.repo(team);
     const project = this.readProjectConfig(repo, slug);
     if (!isRecord(patch)) bad('Тело запроса — объект');
     const columns = repo.config().columns;
     const me = await repo.identity();
     let message = o.message?.trim() || '';
+    let id = taskId;
     await repo.write(() => message, (r) => {
+      if (o.work) id = this.taskOfWork(team, taskId, o.work);
       const all = this.readTasks(r, slug);
       const cur = all.find((t) => t.id === id);
       if (!cur) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
@@ -1199,6 +1245,22 @@ export class TeamService {
     }
   }
 
+  /**
+   * Номер задачи, у которой в local.json → work записан этот запуск или сессия. Запуск и сессия помнят номер со старта, а
+   * после переименования совпавшего номера (spec §5.7) работа переезжает на новый (D-14). Нет записи — undefined.
+   */
+  workTask(team: string, work: Pick<TeamTaskWork, 'kind' | 'id'>): string | undefined {
+    const all = this.repo(team).local().work;
+    return Object.keys(all).find((id) => all[id].some((w) => w.kind === work.kind && w.id === work.id));
+  }
+
+  /** Номер задачи по записи работы — внутри очереди записей (TaskWriteOptions.work); записи нет — 404 с понятной причиной. */
+  private taskOfWork(team: string, id: string, work: Pick<TeamTaskWork, 'kind' | 'id'>): string {
+    const found = this.workTask(team, work);
+    if (!found) throw new TeamError(404, `Задачи ${id} больше нет среди работы ${work.kind === 'session' ? 'этой сессии' : 'этого запуска'}: её удалили, или старт не записался. Измени задачу в agentgraph руками`);
+    return found;
+  }
+
   /** Запуск или сессия по задаче на этом компьютере — в local.json → work (spec §6); тот же kind и id — обновляется. */
   recordWork(team: string, taskId: string, work: TeamTaskWork): void {
     const repo = this.repo(team);
@@ -1228,15 +1290,21 @@ export class TeamService {
       .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   }
 
-  async addComment(team: string, slug: string, id: string, text: unknown): Promise<TeamComment> {
+  /** Комментарий к задаче; o.work — задача по записи работы, номер ищется внутри очереди (D-14). */
+  async addComment(team: string, slug: string, taskId: string, text: unknown, o: Pick<TaskWriteOptions, 'work'> = {}): Promise<TeamComment> {
     const repo = this.repo(team);
     this.readProjectConfig(repo, slug);
-    this.readTask(repo, slug, this.taskId(id));
+    if (!o.work) this.readTask(repo, slug, this.taskId(taskId));
     const body = reqStr(text, 'text', 'Комментарий пустой');
     const me = await repo.requireIdentity();
     const at = this.repoDeps.now().toISOString();
     let file = commentFileName(at, me.email);
-    await repo.write(`${id}: комментарий`, (r) => {
+    let id = taskId;
+    await repo.write(() => `${id}: комментарий`, (r) => {
+      if (o.work) {
+        id = this.taskOfWork(team, taskId, o.work);
+        if (!r.exists(`projects/${slug}/tasks/${id}.md`)) throw new TeamError(404, `Задачи ${id} нет в проекте ${slug}`);
+      }
       const dir = `projects/${slug}/comments/${id}`;
       for (let i = 2; r.exists(`${dir}/${file}`); i++) file = commentFileName(at, me.email).replace(/\.md$/, `-${i}.md`);
       r.writeFile(`${dir}/${file}`, serializeComment({ author: me.email, name: me.name, at, text: body, extra: {} }));
@@ -1570,6 +1638,7 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
       }
     }
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/sync$/)) && method === 'POST') return ok(await svc.sync(seg(m[1])));
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/members\/me$/)) && method === 'POST') return ok(await svc.addMe(seg(m[1])));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts$/)) && method === 'GET') return ok(svc.conflicts(seg(m[1])));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)$/)) && method === 'DELETE') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'theirs'));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/conflicts\/([a-f0-9]+)\/mine$/)) && method === 'POST') return ok(await svc.resolveConflict(seg(m[1]), m[2], 'mine'));

@@ -37,6 +37,7 @@ export function OverviewTab({ team, project, tasks }: { team: TeamDetail; projec
         <SprintBlock team={team} project={project} tasks={tasks} />
         <AgentsBlock tasks={tasks} />
         <DocsBlock team={team} project={project} />
+        <SkippedClaude project={project} />
       </div>
       <div className={styles.colR}>
         {/* key: черновик нового репо не переезжает в другой проект при переходе без перемонтирования */}
@@ -122,6 +123,20 @@ function AgentsBlock({ tasks }: { tasks: readonly TeamTask[] }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+/** .claude из репо команды в папке проекта (spec §14): в репо есть, в клон не выгружается, агентам не применяется. */
+function SkippedClaude({ project }: { project: TeamProject }) {
+  const list = project.claudeSkipped ?? [];
+  if (!list.length) return null;
+  return (
+    <section aria-label={t('Не применяется из репо команды')}>
+      <h2 className={styles.cap}>{t('Не применяется из репо команды')}</h2>
+      <p className="msg warn">
+        {t('В папке проекта есть {list}. agentgraph не выгружает это в клон: скиллы, сабагенты и плагины из репо команды агентам не достаются — их пишут участники мимо доверия к flow. Правила проекта для агентов задают в CLAUDE.md.', { list: list.join(', ') })}
+      </p>
     </section>
   );
 }
