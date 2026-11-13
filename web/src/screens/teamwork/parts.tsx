@@ -35,11 +35,15 @@ export function People({ members, max = 6 }: { members: readonly TeamMember[]; m
  * Полоса спринта: по ячейке на задачу в порядке готово → ревью → в работе → к работе (STRIP_ORDER). counts — из
  * TeamProjectBrief.sprint.counts или sprintStrip(tasks).counts; big — крупные ячейки обзора проекта.
  */
+/** Класс ячейки полосы по статусу. CSS Modules с camelCaseOnly отдают .in_progress только как inProgress: styles[status]
+ *  терял «в работе», и на полосе вместо этих задач была пустота. */
+export const stripCell = (s: TeamTaskStatus): string | undefined => styles[s === 'in_progress' ? 'inProgress' : s];
+
 export function SprintStrip({ counts, label, big }: { counts: Record<TeamTaskStatus, number>; label: string; big?: boolean }) {
   const cells = STRIP_ORDER.flatMap((s) => Array<TeamTaskStatus>(counts[s] ?? 0).fill(s));
   return (
     <span className={cx(styles.strip, big && styles.big)} role="img" aria-label={label} title={label}>
-      {cells.map((s, i) => <span key={i} className={cx(styles.st, styles[s])} />)}
+      {cells.map((s, i) => <span key={i} className={cx(styles.st, stripCell(s))} />)}
     </span>
   );
 }

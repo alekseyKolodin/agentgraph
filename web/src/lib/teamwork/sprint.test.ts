@@ -41,6 +41,6 @@ test('спринт: история закрытых — свежие сверх�
   ];
   assert.deepEqual(closedSprints(list).map((s) => s.number), [2, 1]);
   assert.equal(sprintResultText(list[0]!), 'готово 2 из 3 · перенесено 1');
-  assert.equal(sprintResultText(list[1]!), 'готово 1 из 2 · в бэклог 1');
+  assert.equal(sprintResultText(list[1]!), 'готово 1 из 2 · вернулось в бэклог 1');
   assert.equal(sprintResultText(list[2]!), '');
 });

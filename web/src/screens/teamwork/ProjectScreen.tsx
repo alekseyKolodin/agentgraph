@@ -51,7 +51,7 @@ export function ProjectScreen() {
     setSearch(next, { replace: true });
   };
 
-  if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Сервер не умеет Teamwork: обновите agentgraph.')}</p></div>;
+  if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Этот сервер не поддерживает Teamwork: обновите agentgraph.')}</p></div>;
   const err = teamQ.error ?? projQ.error;
   if (err) {
     const gone = err instanceof ApiError && err.status === 404;

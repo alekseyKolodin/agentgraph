@@ -38,7 +38,8 @@ export function syncLine(sync: TeamSync, o: { conflicts?: readonly TeamConflict[
       return { text: sync.unpushed ? `${t('отправляется')} · ${changesWord(sync.unpushed)}` : t('отправляется…'), tone: 'live' };
     case 'pending': {
       const head = sync.unpushed ? t('не отправлено: {changes}', { changes: changesWord(sync.unpushed) }) : t('не отправлено');
-      return { text: sync.error ? `${head} — ${sync.error}` : head, tone: 'wait', action: { kind: 'retry', label: t('Повторить') } };
+      // без ошибки отправка просто ждёт таймера: «Повторить» тут нечего — кнопка отправляет сейчас
+      return { text: sync.error ? `${head} — ${sync.error}` : head, tone: 'wait', action: { kind: 'retry', label: sync.error ? t('Повторить') : t('Отправить сейчас') } };
     }
     case 'conflict':
       return { text: conflictText(sync, o.conflicts), tone: 'wait', action: { kind: 'resolve', label: t('Разобрать') } };
@@ -60,3 +61,14 @@ export function unsavedLine(sections: readonly string[]): SyncLine | undefined {
   const list = sections.map((s) => `«${s}»`).join(', ');
   return { text: t('не сохранено: {word} {list}', { word: plural(sections.length, 'раздел', 'разделы', 'разделы'), list }), tone: 'wait' };
 }
+
+/** Поля файлов команды (задача, спринт, проект, teamwork.yaml) по-человечески; незнакомое поле — как в файле. */
+const FIELD_LABEL: Record<string, string> = {
+  title: 'Название', pr: 'PR', format: 'Формат', status: 'Статус', sprint: 'Спринт', assignee: 'Исполнитель', estimate: 'Оценка', type: 'Тип', repo: 'Репо', branch: 'Ветка',
+  blockedBy: 'Ждёт', covers: 'Требования', rank: 'Место в списке', body: 'Описание', text: 'Текст', goal: 'Цель', summary: 'Суть одной строкой', repos: 'Репо кода',
+  members: 'Участники', columns: 'Колонки', prefix: 'Префикс задач', defaultFlow: 'Flow для «В работу»',
+};
+
+/** title у задачи — «Заголовок», как в её панели; у проекта, команды и спринта — «Название», как в их формах. */
+export const fieldLabel = (field: string, task = false): string =>
+  task && field === 'title' ? t('Заголовок') : Object.hasOwn(FIELD_LABEL, field) ? t(FIELD_LABEL[field]!) : field;

@@ -21,7 +21,7 @@ export function MyTasks({ mine, className }: { mine: TeamMine; className?: strin
   const noEmail = unknownMe(mine);
   return (
     <section className={className} aria-labelledby="home-my-tasks">
-      <h2 id="home-my-tasks" title={t('Задачи активных спринтов во всех командах, где исполнитель — вы')}>
+      <h2 id="home-my-tasks" title={t('Ваши задачи в активных спринтах всех команд')}>
         {t('Мои задачи')}
         {rows.length > 0 && <span className={styles.count}>{rows.length}</span>}
       </h2>

@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { copyUntracked, ensureWorktree, forgeOf, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
+import { commandOf, copyUntracked, ensureWorktree, exec, forgeOf, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
 
 test('remote: https, scp, ssh с портом, вложенные группы', () => {
   assert.deepEqual(parseRemote('https://gitlab.example.com/cafe/App.git'), { host: 'gitlab.example.com', path: 'cafe/App' });
@@ -170,6 +170,30 @@ test('repoRoot: не репо — undefined; копирование не вых�
     fs.mkdirSync(path.join(tmp, 'dst'));
     fs.writeFileSync(path.join(tmp, 'secret'), 'x');
     assert.deepEqual(copyUntracked(path.join(tmp, 'src'), path.join(tmp, 'dst'), ['../secret', 'missing']), []);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('ошибка exec подписана командой, а не опцией: -c и -C со значением пропускаются', async () => {
+  assert.equal(commandOf(['-c', 'core.quotePath=false', 'fetch', 'origin']), 'fetch');
+  assert.equal(commandOf(['-C', '/tmp/repo', '-c', 'a=b', 'log', '-1']), 'log');
+  assert.equal(commandOf(['--git-dir', '/x/.git', '--no-pager', 'status']), 'status');
+  assert.equal(commandOf(['--git-dir=/x/.git', 'push']), 'push');
+  assert.equal(commandOf(['clone', '-q', '-c', 'core.symlinks=false', '--', 'u', 'd']), 'clone');
+  assert.equal(commandOf(['--version']), '');
+  assert.equal(commandOf([]), '');
+  // настоящий git: «git fetch: …» вместо «git -c: …»
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-execerr-')));
+  try {
+    await assert.rejects(exec('git', ['-c', 'core.quotePath=false', 'fetch', 'nowhere'], { cwd: tmp }), (err: Error) => {
+      assert.match(err.message, /^git fetch: /);
+      return true;
+    });
+    await assert.rejects(exec('git', ['--no-such-option'], { cwd: tmp }), (err: Error) => {
+      assert.match(err.message, /^git: /);
+      return true;
+    });
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

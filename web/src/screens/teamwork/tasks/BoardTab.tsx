@@ -241,7 +241,7 @@ function Card({ task: x, index, status, td, p, members, href, byId, conflicts, d
         </div>
       )}
       {!readonly && (
-        <div className={cx(styles.cardAct, !(badge?.state === 'waiting' || badge?.state === 'failed') && styles.quiet)}>
+        <div className={cx(styles.cardAct, !(badge?.state === 'waiting' || badge?.state === 'failed') && styles.hoverOnly)}>
           {canWork && <ToWorkButton td={td} p={p} task={x} onOpen={setOpen} />}
           {badge?.state === 'waiting' && <Link className="btn small" to={workHref} draggable={false}>{t('Ответить')}</Link>}
           {badge?.state === 'failed' && <Link className="btn ghost small" to={workHref} draggable={false}>{t('Открыть запуск')}</Link>}

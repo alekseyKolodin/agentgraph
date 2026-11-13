@@ -1,5 +1,5 @@
 // Диалог конфликтов синхронизации (spec §7.4; макет Team.dc.html): конфликты сгруппированы по задаче или документу, у каждого
-// выбор «Взять мою» / «Оставить версию команды» — по умолчанию команды, она уже лежит в репо. «Сохранить решение» применяет
+// выбор «Взять мою версию» / «Оставить версию команды» — по умолчанию команды, она уже лежит в репо. «Сохранить решение» применяет
 // выбранное: мою — POST …/conflicts/:id/mine, команды — DELETE …/conflicts/:id, по коммиту на конфликт. Для двух активных
 // спринтов моя версия недоступна: задачи второго переносятся руками.
 import { useEffect, useRef, useState } from 'react';
@@ -10,6 +10,7 @@ import { keepMine, keepTheirs, teamKeys } from '../../api/teamwork';
 import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { memberByEmail, memberLabel } from '../../lib/teamwork/board';
+import { fieldLabel } from '../../lib/teamwork/sync';
 import { cx } from './parts';
 import { conflictKindText, conflictValue } from './shell';
 import styles from './Teamwork.module.css';
@@ -66,11 +67,11 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
         if (!busy) onClose();
       }}
     >
-      <h2 id="tw-conflicts-title">{t('Конфликты правок')}</h2>
+      <h2 id="tw-conflicts-title">{t('Конфликты синхронизации')}</h2>
       {conflicts.length === 0 ? (
         <p>{t('Конфликтов больше нет.')}</p>
       ) : (
-        <p>{t('Изменения разошлись с командой. Разные поля слились сами, по этим нужно решение. Пока его нет, в репо лежит версия команды.')}</p>
+        <p>{t('Ваши изменения разошлись с изменениями команды. Разные поля слились сами, здесь нужно выбрать. Пока выбора нет, в репо лежит версия команды.')}</p>
       )}
       {[...groups.entries()].map(([key, list]) => (
         <section key={key} className={styles.cf} aria-label={key}>
@@ -81,17 +82,17 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
           {list.map((c) => {
             const cur = pick(c);
             return (
-              <div key={c.id} role="radiogroup" aria-label={conflictKindText(c.kind, c.field)} className={styles.cf}>
+              <div key={c.id} role="radiogroup" aria-label={conflictKindText(c.kind, c.field, Boolean(c.task))} className={styles.cf}>
                 <div className={styles.cfH}>
-                  <b>{c.field ?? (c.kind === 'text' ? t('Текст') : c.kind === 'deleted' ? t('Файл') : t('Спринт'))}</b>
-                  <span className={styles.meta}>{conflictKindText(c.kind, c.field)}</span>
+                  <b>{c.field ? fieldLabel(c.field, Boolean(c.task)) : c.kind === 'text' ? t('Текст') : c.kind === 'deleted' ? t('Файл') : t('Спринт')}</b>
+                  <span className={styles.meta}>{c.kind === 'field' || c.kind === 'text' || (c.kind === 'sprint' && c.field && c.field !== 'status') ? t('изменили оба') : conflictKindText(c.kind)}</span>
                 </div>
                 <div className={styles.opts}>
                   <label className={cx(styles.opt, cur === 'mine' && styles.on)} aria-disabled={c.kind === 'sprint' || undefined}>
                     <input type="radio" name={`cf-${c.id}`} checked={cur === 'mine'} disabled={c.kind === 'sprint' || busy} onChange={() => setChoice((m) => ({ ...m, [c.id]: 'mine' }))} />
                     <span className={styles.v}>
-                      <b>{c.kind === 'deleted' ? t('Вернуть мою версию') : t('Взять мою')}</b>
-                      <small>{t('ваше')}</small>
+                      <b>{c.kind === 'deleted' ? t('Вернуть мою версию') : t('Взять мою версию')}</b>
+                      <small>{t('ваша правка')}</small>
                       <pre className={styles.val}>{conflictValue(c.ours)}</pre>
                     </span>
                   </label>
@@ -99,7 +100,7 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
                     <input type="radio" name={`cf-${c.id}`} checked={cur === 'theirs'} disabled={busy} onChange={() => setChoice((m) => ({ ...m, [c.id]: 'theirs' }))} />
                     <span className={styles.v}>
                       <b>{c.kind === 'deleted' ? t('Оставить удалённым') : t('Оставить версию команды')}</b>
-                      <small>{t('команды · {who}', { who: who(c.theirsBy) })}</small>
+                      <small>{t('в репо · {who}', { who: who(c.theirsBy) })}</small>
                       {c.kind !== 'deleted' && <pre className={styles.val}>{conflictValue(c.theirs)}</pre>}
                     </span>
                   </label>
@@ -111,7 +112,7 @@ export function ConflictsDialog({ team, conflicts, members, onClose }: { team: s
       ))}
       {err && <p className="msg err">{err}</p>}
       <div className={styles.foot}>
-        <span className={styles.hint}>{conflicts.length ? t('Решение уйдёт коммитом по каждому конфликту') : ''}</span>
+        <span className={styles.hint}>{conflicts.length ? t('Каждое решение уйдёт отдельным коммитом') : ''}</span>
         <span className={styles.grow} />
         <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>{conflicts.length ? t('Позже') : t('Закрыть')}</button>
         {conflicts.length > 0 && <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>{busy ? t('Сохраняю…') : t('Сохранить решение')}</button>}

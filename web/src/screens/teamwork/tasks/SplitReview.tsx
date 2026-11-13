@@ -1,8 +1,8 @@
 // Разбивка ТЗ на задачи (spec §8.5, §9.1, §9.3; макеты Backlog.dc.html и Split.dc.html): «Разбить ТЗ на задачи…» запускает
 // черновик teamwork-split; пока он идёт — строка со ссылкой на запуск; готовый — предложение над бэклогом. У каждой задачи
-// галочка и правка полей до принятия. Два вида: список по волнам с колонками «Ждёт» и «Открывает» и граф по волнам слева
-// направо (DepsGraphView). Справа — панель выбранной задачи: поля, «Ждёт» с × у каждой связи, «+ Зависимость», «Открывает»,
-// когда её можно начать. Сводка: волны, сколько можно начать сейчас, сколько ждут текущих задач, самая длинная цепочка в
+// галочка и правка полей до принятия. Два вида: список по волнам с колонками «Ждёт» и «Блокирует» и граф по волнам слева
+// направо (DepsGraphView). Справа — панель выбранной задачи: поля, «Ждёт» с × у каждой связи, «+ Зависимость», «Блокирует»,
+// когда её можно начать. Сводка: волны, сколько можно начать сейчас, сколько ждут задач проекта, самая длинная цепочка в
 // очках с «Показать», циклы. «Добавить N в бэклог» → POST …/drafts/:run/accept { tasks }; 400 dependencies подсвечивает
 // ошибки по задачам. Принятые и отклонённые черновики запоминаются в браузере, чтобы предложение не всплывало снова.
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
@@ -260,7 +260,7 @@ function SplitReview({ team, project, draft, tasks, readonly, onDone, onRetry }:
       )}
       {d.warnings?.map((w) => <p key={w} className="msg warn">{w}</p>)}
       <div className={styles.ctl}>
-        <span className={styles.seg} role="group" aria-label={t('Вид')}>
+        <span className={styles.seg} role="group" aria-label={t('Вид', undefined, 'view')}>
           <button type="button" className={cx(view === 'graph' && styles.on)} aria-pressed={view === 'graph'} onClick={() => setView('graph')}>{t('Граф')}</button>
           <button type="button" className={cx(view === 'list' && styles.on)} aria-pressed={view === 'list'} onClick={() => setView('list')}>{t('Список')}</button>
         </span>
@@ -351,7 +351,7 @@ function ProposalList({ all, off, layoutRep, existing, selected, errorsOf, onSel
   const label = (id: string) => (all.some((x) => x.key === id) ? keyLabel(id) : id);
   return (
     <div aria-label={t('Предложенные задачи')}>
-      <div className={styles.lh} aria-hidden="true"><span /><span>№</span><span>{t('Задача')}</span><span>{t('Ждёт')}</span><span>{t('Открывает')}</span><span>{t('ТЗ')}</span><span style={{ textAlign: 'right' }}>{t('Оц.')}</span></div>
+      <div className={styles.lh} aria-hidden="true"><span /><span>№</span><span>{t('Задача')}</span><span>{t('Ждёт')}</span><span>{t('Блокирует')}</span><span>{t('ТЗ')}</span><span style={{ textAlign: 'right' }}>{t('Оц.')}</span></div>
       {groups.filter((g) => g.items.length).map((g) => (
         <div key={g.wave ?? 'cycle'}>
           <div className={styles.wvh}>{g.wave === undefined ? t('Цикл', undefined, 'deps') : t('Волна {n}', { n: g.wave })}{g.wave === 1 && <span className={styles.meta}>{t('можно начать сейчас')}</span>}</div>
@@ -373,7 +373,7 @@ function ProposalList({ all, off, layoutRep, existing, selected, errorsOf, onSel
                   }
                 }}
               >
-                <input type="checkbox" checked={!off.includes(x.key)} disabled={readonly} aria-label={t('Взять задачу {key}', { key: keyLabel(x.key) })} onClick={(e) => e.stopPropagation()} onChange={() => onPick(x.key)} />
+                <input type="checkbox" checked={!off.includes(x.key)} disabled={readonly} aria-label={t('Добавить задачу {key}', { key: keyLabel(x.key) })} onClick={(e) => e.stopPropagation()} onChange={() => onPick(x.key)} />
                 <span className={styles.k}>{keyLabel(x.key)}</span>
                 <span className={styles.t}>
                   {x.title}
@@ -592,12 +592,12 @@ function Inspector({ task, all, index, picked, existing, report, errors, project
               </span>
             </div>
           ))}
-          {!waits.length && <div className={styles.dep}><span className={styles.no}>—</span><span className={styles.hint}>{t('ничего не ждёт')}</span><span /></div>}
+          {!waits.length && <div className={styles.dep}><span className={styles.no}>—</span><span className={styles.hint}>{t('ничего', undefined, 'deps')}</span><span /></div>}
         </div>
         {!readonly && (
           <div className={styles.addDep}>
             <select className={styles.inp} aria-label={t('Новая зависимость')} value={dep} onChange={(e) => setDep(e.target.value)}>
-              <option value="">{t('+ Зависимость: от чего ждёт')}</option>
+              <option value="">{t('+ Зависимость: чего она ждёт')}</option>
               {cands.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
             <button type="button" className="btn ghost small" disabled={!dep} onClick={() => { onLink(dep); setDep(''); }}>{t('Добавить')}</button>
@@ -605,12 +605,12 @@ function Inspector({ task, all, index, picked, existing, report, errors, project
         )}
       </div>
       <div>
-        <h4 className={styles.cap}>{t('Открывает')}</h4>
+        <h4 className={styles.cap}>{t('Блокирует')}</h4>
         <div className={styles.deps}>
           {opens.map((r) => (
             <div key={r.id} className={styles.dep}><span className={cx(styles.k, styles.meta)}>{keyLabel(r.id)}</span><span className={styles.tx}>{r.title}</span><span className={styles.st}>{waveText(r.wave)}</span></div>
           ))}
-          {!opens.length && <div className={styles.dep}><span className={styles.no}>—</span><span className={styles.hint}>{t('ничего не ждёт её')}</span><span /></div>}
+          {!opens.length && <div className={styles.dep}><span className={styles.no}>—</span><span className={styles.hint}>{t('никого')}</span><span /></div>}
         </div>
       </div>
       <p className={styles.when}>{startNote(task.key, all, existing, report, members)}</p>

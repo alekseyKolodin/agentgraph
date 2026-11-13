@@ -19,7 +19,7 @@
 .work.fail { color: var(--st-fail); }
 .status { font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
 .acts { display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
-.acts :global(.btn) { white-space: nowrap; }
+.acts :global(.btn) { white-space: nowrap; text-decoration: none; }
 .empty { margin: 6px 0 0; font-size: var(--fs-small); color: var(--ink-2); }
 .empty.fail { color: var(--st-fail); }
 .empty.fail a { color: inherit; }

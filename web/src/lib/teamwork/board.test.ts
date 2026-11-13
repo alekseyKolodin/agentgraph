@@ -93,6 +93,11 @@ test('доска: состояние работы агента по статус
   assert.equal(workBadge(working)?.text, 'сессия Claude Code · работает');
   assert.equal(workBadge(failed)?.text, 'запуск остановлен: лимит стоимости');
   assert.equal(workBadge(idle), undefined);
+  // запуск без имени: только состояние, без «· запуск» в хвосте
+  assert.equal(workBadge(task({ id: '6', work: [w({ status: 'running' })] }))?.text, 'идёт запуск');
+  assert.equal(workBadge(task({ id: '7', work: [w({ status: 'running', title: 'Работа над PAY-7' })] }))?.text, 'идёт запуск · Работа над PAY-7');
+  assert.equal(workBadge(task({ id: '8', work: [w({ status: 'waiting' })] }))?.text, 'ждёт ответа');
+  assert.equal(workBadge(task({ id: '9', work: [w({ status: 'failed', title: 'Работа над PAY-9' })] }))?.text, 'запуск остановлен: ошибка · Работа над PAY-9');
 });
 
 test('доска: «ждёт PAY-12», пока предшественник не готов; неизвестный номер не блокирует; кто кого блокирует; PR', () => {

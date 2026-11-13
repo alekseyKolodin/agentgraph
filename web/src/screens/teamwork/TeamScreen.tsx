@@ -38,7 +38,7 @@ export function TeamScreen() {
   const conflictsQ = useTeamConflicts(slug, (team?.sync.conflicts ?? 0) > 0);
   const [conflictsOpen, setConflictsOpen] = useState(false);
 
-  if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Сервер не умеет Teamwork: обновите agentgraph.')}</p></div>;
+  if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Этот сервер не поддерживает Teamwork: обновите agentgraph.')}</p></div>;
   if (q.isError) {
     const gone = q.error instanceof ApiError && q.error.status === 404;
     return (
@@ -95,7 +95,7 @@ function ProjectsTab({ team }: { team: TeamDetail }) {
       {open && <NewProjectForm team={team} onClose={() => setOpen(false)} />}
       {team.projects.length === 0 && !open && (
         <div className={styles.emptyBox}>
-          <p>{t('Создайте первый проект: название, slug и одна строка сути. Репо кода можно добавить сразу или позже.')}</p>
+          <p>{t('Создайте первый проект: название, slug и суть одной строкой. Репо кода можно добавить сразу или позже.')}</p>
         </div>
       )}
       {active.length > 0 && <div className={styles.rows}>{active.map((p) => <ProjectRow key={p.slug} team={team.slug} p={p} />)}</div>}
@@ -165,7 +165,7 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
   };
   return (
     <form className={styles.newProject} aria-label={t('Новый проект')} onSubmit={(e) => void submit(e)}>
-      <div className={styles.two} style={{ gridTemplateColumns: 'minmax(0, 1fr) 200px' }}>
+      <div className={cx(styles.two, styles.twoSlug)}>
         <div className={styles.f}>
           <label htmlFor="tw-np-title">{t('Название')}</label>
           <input id="tw-np-title" value={title} autoFocus placeholder={t('Экспорт счетов')} onChange={(e) => setTitle(e.target.value)} />
@@ -233,10 +233,10 @@ function MembersTab({ team }: { team: TeamDetail }) {
   return (
     <section aria-label={t('Участники')}>
       <div className={styles.tabBar}>
-        <span className={styles.note}>{t('Участники из teamwork.yaml; «себя» agentgraph узнаёт по email из git config клона')}</span>
+        <span className={styles.note}>{t('Участники — из teamwork.yaml. Вас agentgraph узнаёт по email из git config клона')}</span>
         {!me.inTeam && me.email && <button type="button" className="btn small" disabled={busy} onClick={() => void addMe()}>{t('Добавить меня')}</button>}
       </div>
-      {!me.email && <p className="msg warn">{t('git не знает вас: задайте git config --global user.name и user.email, иначе записи в команду не пройдут.')}</p>}
+      {!me.email && <p className="msg warn">{t('git не знает, кто вы: задайте git config --global user.name и user.email, иначе изменения в команду не запишутся.')}</p>}
       {team.memberList.length === 0 && <p className={styles.note}>{t('Участников пока нет')}</p>}
       {team.memberList.length > 0 && (
         <div className={styles.rows}>
@@ -336,7 +336,7 @@ function ProcessTab({ team }: { team: TeamDetail }) {
         {!flow && !q.isError && <Loading className={styles.loading} />}
         <div className="row">
           <button type="button" className="btn primary" disabled={busy || !flow} onClick={() => void save()}>{busy ? t('Сохраняю…') : t('Сохранить')}</button>
-          <span className={styles.note}>{t('Сохранение коммитит flow в репо команды; невалидный YAML сервер не примет')}</span>
+          <span className={styles.note}>{t('Сохранение — коммит flow в репо команды; YAML с ошибками не сохранится')}</span>
           <span className={msgClass(msg)}>{msg.text}</span>
         </div>
       </div>
@@ -412,7 +412,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
   return (
     <section aria-label={t('Настройки')} className={styles.settings}>
       <form className={styles.settings} onSubmit={(e) => void save(e)}>
-        <div className={styles.two} style={{ gridTemplateColumns: 'minmax(0, 1fr) 160px' }}>
+        <div className={cx(styles.two, styles.twoPrefix)}>
           <div className={styles.f}>
             <label htmlFor="tw-set-title">{t('Название')}</label>
             <input id="tw-set-title" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -451,7 +451,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
         <span className={styles.meta}><PathLink path={team.dir}>{tildePath(team.dir, home)}</PathLink> · {t('формат {n}', { n: team.format })}</span>
       </div>
       <div className={styles.dangerZone}>
-        <p>{t('Отключить команду — удалить локальный клон. Репо команды остаётся, подключиться снова можно по ссылке. С неотправленными изменениями сервер переспросит.')}</p>
+        <p>{t('Отключить команду — удалить её локальный клон. Репо команды останется, подключиться снова можно по ссылке. Если есть неотправленные изменения, agentgraph спросит ещё раз.')}</p>
         <button type="button" className="btn danger" style={{ alignSelf: 'flex-start' }} onClick={() => void disconnect()}>{t('Отключить команду…')}</button>
       </div>
     </section>

@@ -122,7 +122,7 @@ export function depsSummary(tasks: readonly Proposed[], existing: readonly { id:
   return [
     `${n} ${plural(n, 'волна', 'волны', 'волн')}`,
     t('сразу можно начать {n}', { n: now }),
-    t('ждут текущих задач {n}', { n: waitingExisting(tasks, existing).length }),
+    t('ждут задач проекта {n}', { n: waitingExisting(tasks, existing).length }),
     report.cycle ? cycleText(report.cycle) : t('циклов нет'),
   ];
 }
@@ -177,7 +177,7 @@ export function waitsOn(key: string, tasks: readonly TeamProposedTask[], existin
   return (me?.dependsOn ?? []).map((d) => rowOf(d, tasks, existing, report)).filter((x): x is DepRow => Boolean(x));
 }
 
-/** «Открывает»: предложенные задачи, которые ждут эту. */
+/** «Блокирует»: предложенные задачи, которые ждут эту. */
 export const unlocks = (key: string, tasks: readonly TeamProposedTask[], report: TeamDependencyReport): DepRow[] =>
   tasks.filter((x) => x.dependsOn.includes(key)).map((x) => ({ id: x.key, title: x.title, existing: false, wave: report.waves[x.key] }));
 

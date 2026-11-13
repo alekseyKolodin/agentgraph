@@ -24,6 +24,8 @@
 /* --- документ */
 .doc { flex: 999 1 640px; min-width: 0; max-width: 960px; }
 .dhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+/* перенесённая группа прижата вправо, к подсказке «Нажмите на раздел…», а не к началу строки */
+.dacts { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
 .row { display: grid; grid-template-columns: 56px minmax(0, 640px) minmax(150px, 220px); column-gap: 18px; align-items: start; }
 .sec { position: relative; border-radius: var(--r-md); padding: 0 0 4px; }
 .sec.editable { cursor: text; }
@@ -62,7 +64,8 @@
 .mg .cap { color: var(--ink-3); font-family: var(--font-sans); }
 .mg a { text-decoration: none; }
 .mg a:hover { text-decoration: underline; }
-.linkBtn { border: 0; background: none; padding: 0; font: inherit; font-family: var(--font-sans); font-size: var(--fs-meta); color: var(--live); cursor: pointer; }
+/* текстовая кнопка-ссылка: без рамки, но с кликабельной высотой и местом под кольцо фокуса */
+.linkBtn { border: 0; background: none; padding: 2px 0; font: inherit; font-family: var(--font-sans); font-size: var(--fs-meta); color: var(--live); cursor: pointer; border-radius: var(--r-xs); }
 .linkBtn:hover { text-decoration: underline; }
 .flash { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: var(--select); } to { background: transparent; } }
@@ -88,13 +91,14 @@
 .seg button { border: 0; background: transparent; color: var(--ink-3); padding: 2px 9px; font: inherit; font-size: var(--fs-meta); font-weight: 500; cursor: pointer; border-radius: 0; }
 .seg button:hover { color: var(--ink-2); }
 .seg button.on { background: var(--raised); color: var(--ink); }
+.seg button:focus-visible { box-shadow: inset var(--focus); }
 .ebody { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .erows { padding: 6px 6px 4px; }
 .erow { display: grid; grid-template-columns: 18px 52px minmax(0, 1fr) 150px 24px; gap: 8px; align-items: start; padding: 4px 6px; border-radius: var(--r-sm); }
 .erow:hover { background: var(--hover); }
 .erow.dragging { opacity: .45; }
 .erow.over { box-shadow: inset 0 2px 0 var(--live); }
-.grip { border: 0; background: transparent; color: var(--ink-off); cursor: grab; padding: 6px 0 0; font-size: var(--fs-meta); letter-spacing: -2px; line-height: 1; border-radius: var(--r-xs); }
+.grip { border: 0; background: transparent; color: var(--ink-off); cursor: grab; padding: 0; min-height: 30px; font-size: var(--fs-meta); letter-spacing: -2px; line-height: 1; border-radius: var(--r-xs); }
 .erow:hover .grip, .grip:focus-visible { color: var(--ink-3); }
 .erow .id { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); padding-top: 7px; display: flex; align-items: center; gap: 6px; }
 .chg { width: 6px; height: 6px; border-radius: 50%; background: var(--st-wait); display: inline-block; flex: none; }
@@ -102,7 +106,7 @@
 .erow textarea:hover { border-color: var(--line); }
 .erow textarea:focus { outline: none; background: var(--well); border-color: var(--line-strong); box-shadow: var(--focus); }
 .erow .lk { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); padding-top: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.erow .x { border: 0; background: transparent; color: var(--ink-off); cursor: pointer; padding: 6px 0 0; font-size: 15px; line-height: 1; border-radius: var(--r-xs); }
+.erow .x { border: 0; background: transparent; color: var(--ink-off); cursor: pointer; padding: 0; min-height: 30px; font-size: 15px; line-height: 1; border-radius: var(--r-xs); }
 .erow:hover .x, .x:focus-visible { color: var(--ink-3); }
 .x:hover { color: var(--ink); }
 .addr { display: flex; align-items: center; gap: 10px; padding: 4px 12px 10px 32px; flex-wrap: wrap; }
@@ -115,7 +119,7 @@
 .orphan pre { margin: 0; max-height: 220px; overflow: auto; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: var(--fs-meta); white-space: pre-wrap; }
 .kbd { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 4px; }
 
-/* всплывающие панели: «С агентом…», «Черновик с моделью…», ссылка на задачу/требование/документ */
+/* всплывающие панели: «С агентом…», «Черновик с агентом…», ссылка на задачу/требование/документ */
 .popWrap { position: relative; display: inline-flex; }
 .pop { position: absolute; top: calc(100% + 6px); right: 0; width: 380px; max-width: calc(100vw - 32px); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 5; text-align: left; }
 .pop.left { right: auto; left: 0; }
@@ -132,6 +136,7 @@
 .picks { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; margin: 0 -4px; }
 .picks button { display: flex; gap: 8px; align-items: baseline; border: 0; background: transparent; color: var(--ink-2); padding: 4px 6px; border-radius: var(--r-xs); font: inherit; font-size: var(--fs-small); text-align: left; cursor: pointer; min-width: 0; }
 .picks button:hover, .picks button.act { background: var(--select); color: var(--ink); }
+.picks button:focus-visible { box-shadow: inset var(--focus); }
 .picks .id { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); flex: none; }
 .picks .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picks .g { font-size: var(--fs-cap); font-weight: 500; color: var(--ink-3); padding: 6px 6px 2px; }
@@ -147,7 +152,8 @@
 /* --- строка черновика и рецензия правок агента */
 .dline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-md); margin: 0 0 16px; background: var(--panel); }
 .dline .t { font-weight: 500; }
-.dline .brief { color: var(--ink-2); font-size: var(--fs-small); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+/* задание сжимается первым: кнопки строки не переносятся на вторую строку, пока на задание есть хоть 80px */
+.dline .brief { color: var(--ink-2); font-size: var(--fs-small); flex: 1 1 0; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
 .draft { background: color-mix(in srgb, var(--st-wait) 6%, var(--panel)); border: 1px solid color-mix(in srgb, var(--st-wait) 45%, transparent); border-radius: var(--r-md); padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 22px; }
 .draftH { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .draftH h2 { margin: 0; font-size: var(--fs-h3); font-weight: 500; }
@@ -177,8 +183,6 @@ ins.i { background: color-mix(in srgb, var(--st-ok) 15%, transparent); color: va
 .cc .why { color: var(--ink-2); line-height: 1.45; }
 .cc .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .fold { display: flex; align-items: center; gap: 10px; margin: 22px 0 0; padding: 8px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); color: var(--ink-3); font-size: var(--fs-small); }
-.fold button { border: 0; background: transparent; color: var(--ink-2); padding: 0; cursor: pointer; font: inherit; }
-.fold button:hover { color: var(--ink); text-decoration: underline; }
 .diff { margin: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 0; font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.55; overflow: auto; max-height: 70vh; }
 .diff > div { padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.55em; }
 .diff .ins { background: color-mix(in srgb, var(--st-ok) 12%, transparent); color: var(--ink); }
@@ -197,6 +201,7 @@ ins.i { background: color-mix(in srgb, var(--st-ok) 15%, transparent); color: va
 .hist button { width: 100%; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; border: 0; background: transparent; color: var(--ink-2); padding: 6px 8px; border-radius: var(--r-sm); font: inherit; text-align: left; cursor: pointer; }
 .hist button:hover { background: var(--hover); color: var(--ink); }
 .hist button.on { background: var(--select); color: var(--ink); }
+.hist button:focus-visible { box-shadow: inset var(--focus); }
 .hist .m { font-size: var(--fs-small); overflow-wrap: anywhere; }
 .src { margin: 0; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 70vh; color: var(--ink); }
 .foot { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }

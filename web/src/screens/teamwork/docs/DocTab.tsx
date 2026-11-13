@@ -1,7 +1,7 @@
 // Вкладка документа проекта — ТЗ, архитектура или дизайн (spec §8.4, §9.2–9.3, §11; макеты PrdRead, PrdEdit, Prd): чтение с
 // оглавлением, требованиями и задачами на полях, правка по разделам на месте, «История», «Исходник», черновики агентов —
 // строка «Черновик идёт · Открыть запуск», по готовности рецензия правок прямо в документе (?draft=<запуск>).
-// Пустой документ зовёт «Черновик с моделью». DocBody — то же для любого документа проекта, в том числе из docs/.
+// Пустой документ зовёт «Черновик с агентом». DocBody — то же для любого документа проекта, в том числе из docs/.
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -114,7 +114,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
         <p>{draftable ? emptyText(name).text : t('Его удалили или переименовали. Выберите другой документ.')}</p>
         {!readonly && (
           <div className={styles.go}>
-            {draftable && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} buttonClass="btn primary" disabledReason={agentReason} left>{t('Черновик с моделью…')}</AgentAsk>}
+            {draftable && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} buttonClass="btn primary" disabledReason={agentReason} left>{t('Черновик с агентом…')}</AgentAsk>}
             <button type="button" className="btn" disabled={creating} onClick={() => void create()}>{t('Создать пустой')}</button>
           </div>
         )}
@@ -132,12 +132,13 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
     );
   }
 
+  // кнопки шапки — одной группой: при переносе уезжают вместе, а не «Исходник» один на вторую строку
   const actions = (
-    <>
+    <span className={styles.dacts}>
       <button type="button" className="btn ghost small" onClick={() => setDialog('history')} title={t('Последние 10 коммитов по файлу')}>{t('История')}</button>
       <button type="button" className="btn ghost small" onClick={() => setDialog('source')} title={t('Markdown документа целиком')}>{t('Исходник')}</button>
-      {draftable && !readonly && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} disabledReason={agentReason}>{t('Черновик с моделью…')}</AgentAsk>}
-    </>
+      {draftable && !readonly && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} disabledReason={agentReason}>{t('Черновик с агентом…')}</AgentAsk>}
+    </span>
   );
   // открытая правка раздела важнее призыва пустого документа: после ухода с вкладки и возврата она на месте
   const empty = isDocEmpty(doc.text) && !writeSelf && !openEdit;
@@ -149,7 +150,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
           <h2>{emptyText(name).title}</h2>
           <p>{emptyText(name).text}</p>
           <div className={styles.go}>
-            {!readonly && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} buttonClass="btn primary" disabledReason={agentReason} left>{t('Черновик с моделью…')}</AgentAsk>}
+            {!readonly && <AgentAsk team={team.slug} project={project.slug} doc={name as DraftDoc} buttonClass="btn primary" disabledReason={agentReason} left>{t('Черновик с агентом…')}</AgentAsk>}
             {!readonly && <button type="button" className="btn ghost" onClick={() => setWriteSelf(true)}>{t('Писать самому')}</button>}
             <span className={styles.meta}>{docFile(name)}</span>
           </div>
@@ -188,7 +189,7 @@ function DraftLine({ draft, name, onReview, onRetry }: { draft: TeamDraft; name:
       <span className={styles.grow} />
       <Link className="btn small ghost" to={`/run/${encodeURIComponent(draft.run)}`}>{draft.status === 'waiting' ? t('Ответить в запуске') : t('Открыть запуск')}</Link>
       {!running && !failed && <button type="button" className="btn small" onClick={onReview}>{t('Посмотреть')}</button>}
-      {failed && <button type="button" className="btn small ghost" onClick={onReview}>{t('Что успел')}</button>}
+      {failed && <button type="button" className="btn small ghost" onClick={onReview}>{t('Что успел агент')}</button>}
       {failed && <button type="button" className="btn small" onClick={onRetry}>{t('Повторить')}</button>}
       {!running && <button type="button" className="btn small ghost" onClick={() => void hide(!failed)} title={failed ? t('Скрыть строку') : t('Отклонить черновик')}>{failed ? t('Скрыть') : t('Отклонить')}</button>}
     </div>

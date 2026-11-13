@@ -232,7 +232,7 @@ function Warns({ list }: { list: ReturnType<typeof orderWarnings> }) {
   );
 }
 
-/** «Запланировать» следующий спринт: без него некуда переносить задачи из бэклога. */
+/** «Запланировать спринт» — следующий: без него некуда переносить задачи из бэклога. */
 function PlanSprint({ team, project }: { team: string; project: TeamProject }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -255,7 +255,7 @@ function PlanSprint({ team, project }: { team: string; project: TeamProject }) {
         }
       }}
     >
-      {t('Запланировать')}
+      {t('Запланировать спринт')}
     </button>
   );
 }

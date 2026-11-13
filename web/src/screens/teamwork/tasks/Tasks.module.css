@@ -15,12 +15,14 @@
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--ink-2); }
 .line a { color: var(--live); }
-.link-btn { border: 0; background: transparent; padding: 0; color: var(--live); font: inherit; cursor: pointer; }
+/* текстовая кнопка-ссылка: без рамки, но с кликабельной высотой и местом под кольцо фокуса */
+.link-btn { border: 0; background: transparent; padding: 2px 0; color: var(--live); font: inherit; cursor: pointer; border-radius: var(--r-xs); }
 .link-btn:hover { text-decoration: underline; }
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
 .seg button { border: 0; background: transparent; color: var(--ink-3); padding: 3px 10px; font: inherit; font-size: var(--fs-meta); font-weight: 500; cursor: pointer; border-radius: 0; }
 .seg button:hover { color: var(--ink-2); }
 .seg button.on { background: var(--raised); color: var(--ink); }
+.seg button:focus-visible { box-shadow: inset var(--focus); }
 .empty-box { border: 1px dashed var(--line-strong); border-radius: var(--r-md); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
 .empty-box h2 { margin: 0; font-size: var(--fs-h3); font-weight: 500; }
 .empty-box p { margin: 0; color: var(--ink-2); }
@@ -65,7 +67,8 @@
 .brow .t:hover { text-decoration: underline; }
 .brow .est { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); text-align: right; }
 .brow .stt { font-size: var(--fs-meta); color: var(--ink-3); text-align: right; white-space: nowrap; }
-.grip { border: 0; background: transparent; color: var(--ink-off); cursor: grab; padding: 0; font-size: var(--fs-meta); letter-spacing: -2px; line-height: 1; border-radius: var(--r-xs); }
+/* ручка — иконка без рамки; кликабельная область 18×24, а не ширина двух точек */
+.grip { border: 0; background: transparent; color: var(--ink-off); cursor: grab; padding: 0; min-width: 18px; min-height: 24px; display: inline-grid; place-items: center; font-size: var(--fs-meta); letter-spacing: -2px; line-height: 1; border-radius: var(--r-xs); }
 .brow:hover .grip, .grip:focus-visible { color: var(--ink-3); }
 .quick { display: flex; gap: 8px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 .quick input { flex: 1; min-width: 0; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 5px 10px; color: var(--ink); font: inherit; }
@@ -95,14 +98,15 @@
 .fr.none i { box-shadow: inset 0 0 0 1.5px var(--st-wait); }
 .ctl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sum { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); display: inline-flex; gap: 6px; flex-wrap: wrap; }
-.lh, .lr { display: grid; grid-template-columns: 18px 22px minmax(0, 1fr) 150px 90px 90px 28px; align-items: center; gap: 12px; padding: 7px 6px; }
+/* колонка ключа — 62px, как номер в строке бэклога: ключи агента («schema», «t12») в 22px налезали на название */
+.lh, .lr { display: grid; grid-template-columns: 18px 62px minmax(0, 1fr) 150px 90px 90px 28px; align-items: center; gap: 12px; padding: 7px 6px; }
 .lh { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); padding-bottom: 4px; }
 .lr { border-top: 1px solid var(--line); cursor: pointer; }
 .lr:hover { background: var(--hover); }
 .lr.on { background: var(--select); }
 .lr.off .t { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--ink-off); }
 .lr input { accent-color: var(--ink-2); width: 14px; height: 14px; margin: 0; }
-.lr .k { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); }
+.lr .k { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lr .t { font-weight: 500; min-width: 0; }
 .lr .d { display: block; font-weight: 400; font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lr .err { display: block; font-weight: 400; font-size: var(--fs-meta); }
@@ -167,7 +171,8 @@
 .dep .k { font-family: var(--font-mono); font-size: var(--fs-meta); }
 .dep .tx { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dep .st { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; }
-.x { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 0 3px; font-size: 15px; line-height: 1; border-radius: var(--r-xs); }
+/* «×» — иконка без рамки, кликабельная область 22×22 */
+.x { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 0 4px; min-width: 22px; min-height: 22px; display: inline-grid; place-items: center; font-size: 15px; line-height: 1; border-radius: var(--r-xs); flex: none; }
 .x:hover { color: var(--ink); }
 .add-dep { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .add-dep select { flex: 1; min-width: 0; }
@@ -197,7 +202,8 @@
 .cards.over { background: var(--hover); }
 .card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .card:hover { border-color: var(--line-strong); }
-.card:focus-visible { outline: none; box-shadow: var(--focus); }
+/* доска прокручивается вбок (overflow) и режет внешнее кольцо у крайних карточек — кольцо внутри */
+.card:focus-visible { outline: none; box-shadow: inset var(--focus); }
 .card.open { z-index: 6; border-color: var(--line-strong); }
 .card.dragging { opacity: .4; }
 .card.live { border-color: color-mix(in srgb, var(--live) 40%, transparent); }
@@ -215,12 +221,14 @@
 .agent a:hover { text-decoration: underline; }
 .card-act { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .card-act :global(.btn) { white-space: nowrap; }
-/* без срочного действия кнопки карточки видны при наведении и фокусе — доска не пестрит «В работу ▸» */
-.card-act.quiet { opacity: 0; transition: opacity .12s; }
-.card:hover .card-act.quiet, .card:focus-within .card-act.quiet, .card.open .card-act.quiet { opacity: 1; }
-@media (hover: none) { .card-act.quiet { opacity: 1; } }
+/* без срочного действия кнопки карточки видны при наведении и фокусе — доска не пестрит «В работу ▸». Своё имя модификатора:
+   .quiet — пилюля «запланирован» с фоном и отступами, с ней ряд кнопок становился тёмной пилюлей */
+.card-act.hover-only { opacity: 0; transition: opacity .12s; }
+.card:hover .card-act.hover-only, .card:focus-within .card-act.hover-only, .card.open .card-act.hover-only { opacity: 1; }
+@media (hover: none) { .card-act.hover-only { opacity: 1; } }
 .add { border: 1px dashed var(--line); border-radius: var(--r-md); padding: 8px 12px; color: var(--ink-3); background: transparent; text-align: left; cursor: pointer; font: inherit; font-size: var(--fs-small); }
 .add:hover { color: var(--ink-2); border-color: var(--line-strong); }
+.add:focus-visible { box-shadow: inset var(--focus); }
 .add-input { width: 100%; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 8px 12px; color: var(--ink); font: inherit; font-size: var(--fs-small); }
 .add-input:focus { outline: none; border-color: var(--live); }
 
@@ -259,7 +267,13 @@
 .pick.mono { font-family: var(--font-mono); }
 .val { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-small); }
 .val.muted { color: var(--ink-3); white-space: normal; }
-.val.wrap { white-space: normal; display: flex; flex-direction: column; gap: 4px; }
+/* в колонке зависимостей селект и «×» — overflow не режет их кольцо фокуса; длинные названия режет .tx */
+.val.wrap { white-space: normal; display: flex; flex-direction: column; gap: 4px; overflow: visible; }
+/* селект поля рядом с аватаром или подсказкой: сжимается по ширине панели, а не вылезает за неё */
+.pick-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pick-row .pick { min-width: 0; }
+.repo-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-family: var(--font-mono); font-size: var(--fs-meta); }
+.repo-line > span { min-width: 0; overflow-wrap: anywhere; }
 .dep-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .dep-row a { font-family: var(--font-mono); font-size: var(--fs-meta); white-space: nowrap; flex: none; }
 .dep-row .tx { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -319,12 +333,14 @@
   .brow { grid-template-columns: 18px 56px minmax(0, 1fr) 22px; }
   .brow > :first-child, .brow .ty, .brow .est, .brow .stt { display: none; }
   .lh { display: none; }
-  .lr { grid-template-columns: 18px 22px minmax(0, 1fr); }
+  .lr { grid-template-columns: 18px 62px minmax(0, 1fr); }
   .lr .op, .lr .fr-c, .lr .e { display: none; }
   .lr .wt { grid-column: 3; }
   .insp { max-width: none; }
   .fields { grid-template-columns: 96px minmax(0, 1fr); }
   .signals { margin-left: 0; }
+  /* фильтры переносятся: разделитель повисал один в начале строки */
+  .filters .vsep { display: none; }
   .two { grid-template-columns: minmax(0, 1fr); }
 }
 
