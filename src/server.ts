@@ -41,6 +41,7 @@ import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from '
 import { TeamDrafts, type DraftRunDeps } from './teamwork-drafts.js';
 import { currentTeamworkStatus, parseTeamworkLink, statusService, stopTeamworkStatus, teamworkStatus } from './teamwork-status.js';
 import { sessionTeamwork, teamworkWorkRoute } from './teamwork-work.js';
+import { teamsAddDirProblem, teamsCwdProblem } from './teamwork-trust.js';
 import { TeamError } from './teamwork-repo.js';
 import { getLimits } from './limits.js';
 import { ContextError, getContext, readContextFile, writeContextFile } from './context.js';
@@ -53,7 +54,7 @@ import type { RunSource } from './intake.js';
 import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
-import { loadSettings, updateSettings, type Settings } from './settings.js';
+import { configDir, loadSettings, updateSettings, type Settings } from './settings.js';
 import { requestProblem } from './server-guard.js';
 import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
@@ -208,7 +209,8 @@ const LOG_REPLAY_MAX = 3000;
 
 /** Ошибка с HTTP-кодом: функции управления запуском бросают её, а отвечает обработчик запроса. */
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** body — тело ответа целиком (код причины и данные, например 409 flow_untrusted); без него — { error }. */
+  constructor(readonly status: number, message: string, readonly body?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -222,15 +224,25 @@ const servers = new Set<http.Server>();
 let updater: Updater | null = null;
 /** Подписка на «сессия ждёт тебя»: одна на поднятые серверы, адрес в уведомлении — первого startServer; снимает stopServer. */
 let sessionWaits: (() => void) | null = null;
+/**
+ * Пустые рабочие папки запусков в папке настроек (configDir()/workdirs/<id запуска>/<имя>): черновик Teamwork без репо кода
+ * (startRun emptyCwd). Не в папке запусков: она бывает внутри репо agentgraph (ROOT = APP_DIR), и агент подхватил бы его
+ * CLAUDE.md и .claude/ вверх по дереву. Удаляются вместе с запуском.
+ */
+const RUN_WORKDIRS = 'workdirs';
+const runWorkdir = (id: string): string => path.join(configDir(), RUN_WORKDIRS, id);
 /** Подписка на изменения команд Teamwork: одна на процесс, снимает stopServer. */
 let teamChanges: (() => void) | null = null;
+/** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
+let stopping = false;
 
 export function startServer(opts: ServerOptions): Promise<string> {
+  stopping = false;
   // перенос тегов задач ищет их запуски в этой папке запусков: их артефакты откроются перенесённому пространству
   setMigrationRunsDir(RUNS_DIR);
   const server = http.createServer((req, res) => {
     handle(req, res, opts).catch((err) => {
-      if (!res.headersSent) sendJson(res, err instanceof HttpError ? err.status : 500, { error: errMsg(err) });
+      if (!res.headersSent) sendJson(res, err instanceof HttpError ? err.status : 500, err instanceof HttpError && err.body ? err.body : { error: errMsg(err) });
       else res.end();
     });
   });
@@ -271,6 +283,7 @@ export function startServer(opts: ServerOptions): Promise<string> {
  * Ждёт конца запусков и ходов не дольше timeoutMs: завис — процесс всё равно выходит.
  */
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
+  stopping = true;
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
   updater?.stop();
@@ -386,6 +399,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
   // --- Teamwork: команды, проекты, документы, задачи, спринты, flow команды (teamwork-server.ts); задача в работу —
   // intake и worktree (teamwork-work.ts)
   if (p === '/api/teams' || p.startsWith('/api/teams/')) {
+    // teamService() после stopTeamwork завёл бы новый сервис с таймерами посреди выхода
+    if (stopping) return sendJson(res, 503, { error: 'Сервер останавливается' });
     const service = teamService(opts.teamwork);
     const r = (await teamworkRoute(method, url, () => readJson(req), { service, drafts: new TeamDrafts(service, draftRuns(opts)) })) ?? (await teamworkWorkRoute(method, url, () => readJson(req), { service, exec: opts.teamwork?.repo?.exec }));
     if (r) return sendJson(res, r.status, r.body);
@@ -450,8 +465,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const instruction = (body.instruction ?? '').trim();
     if (!instruction) return sendJson(res, 400, { error: 'Опиши, что поменять' });
     const base = editBase(name, body.spec || typeof body.yaml === 'string' ? body : { yaml: readFlowYaml(name) });
-    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию
-    const cwd = path.resolve((body.cwd ?? '').trim() || opts.defaultCwd);
+    // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию; папка в клоне команды — 400 (resolveDir)
+    const cwd = resolveDir(body.cwd, opts.defaultCwd);
     return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
   }
 
@@ -728,7 +743,9 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       teamwork = parseTeamworkLink(body.teamwork);
       ({ spec, adhoc } = teamFlowSpec(body, opts) ?? specFromRunBody(body));
     } catch (err) {
-      throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err));
+      if (err instanceof HttpError) throw err;
+      // 409 flow_untrusted и 400 flow_forbidden — с телом целиком: UI показывает диалог доверия по нему
+      throw new HttpError(err instanceof TeamError ? err.status : 400, errMsg(err), err instanceof TeamError ? err.body() : undefined);
     }
     // задача Teamwork: команда, проект и задача должны быть — до создания папки запуска; источник запуска — сама задача
     let teamSource: RunSource | undefined;
@@ -857,6 +874,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     const f = finishedRun(m[1]);
     if ('error' in f) return sendJson(res, f.code, { error: f.error });
     fs.rmSync(f.dir, { recursive: true, force: true });
+    // пустая рабочая папка черновика Teamwork — вместе с запуском
+    fs.rmSync(runWorkdir(m[1]), { recursive: true, force: true });
     return sendJson(res, 200, { ok: true });
   }
 
@@ -1113,10 +1132,19 @@ function startRun(
     autoSpace?: AutoSpaceReport;
     /** Имя исходного запуска (продолжение): без подбора моделью. */
     title?: string;
+    /**
+     * Рабочая папка — пустая папка с этим именем (runWorkdir(id)/<имя>), а не cwd: черновик Teamwork без репо кода (spec
+     * §14). Имя — слаг проекта: по нему список запусков группирует их, как по папке проекта.
+     */
+    emptyCwd?: string;
   },
   srv: ServerOptions,
 ): string {
   const runDir = makeRunDir(RUNS_DIR, spec.name);
+  if (o.emptyCwd) {
+    o = { ...o, cwd: path.join(runWorkdir(path.basename(runDir)), path.basename(o.emptyCwd)) };
+    fs.mkdirSync(o.cwd, { recursive: true });
+  }
   // до live.set: упавшая запись вложений не оставит висящий запуск
   let attachments: string[];
   try {
@@ -1125,7 +1153,7 @@ function startRun(
     fs.rmSync(runDir, { recursive: true, force: true });
     throw err;
   }
-  const { attachments: _files, attachmentsFrom: _from, ...runOpts } = o;
+  const { attachments: _files, attachmentsFrom: _from, emptyCwd: _empty, ...runOpts } = o;
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
   // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json.
@@ -1633,6 +1661,9 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
   if (!prev) throw new HttpError(404, 'Запуск не найден');
   if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: продолжить можно только завершённый');
   if (!prev.cwd) throw new HttpError(400, 'В отчёте запуска нет директории проекта');
+  // черновик прошлых версий шёл в папке проекта в клоне команды: продолжать его там нельзя (spec §14)
+  const inTeams = teamsCwdProblem(prev.cwd);
+  if (inTeams) throw new HttpError(400, inTeams);
   // вызванный блоком-вызовом запуск продолжается вместе с родителем: отдельно он оторвался бы от связки
   if (prev.parent) throw new HttpError(400, childContinueReason(prev.parent));
   const spec = specOf(prev);
@@ -1797,6 +1828,8 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
   if (!prev) throw new HttpError(404, 'Запуск не найден');
   if (live.has(prevId) || prev.status === 'running') throw new HttpError(409, 'Запуск ещё идёт: перезапустить можно только завершённый');
   if (!prev.cwd || !fs.existsSync(prev.cwd)) throw new HttpError(400, 'Директории проекта запуска больше нет');
+  const inTeams = teamsCwdProblem(prev.cwd);
+  if (inTeams) throw new HttpError(400, inTeams);
   let spec: FlowSpec;
   let addDirs: string[];
   try {
@@ -2167,7 +2200,8 @@ const draftDeps = (opts: ServerOptions): DraftDeps => (opts.draftSession ? { ses
 /** Запуски для черновиков Teamwork (teamwork-drafts.ts): старт обычным startRun, список и отчёт глазами сервера, статус живого. */
 const draftRuns = (opts: ServerOptions): DraftRunDeps => ({
   runsDir: RUNS_DIR,
-  start: (spec, o) => startRun(spec, o, opts),
+  // без репо кода — пустая папка в папке запуска: клон репо команды рабочей папкой агента не бывает (spec §14)
+  start: (spec, { cwd, ...o }) => startRun(spec, cwd === undefined ? { ...o, cwd: '', emptyCwd: o.teamwork.project } : { ...o, cwd }, opts),
   runs: listRuns,
   report: readReport,
   live: (id) => {
@@ -2393,12 +2427,20 @@ function runAddDirs(raw: unknown, cwd: string): string[] {
   const dirs = resolveDirList(list as string[], cwd).filter((d) => d !== cwd);
   const missing = dirs.filter((d) => !isDir(d));
   if (missing.length) throw new Error(`Директория не найдена: ${missing.join(', ')}`);
+  // папка проекта из клона команды с .claude/ (скиллы, сабагенты, плагины участников) — не доп. папка агента (spec §14)
+  for (const d of dirs) {
+    const conf = teamsAddDirProblem(d);
+    if (conf) throw new Error(conf);
+  }
   return dirs;
 }
 
 function resolveDir(dir: string | undefined, fallback: string): string {
   const resolved = path.resolve((dir ?? '').trim() || fallback);
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`Директория не найдена: ${resolved}`);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new HttpError(400, `Директория не найдена: ${resolved}`);
+  // клон репо команды не бывает рабочей папкой агента (spec §14): его .claude/settings.json грузится как настройки проекта
+  const inTeams = teamsCwdProblem(resolved);
+  if (inTeams) throw new HttpError(400, inTeams);
   return resolved;
 }
 
@@ -2418,8 +2460,10 @@ function teamFlowSpec(body: { teamFlow?: unknown; flow?: unknown; spec?: unknown
   const tf = body.teamFlow as { team?: unknown; name?: unknown };
   if (typeof tf !== 'object' || typeof tf.team !== 'string' || typeof tf.name !== 'string' || !tf.team.trim() || !tf.name.trim()) throw new Error('teamFlow — { team, name }: слаг команды и имя flow из её репо');
   if ([body.flow, body.spec, body.yaml].some((v) => v !== undefined && v !== null && v !== '')) throw new Error('Передай что-то одно из teamFlow, flow, spec и yaml');
+  if (stopping) throw new HttpError(503, 'Сервер останавливается');
+  // доверие к содержимому и запреты flow команды (spec §14) — в readTeamFlow: 409 flow_untrusted, 400 flow_forbidden
   const spec = teamService(opts.teamwork).readTeamFlow(tf.team.trim(), tf.name.trim()).spec;
-  // блоки-вызовы flow команды зовут только сохранённые flow этого компьютера: проверка — до папки запуска
+  // блоки-вызовы flow команде запрещены (teamFlowProblems); проверка вызовов осталась на случай, если запрет ослабят
   checkCalls(spec);
   return { spec, adhoc: true };
 }

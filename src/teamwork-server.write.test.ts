@@ -282,7 +282,9 @@ test('ТЗ с повтором номера требования не запис
 test('team_doc_write: ТЗ из сессии по задаче не пишется вовсе, поэтому повторов номеров оттуда не будет', async () => {
   const hooks = sessionTeamwork(alice, {} as never);
   const link = { team: T, project: 'r', task: ids(alice, 'r')[0] };
-  await assert.rejects(hooks.writeDoc(link, 'prd', PRD), /ТЗ из сессии не пишется/);
-  await hooks.writeDoc(link, 'design', '# Дизайн\n');
+  await assert.rejects(hooks.writeDoc(link, 'prd', PRD, 's1'), /ТЗ из сессии не пишется/);
+  // старта сессии сервис не видел: что она читала, неизвестно — первая запись просит перечитать документ
+  await assert.rejects(hooks.writeDoc(link, 'design', '# Дизайн\n', 's1'), /перечитай/);
+  await hooks.writeDoc(link, 'design', '# Дизайн\n', 's1');
   assert.equal(alice.repo(T).read('projects/r/design.md'), '# Дизайн\n');
 });

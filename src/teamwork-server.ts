@@ -14,6 +14,7 @@ import { loadSettings } from './settings.js';
 import type { FlowSpec } from './schema.js';
 import type { TeamDrafts } from './teamwork-drafts.js';
 import { PROJECT_TEMPLATE_DIR, projectDocs, TEMPLATE_DIR } from './teamwork-template.js';
+import { flowHash, teamFlowProblems, teamFlowTextProblems, trustFlow, untrustedFlow } from './teamwork-trust.js';
 import { checkRemote, createTeam, defaultRepoDeps, joinTeam, TASK_FILE_RE, TeamError, TeamRepo, type ChangeEvent, type RepoDeps } from './teamwork-repo.js';
 import {
   commentFileName, composeTask, DOC_FILES, docFile, docLabel, docTitle, findSection, FLOW_NAME_RE, isDocName, nextRequirementId, nextTaskId, parseComment,
@@ -23,7 +24,7 @@ import {
 } from './teamwork.js';
 import { addedRequirementRepeats, compareTasks, validRank, type RequirementKind } from './teamwork.js';
 import type {
-  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
+  TeamColumns, TeamComment, TeamConflict, TeamDetail, TeamDoc, TeamDocBrief, TeamDocName, TeamDocRevision, TeamFlow as TeamFlowOf, TeamFlowTrust, TeamFlowTrusted, TeamHistoryItem, TeamLocal, TeamMe, TeamMember,
   TeamMine, TeamMineProject, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamRepoRef, TeamSprint, TeamSummary, TeamSync, TeamTask, TeamTaskMove, TeamTaskPatch, TeamTaskStatus, TeamTaskType,
   TeamTaskWork,
 } from './api-types.js';
@@ -1254,39 +1255,90 @@ export class TeamService {
     return repo.exists(`flows/${name}.yml`) && !repo.exists(`flows/${name}.yaml`) ? `flows/${name}.yml` : `flows/${name}.yaml`;
   }
 
-  /** Flow команды как есть: YAML и spec, если он проходит схему, иначе error (для редактора «Процесс»). */
+  /**
+   * Flow команды как есть: YAML и spec, если он проходит схему, иначе error (для редактора «Процесс»); у проходящего схему —
+   * что flow команде нельзя (problems) и не одобрена ли эта версия на этом компьютере (trust, spec §14).
+   */
   teamFlow(team: string, name: string): TeamFlow {
     const repo = this.repo(team);
     const rel = this.flowFile(repo, name);
     const yaml = repo.read(rel);
     if (yaml === undefined) throw new TeamError(404, `Flow ${name} нет в репо команды`);
+    let spec: FlowSpec;
     try {
-      return { name, yaml, file: repo.abs(rel), spec: parseFlow(yaml) };
+      spec = parseFlow(yaml);
     } catch (err) {
       return { name, yaml, file: repo.abs(rel), error: errMsg(err) };
     }
+    const problems = [...teamFlowTextProblems(yaml), ...teamFlowProblems(spec)];
+    const trust = problems.length ? undefined : this.untrusted(repo, team, name, yaml, spec);
+    return { name, yaml, file: repo.abs(rel), spec, ...(problems.length ? { problems } : {}), ...(trust ? { trust } : {}) };
   }
 
-  /** Flow команды для запуска: невалидный — 400. */
+  private untrusted(repo: TeamRepo, team: string, name: string, yaml: string, spec: FlowSpec): TeamFlowTrust | undefined {
+    return untrustedFlow({ teamDir: repo.dir, templateDir: this.repoDeps.templateDir, team, name, yaml, spec });
+  }
+
+  /**
+   * Flow команды для запуска (черновики, разбивка, «В работу», spec §14): невалидный — 400; с тем, что flow команде нельзя, —
+   * 400 flow_forbidden; версия не одобрена на этом компьютере — 409 flow_untrusted с YAML, базой диффа и возможностями
+   * flow. spec разобран из того же текста, чей хэш сверен: подменить файл между проверкой и запуском нельзя.
+   */
   readTeamFlow(team: string, name: string): { spec: FlowSpec; yaml: string; file: string } {
     const f = this.teamFlow(team, name);
     if (!f.spec) throw new TeamError(400, `Flow ${name} не проходит проверку: ${f.error}`);
+    if (f.problems) throw forbidden(name, f.problems);
+    if (f.trust) throw untrustedError(f.trust);
     return { spec: f.spec, yaml: f.yaml, file: f.file };
   }
 
+  /** «Доверять этой версии» (POST …/flows/:name/trust { hash }): flow успел измениться — 409 flow_untrusted с новой версией. */
+  trustTeamFlow(team: string, name: string, body: unknown): TeamFlowTrusted {
+    const hash = reqStr(isRecord(body) ? body.hash : undefined, 'hash', 'Укажи hash — sha256 версии flow, которую одобряешь');
+    const repo = this.repo(team);
+    const f = this.teamFlow(team, name);
+    if (!f.spec) throw new TeamError(400, `Flow ${name} не проходит проверку: ${f.error}`);
+    if (f.problems) throw forbidden(name, f.problems);
+    const current = flowHash(f.yaml);
+    if (current !== hash) {
+      // одобряют ровно то, что видели: пока смотрели, pull принёс другую версию
+      if (f.trust) throw new TeamError(409, `Flow ${name} успел измениться: посмотри новую версию`, 'flow_untrusted', { flow: f.trust });
+      return { name, hash: current, trusted: true };
+    }
+    if (f.trust) trustFlow(repo.dir, name, f.yaml, 'trust', this.repoDeps.now());
+    return { name, hash, trusted: true };
+  }
+
+  /** Сохранение на вкладке «Процесс»: невалидный и запрещённый flow — 400; сохранённая здесь версия сразу одобрена. */
   async writeTeamFlow(team: string, name: string, yaml: unknown): Promise<TeamFlow> {
     const repo = this.repo(team);
     const rel = this.flowFile(repo, name);
     if (typeof yaml !== 'string' || !yaml.trim()) bad('Поле yaml — текст flow');
+    let spec: FlowSpec;
     try {
-      parseFlow(yaml as string);
+      spec = parseFlow(yaml as string);
     } catch (err) {
       throw new TeamError(400, errMsg(err));
     }
+    const problems = [...teamFlowTextProblems(yaml as string), ...teamFlowProblems(spec)];
+    if (problems.length) throw forbidden(name, problems);
     const text = (yaml as string).endsWith('\n') ? (yaml as string) : `${yaml}\n`;
     await repo.write(`flow ${name}: ${repo.exists(rel) ? 'обновлён' : 'добавлен'}`, (r) => r.writeFile(rel, text));
+    // одобряется текст, который записал я, а не файл после записи: его мог уже переписать pull
+    trustFlow(repo.dir, name, text, 'save', this.repoDeps.now());
     return this.teamFlow(team, name);
   }
+}
+
+/** 400 flow_forbidden: во flow команды то, что ей нельзя (teamFlowProblems). */
+function forbidden(name: string, problems: string[]): TeamError {
+  return new TeamError(400, `Flow ${name} нельзя запускать как flow команды:\n${problems.map((p) => `- ${p}`).join('\n')}`, 'flow_forbidden', { problems });
+}
+
+/** 409 flow_untrusted: эту версию flow команды на этом компьютере не одобряли (spec §14). */
+export function untrustedError(flow: TeamFlowTrust): TeamError {
+  const why = flow.base?.kind === 'trusted' ? 'изменился с версии, которую ты одобрял' : flow.base?.kind === 'template' ? 'отличается от шаблона agentgraph' : 'новый';
+  return new TeamError(409, `Flow команды ${flow.name} ${why}: посмотри изменения и подтверди, что доверяешь этой версии`, 'flow_untrusted', { flow });
 }
 
 /** Разделы документа для API: только «## », без текста до первого раздела. */
@@ -1415,6 +1467,7 @@ export async function teamworkRoute(method: string, url: URL, readBody: () => Pr
       if (method === 'GET') return ok(svc.teamFlow(seg(m[1]), seg(m[2])));
       if (method === 'PUT') return ok(await svc.writeTeamFlow(seg(m[1]), seg(m[2]), (await body<{ yaml?: unknown }>()).yaml));
     }
+    if ((m = p.match(/^\/api\/teams\/([^/]+)\/flows\/([^/]+)\/trust$/)) && method === 'POST') return ok(svc.trustTeamFlow(seg(m[1]), seg(m[2]), await readBody()));
     if ((m = p.match(/^\/api\/teams\/([^/]+)\/projects$/))) {
       if (method === 'GET') return ok(svc.listProjects(seg(m[1])));
       if (method === 'POST') return ok(await svc.createProject(seg(m[1]), await readBody()), 201);
