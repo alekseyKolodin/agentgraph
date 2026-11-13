@@ -10,6 +10,7 @@ import { joinTeam, teamKeys } from '../../api/teamwork';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { memberLabel } from '../../lib/teamwork/board';
+import { useReturnFocus } from './focus';
 import { cx, Who } from './parts';
 import { CloneHint } from './RepoPicker';
 import { checkLine, projectsWord, slugFromUrl } from './shell';
@@ -27,6 +28,7 @@ export function JoinDialog({ initialUrl = '', onClose, onJoined }: { initialUrl?
   const line = checkLine(check, checking);
   const found = check?.kind === 'team' ? check : undefined;
   const home = useConfig().data?.home;
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);

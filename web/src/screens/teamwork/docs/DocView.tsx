@@ -10,8 +10,9 @@ import { errorText } from '../../../api';
 import { createTask, teamKeys } from '../../../api/teamwork';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { t } from '../../../lib/i18n';
-import { isReqSection, readChunks, reqAnchor, sectionAnchor, sectionName, taskWhere } from '../../../lib/teamwork/doc-view';
-import { coverage, currentSection, docHeadLine, parseRequirements, requirementShort, serializeRequirementRows, splitSections, type DocSection } from '../../../lib/teamwork/docs';
+import { editMovedDown, isReqSection, readChunks, repeatedSections, reqAnchor, sectionAnchor, sectionName, taskWhere } from '../../../lib/teamwork/doc-view';
+import { coverage, currentSection, docFile, docHeadLine, parseRequirements, requirementShort, serializeRequirementRows, splitSections, type DocSection } from '../../../lib/teamwork/docs';
+import { useReturnFocus } from '../focus';
 import { cx } from '../parts';
 import { TASK_PARAM } from '../shell';
 import { DocText, RefCtx, scrollToAnchor, type RefContext } from './DocText';
@@ -97,7 +98,13 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
     }
   };
 
-  const editing = edit ? sections.findIndex((s) => s.heading === edit.heading) : -1;
+  // сервер адресует раздел заголовком и правит первый такой: повтор заголовка на месте не правится, правка — у первого
+  const repeated = useMemo(() => repeatedSections(sections), [sections]);
+  // заголовок правки повторился уже во время правки (pull вставил выше такой же, и первый теперь — чужой): сервер запишет в
+  // первый — редактора на месте нет, правка видна, как у пропавшего раздела. Правка того же первого раздела коллегой — не то:
+  // там обычный 409 с обеими версиями
+  const lost = Boolean(edit && editMovedDown(sections, edit.heading, edit.original, edit.repeats));
+  const editing = edit && !lost ? sections.findIndex((s) => s.heading === edit.heading) : -1;
   const dirty = edit ? isDirty(edit, serializeRequirementRows) : false;
   const toTop = (i: number) => (e: MouseEvent) => {
     e.preventDefault();
@@ -153,7 +160,7 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
             {!readonly && !edit && <span className={styles.hint}>{t('Нажмите на раздел, чтобы править')}</span>}
             {actions}
           </div>
-          {edit && editing < 0 && <OrphanEdit team={team.slug} project={project.slug} name={name} />}
+          {edit && editing < 0 && <OrphanEdit team={team.slug} project={project.slug} name={name} repeated={lost} />}
           {sections.map((s, i) =>
             i === editing && edit ? (
               <div key={`edit:${edit.heading}`} id={sectionAnchor(i)} data-sec={i}>
@@ -179,7 +186,8 @@ export function DocView({ team, project, name, doc, tasks, readonly, agent, acti
                 team={team}
                 project={project}
                 byReq={cov.byReq}
-                editable={!readonly}
+                editable={!readonly && !repeated.has(i)}
+                repeatOf={!readonly && repeated.has(i) ? docFile(name) : undefined}
                 onEdit={() => void openEdit(s.heading)}
                 onCreate={(id, text) => setCreating({ id, text })}
               />
@@ -201,12 +209,15 @@ type ReadProps = {
   project: TeamProject;
   byReq: Map<string, TeamTask[]>;
   editable: boolean;
+  /** Повтор заголовка: на месте не правится; значение — файл документа для подсказки. */
+  repeatOf?: string;
   onEdit: () => void;
   onCreate: (id: string, text: string) => void;
 };
 
 /** Раздел для чтения: заголовок с «Править», куски markdown и строки требований. Клик по тексту (не по ссылке) — править. */
-function SectionRead({ index, section, isPrd, team, project, byReq, editable, onEdit, onCreate }: ReadProps) {
+function SectionRead({ index, section, isPrd, team, project, byReq, editable, repeatOf, onEdit, onCreate }: ReadProps) {
+  const { notify } = useConfirm();
   const chunks = useMemo(() => readChunks(section.body, isPrd && Boolean(section.heading)), [section.body, isPrd, section.heading]);
   const click = (e: MouseEvent) => {
     if (!editable) return;
@@ -222,6 +233,16 @@ function SectionRead({ index, section, isPrd, team, project, byReq, editable, on
           <div className={styles.sh}>
             <h2>{section.heading}</h2>
             {editable && <button type="button" className={cx('btn ghost small', styles.ed)} onClick={onEdit}>{t('Править')}</button>}
+            {repeatOf && (
+              // кнопка, а не подсказка в title: объяснение доступно с клавиатуры и экранному диктору
+              <button
+                type="button"
+                className={styles.linkBtn}
+                onClick={() => void notify(t('Заголовок «{section}» в документе не один: на месте правится только первый такой раздел. Переименуйте повтор в {file}, чтобы править и его.', { section: section.heading, file: repeatOf }))}
+              >
+                {t('повтор заголовка — не правится здесь')}
+              </button>
+            )}
           </div>
           {isPrd && chunks.some((c) => c.kind === 'reqs') ? <span className={styles.mg} style={{ paddingTop: 40 }}><span className={styles.cap}>{t('задачи')}</span></span> : <span className={styles.sp} />}
         </div>
@@ -291,6 +312,7 @@ function CreateTaskDialog({ team, project, req, onClose }: { team: string; proje
   const [title, setTitle] = useState(requirementShort(req.text, 100));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -342,17 +364,21 @@ function CreateTaskDialog({ team, project, req, onClose }: { team: string; proje
 }
 
 /**
- * Раздел, который правили, исчез из документа (его переименовали или удалили, документ перечитался): правка не
- * пропадает молча — её текст виден, его можно скопировать или бросить.
+ * Раздел, который правили, исчез из документа (его переименовали или удалили, документ перечитался) или его заголовок
+ * повторился (repeated): правка не пропадает молча — её текст виден, его можно скопировать или бросить.
  */
-function OrphanEdit({ team, project, name }: { team: string; project: string; name: TeamDocName }) {
+function OrphanEdit({ team, project, name, repeated }: { team: string; project: string; name: TeamDocName; repeated: boolean }) {
   const edit = useEdit(team, project, name);
   const [copied, setCopied] = useState(false);
   if (!edit) return null;
   const text = editBody(edit, serializeRequirementRows);
   return (
     <div className={styles.orphan} role="alert">
-      <h3>{t('Раздела «{section}» больше нет в документе: его переименовали или удалили. Ваша несохранённая правка:', { section: sectionName(edit.heading) })}</h3>
+      <h3>
+        {repeated
+          ? t('Заголовок «{section}» теперь в документе не один: не понять, какой раздел вы правили, на месте правка не сохранится. Ваша несохранённая правка:', { section: sectionName(edit.heading) })
+          : t('Раздела «{section}» больше нет в документе: его переименовали или удалили. Ваша несохранённая правка:', { section: sectionName(edit.heading) })}
+      </h3>
       <pre>{text}</pre>
       <div className={styles.go}>
         <button

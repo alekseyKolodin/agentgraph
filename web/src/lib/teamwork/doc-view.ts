@@ -104,6 +104,37 @@ export function lastIssued(next: { FR: string; NFR: string } | undefined, kind: 
 
 /** Якорь раздела в документе: по порядку, заголовки могут повторяться. */
 export const sectionAnchor = (i: number): string => `s-${i}`;
+/**
+ * Разделы-повторы: индексы разделов, чей заголовок уже был выше. Сервер адресует раздел заголовком и правит первый с таким
+ * заголовком, поэтому повтор на месте не правится — иначе правка легла бы в первый.
+ */
+export function repeatedSections(sections: readonly { heading: string }[]): Set<number> {
+  const seen = new Set<string>();
+  const out = new Set<number>();
+  sections.forEach((s, i) => {
+    if (!s.heading) return;
+    if (seen.has(s.heading)) out.add(i);
+    else seen.add(s.heading);
+  });
+  return out;
+}
+
+/**
+ * Раздел, который правят, уехал ниже повтора своего заголовка (pull вставил выше такой же): первый раздел с этим заголовком —
+ * его правит сервер — уже не тот, с которого начали (original), а один из следующих — тот, или разделов с этим заголовком
+ * стало больше, чем было на начало правки (repeats; мой раздел тем временем ещё и поправили). Правка на месте легла бы в
+ * чужой раздел. Иначе — обычная параллельная правка самого раздела (409 и обе версии рядом), а не повтор.
+ */
+export function editMovedDown(sections: readonly { heading: string; body: string }[], heading: string, original: string, repeats?: number): boolean {
+  if (!heading) return false;
+  const norm = (b: string) => b.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
+  const same = sections.filter((s) => s.heading === heading);
+  if (same.length < 2) return false;
+  const o = norm(original);
+  if (norm(same[0]!.body) === o) return false;
+  return same.slice(1).some((s) => norm(s.body) === o) || (repeats !== undefined && same.length > repeats);
+}
+
 /** Якорь требования: «FR-3» — тот же текст, что и в адресе ссылки. */
 export const reqAnchor = (id: string): string => id.toUpperCase();
 

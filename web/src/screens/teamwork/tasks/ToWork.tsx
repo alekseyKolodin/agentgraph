@@ -18,6 +18,7 @@ import { withWorktreeNote } from '../../../lib/run-form';
 import {
   defaultWorkFlow, myFlowInput, needsRepo, parseWorkFlow, taskRepo, workFlowKey, workRunBody, workSessionBody, type WorkFlow,
 } from '../../../lib/teamwork/task';
+import { useReturnFocus } from '../focus';
 import { projectPath } from '../shell';
 import { fetchIntake, prepareTaskWorktree, startTaskSession } from './api';
 import { MenuButton, type MenuEntry } from './parts';
@@ -108,17 +109,8 @@ export function ToWorkDialog({ td, p, task, mode, onClose }: { td: WorkTeam; p: 
   const [loadingFlow, setLoadingFlow] = useState(false);
   const [err, setErr] = useState('');
 
-  // закрытие формы возвращает фокус туда, откуда её открыли (кнопка «В работу ▸»); элемент запомнен до showModal, а
-  // фокус возвращается, только когда диалога уже нет в документе (StrictMode «размонтирует» понарошку, DOM остаётся)
-  const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-  useEffect(() => {
-    const el = dlg.current;
-    return () => {
-      setTimeout(() => {
-        if (!el?.isConnected && opener.current?.isConnected) opener.current.focus();
-      });
-    };
-  }, []);
+  // закрытие формы возвращает фокус туда, откуда её открыли (кнопка «В работу ▸»)
+  useReturnFocus(dlg);
   // у команды нет своих flow, а список «Мои flow» пришёл после intake — flow по умолчанию из него
   useEffect(() => {
     if (session || flow || !intake || phase.kind !== 'form') return;

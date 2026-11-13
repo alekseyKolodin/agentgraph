@@ -46,14 +46,16 @@ const ser = serializeRequirementRows;
  * для проверки параллельной правки. У начала документа сервер хэша не отдаёт — его считает introHash.
  */
 export function startEdit(doc: TeamDoc, heading: string, withReqs: boolean): SectionEdit | undefined {
-  const sec = splitSections(doc.text).find((s) => s.heading === heading);
+  const all = splitSections(doc.text);
+  const sec = all.find((s) => s.heading === heading);
   if (!sec) return undefined;
+  const repeats = all.filter((s) => s.heading === heading).length;
   const hash = doc.sections.find((s) => s.heading === heading)?.hash ?? '';
   const headLine = heading ? doc.text.replace(/\r\n?/g, '\n').split('\n')[sec.start]! : '';
   // пустые строки вокруг текста раздела в редакторе не нужны: при сохранении после заголовка ставится одна
   const body = sec.body.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
   const parts = withReqs && rowsLossless(body) ? parseRequirementRows(body) : undefined;
-  return { heading, hash, headLine, original: body, body, mode: 'text', ...(parts ? { rows: parts, originalRows: parts } : {}) };
+  return { heading, hash, headLine, repeats, original: body, body, mode: 'text', ...(parts ? { rows: parts, originalRows: parts } : {}) };
 }
 
 /** Хэш начала документа как у сервера (sectionHash: sha256 текста без хвостовых пробелов, 16 знаков); без WebCrypto — пусто. */

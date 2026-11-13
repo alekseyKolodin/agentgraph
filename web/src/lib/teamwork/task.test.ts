@@ -4,7 +4,7 @@ import type { TeamTaskIntake } from '@server/api-types';
 import { boardColumns } from './board';
 import { task } from './fixtures';
 import {
-  addCriterion, columnMoves, criteriaOf, dropRank, criteriaTitle, defaultWorkFlow, descriptionOf, dropIndex, editCriterion, listMoves, myFlowInput, needsRepo, parseWorkFlow,
+  addCriterion, columnMoves, criteriaOf, dropRank, criteriaTitle, defaultWorkFlow, descriptionOf, dropIndex, editCriterion, listMoves, myFlowInput, needsRepo, parseCovers, parseWorkFlow,
   removeCriterion, samePlace, sideMove, taskRepo, toggleCriterion, withDescription, workFlowKey, workRunBody, workSessionBody,
 } from './task';
 
@@ -174,4 +174,12 @@ test('«В работу ▸»: тело запуска — flow команды �
 test('«В работу ▸»: тело сессии — worktree, текст задачи первым сообщением, связь с задачей', () => {
   const body = workSessionBody(intake, { path: '/wt' }, { input: 'ТЕКСТ', space: 'billing', model: '' });
   assert.deepEqual(body, { cwd: '/wt', prompt: 'ТЕКСТ', tags: [], saveState: true, teamwork: intake.teamwork, name: 'PAY-12 · Выгрузка', space: 'billing' });
+});
+
+test('требования из поля ввода: запятая, точка с запятой и пробелы делят, пустые и повторы уходят', () => {
+  assert.deepEqual(parseCovers('FR-1, FR-2'), ['FR-1', 'FR-2']);
+  // запятая в конце набора — ещё не второе требование, но и не ошибка
+  assert.deepEqual(parseCovers('FR-1,'), ['FR-1']);
+  assert.deepEqual(parseCovers('FR-1;FR-3  NFR-1, FR-1'), ['FR-1', 'FR-3', 'NFR-1']);
+  assert.deepEqual(parseCovers('  '), []);
 });

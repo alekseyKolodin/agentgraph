@@ -9,7 +9,8 @@ import { t } from '../../../lib/i18n';
 import { memberByEmail, memberLabel } from '../../../lib/teamwork/board';
 import { docFile } from '../../../lib/teamwork/docs';
 import { Loading } from '../../sessions/Loading';
-import { cx } from '../parts';
+import { useReturnFocus } from '../focus';
+import { cx, StaleLine } from '../parts';
 import { useRevision } from './api';
 import { Diff } from './DraftReview';
 import styles from './Docs.module.css';
@@ -17,6 +18,7 @@ import styles from './Docs.module.css';
 /** Модальное окно с заголовком и «Закрыть»; Esc закрывает. */
 function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const dlg = useRef<HTMLDialogElement>(null);
+  useReturnFocus(dlg);
   useEffect(() => {
     dlg.current?.showModal();
   }, []);
@@ -41,9 +43,10 @@ export function HistoryDialog({ team, project, name, members, onClose }: { team:
   const rev = useRevision(team, project, name, sel);
   return (
     <Dialog title={t('История {file}', { file: docFile(name) })} onClose={onClose}>
+      {q.data && <StaleLine error={q.error} />}
       {q.isPending ? (
         <Loading />
-      ) : q.isError ? (
+      ) : q.isError && !q.data ? (
         <p className="msg err">{errorText(q.error)}</p>
       ) : !items.length ? (
         <p className={styles.hint}>{t('Коммитов по файлу пока нет.')}</p>
@@ -63,7 +66,7 @@ export function HistoryDialog({ team, project, name, members, onClose }: { team:
             })}
           </ul>
           <div style={{ minWidth: 0 }}>
-            {rev.isPending ? <Loading /> : rev.isError ? <p className="msg err">{errorText(rev.error)}</p> : rev.data ? <Diff a={rev.data.before} b={rev.data.after} /> : null}
+            {rev.isPending ? <Loading /> : rev.isError && !rev.data ? <p className="msg err">{errorText(rev.error)}</p> : rev.data ? <Diff a={rev.data.before} b={rev.data.after} /> : null}
           </div>
         </div>
       )}

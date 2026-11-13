@@ -2,7 +2,7 @@
 // и участниками; вкладки «Проекты» (строки с полосой спринта и форма нового проекта, репо кода — из моих папок), «Участники», «Процесс» (flow команды
 // в редакторе YAML с проверкой схемы, сохранение коммитит), «Настройки» (название, колонки, flow по умолчанию, отключение).
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useBlocker, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { TeamDetail, TeamProjectBrief, TeamTaskStatus } from '@server/api-types';
 import { ApiError, errorText, useConfig, useFeature } from '../../api';
@@ -14,11 +14,13 @@ import { useMemoryState } from '../../components/useMemoryState';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { STATUSES, tasksWord } from '../../lib/teamwork/board';
+import { changedFields, failView, rebaseForm } from '../../lib/teamwork/form';
 import { YamlEditor, type YamlEditorHandle } from '../flow/YamlEditor';
 import { Loading } from '../sessions/Loading';
 import { reposBody, type RepoDraft } from '../../lib/teamwork/repos';
 import { ConflictsDialog } from './ConflictsDialog';
-import { Crumbs, cx, ErrorLine, People, SprintStrip, Tabs, Who } from './parts';
+import { guardUnsaved, unsavedKey, useUnsaved } from './unsaved';
+import { Crumbs, cx, ErrorLine, People, readonlyReason, SprintStrip, StaleLine, Tabs, Who } from './parts';
 import { RepoChooser, RepoDraftRow, type RepoTaken } from './RepoPicker';
 import { projectPath, remoteLabel, SLUG_RE, TEAM_TABS, TEAMS_PATH, teamTabLabel, teamTabOf, teamTabPath, type TeamTab } from './shell';
 import { SyncLine } from './SyncLine';
@@ -39,7 +41,8 @@ export function TeamScreen() {
   const [conflictsOpen, setConflictsOpen] = useState(false);
 
   if (!on) return <div className="empty"><h1>Teamwork</h1><p className="muted">{t('Этот сервер не поддерживает Teamwork: обновите agentgraph.')}</p></div>;
-  if (q.isError) {
+  // упавшая перечитка при данных на экране — строка под вкладками: форма нового проекта, YAML «Процесса» и настройки остаются
+  if (failView(q.error, Boolean(team)) === 'screen') {
     const gone = q.error instanceof ApiError && q.error.status === 404;
     return (
       <div className="empty">
@@ -71,6 +74,7 @@ export function TeamScreen() {
         </div>
       </div>
       <Tabs items={tabs} active={tab} label={t('Команда', undefined, 'team')} />
+      <StaleLine error={q.error} gone={t('Команды {slug} больше нет: её отключили. Показано последнее загруженное, изменения не запишутся.', { slug })} />
       {tab === 'projects' && <ProjectsTab team={team} />}
       {tab === 'members' && <MembersTab team={team} />}
       {tab === 'process' && <ProcessTab team={team} />}
@@ -83,14 +87,17 @@ export function TeamScreen() {
 // ---------- проекты
 
 function ProjectsTab({ team }: { team: TeamDetail }) {
-  const [open, setOpen] = useMemoryState(`teamwork.newProject.${team.slug}`, team.projects.length === 0);
+  // открытость формы — в unsaved.ts рядом с её полями: создание проекта, законченное после ухода с вкладки, закрывает форму
+  const [openSaved, setOpen] = useUnsaved<boolean>(unsavedKey('newProjectOpen', team.slug));
+  const open = openSaved ?? team.projects.length === 0;
+  const ro = team.sync.state === 'readonly' ? readonlyReason() : undefined;
   const active = team.projects.filter((p) => p.status !== 'archived');
   const archived = team.projects.filter((p) => p.status === 'archived');
   return (
     <section aria-label={t('Проекты')}>
       <div className={styles.tabBar}>
         <span className={styles.note}>{team.projects.length ? t('Проект — фича, которую строит команда: ТЗ, архитектура, задачи и спринты') : ''}</span>
-        {!open && <button type="button" className="btn small" onClick={() => setOpen(true)}>{t('+ Проект')}</button>}
+        {!open && <button type="button" className="btn small" disabled={Boolean(ro)} title={ro} onClick={() => setOpen(true)}>{t('+ Проект')}</button>}
       </div>
       {open && <NewProjectForm team={team} onClose={() => setOpen(false)} />}
       {team.projects.length === 0 && !open && (
@@ -128,19 +135,46 @@ function ProjectRow({ team, p }: { team: string; p: TeamProjectBrief }) {
  * Новый проект: slug, название, суть, репо кода (spec §8.3). Репо — из моих папок (RepoChooser): ссылка и ветка из git уходят
  * в project.yaml, папка — только в мой local.json; ссылку руками — «Ввести ссылку».
  */
+type NewProjectFields = { slug: string; title: string; summary: string; repos: RepoDraft[] };
+const NO_FIELDS: NewProjectFields = { slug: '', title: '', summary: '', repos: [] };
+
+// перезагрузка с заполненной формой нового проекта — вопрос браузера
+guardUnsaved((k, v) => {
+  if (!k.startsWith(unsavedKey('newProject', '')) || typeof v !== 'object' || v === null || !('slug' in v)) return false;
+  const f = v as NewProjectFields;
+  return Boolean(f.slug || f.title.trim() || f.summary.trim() || f.repos.length);
+});
+
 function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => void }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [slug, setSlug] = useState('');
-  const [title, setTitle] = useState('');
-  const [summary, setSummary] = useState('');
-  const [repos, setRepos] = useState<RepoDraft[]>([]);
+  const toast = useToast();
+  // поля и «Создаю…» — в unsaved.ts по команде: уход на другую вкладку и обратно их не теряет и второй раз не создаст
+  const [fields, setFields] = useUnsaved<NewProjectFields>(unsavedKey('newProject', team.slug));
+  const { slug, title, summary, repos } = fields ?? NO_FIELDS;
+  const setField = <K extends keyof NewProjectFields>(k: K, v: NewProjectFields[K] | ((prev: NewProjectFields[K]) => NewProjectFields[K])) =>
+    setFields((d) => {
+      const cur = d ?? NO_FIELDS;
+      return { ...cur, [k]: typeof v === 'function' ? (v as (p: NewProjectFields[K]) => NewProjectFields[K])(cur[k]) : v };
+    });
+  const setRepos = (v: RepoDraft[] | ((prev: RepoDraft[]) => RepoDraft[])) => setField('repos', v);
   const [choosing, setChoosing] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyFlag, setBusy] = useUnsaved<boolean>(unsavedKey('newProject', team.slug, 'busy'));
+  const busy = Boolean(busyFlag);
   const [err, setErr] = useState('');
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => void (alive.current = false);
+  }, []);
+  const ro = team.sync.state === 'readonly' ? readonlyReason() : undefined;
   const slugOk = slug === '' || SLUG_RE.test(slug);
   const body = reposBody(repos);
-  const can = !busy && SLUG_RE.test(slug) && title.trim() !== '' && body !== undefined;
+  const can = !busy && !ro && SLUG_RE.test(slug) && title.trim() !== '' && body !== undefined;
+  const close = () => {
+    setFields(undefined);
+    onClose();
+  };
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!can) return;
@@ -148,13 +182,18 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
     setErr('');
     try {
       const p = await createProject(team.slug, { slug, title: title.trim(), summary: summary.trim(), ...(body.length ? { repos: body } : {}) });
+      // проект создан: поля снимаются сразу, даже если форму уже закрыли сменой вкладки
+      setFields(undefined);
       await qc.invalidateQueries({ queryKey: teamKeys.all });
       onClose();
-      void navigate(projectPath(team.slug, p.slug));
+      // форму уже закрыли сменой вкладки — человек занят другим, не уводим его; проект появится в списке
+      if (alive.current) void navigate(projectPath(team.slug, p.slug));
     } catch (e2) {
-      setErr(errorText(e2));
+      // форму уже закрыли сменой вкладки — ошибка всплывашкой, поля остаются до возврата
+      if (alive.current) setErr(errorText(e2));
+      else toast(t('Проект не создан: {error}', { error: errorText(e2) }));
     } finally {
-      setBusy(false);
+      setBusy(undefined);
     }
   };
   const setRepo = (id: number, patch: Partial<RepoDraft>) => setRepos((list) => list.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -168,17 +207,17 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
       <div className={cx(styles.two, styles.twoSlug)}>
         <div className={styles.f}>
           <label htmlFor="tw-np-title">{t('Название')}</label>
-          <input id="tw-np-title" value={title} autoFocus placeholder={t('Экспорт счетов')} onChange={(e) => setTitle(e.target.value)} />
+          <input id="tw-np-title" value={title} autoFocus placeholder={t('Экспорт счетов')} onChange={(e) => setField('title', e.target.value)} />
         </div>
         <div className={styles.f}>
           <label htmlFor="tw-np-slug">{t('Slug')}</label>
-          <input id="tw-np-slug" className={styles.mono} value={slug} placeholder="invoice-export" spellCheck={false} autoComplete="off" aria-invalid={!slugOk || undefined} onChange={(e) => setSlug(e.target.value.trim().toLowerCase())} />
+          <input id="tw-np-slug" className={styles.mono} value={slug} placeholder="invoice-export" spellCheck={false} autoComplete="off" aria-invalid={!slugOk || undefined} onChange={(e) => setField('slug', e.target.value.trim().toLowerCase())} />
         </div>
       </div>
       <span className={cx(styles.note, !slugOk && styles.err)}>{slugOk ? t('Slug — папка проекта в репо команды: латиница в нижнем регистре, цифры и дефис. Потом не меняется.') : t('Slug — латиница в нижнем регистре, цифры и дефис')}</span>
       <div className={styles.f}>
         <label htmlFor="tw-np-summary">{t('Суть одной строкой')}</label>
-        <input id="tw-np-summary" value={summary} placeholder={t('Бухгалтерия выгружает счета за период в CSV и 1С')} onChange={(e) => setSummary(e.target.value)} />
+        <input id="tw-np-summary" value={summary} placeholder={t('Бухгалтерия выгружает счета за период в CSV и 1С')} onChange={(e) => setField('summary', e.target.value)} />
       </div>
       <div className={styles.f}>
         <label>{t('Репо кода')}</label>
@@ -204,8 +243,8 @@ function NewProjectForm({ team, onClose }: { team: TeamDetail; onClose: () => vo
       </div>
       {err && <p className="msg err">{err}</p>}
       <div className="row">
-        <button type="submit" className="btn primary" disabled={!can}>{busy ? t('Создаю…') : t('Создать проект')}</button>
-        <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>{t('Отмена')}</button>
+        <button type="submit" className="btn primary" disabled={!can} title={ro}>{busy ? t('Создаю…') : t('Создать проект')}</button>
+        <button type="button" className="btn ghost" disabled={busy} onClick={close}>{t('Отмена')}</button>
       </div>
     </form>
   );
@@ -234,7 +273,7 @@ function MembersTab({ team }: { team: TeamDetail }) {
     <section aria-label={t('Участники')}>
       <div className={styles.tabBar}>
         <span className={styles.note}>{t('Участники — из teamwork.yaml. Вас agentgraph узнаёт по email из git config клона')}</span>
-        {!me.inTeam && me.email && <button type="button" className="btn small" disabled={busy} onClick={() => void addMe()}>{t('Добавить меня')}</button>}
+        {!me.inTeam && me.email && <button type="button" className="btn small" disabled={busy || team.sync.state === 'readonly'} title={team.sync.state === 'readonly' ? readonlyReason() : undefined} onClick={() => void addMe()}>{t('Добавить меня')}</button>}
       </div>
       {!me.email && <p className="msg warn">{t('git не знает, кто вы: задайте git config --global user.name и user.email, иначе изменения в команду не запишутся.')}</p>}
       {team.memberList.length === 0 && <p className={styles.note}>{t('Участников пока нет')}</p>}
@@ -261,6 +300,7 @@ function MembersTab({ team }: { team: TeamDetail }) {
 
 function ProcessTab({ team }: { team: TeamDetail }) {
   const qc = useQueryClient();
+  const { askConfirm } = useConfirm();
   const [picked, setPicked] = useMemoryState<string>(`teamwork.flow.${team.slug}`, team.flows[0] ?? '');
   const name = team.flows.includes(picked) ? picked : team.flows[0];
   const q = useTeamFlow(team.slug, name);
@@ -291,6 +331,33 @@ function ProcessTab({ team }: { team: TeamDetail }) {
     else setMsg({ text: t('Flow изменили в репо команды: сохранение перезапишет чужую правку'), tone: 'warn' });
   }, [flow]);
 
+  // несохранённый YAML: смена flow, уход на другую вкладку или экран и перезагрузка спрашивают, а не теряют его молча
+  const dirty = () => Boolean(flow && editor.current && editor.current.value() !== flow.yaml);
+  const askDiscard = () => askConfirm(t('Бросить правку flow «{name}»? Изменения пропадут.', { name: name ?? '' }), { ok: t('Бросить'), danger: true });
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search) && dirty());
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    void askDiscard().then((ok) => (ok ? blocker.proceed() : blocker.reset()));
+  }, [blocker.state]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!dirtyRef.current()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
+  const pick = async (f: string) => {
+    if (f === name) return;
+    if (dirty() && !(await askDiscard())) return;
+    setMsg(NO_MSG);
+    setPicked(f);
+  };
+  const ro = team.sync.state === 'readonly' ? readonlyReason() : undefined;
+
   const save = async () => {
     if (!name) return;
     const text = editor.current?.value() ?? '';
@@ -319,7 +386,7 @@ function ProcessTab({ team }: { team: TeamDetail }) {
       <ul className={styles.flowList} aria-label={t('Flow команды')}>
         {team.flows.map((f) => (
           <li key={f}>
-            <button type="button" className={cx(f === name && styles.on)} aria-current={f === name || undefined} onClick={() => setPicked(f)}>
+            <button type="button" className={cx(f === name && styles.on)} aria-current={f === name || undefined} onClick={() => void pick(f)}>
               {f}{f === team.defaultFlow && <span className={styles.meta}> · {t('по умолчанию')}</span>}
             </button>
           </li>
@@ -335,7 +402,7 @@ function ProcessTab({ team }: { team: TeamDetail }) {
         {flow && <YamlEditor key={flow.name} ref={editor} className={styles.yaml} value={flow.yaml} seq={seq} />}
         {!flow && !q.isError && <Loading className={styles.loading} />}
         <div className="row">
-          <button type="button" className="btn primary" disabled={busy || !flow} onClick={() => void save()}>{busy ? t('Сохраняю…') : t('Сохранить')}</button>
+          <button type="button" className="btn primary" disabled={busy || !flow || Boolean(ro)} title={ro} onClick={() => void save()}>{busy ? t('Сохраняю…') : t('Сохранить')}</button>
           <span className={styles.note}>{t('Сохранение — коммит flow в репо команды; YAML с ошибками не сохранится')}</span>
           <span className={msgClass(msg)}>{msg.text}</span>
         </div>
@@ -346,35 +413,41 @@ function ProcessTab({ team }: { team: TeamDetail }) {
 
 // ---------- настройки
 
+/** Поля настроек плоско: название, flow по умолчанию и по полю на колонку — перечитка и запись идут по каждому отдельно. */
+type SettingsForm = { title: string; defaultFlow: string } & Record<TeamTaskStatus, string>;
+const settingsForm = (team: TeamDetail): SettingsForm => ({ title: team.title, defaultFlow: team.defaultFlow ?? '', ...team.columns });
+
 function SettingsTab({ team }: { team: TeamDetail }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
   const { askConfirm } = useConfirm();
   const home = useConfig().data?.home;
-  const [title, setTitle] = useState(team.title);
-  const [columns, setColumns] = useState(team.columns);
-  const [defaultFlow, setDefaultFlow] = useState(team.defaultFlow ?? '');
+  // команда перечиталась (чужая правка, событие team): каждое нетронутое поле — заново, тронутые остаются; запись уносит
+  // только поля, изменённые относительно базы формы, — переименование команды коллегой не откатится правкой колонки
+  const [base, setBase] = useState(() => settingsForm(team));
+  const [form, setForm] = useState(base);
+  const [seen, setSeen] = useState(team);
+  if (seen !== team) {
+    const next = settingsForm(team);
+    setSeen(team);
+    setForm((f) => rebaseForm(f, base, next));
+    setBase(next);
+  }
+  const { title, defaultFlow } = form;
+  const set = (k: keyof SettingsForm, v: string) => setForm((f) => ({ ...f, [k]: v }));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(NO_MSG);
-  // команда перечиталась (чужая правка, событие team): поля — заново, если их не трогали
-  const [base, setBase] = useState(team);
-  if (base !== team) {
-    const untouched = title === base.title && defaultFlow === (base.defaultFlow ?? '') && STATUSES.every((s) => columns[s] === base.columns[s]);
-    setBase(team);
-    if (untouched) {
-      setTitle(team.title);
-      setColumns(team.columns);
-      setDefaultFlow(team.defaultFlow ?? '');
-    }
-  }
-  const dirty = title.trim() !== team.title || defaultFlow !== (team.defaultFlow ?? '') || STATUSES.some((s) => columns[s].trim() !== team.columns[s]);
+  const ro = team.sync.state === 'readonly' ? readonlyReason() : undefined;
+  const diff = changedFields(form, base);
+  const dirty = Object.keys(diff).length > 0;
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const patch: TeamPatch = {};
-    if (title.trim() !== team.title) patch.title = title.trim();
-    if (STATUSES.some((s) => columns[s].trim() !== team.columns[s])) patch.columns = Object.fromEntries(STATUSES.map((s) => [s, columns[s].trim()])) as TeamDetail['columns'];
-    if (defaultFlow !== (team.defaultFlow ?? '')) patch.defaultFlow = defaultFlow || null;
+    if (diff.title !== undefined) patch.title = diff.title;
+    const cols = STATUSES.filter((s) => diff[s] !== undefined);
+    if (cols.length) patch.columns = Object.fromEntries(cols.map((s) => [s, diff[s]!]));
+    if (diff.defaultFlow !== undefined) patch.defaultFlow = diff.defaultFlow || null;
     setBusy(true);
     setMsg(NO_MSG);
     try {
@@ -415,7 +488,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
         <div className={cx(styles.two, styles.twoPrefix)}>
           <div className={styles.f}>
             <label htmlFor="tw-set-title">{t('Название')}</label>
-            <input id="tw-set-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <input id="tw-set-title" value={title} onChange={(e) => set('title', e.target.value)} />
           </div>
           <div className={styles.f}>
             <label htmlFor="tw-set-prefix">{t('Префикс задач')}</label>
@@ -428,7 +501,7 @@ function SettingsTab({ team }: { team: TeamDetail }) {
             {STATUSES.map((s) => (
               <div key={s} className={styles.f}>
                 <label htmlFor={`tw-col-${s}`} className={styles.meta}>{s} · {colLabel[s]}</label>
-                <input id={`tw-col-${s}`} value={columns[s]} onChange={(e) => setColumns((c) => ({ ...c, [s]: e.target.value }))} />
+                <input id={`tw-col-${s}`} value={form[s]} onChange={(e) => set(s, e.target.value)} />
               </div>
             ))}
           </div>
@@ -436,13 +509,13 @@ function SettingsTab({ team }: { team: TeamDetail }) {
         </div>
         <div className={styles.f}>
           <label htmlFor="tw-set-flow">{t('Flow для «В работу»')}</label>
-          <select id="tw-set-flow" value={defaultFlow} onChange={(e) => setDefaultFlow(e.target.value)}>
+          <select id="tw-set-flow" value={defaultFlow} onChange={(e) => set('defaultFlow', e.target.value)}>
             <option value="">{t('— не выбран —')}</option>
             {team.flows.map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
         </div>
         <div className="row">
-          <button type="submit" className="btn primary" disabled={busy || !dirty || !title.trim() || STATUSES.some((s) => !columns[s].trim())}>{busy ? t('Сохраняю…') : t('Сохранить')}</button>
+          <button type="submit" className="btn primary" disabled={busy || !dirty || Boolean(ro) || !title.trim() || STATUSES.some((s) => !form[s].trim())} title={ro}>{busy ? t('Сохраняю…') : t('Сохранить')}</button>
           <span className={msgClass(msg)}>{msg.text}</span>
         </div>
       </form>

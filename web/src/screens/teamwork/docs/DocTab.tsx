@@ -14,7 +14,7 @@ import { t } from '../../../lib/i18n';
 import { draftFailed, draftLine, draftRunning, isDocEmpty, latestDraftFor } from '../../../lib/teamwork/doc-view';
 import { docFile, docLabel, serializeRequirementRows } from '../../../lib/teamwork/docs';
 import { Loading } from '../../sessions/Loading';
-import { cx, ErrorLine } from '../parts';
+import { cx, ErrorLine, StaleLine } from '../parts';
 import tw from '../Teamwork.module.css';
 import { AgentAsk, type DraftDoc } from './AgentAsk';
 import { draftKeys, startDraft, useDrafts } from './api';
@@ -87,7 +87,8 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
   };
 
   if (docQ.isPending) return <Loading className={tw.loading} />;
-  if (docQ.isError) {
+  // перечитка упала, а документ уже на экране — строка над ним (ниже), правка раздела и рецензия остаются
+  if (docQ.isError && !docQ.data) {
     const gone = docQ.error instanceof ApiError && docQ.error.status === 404;
     if (!gone) return <ErrorLine text={t('Документ не читается: {error}', { error: errorText(docQ.error) })} />;
     const create = async () => {
@@ -122,10 +123,12 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
     );
   }
   const doc = docQ.data;
+  const stale = <StaleLine error={docQ.error} gone={t('Файла {file} больше нет в репо команды. Показано последнее загруженное, изменения не запишутся.', { file: docFile(name) })} />;
 
   if (review) {
     return (
       <>
+        {stale}
         <p className={styles.hint} style={{ margin: '0 0 10px' }}><button type="button" className={styles.linkBtn} onClick={() => setReview(null)}>{t('← К документу')}</button></p>
         <DraftReview key={`${review}|${name}`} team={team} project={project} name={name} run={review} onClose={() => setReview(null)} onRetry={(d: TeamDraftDetail) => void retry(d)} />
       </>
@@ -144,6 +147,7 @@ export function DocBody({ team, project, name, tasks }: { team: TeamDetail; proj
   const empty = isDocEmpty(doc.text) && !writeSelf && !openEdit;
   return (
     <>
+      {stale}
       {latest && <DraftLine draft={latest} name={name} onReview={() => setReview(latest.run)} onRetry={() => void retry(latest)} />}
       {empty && draftable ? (
         <div className={styles.empty}>
