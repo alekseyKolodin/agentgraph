@@ -355,3 +355,31 @@ test('stop дожидается идущих записей старта и ко
   await stopped;
   assert.deepEqual(f.patches.map((p) => p.patch), [{ status: 'in_progress', assignee: 'me@x' }, { status: 'review' }]);
 });
+
+test('D-14: запуск переименованной задачи кончился — переход у задачи, на которую переехала его работа, а не у старого номера', async () => {
+  const f = fake({ export: [task({ id: 'PAY-1', status: 'in_progress', title: 'чужая' }), task({ id: 'PAY-7', status: 'in_progress', title: 'моя' })] });
+  f.work['PAY-7'] = [{ kind: 'run', id: 'r1', status: 'running', at: 'x' }];
+  const svc: StatusService = { ...f.svc, workTask: (_t, w) => Object.keys(f.work).find((id) => f.work[id].some((x) => x.kind === w.kind && x.id === w.id)) };
+  await new TeamworkStatus({ service: svc, timers: false }).ended(link, { kind: 'run', id: 'r1', status: 'done' });
+  assert.deepEqual(f.patches, [{ id: 'PAY-7', patch: { status: 'review' } }]);
+  assert.equal(f.work['PAY-1'], undefined);
+  assert.deepEqual(f.work['PAY-7'].map((w) => w.status), ['done']);
+  // работа нигде не записана (задачу удалили, номер мог достаться чужой) — задачу по номеру из связи не трогаем
+  const g = fake({ export: [task({ status: 'in_progress' })] });
+  const logs: string[] = [];
+  await new TeamworkStatus({ service: { ...g.svc, workTask: () => undefined }, timers: false, log: (l) => logs.push(l) }).ended(link, { kind: 'run', id: 'r2', status: 'done' });
+  assert.deepEqual([g.patches, g.work], [[], {}]);
+  assert.match(logs[0] ?? '', /запуска r2 нет в работе задач/);
+});
+
+test('D-16: stop не ждёт зависший опрос PR дольше срока; после stop опрос дальше по задачам не идёт', async () => {
+  const f = fake({ export: [task({ status: 'in_progress', branch: 'tw/PAY-1-x' }), task({ id: 'PAY-2', status: 'in_progress', branch: 'tw/PAY-2-x', file: 'projects/export/tasks/PAY-2.md' })] });
+  let calls = 0;
+  const st = new TeamworkStatus({ service: f.svc, exec: () => (calls++, new Promise<string>(() => {})), timers: false });
+  void st.poll();
+  await new Promise((r) => setTimeout(r, 10));
+  const started = Date.now();
+  await st.stop(50);
+  assert.ok(Date.now() - started < 1_000);
+  assert.equal(calls, 1);
+});

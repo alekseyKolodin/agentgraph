@@ -115,10 +115,22 @@ test('askQuit: отправка не успела — не ждём её дол�
   assert.equal(f.shown[1]!.message, 'Изменения Teamwork ещё отправляются');
 });
 
-test('askQuit: «Отмена» в первом окне — остаёмся, ничего не отправляем; подсчёт коммитов завис — выход без вопроса', async () => {
+test('askQuit: «Отмена» в первом окне — остаёмся, ничего не отправляем', async () => {
   const f = fake({ unsent: [[pay]], answers: [2] });
   assert.equal(await askQuit(f.deps), false);
   assert.deepEqual(f.pushed, []);
-  const hang = { ...fake({ unsent: [[]], answers: [] }).deps, unsent: () => new Promise<UnsentTeam[]>(() => {}) };
-  assert.equal(await askQuit(hang), true);
+});
+
+test('D-16: подсчёт коммитов завис или упал — выход не молча: окно «не удалось проверить», по умолчанию «Отмена»', async () => {
+  const hang = fake({ unsent: [[]], answers: [] });
+  const deps = { ...hang.deps, unsent: () => new Promise<UnsentTeam[]>(() => {}) };
+  assert.equal(await askQuit(deps), false);
+  assert.equal(hang.shown.length, 1);
+  assert.match(hang.shown[0]!.detail, /Не удалось проверить, всё ли отправлено в Teamwork/);
+  assert.deepEqual(hang.shown[0]!.choices, ['quit', 'cancel']);
+  assert.equal(hang.shown[0]!.defaultId, hang.shown[0]!.cancelId);
+  const broken = fake({ sessions: ['a'], unsent: [[]], answers: [0] });
+  assert.equal(await askQuit({ ...broken.deps, unsent: () => Promise.reject(new Error('git упал')) }), true);
+  assert.deepEqual(broken.shown[0]!.buttons, ['Завершить сессии и закрыть', 'Отмена']);
+  assert.match(broken.shown[0]!.detail, /^Идёт 1 сессия Claude/);
 });

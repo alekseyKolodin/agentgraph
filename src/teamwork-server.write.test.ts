@@ -26,7 +26,7 @@ function actor(name: string, email: string): TeamService {
   const x: Exec = (cmd, args, opts = {}) => exec(cmd, args, { ...opts, env: { ...opts.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: cfg } });
   const root = path.join(tmp, name, 'teams');
   fs.mkdirSync(root, { recursive: true });
-  return new TeamService({ root: () => root, timers: false, repo: { ...defaultRepoDeps(), exec: x, tmpDir: tmp } });
+  return new TeamService({ root: () => root, timers: false, repo: { ...defaultRepoDeps(), exec: x, tmpDir: tmp, retryMinMs: 3_600_000, retryMaxMs: 3_600_000 } });
 }
 
 const alice = actor('alice', 'alice@example.com');

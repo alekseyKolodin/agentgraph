@@ -39,15 +39,22 @@ export function teamsLine(teams: readonly UnsentTeam[]): string {
 const SESSIONS_NOTE =
   'Они завершатся; разговор сохранится, продолжить можно потом кнопкой «Продолжить».\n\nСостояние пространства по этим сессиям при таком выходе не пишется — обновить его можно потом кнопкой «Обновить состояние» на экране сессии.';
 const TEAMS_NOTE = 'Изменения сохранены на этом компьютере и уйдут в репо команды при следующем запуске agentgraph, когда репо будет доступен.';
+const UNKNOWN_LINE =
+  'Не удалось проверить, всё ли отправлено в Teamwork. Неотправленные изменения, если они есть, сохранены на этом компьютере и уйдут в репо команды при следующем запуске agentgraph.';
 
 /**
  * Вопрос перед выходом; спрашивать не о чем — undefined. Сессии терминала — «Завершить сессии и закрыть» или «Отмена».
  * Неотправленные изменения команд — первой кнопкой «Отправить и закрыть» (askQuit синхронизирует команды и выходит, если
  * всё ушло), «Закрыть без отправки», «Отмена». pushFailed — отправка уже не удалась или не успела: «Отправить» больше не
- * предлагается.
+ * предлагается. teams undefined — проверить не удалось (git не ответил вовремя или упал): выход всё равно спрашивает, с
+ * «Отмена» по умолчанию, а не закрывается молча (D-16).
  */
-export function quitPrompt(s: { sessions: readonly string[]; teams: readonly UnsentTeam[]; pushFailed?: boolean }): QuitPrompt | undefined {
+export function quitPrompt(s: { sessions: readonly string[]; teams: readonly UnsentTeam[] | undefined; pushFailed?: boolean }): QuitPrompt | undefined {
   const sessions = s.sessions.length > 0;
+  if (!s.teams) {
+    const detail = [sessions ? `${sessionsLine(s.sessions)} ${SESSIONS_NOTE}` : '', UNKNOWN_LINE].filter(Boolean).join('\n\n');
+    return { message: 'Закрыть AgentGraph?', detail, buttons: [sessions ? 'Завершить сессии и закрыть' : 'Закрыть', 'Отмена'], choices: ['quit', 'cancel'], defaultId: 1, cancelId: 1 };
+  }
   const teams = s.teams.length > 0;
   if (!sessions && !teams) return undefined;
   const detail = [sessions ? `${sessionsLine(s.sessions)} ${SESSIONS_NOTE}` : '', teams ? `${teamsLine(s.teams)} ${TEAMS_NOTE}` : ''].filter(Boolean).join('\n\n');
@@ -93,15 +100,16 @@ const within = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
 export async function askQuit(d: QuitDeps): Promise<boolean> {
   const unsentWait = d.unsentWaitMs ?? 3_000;
   const sessions = d.sessions();
-  let teams = await within(d.unsent(), unsentWait, []);
+  // не успели или упали — undefined: об этом спрашиваем, а не выходим молча
+  let teams: UnsentTeam[] | undefined = await within<UnsentTeam[] | undefined>(d.unsent(), unsentWait, undefined);
   let pushFailed = false;
   for (;;) {
     const p = quitPrompt({ sessions, teams, pushFailed });
     if (!p) return true;
     const choice = p.choices[await d.show(p)] ?? 'cancel';
-    if (choice !== 'push') return choice === 'quit';
+    if (choice !== 'push' || !teams) return choice === 'quit';
     await within(d.push(teams.map((x) => x.slug)), d.pushWaitMs ?? 20_000, undefined);
-    teams = await within(d.unsent(), unsentWait, teams);
+    teams = (await within<UnsentTeam[] | undefined>(d.unsent(), unsentWait, undefined)) ?? teams;
     // всё ушло: про сессии человек уже ответил той же кнопкой
     if (!teams.length) return true;
     pushFailed = true;

@@ -129,6 +129,11 @@ export type StatusService = {
   task(team: string, project: string, id: string): TeamTask;
   updateTask(team: string, project: string, id: string, patch: TeamTaskPatch): Promise<TeamTask>;
   recordWork(team: string, taskId: string, work: TeamTaskWork): void;
+  /**
+   * Номер задачи, у которой в local.json → work записан этот запуск или сессия: после переименования совпавшего номера
+   * (spec §5.7) работа переезжает на новый, а запуск помнит старый (D-14). Нет записи — undefined.
+   */
+  workTask?(team: string, work: Pick<TeamTaskWork, 'kind' | 'id'>): string | undefined;
 };
 
 /** Адаптер настоящего сервиса команды. Список команд и репо проекта читаются с диска без git: опрос идёт по таймеру. */
@@ -145,6 +150,10 @@ export function statusService(svc: TeamService): StatusService {
     task: (team, project, id) => svc.task(team, project, id),
     updateTask: (team, project, id, patch) => svc.updateTask(team, project, id, patch),
     recordWork: (team, id, work) => svc.recordWork(team, id, work),
+    workTask: (team, work) => {
+      const all = svc.repo(team).local().work;
+      return Object.keys(all).find((id) => all[id].some((w) => w.kind === work.kind && w.id === work.id));
+    },
   };
 }
 
@@ -173,6 +182,7 @@ export class TeamworkStatus {
   private readonly starting = new Map<string, Promise<void>>();
   /** Все идущие записи старта и конца: stop() дожидается их до остановки сервиса команды. */
   private readonly writes = new Set<Promise<void>>();
+  private stopped = false;
 
   constructor(private readonly deps: TeamworkStatusDeps) {}
 
@@ -219,20 +229,30 @@ export class TeamworkStatus {
 
   /**
    * Запуск или сессия по задаче закончились: статус — в local.json → work; запуск done — «В работе» → «Ревью». Упал или
-   * остановлен — без перехода, значок на карточке по work. Не бросает.
+   * остановлен — без перехода, значок на карточке по work. Задача — та, у которой этот запуск записан в work: если мою
+   * неотправленную задачу переименовали из-за совпавшего номера, run.json помнит старый номер, а он теперь у чужой
+   * задачи (D-14). Не бросает.
    */
   async ended(link: RunTeamworkLink, work: Omit<TeamTaskWork, 'at'> & { at?: string }): Promise<void> {
     if (!link.task) return;
     const run = (async () => {
       // старт той же задачи ещё пишется (запуск кончился за секунды): сначала он, иначе done не даст «Ревью»
       await this.starting.get(`${link.team}/${link.task}`);
+      let id = link.task!;
       try {
-        this.deps.service.recordWork(link.team, link.task!, { ...work, at: work.at ?? this.now() });
+        if (this.deps.service.workTask) {
+          const found = this.deps.service.workTask(link.team, work);
+          // записи нет нигде — задачу удалили (работа забыта) или старт не записался: номер из связи мог уже достаться
+          // чужой задаче, её не трогаем
+          if (!found) return this.log(`${link.task}: конец работы не записан — запуска ${work.id} нет в работе задач`);
+          id = found;
+        }
+        this.deps.service.recordWork(link.team, id, { ...work, at: work.at ?? this.now() });
         if (work.kind !== 'run' || !work.status) return;
-        const patch = runEndPatch(this.deps.service.task(link.team, link.project, link.task!), work.status);
-        if (patch) await this.deps.service.updateTask(link.team, link.project, link.task!, patch);
+        const patch = runEndPatch(this.deps.service.task(link.team, link.project, id), work.status);
+        if (patch) await this.deps.service.updateTask(link.team, link.project, id, patch);
       } catch (err) {
-        this.log(`${link.task}: конец работы не записан — ${errMsg(err)}`);
+        this.log(`${id}: конец работы не записан — ${errMsg(err)}`);
       }
     })();
     this.writes.add(run);
@@ -281,6 +301,7 @@ export class TeamworkStatus {
           continue;
         }
         for (const task of tasks) {
+          if (this.stopped) return report;
           report.tasks++;
           // репо задачи; у проекта с одним репо — оно. Ссылка без хоста (путь, file://) — PR негде искать
           const repo = task.repo ? repos.find((r) => r.key === task.repo) : repos.length === 1 ? repos[0] : undefined;
@@ -335,17 +356,24 @@ export class TeamworkStatus {
 
   /** Опрос по таймеру; с timers: false — ничего. */
   start(): void {
+    this.stopped = false;
     if (this.deps.timers === false || this.timer) return;
     this.timer = setInterval(() => void this.poll().catch((err: unknown) => this.log(`опрос PR: ${errMsg(err)}`)), this.deps.intervalMs ?? PR_POLL_MS);
     this.timer.unref();
   }
 
-  /** Снять таймер и дождаться идущего опроса и записей старта и конца: сервис команды останавливается после них. */
-  async stop(): Promise<void> {
+  /**
+   * Снять таймер и дождаться идущего опроса и записей старта и конца: сервис команды останавливается после них. Ждём не
+   * дольше waitMs: запись опроса стоит в очереди клона за fetch без сети (до 2 минут), а выход из приложения не должен
+   * висеть на ней (D-16). Опрос после stop() дальше по задачам не идёт; недописанное автоматика повторит при следующем
+   * запуске (PR увидится снова).
+   */
+  async stop(waitMs = 5_000): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    await this.polling?.catch(() => undefined);
-    await Promise.all([...this.writes].map((w) => w.catch(() => undefined)));
+    this.stopped = true;
+    const all = Promise.all([this.polling?.catch(() => undefined), ...[...this.writes].map((w) => w.catch(() => undefined))]);
+    await Promise.race([all, new Promise<void>((resolve) => setTimeout(resolve, waitMs).unref())]);
   }
 }
 
@@ -363,7 +391,7 @@ export function teamworkStatus(deps?: TeamworkStatusDeps): TeamworkStatus {
 /** Автоматика, если она создана и не снята остановкой сервера: конец опоздавшего запуска не должен ронять процесс. */
 export const currentTeamworkStatus = (): TeamworkStatus | undefined => status;
 
-/** Остановить автоматику (stopServer): таймер снимается, идущий опрос дожидается. */
+/** Остановить автоматику (stopServer): таймер снимается, идущий опрос дожидается не дольше нескольких секунд (D-16). */
 export async function stopTeamworkStatus(): Promise<void> {
   const s = status;
   status = undefined;
