@@ -2,6 +2,24 @@
 
 agentgraph versions. Sections are written by `npm run release`; when a new version reaches `main`, CI publishes the GitHub release `v<version>` with its section.
 
+## 0.4.0 — 2026-11-14
+
+### Features
+
+- Teamwork: plan a feature as a team in a shared git repo. A team's projects (PRD, architecture, design, documents, tasks with dependencies, backlog and sprints) are files in an ordinary git repository, and code stays in its own repos. "Create team" on an empty repo gives it the template, including the agents' flows; teammates join with "Join by URL". agentgraph keeps a local clone, commits every change, pushes it a few seconds later and pulls teammates' changes in the background. The sync line says what hasn't gone out and why. Concurrent edits are merged field by field, and what can't be merged is shown with both versions
+- Project documents read like documents: a table of contents, and requirements `FR-N`/`NFR-N` as rows with the tasks that cover them. A requirement without tasks is marked and gets "Create task", and task numbers, requirements and document paths in the text are links. You edit one section at a time in place, with live markdown and requirement rows you can drag. Saving conflicts only when someone changed that same section. "History" opens past versions as diffs
+- Agent drafts: the team's flows draft the PRD from the code, architecture and design from the PRD, and "Break down the PRD into tasks". They run as ordinary runs, and you accept their edits one by one; "With an agent…" rewrites a single section. A breakdown proposal shows the tasks by waves, as a list or a dependency graph, with the longest chain and a cycle check, and every task can be edited before you accept it
+- Backlog, sprints and board: an ordered backlog with quick add, drag and drop (or "Move…" and ⌥-arrows from the keyboard) and actions on several tasks. Sprints have no dates: "Start a sprint", "Close sprint" with a summary and a choice for unfinished tasks, then a history of closed sprints. The board has four columns and filters, and its cards show blockers, runs, sessions and the PR. The task panel holds fields, acceptance criteria, comments and the work done on the task
+- "Start work ▸" sends a task to the team's flow or to a Claude Code session in a worktree on the task branch `tw/<ID>-<slug>`, with everything the agent gets shown in the run form first. The task moves to "In progress" when work starts, to "Review" when the run is done or a PR is opened, and to "Done" when the PR is merged. Statuses only move forward, and PRs are found with `gh` or `glab`. A session opened from a task can update the task and write the project's architecture, design and documents, always asking you first
+- Home shows "My tasks" across all teams. The desktop app asks before quitting while team changes are unpushed and can send them first
+- Team flows run only in a version you trust: one changed by a teammate shows its diff, shell commands and risky tools until you choose "Trust this version". Team flows can't use plugins, extra folders, local flows or permission modes above `default` and `plan`. `.claude` folders in the team repo are not applied, and the project overview names them
+- Terminal sessions can edit their own space (map, state, documents, `space.json`, its `.claude/`) and flows, with your approval: every edit asks, in every permission mode, with claude 2.1.285 or newer. `space.json` and flow files are checked like in the API before the question, and an edit that doesn't pass is refused with the errors. In `dontAsk` the edit is refused with the reason, since Claude Code shows no question there. In `bypassPermissions` a Bash command that names the space or flows folder asks too. New session tools are `space_map_write`, `space_state_write`, `space_settings` and `flow_write`
+
+### Fixes
+
+- Terminal sessions can no longer write agentgraph's settings files (`settings.json`, tokens). The write hook that guards knowledge tags and other spaces now runs in every session, not only in one started in a space folder
+- A failed git command is named in the error ("git fetch: …"), not by its first option ("git -c: …")
+
 ## 0.3.0 — 2026-11-04
 
 ### Features
