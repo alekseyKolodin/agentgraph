@@ -1,0 +1,18 @@
+# Рецепт: уведомления GitHub (ревью, упоминания, CI). Нужен gh с входом (gh auth login) и правом notifications.
+id: github-notifications
+summary: Новые уведомления GitHub (ревью, упоминания, CI)
+spec:
+  title: GitHub · уведомления
+  kind: command
+  every: 5m
+  description: Новое уведомление в GitHub
+  config:
+    command: |-
+      gh api notifications --jq '[.[] | {id: (.id + "@" + .updated_at), title: .subject.title, text: (.reason + " · " + .repository.full_name), link: (if .subject.type == "Release" then (.repository.html_url + "/releases") elif .subject.type == "CheckSuite" then (.repository.html_url + "/actions") elif (.subject.url // "") == "" then .repository.html_url else (.subject.url | sub("api.github.com/repos"; "github.com") | sub("/pulls/"; "/pull/") | sub("/commits/"; "/commit/")) end), at: .updated_at, author: .repository.full_name}]'
+  map:
+    id: id
+    title: title
+    text: text
+    link: link
+    at: at
+    author: author

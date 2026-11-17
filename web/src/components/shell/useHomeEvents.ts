@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { HomeEvent } from '@server/api-types';
 import { keys, useEventStream, useFeature } from '../../api';
 import { sessionKeys } from '../../api/sessions';
+import { routineKeys } from '../../api/routines';
 import { emitSpaceChanged } from '../../api/spaces';
 import { teamKeys } from '../../api/teamwork';
 import { FEED_EVENTS } from '../../lib/feed';
@@ -113,6 +114,7 @@ export function useHomeEvents(): void {
     // при переподключении события за время обрыва потеряны: забираем состояние заново
     onOpen: () => {
       soon(keys.home);
+      soon(routineKeys.all);
       soon(keys.runs);
       if (feedOn) soon(keys.feed);
     },
@@ -126,6 +128,11 @@ export function useHomeEvents(): void {
       if (e.type === 'space') {
         soon(keys.spaces);
         if (e.space) emitSpaceChanged(e.space, e.spacePart);
+        return;
+      }
+      // рутины: новое событие в журнале, ожидание, статус источника — список, рутина, журнал и карточки главной заново
+      if (e.type === 'routines') {
+        soon(routineKeys.all);
         return;
       }
       // …или файл в папке flow: список flow в сайдбаре

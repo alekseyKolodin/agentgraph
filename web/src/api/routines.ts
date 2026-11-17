@@ -1,0 +1,85 @@
+// Запросы раздела «Рутины» (docs/routines/SPEC.md §3): обзор со списком, источниками, видами, ожиданиями и «догнать»,
+// рутина, журнал, проверка на истории, источники, подключение словами и рецепты. Изменения на сервере приходят событием
+// `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
+import { useQuery } from '@tanstack/react-query';
+import type {
+  DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceSpec, SourceTestResult, SourceView, WaitAction,
+} from '@server/routines/types';
+import type { Recipe } from '@server/routines/kind';
+import { api } from './client';
+
+const enc = encodeURIComponent;
+const BASE = '/api/routines';
+
+/** Рецепт без пути к файлу: его сервер наружу не отдаёт. */
+export type RecipeView = Omit<Recipe, 'file'>;
+
+export const routineKeys = {
+  all: ['routines'] as const,
+  overview: ['routines', 'overview'] as const,
+  one: (slug: string) => ['routines', 'one', slug] as const,
+  log: (slug: string, outcomes: string) => ['routines', 'log', slug, outcomes] as const,
+  recipes: ['routines', 'recipes'] as const,
+  draft: (id: string) => ['routines', 'draft', id] as const,
+};
+
+export const fetchOverview = () => api<RoutinesOverview>('GET', BASE);
+export const fetchRoutine = (slug: string) => api<RoutineView>('GET', `${BASE}/${enc(slug)}`);
+/** spec или yaml (YAML вручную); ошибка схемы — 400 с problems в теле (ApiError.data). */
+export const saveRoutine = (slug: string, body: { spec: RoutineSpec } | { yaml: string }) => api<RoutineView>('PUT', `${BASE}/${enc(slug)}`, body);
+export const deleteRoutine = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/${enc(slug)}`);
+export const setRoutineEnabled = (slug: string, enabled: boolean) => api<RoutineView>('POST', `${BASE}/${enc(slug)}/enabled`, { enabled });
+/** «Проверить на истории»: можно для несохранённого spec. */
+export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryCheck>('POST', `${BASE}/${enc(slug)}/history`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
+/** Ручной запуск: по событию журнала или (расписание) сейчас. */
+export const runRoutine = (slug: string, eventId?: string) => api<{ runId?: string; wait?: RoutineWait }>('POST', `${BASE}/${enc(slug)}/run`, eventId ? { eventId } : {});
+export const fetchLog = (slug: string, outcomes?: LogOutcome[], limit = 200) =>
+  api<LogEntry[]>('GET', `${BASE}/${enc(slug)}/log?${new URLSearchParams({ ...(outcomes?.length ? { outcome: outcomes.join(',') } : {}), limit: String(limit) })}`);
+/** Обратная связь на событие: «Это баг» / «Не баг» / «Не повтор»; «Учесть» в проверке на истории — verdict = прошлый ответ. */
+export const sendFeedback = (slug: string, eventId: string, verdict: Feedback['verdict']) => api<{ ok: true }>('POST', `${BASE}/${enc(slug)}/feedback`, { eventId, verdict });
+/** keepalive — отправка при закрытии вкладки: запрос не обрывается вместе со страницей. */
+export const answerWait = (id: string, action: WaitAction, keepalive = false) => api<{ ok: true; runId?: string }>('POST', `${BASE}/waits/${enc(id)}`, action, undefined, keepalive);
+export const answerCatchUp = (id: string, action: 'run' | 'skip') => api<{ ok: true }>('POST', `${BASE}/catchup/${enc(id)}`, { action });
+
+export const fetchSources = () => api<SourceView[]>('GET', `${BASE}/sources`);
+export const saveSource = (slug: string, spec: SourceSpec, secrets?: Record<string, string>) => api<SourceView>('PUT', `${BASE}/sources/${enc(slug)}`, { spec, ...(secrets && Object.keys(secrets).length ? { secrets } : {}) });
+/** 409 — источник используют рутины. */
+export const deleteSource = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/sources/${enc(slug)}`);
+export const testSource = (spec: SourceSpec, secrets?: Record<string, string>) => api<SourceTestResult>('POST', `${BASE}/sources/test`, { spec, ...(secrets && Object.keys(secrets).length ? { secrets } : {}) });
+
+export const startDraft = (description: string) => api<DraftView>('POST', `${BASE}/sources/draft`, { description });
+export const fetchDraft = (id: string) => api<DraftView>('GET', `${BASE}/sources/draft/${enc(id)}`);
+export const draftSecret = (id: string, name: string, value: string) => api<DraftView>('POST', `${BASE}/sources/draft/${enc(id)}/secret`, { name, value });
+export const refineDraft = (id: string, note: string) => api<DraftView>('POST', `${BASE}/sources/draft/${enc(id)}/refine`, { note });
+export const cancelDraft = (id: string) => api<{ ok: true }>('DELETE', `${BASE}/sources/draft/${enc(id)}`);
+
+export const fetchRecipes = () => api<RecipeView[]>('GET', `${BASE}/recipes`);
+export const importRecipe = (yaml: string) => api<RecipeView>('POST', `${BASE}/recipes/import`, { yaml });
+
+/** GET /api/routines: список, источники, виды, ожидания и «догнать» — для списка, создания, редактора и главной. */
+export function useRoutines(enabled = true) {
+  return useQuery({ queryKey: routineKeys.overview, queryFn: fetchOverview, enabled });
+}
+
+export function useRoutine(slug: string | undefined) {
+  return useQuery({ queryKey: routineKeys.one(slug ?? ''), queryFn: () => fetchRoutine(slug!), enabled: Boolean(slug) });
+}
+
+/** Журнал целиком (до 200 строк): фильтры-чипы считаются на месте, без запроса на каждый. */
+export function useRoutineLog(slug: string | undefined) {
+  return useQuery({ queryKey: routineKeys.log(slug ?? '', ''), queryFn: () => fetchLog(slug!), enabled: Boolean(slug) });
+}
+
+export function useRecipes(enabled = true) {
+  return useQuery({ queryKey: routineKeys.recipes, queryFn: fetchRecipes, enabled, staleTime: 60_000 });
+}
+
+/** Черновик подключения словами: пока агент работает, опрос раз в 1.5 с. */
+export function useDraft(id: string | null) {
+  return useQuery({
+    queryKey: routineKeys.draft(id ?? ''),
+    queryFn: () => fetchDraft(id!),
+    enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data?.state === 'working' ? 1500 : false),
+  });
+}

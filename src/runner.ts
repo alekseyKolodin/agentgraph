@@ -125,6 +125,11 @@ export type RunOptions = {
   loadFlow?: (name: string) => FlowSpec;
   /** Запуск вызван блоком-вызовом другого запуска: в отчёт. */
   parent?: RunParent;
+  /**
+   * Блоки, перед первой итерацией которых запуск встаёт на паузу с pauseReason (before: true) — рутина ждёт человека
+   * (src/routines). Продолжение снимает её как обычную паузу. Без control.requestPause (CLI) опция не действует.
+   */
+  pauseBefore?: string[];
 };
 
 export type { RunWorktree } from './api-types.js';
@@ -988,6 +993,20 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
 
     // лимит читаем на каждом шаге: его можно поменять во время запуска (setBlockMaxIterations, повтор итерации)
     for (let iter = 1; ; iter++) {
+      // Рутина ждёт человека перед этим блоком (pauseBefore): пауза с причиной до первой итерации, дальше — как обычно
+      if (iter === 1 && opts.pauseBefore?.includes(blocks[bi].name) && opts.control?.requestPause && !aborted()) {
+        const name = blocks[bi].name;
+        const reason: PauseReason = { block: name, iteration: 1, phase: blocks[bi].phases[0]?.name ?? '', text: `Рутина ждёт подтверждения перед блоком «${name}»`, output: '', at: new Date().toISOString(), before: true };
+        report.pauseReason = reason;
+        const record: PauseReason = { ...reason };
+        (report.pauses ??= []).push(record);
+        save();
+        opts.control.requestPause();
+        if (await checkpoint()) return 'aborted';
+        record.resumedAt = new Date().toISOString();
+        delete report.pauseReason;
+        save();
+      }
       // Пауза до начала итерации, чтобы на паузе в отчёте не висела пустая итерация. После последней — тоже: на ней
       // можно повторить итерацию или поднять лимит, и блок пойдёт дальше.
       if (await checkpoint()) return 'aborted';

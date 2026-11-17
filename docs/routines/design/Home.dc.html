@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Главная — рутина ждёт решения</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,a:focus-visible,input:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.src{font:500 11px/18px var(--mono);color:var(--ink-2);border:1px solid var(--line-strong);border-radius:4px;padding:0 6px;white-space:nowrap}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);position:relative}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.ri .b{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.nowrow{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:2px 10px;padding:10px 6px;border-bottom:1px solid var(--line);align-items:baseline}
+.nowrow:hover{background:var(--hover)}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 700px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri on" href="Home.dc.html" aria-label="Главная" title="Главная" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg><sc-if value="{{waiting}}" hint-placeholder-val="{{true}}"><span class="b"></span></sc-if></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Flow" title="Flow"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Знания" title="Знания"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M7 3 5.5 15M12.5 3 11 15M3.5 6.5h12M3 11.5h12"/></svg></a>
+    <a class="ri" href="#" aria-label="Teamwork" title="Teamwork"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="12.5" cy="7.5" r="2"/><path d="M2.5 15c0-2.5 1.8-4 4-4s4 1.5 4 4M11 11.2c2.3-.3 4.5 1 4.5 3.8"/></svg></a>
+    <a class="ri" href="#" aria-label="Код" title="Код"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6.5 5-4 4 4 4M11.5 5l4 4-4 4"/></svg></a>
+    <a class="ri" href="Main.dc.html" aria-label="Рутины" title="Рутины"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; max-width: 920px; padding: 24px 28px 32px; display: flex; flex-direction: column; gap: 20px">
+    <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Главная</h1>
+
+    <!-- рутина ждёт решения -->
+    <sc-if value="{{waiting}}" hint-placeholder-val="{{true}}">
+      <section aria-label="Ждёт тебя" style="border: 1px solid rgba(242,177,54,.45); background: color-mix(in srgb, #f2b136 6%, #181b20); border-radius: 8px; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+          <a class="src" href="Log.dc.html" title="Открыть срабатывание рутины">↯ Баг в #bugs</a>
+          <span style="flex: 1"></span>
+          <span class="mono" style="font-size: 12px; color: var(--wait)">ждёт 12 мин</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 600">Чинить заказ, который висит в pending после оплаты «Мир»?</h2>
+          <p style="margin: 0; color: var(--ink-2)">Ирина в #bugs, 09:42: «После оплаты картой Мир заказ висит в pending, вебхук не приходит».</p>
+          <p style="margin: 0">Баг подтверждён на стейдже: провайдер получает 401 из-за старого секрета подписи.</p>
+        </div>
+        <div style="background: var(--well); border-radius: 6px; padding: 10px 12px; font-size: 13px; line-height: 1.6; color: var(--ink-2)">
+          <div style="display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap"><span style="color: var(--ink); font-weight: 500">Таска AG-447</span><span style="flex: 1"></span><button type="button" class="btn s g">Поправить</button></div>
+          <div>— после оплаты «Мир» статус paid не позже 30 с</div>
+          <div>— повторный вебхук не создаёт второй платёж</div>
+          <div>— тест на обработчик провайдера</div>
+        </div>
+        <label style="display: flex; gap: 10px; align-items: flex-start; font-size: 13px; cursor: pointer">
+          <input type="checkbox" checked="{{reply}}" onChange="{{toggleReply}}" style="margin: 3px 0 0; width: 16px; height: 16px; flex: none">
+          <span><span style="font-weight: 500">Ответить в тред:</span> <span style="color: var(--ink-2)">«Взял в работу, AG-447. Причина в подписи вебхука, фикс будет в MR».</span></span>
+        </label>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap">
+          <button type="button" class="btn p" onClick="{{fix}}">Чинить</button>
+          <button type="button" class="btn" onClick="{{later}}">Не сейчас</button>
+          <button type="button" class="btn g" onClick="{{notBug}}">Это не баг</button>
+        </div>
+      </section>
+    </sc-if>
+    <sc-if value="{{decided}}" hint-placeholder-val="{{false}}">
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px">
+        <span class="dot" style="{{decDot}}"></span><span>{{decText}}</span><span style="flex: 1"></span><button type="button" class="btn s g" onClick="{{undo}}">Отменить</button>
+      </div>
+    </sc-if>
+
+    <!-- догнать пропущенное -->
+    <sc-if value="{{catchVisible}}" hint-placeholder-val="{{true}}">
+      <div style="border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+          <span style="font-size: 13px">Пока приложение было закрыто, пришло 2 события для рутин.</span>
+          <span style="flex: 1"></span>
+          <button type="button" class="btn s g" onClick="{{toggleCatch}}" aria-expanded="{{catchOpenStr}}">{{catchLabel}}</button>
+          <button type="button" class="btn s" onClick="{{runCatch}}">Запустить оба</button>
+          <button type="button" class="btn s g" onClick="{{dismissCatch}}" aria-label="Не запускать">×</button>
+        </div>
+        <sc-if value="{{catchOpen}}" hint-placeholder-val="{{false}}">
+          <div style="border-top: 1px solid var(--line); display: flex; flex-direction: column">
+            <div style="display: grid; grid-template-columns: 48px minmax(0,1fr) auto; gap: 10px; padding: 7px 0; font-size: 13px; border-bottom: 1px solid var(--line); align-items: baseline"><span class="mono" style="font-size: 12px; color: var(--ink-2)">07:52</span><span>Не грузится аватар после смены почты</span><span style="font-size: 12px; color: var(--ink-2)">Баг в #bugs</span></div>
+            <div style="display: grid; grid-template-columns: 48px minmax(0,1fr) auto; gap: 10px; padding: 7px 0; font-size: 13px; align-items: baseline"><span class="mono" style="font-size: 12px; color: var(--ink-2)">09:30</span><span>Сводка по MR за утро</span><span style="font-size: 12px; color: var(--ink-2)">Утренняя сводка</span></div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- сейчас -->
+    <section aria-label="Сейчас" style="display: flex; flex-direction: column">
+      <div style="font-size: 12px; font-weight: 500; color: var(--ink-3); margin-bottom: 4px">Сейчас</div>
+      <div style="border-top: 1px solid var(--line)">
+        <sc-if value="{{fixing}}" hint-placeholder-val="{{false}}">
+          <div class="nowrow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Фикс AG-447, оплата «Мир»</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">1/4</span><span style="grid-column: 2; font-size: 12px; color: var(--ink-2)">↯ Баг в #bugs · блок «fix»</span></div>
+        </sc-if>
+        <sc-if value="{{catchRan}}" hint-placeholder-val="{{false}}">
+          <div class="nowrow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Не грузится аватар после смены почты</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">1/3</span><span style="grid-column: 2; font-size: 12px; color: var(--ink-2)">↯ Баг в #bugs · проверяет баг</span></div>
+          <div class="nowrow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Сводка по MR за утро</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">1/1</span><span style="grid-column: 2; font-size: 12px; color: var(--ink-2)">↯ Утренняя сводка</span></div>
+        </sc-if>
+        <div class="nowrow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Ревью !1287, retry для вебхуков</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">1/3</span><span style="grid-column: 2; font-size: 12px; color: var(--ink-2)">↯ MR на ревью · этап «review»</span></div>
+        <div class="nowrow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Миграция moment → date-fns</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">3/8</span><span style="grid-column: 2; font-size: 12px; color: var(--ink-2)">запущено вручную · осталось 4 импорта</span></div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":700}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { decision: null, reply: true, catchOpen: false, catchState: 'open' };
+  }
+  renderVals() {
+    const s = this.state;
+    const tail = s.reply ? ' Ответ ушёл в тред.' : ' В тред ничего не ушло.';
+    const D = {
+      fix: ['background: var(--live)', 'Фикс AG-447 запущен.' + tail],
+      later: ['border: 1.4px solid var(--ink-3)', 'Отложено. Запуск ждёт в срабатываниях рутины.' + tail],
+      notbug: ['border: 1.4px solid var(--ink-3)', 'Закрыто как «не баг». Черновик AG-447 удалён, в тред ничего не ушло.']
+    };
+    const d = s.decision ? D[s.decision] : null;
+    return {
+      waiting: !s.decision,
+      decided: Boolean(s.decision),
+      fixing: s.decision === 'fix',
+      decDot: d ? d[0] : '',
+      decText: d ? d[1] : '',
+      reply: s.reply,
+      toggleReply: () => this.setState({ reply: !s.reply }),
+      fix: () => this.setState({ decision: 'fix' }),
+      later: () => this.setState({ decision: 'later' }),
+      notBug: () => this.setState({ decision: 'notbug' }),
+      undo: () => this.setState({ decision: null }),
+      catchVisible: s.catchState === 'open',
+      catchRan: s.catchState === 'ran',
+      catchOpen: s.catchOpen,
+      catchOpenStr: s.catchOpen ? 'true' : 'false',
+      catchLabel: s.catchOpen ? 'Скрыть' : 'Показать',
+      toggleCatch: () => this.setState({ catchOpen: !s.catchOpen }),
+      runCatch: () => this.setState({ catchState: 'ran' }),
+      dismissCatch: () => this.setState({ catchState: 'gone' })
+    };
+  }
+}
+</script>
+</body>
+</html>

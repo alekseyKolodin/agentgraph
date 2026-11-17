@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeResponse } from '@server/api-types';
 import { keys, useFeature, useFlows, useHome, useRuns, type IntakeTarget } from '../../api';
+import { useRoutines } from '../../api/routines';
 import { useSessions } from '../../api/sessions';
 import { useTeamMine } from '../../api/teamwork';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
@@ -27,6 +28,8 @@ import { HomeRuns } from './HomeRuns';
 import { HomeSessions } from './HomeSessions';
 import { Limits } from './Limits';
 import { Review } from './Review';
+import { RoutineHome } from './RoutineWaits';
+import { activeWaits } from '../../lib/routines/view';
 import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
 
@@ -67,7 +70,12 @@ export function HomeScreen() {
   // без /api/home пустая главная соврала бы «ничего не идёт», а запуски могут идти
   const down = home.isError;
   const loadHomeSoon = () => setTimeout(() => void qc.invalidateQueries({ queryKey: keys.home }), 300);
-  const waiting = items.length + sessions.waiting.length;
+  // рутины: карточки ожидания и «догнать» — над вопросами агентов (docs/routines/design/Home.dc.html)
+  const routines = useRoutines(useFeature('routines'));
+  // отложенные («Не сейчас») на главной не показываются — они в полосе ожиданий /routines
+  const routineWaits = activeWaits(routines.data?.waits ?? []);
+  const catchUp = routines.data?.catchUp ?? [];
+  const waiting = items.length + sessions.waiting.length + routineWaits.length;
   const going = runs.length + sessions.live.length;
   // первый раз: ни одного запуска и ни одной сессии — подсказываем, с чего начать (только по ответам, не пока грузятся)
   const fresh = !down && history.isSuccess && !history.data.length && (!sessionsOn || (sessionList.isSuccess && !sessionList.data.sessions.length));
@@ -89,7 +97,8 @@ export function HomeScreen() {
       <div className={`${styles.homeGrid}${feedOn ? '' : ` ${styles.noFeed}`}`}>
         <div className={styles.homeMain}>
           {fresh && <Start sessions={sessionsOn} />}
-          {waiting > 0 && (
+          <RoutineHome waits={routineWaits} catchUp={catchUp} now={now} />
+          {waiting - routineWaits.length > 0 && (
             <section className={styles.homeSec}>
               <h2 title={t('Вопросы агентов, сначала те, что ждут дольше; под ними — сессии, где ход за тобой')}>{t('Ждёт тебя')}</h2>
               <div>

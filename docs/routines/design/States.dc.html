@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Рутины — пустой список и состояния</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:focus-visible,a:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.tpl{flex:1 1 240px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--panel);display:flex;flex-direction:column;gap:2px;transition:border-color .12s}
+.tpl:hover{border-color:var(--line-strong)}
+.srow{display:grid;grid-template-columns:10px 180px minmax(0,1fr) auto;gap:14px;align-items:baseline;padding:11px 6px;border-bottom:1px solid var(--line)}
+@media (max-width:700px){.srow{grid-template-columns:10px minmax(0,1fr)}.srow>*{grid-column:2}.srow>.dot{grid-column:1;grid-row:1}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 600px; padding: 28px 32px 36px; display: flex; flex-direction: column; gap: 32px">
+  <section aria-label="Пустой список" style="display: flex; flex-direction: column; gap: 16px; max-width: 860px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Рутины</h1>
+      <p style="margin: 0; color: var(--ink-2); max-width: 560px">Рутина запускает flow, когда что-то происходит: пришло сообщение, в сервисе появилось новое, наступило время.</p>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap">
+      <a class="tpl" href="New.dc.html"><span style="font-weight: 500">Баг в канале → таска и фикс</span><span style="font-size: 12px; color: var(--ink-2)">Сообщение в Slack или Telegram</span></a>
+      <a class="tpl" href="New.dc.html"><span style="font-weight: 500">MR на ревью → замечания</span><span style="font-size: 12px; color: var(--ink-2)">GitLab или GitHub</span></a>
+      <a class="tpl" href="New.dc.html"><span style="font-weight: 500">Встреча закончилась → задачи и итог</span><span style="font-size: 12px; color: var(--ink-2)">Fireflies.ai или другой сервис</span></a>
+      <a class="tpl" href="New.dc.html"><span style="font-weight: 500">Каждое утро → сводка</span><span style="font-size: 12px; color: var(--ink-2)">Расписание</span></a>
+    </div>
+    <div><a class="btn p" href="New.dc.html">Новая рутина</a></div>
+  </section>
+
+  <section aria-label="Состояния рутины" style="display: flex; flex-direction: column; max-width: 860px">
+    <h2 style="margin: 0 0 6px; font-size: 12px; font-weight: 500; color: var(--ink-3)">Состояния рутины в списке</h2>
+    <div style="border-top: 1px solid var(--line)">
+      <div class="srow"><span class="dot" style="background: var(--ok)"></span><span style="font-weight: 500">Включена</span><span style="font-size: 13px; color: var(--ink-2)">Слушает. Последний запуск закончился хорошо.</span><span></span></div>
+      <div class="srow"><span class="dot" style="background: var(--live)"></span><span style="font-weight: 500">Идёт запуск</span><span style="font-size: 13px; color: var(--ink-2)">Запуск виден в «Сейчас» на главной с меткой ↯.</span><span></span></div>
+      <div class="srow"><span class="dot" style="background: var(--wait)"></span><span style="font-weight: 500">Ждёт тебя</span><span style="font-size: 13px; color: var(--ink-2)">Остановилась перед блоком или агент задал вопрос.</span><span></span></div>
+      <div class="srow"><span class="dot" style="background: var(--fail)"></span><span style="font-weight: 500">Источник молчит</span><span style="font-size: 13px; color: var(--fail)">Slack не отвечает: токен отозван. События не приходят с 09:10.</span><a class="btn s" href="#">Подключения</a></div>
+      <div class="srow"><span class="dot" style="border: 1.4px solid var(--ink-3)"></span><span style="font-weight: 500; color: var(--ink-3)">На паузе</span><span style="font-size: 13px; color: var(--ink-2)">Выключена. События за это время не копятся.</span><span></span></div>
+      <div class="srow" style="border-bottom: 0"><span class="dot" style="border: 1.4px solid var(--ink-3)"></span><span style="font-weight: 500; color: var(--ink-3)">Черновик</span><span style="font-size: 13px; color: var(--ink-2)">Ещё не включалась. Проверка на истории уже работает.</span><span></span></div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Рутины — редактор правила</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,.slot:focus-visible,.seg button:focus-visible,.more:focus-visible,a:focus-visible,textarea:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.pill{font-size:11px;font-weight:500;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);position:relative}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.ri .b{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.clause{display:grid;grid-template-columns:88px minmax(0,1fr);gap:14px;padding:12px 16px;border-bottom:1px solid var(--line);align-items:baseline}
+.k{font-size:13px;font-weight:500;line-height:24px;color:var(--ink-3)}
+.slot{font-family:inherit;font-size:14px;font-weight:500;color:var(--ink);background:var(--well);border:1px solid var(--line-strong);border-radius:4px;padding:0 8px;line-height:24px;cursor:pointer;margin:2px 0}
+.slot:hover{border-color:rgba(255,255,255,.24)}
+.slot.add{border-style:dashed;color:var(--ink-3);font-weight:400}
+.slot.gate{border-color:rgba(242,177,54,.55);color:var(--wait)}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg button{font-family:inherit;font-size:13px;color:var(--ink-2);background:transparent;border:0;border-right:1px solid var(--line);padding:3px 12px;line-height:22px;cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:500}
+.seg button:disabled{color:var(--ink-off);cursor:not-allowed}
+.more{display:flex;gap:10px;align-items:baseline;width:100%;padding:11px 16px;background:transparent;border:0;font-family:inherit;font-size:13px;color:var(--ink-2);cursor:pointer;text-align:left}
+.more:hover{background:var(--hover)}
+.dr{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:2px 10px;padding:9px 4px;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}.clause{grid-template-columns:1fr;gap:2px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 720px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri" href="Home.dc.html" aria-label="Главная" title="Главная"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg><span class="b"></span></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Flow" title="Flow"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Знания" title="Знания"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M7 3 5.5 15M12.5 3 11 15M3.5 6.5h12M3 11.5h12"/></svg></a>
+    <a class="ri" href="#" aria-label="Teamwork" title="Teamwork"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="12.5" cy="7.5" r="2"/><path d="M2.5 15c0-2.5 1.8-4 4-4s4 1.5 4 4M11 11.2c2.3-.3 4.5 1 4.5 3.8"/></svg></a>
+    <a class="ri" href="#" aria-label="Код" title="Код"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6.5 5-4 4 4 4M11.5 5l4 4-4 4"/></svg></a>
+    <a class="ri on" href="Main.dc.html" aria-label="Рутины" title="Рутины" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 28px 0; display: flex; flex-direction: column; gap: 14px">
+    <a href="Main.dc.html" style="font-size: 12px; color: var(--ink-3)">‹ Рутины</a>
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Баг в #bugs → таска и фикс</h1>
+      <span class="pill" style="background: var(--select); color: var(--ink-2)">черновик</span>
+    </div>
+    <div role="tablist" style="display: flex; gap: 18px; border-bottom: 1px solid var(--line)">
+      <span role="tab" aria-selected="true" style="padding-bottom: 8px; font-weight: 500; color: var(--ink); box-shadow: inset 0 -2px 0 #e7e9ec">Правило</span>
+      <a role="tab" aria-selected="false" href="Log.dc.html" style="padding-bottom: 8px; font-weight: 500; color: var(--ink-3)">Срабатывания</a>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; padding-top: 4px">
+      <!-- правило -->
+      <div style="flex: 1.3 1 480px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--panel)">
+        <div class="clause"><span class="k">Когда</span>
+          <div style="line-height: 2">в <button type="button" class="slot">Slack · #bugs</button> приходит сообщение, <button type="button" class="slot">кроме ответов в тредах</button> <button type="button" class="slot add">+ условие</button></div>
+        </div>
+        <div class="clause"><label class="k" for="cond">Если</label>
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <textarea id="cond" rows="3" style="font-family: inherit; font-size: 14px; line-height: 1.5; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 10px; resize: vertical; width: 100%" value="{{condText}}" onChange="{{onCond}}"></textarea>
+            <span style="font-size: 12px; color: var(--ink-3)">Своими словами, необязательно. Повторы одного и того же отсеиваются сами.</span>
+          </div>
+        </div>
+        <div class="clause"><span class="k">Запустить</span>
+          <div style="line-height: 2"><button type="button" class="slot">bug-to-fix</button> в <button type="button" class="slot">◇ billing</button></div>
+        </div>
+        <div class="clause"><span class="k">Ждать меня</span>
+          <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 1px">
+            <div class="seg" role="group" aria-label="Когда ждать меня">
+              <button type="button" aria-pressed="{{mSuggest}}" onClick="{{setSuggest}}">перед запуском</button>
+              <button type="button" aria-pressed="{{mGate}}" onClick="{{setGate}}">перед блоком</button>
+              <button type="button" aria-pressed="false" disabled="disabled" title="Этот flow правит код. Без остановки его запускать нельзя.">не ждать</button>
+            </div>
+            <sc-if value="{{mGateBool}}" hint-placeholder-val="{{true}}">
+              <div style="line-height: 2; font-size: 13px; color: var(--ink-2)">Запустится сам и остановится перед <button type="button" class="slot gate">fix</button> <button type="button" class="slot add">+ блок</button></div>
+            </sc-if>
+            <sc-if value="{{mSuggestBool}}" hint-placeholder-val="{{false}}">
+              <div style="font-size: 13px; color: var(--ink-2)">Событие появится на главной. Запуск начнётся после твоего «Запустить».</div>
+            </sc-if>
+          </div>
+        </div>
+        <button type="button" class="more" aria-expanded="{{moreStr}}" onClick="{{toggleMore}}"><span style="width: 88px; flex: none; font-weight: 500; color: var(--ink-3)">{{moreCaret}} Ещё</span><span style="min-width: 0">{{moreSummary}}</span></button>
+        <sc-if value="{{moreOpen}}" hint-placeholder-val="{{false}}">
+          <div style="border-top: 1px solid var(--line)">
+            <div class="clause"><span class="k">Где</span><div style="line-height: 2">в <button type="button" class="slot">новом рабочем дереве</button></div></div>
+            <div class="clause"><span class="k">Ответить</span><div style="line-height: 2">в <button type="button" class="slot">тред Slack</button>, <button type="button" class="slot">когда жду тебя и в конце</button>, <button type="button" class="slot">после твоей проверки</button></div></div>
+            <div class="clause" style="border-bottom: 0"><span class="k">Лимит</span><div style="line-height: 2"><button type="button" class="slot">$3</button> на запуск, <button type="button" class="slot">5</button> запусков в день</div></div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- проверка на истории -->
+      <section aria-label="Проверка на истории" style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+        <span style="font-size: 12px; font-weight: 500; color: var(--ink-3)">Проверка на последних 30 сообщениях #bugs</span>
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <span style="font-size: 18px; font-weight: 600">Запустилось бы {{runsCount}} из 30</span>
+          <span class="mono" style="font-size: 12px; color: var(--ink-2)">≈ {{weekCost}} в неделю</span>
+        </div>
+        <div style="border-top: 1px solid var(--line)">
+          <sc-for list="{{rows}}" as="d" hint-placeholder-count="3">
+            <div class="dr" style="{{d.rowStyle}}">
+              <span style="{{d.vStyle}}">{{d.v}}</span>
+              <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{d.text}}</span>
+              <span><sc-if value="{{d.bad}}" hint-placeholder-val="{{false}}"><button type="button" class="btn s" onClick="{{learn}}">Учесть</button></sc-if></span>
+              <sc-if value="{{d.hasWhy}}" hint-placeholder-val="{{false}}"><span style="{{d.whyStyle}}">{{d.why}}</span></sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <button type="button" class="btn s g" style="align-self: flex-start" aria-expanded="{{skipStr}}" onClick="{{toggleSkip}}">{{skipLabel}}</button>
+      </section>
+    </div>
+
+    <div style="position: sticky; bottom: 0; margin-top: auto; background: var(--deck); border-top: 1px solid var(--line); padding: 14px 0 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+      <span style="flex: 1"></span>
+      <button type="button" class="btn">Сохранить черновик</button>
+      <a class="btn p" href="Main.dc.html">Включить</a>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":720}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'gate', more: false, skips: false, learned: false, cond: null };
+  }
+  renderVals() {
+    const s = this.state;
+    const baseCond = 'Это баг-репорт: описано, что сломалось в продукте. Вопросы и обсуждения не считаются.';
+    const learnedLine = '\nБаг и без шагов воспроизведения, если понятно, у кого и что сломалось.';
+    const condText = s.cond ?? (s.learned ? baseCond + learnedLine : baseCond);
+    const raw = [
+      { v: 'запуск', t: 'run', text: 'После оплаты картой «Мир» заказ висит в pending' },
+      { v: 'запуск', t: 'run', text: 'Экспорт в CSV ломает кириллицу' },
+      s.learned
+        ? { v: 'запуск', t: 'run', text: 'После релиза не открывается раздел счетов у части клиентов' }
+        : { v: 'пропуск', t: 'skip', bad: true, text: 'После релиза не открывается раздел счетов у части клиентов', why: 'Ты отметил это как баг. Правило пропустило: нет шагов воспроизведения.' }
+    ];
+    if (s.skips) {
+      raw.push(
+        { v: 'повтор', t: 'skip', text: '+1, у меня тоже CSV с кракозябрами', why: 'то же, что «Экспорт в CSV ломает кириллицу»' },
+        { v: 'пропуск', t: 'skip', text: 'а у кого-то ещё стейдж лежит?', why: 'вопрос, а не баг' },
+        { v: 'пропуск', t: 'skip', text: '18 ответов в тредах', why: 'треды не считаются' }
+      );
+    }
+    const rows = raw.map((r) => ({
+      v: r.v,
+      text: r.text,
+      why: r.why || '',
+      hasWhy: Boolean(r.why),
+      bad: Boolean(r.bad),
+      vStyle: 'font-size: 12px; font-weight: 500; color: ' + (r.t === 'run' ? 'var(--ok)' : 'var(--ink-3)'),
+      rowStyle: r.bad ? 'background: color-mix(in srgb, #f06a6a 8%, transparent)' : '',
+      whyStyle: 'grid-column: 2 / 4; font-size: 12px; color: ' + (r.bad ? 'var(--fail)' : 'var(--ink-3)')
+    }));
+    const skipN = s.learned ? 25 : 26;
+    return {
+      condText,
+      rows,
+      runsCount: s.learned ? 5 : 4,
+      weekCost: s.learned ? '$11–17' : '$9–14',
+      learn: () => this.setState({ learned: true, cond: s.cond == null ? null : s.cond + learnedLine }),
+      onCond: (e) => this.setState({ cond: e.target.value }),
+      mSuggest: s.mode === 'suggest' ? 'true' : 'false',
+      mGate: s.mode === 'gate' ? 'true' : 'false',
+      mGateBool: s.mode === 'gate',
+      mSuggestBool: s.mode === 'suggest',
+      setSuggest: () => this.setState({ mode: 'suggest' }),
+      setGate: () => this.setState({ mode: 'gate' }),
+      moreOpen: s.more,
+      moreStr: s.more ? 'true' : 'false',
+      moreCaret: s.more ? '▾' : '▸',
+      moreSummary: s.more ? '' : 'новое рабочее дерево · ответ в тред после твоей проверки · до $3 за запуск',
+      toggleMore: () => this.setState({ more: !s.more }),
+      skipStr: s.skips ? 'true' : 'false',
+      skipLabel: s.skips ? 'Скрыть пропущенные' : 'Показать ' + skipN + ' пропущенных',
+      toggleSkip: () => this.setState({ skips: !s.skips })
+    };
+  }
+}
+</script>
+</body>
+</html>

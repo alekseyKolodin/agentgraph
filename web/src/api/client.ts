@@ -18,13 +18,17 @@ export class ApiError extends Error {
 
 export type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-/** Запрос к API: тело — JSON (server-guard.ts принимает только его), ответ — JSON; не 2xx — ApiError. */
-export async function api<T>(method: Method, url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+/**
+ * Запрос к API: тело — JSON (server-guard.ts принимает только его), ответ — JSON; не 2xx — ApiError. keepalive — запрос
+ * переживает закрытие вкладки (решение, отправленное на pagehide).
+ */
+export async function api<T>(method: Method, url: string, body?: unknown, signal?: AbortSignal, keepalive?: boolean): Promise<T> {
   const res = await fetch(url, {
     method,
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
+    ...(keepalive ? { keepalive: true } : {}),
   });
   const text = await res.text();
   let data: unknown;

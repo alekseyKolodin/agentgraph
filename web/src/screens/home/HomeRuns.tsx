@@ -4,7 +4,8 @@
 import type { MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { HomeRun } from '@server/api-types';
-import { api, errorText, useFeature } from '../../api';
+import { api, errorText, useFeature, useRuns } from '../../api';
+import { useRoutines } from '../../api/routines';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { projectLabels } from '../../lib/format';
@@ -15,6 +16,14 @@ import { runTeamworkLink } from '../teamwork/shell';
 import styles from './Home.module.css';
 
 export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
+  // запуск рутины — метка «↯ рутина» ссылкой на её срабатывания: источник запуска есть в списке запусков, не в /api/home
+  const routinesOn = useFeature('routines');
+  const history = useRuns();
+  const routineTitles = new Map((useRoutines(routinesOn).data?.routines ?? []).map((x) => [x.slug, x.spec.title]));
+  const routineOf = (id: string) => {
+    const src = history.data?.find((x) => x.id === id)?.source;
+    return src?.type === 'routine' ? { slug: src.key, title: routineTitles.get(src.key) ?? src.key, event: src.title } : undefined;
+  };
   const navigate = useNavigate();
   const { askConfirm, notify } = useConfirm();
   const artifacts = useFeature('artifacts');
@@ -46,6 +55,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
         const v = homeRunView(r, labels.get(r.cwd || '') ?? '', artifacts, now);
         // запуск по задаче Teamwork — номер задачи ссылкой на её панель; черновик — на вкладку документа
         const tw = runTeamworkLink(r.teamwork);
+        const rt = routineOf(r.id);
         // кнопки внутри строки — свои действия, не «открыть»
         const act = (fn: () => void) => (e: MouseEvent) => {
           e.stopPropagation();
@@ -67,6 +77,11 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
               <div className={styles.hrunTop}>
                 <span className={styles.hrunTitle}>{v.title}</span>
                 {tw && <Link to={tw.to} className={styles.hrunTask} title={tw.title} onClick={(e) => e.stopPropagation()}>{tw.label}</Link>}
+                {rt && (
+                  <Link to={`/routines/${encodeURIComponent(rt.slug)}/log`} className={styles.hrunTask} title={t('Запущено рутиной «{name}» по событию: {event}', { name: rt.title, event: rt.event })} onClick={(e) => e.stopPropagation()}>
+                    ↯ {rt.title}
+                  </Link>
+                )}
                 <span className={styles.hrunMeta} title={r.cwd || ''}>{v.meta}</span>
               </div>
               <div className={styles.hrunSum} title={v.sum}>{v.sum}</div>

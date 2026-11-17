@@ -1,0 +1,23 @@
+# Рецепт: открытые задачи Linear, назначенные на вас. Ключ: Linear → Settings → Account → Security & access → Personal API keys.
+id: linear
+summary: Задачи Linear, назначенные на вас
+spec:
+  title: Linear · мои задачи
+  kind: command
+  every: 5m
+  description: Новая задача в Linear, назначенная на меня
+  secrets: [LINEAR_API_KEY]
+  config:
+    command: |-
+      curl -sS --max-time 30 https://api.linear.app/graphql \
+        -H "Authorization: $LINEAR_API_KEY" \
+        -H 'Content-Type: application/json' \
+        -d '{"query":"{ issues(first: 25, orderBy: updatedAt, filter: { assignee: { isMe: { eq: true } }, state: { type: { nin: [\"completed\", \"canceled\"] } } }) { nodes { id identifier title description url updatedAt creator { name } } } }"}'
+  map:
+    items: data.issues.nodes
+    id: id
+    title: title
+    text: description
+    link: url
+    at: updatedAt
+    author: creator.name

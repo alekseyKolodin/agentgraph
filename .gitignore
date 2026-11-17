@@ -24,3 +24,7 @@ docs/redesign/
 *.zip
 .env
 .env.*
+
+# e2e (Playwright): отчёты и трассы
+e2e/.output/
+playwright-report/

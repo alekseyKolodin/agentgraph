@@ -111,6 +111,12 @@ import {
 import type { SessionReviewEstimate, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
 import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
+import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
+import { routinesRoute } from './routines/routes.js';
+import { ensureWorktree, repoRoot } from './git.js';
+import { findProject } from './projects.js';
+import { worktreesDir } from './settings.js';
+import { readHead } from './safe-fs.js';
 
 export type ServerOptions = {
   port: number;
@@ -136,6 +142,13 @@ export type ServerOptions = {
   draftSession?: (req: SessionRequest, log: LogFn) => Promise<SessionResult>;
   /** Сервис команд Teamwork (teamwork-server.ts): тесты выключают таймеры и подменяют git-идентичность через exec. */
   teamwork?: TeamServiceDeps;
+  /**
+   * Рутины (src/routines): true — движок опрашивает источники, следит за расписанием и запускает flow по событиям.
+   * Объект — то же с подменой зависимостей движка (тесты: время, таймеры, проверка словами, виды). Без опции маршруты
+   * /api/routines работают (правка правил, источники), а фоновой работы нет: тесты сервера её не поднимают.
+   * Включают CLI `ui` и десктоп.
+   */
+  routines?: boolean | Partial<Omit<EngineDeps, 'startRun' | 'resumeRun' | 'stopRun' | 'flowBlocks' | 'onChange'>>;
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -188,7 +201,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows'>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows' | 'routines'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -243,6 +256,79 @@ const runWorkdir = (id: string): string => path.join(configDir(), RUN_WORKDIRS, 
 let teamChanges: (() => void) | null = null;
 /** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
 let stopping = false;
+/** Движок рутин: один на процесс, создаёт первый запрос к /api/routines или startServer с routines; снимает stopServer. */
+let routineEngine: RoutineEngine | null = null;
+/** Запуски, начатые движком рутин: только их события уходят в движок (продолжение и повтор копируют source, но не это). */
+const routineRuns = new Set<string>();
+
+/** Движок рутин с зависимостями сервера: запуск flow через startRun, пауза и стоп — как кнопки UI. */
+function routines(srv: ServerOptions): RoutineEngine {
+  if (routineEngine) return routineEngine;
+  const extra = typeof srv.routines === 'object' ? srv.routines : {};
+  routineEngine = new RoutineEngine({
+    ...extra,
+    startRun: (r) => startRoutineRun(r, srv),
+    resumeRun: (id) => resumeRun(id),
+    stopRun: (id) => abortRun(id),
+    flowCost: (name) => {
+      // средняя стоимость последних законченных запусков flow — оценка рутины, у которой своих запусков ещё нет
+      const costs = listRuns().filter((x) => x.flow === name && x.status !== 'running' && x.totalCostUsd > 0).slice(0, 20).map((x) => x.totalCostUsd);
+      return costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : undefined;
+    },
+    flowBlocks: (name) => {
+      try {
+        assertFlowName(name);
+      } catch {
+        return undefined;
+      }
+      if (!flowExists(name)) return undefined;
+      return flowBlocks(loadFlow(name)).map((b) => b.name);
+    },
+    onChange: () => homeBroadcast({ type: 'routines', runId: '', flow: '' }),
+    log: extra.log ?? ((m) => console.error(`[рутины] ${m}`)),
+  });
+  return routineEngine;
+}
+
+/**
+ * Запуск flow по событию рутины — тот же startRun, что у формы: пространство, папка (рабочая папка рутины, пространства
+ * или сервера), новый worktree, знания, модель, бюджет; задача — run.input (или input flow) + событие в обёртке данных.
+ */
+async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promise<string> {
+  const { spec: rs, event } = r;
+  assertFlowName(rs.run.flow);
+  const spec = loadFlow(rs.run.flow);
+  const task = rs.run.input?.trim() || spec.input?.trim() || '';
+  spec.input = [task, r.eventBlock].filter(Boolean).join('\n\n');
+  const space = rs.run.space ? readSpace(spaceSlug(rs.run.space) ?? '') : undefined;
+  if (rs.run.space && !space) throw new Error(`Пространства ${rs.run.space} нет`);
+  let cwd = resolveDir(rs.run.cwd || space?.cwd, srv.defaultCwd);
+  if (!isDir(cwd)) throw new Error(`Рабочей папки ${cwd} нет`);
+  const knowledge = rs.run.knowledge?.length ? knowledgeTags(runTagSlugs(rs.run.knowledge)).map((t) => t.slug) : [];
+  if (knowledge.length) resolveKnowledge(spec, knowledge);
+  let worktree: RunWorktree | undefined;
+  if (rs.run.worktree === 'new') {
+    const root = await repoRoot(cwd);
+    if (!root) throw new Error(`${cwd} — не git-репозиторий: новый worktree сделать не из чего`);
+    const s = loadSettings();
+    const cfg = findProject(s, root);
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
+    const wt = await ensureWorktree({ root, baseDir: worktreesDir(s), branch: `routine/${r.routine}-${stamp}-${event.id.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x'}`, base: cfg?.base, copyFiles: cfg?.copyFiles });
+    cwd = wt.path;
+    worktree = { path: wt.path, ...(wt.branch ? { branch: wt.branch } : {}) };
+  }
+  return startRun(spec, {
+    cwd,
+    ...(rs.limits?.usd ? { maxBudgetUsd: rs.limits.usd } : {}),
+    ...(rs.run.model ? { model: rs.run.model } : {}),
+    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}) },
+    ...(worktree ? { worktree } : {}),
+    ...(space ? { space: space.slug, saveState: true, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
+    ...(knowledge.length ? { knowledge } : {}),
+    ...(r.pauseBefore.length ? { pauseBefore: r.pauseBefore } : {}),
+    routineRun: true,
+  }, srv);
+}
 
 export function startServer(opts: ServerOptions): Promise<string> {
   stopping = false;
@@ -281,6 +367,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
     status.start();
     setSessionTeamwork(sessionTeamwork(service, status));
   }
+  // рутины: фоновая работа (опрос, расписание) — только по опции; маршруты есть всегда
+  if (opts.routines) routines(opts).start();
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -294,6 +382,12 @@ export function startServer(opts: ServerOptions): Promise<string> {
  */
 export async function stopServer(timeoutMs = 10_000): Promise<void> {
   stopping = true;
+  // рутины: новых запусков нет, а начатый в цепочке движка (worktree, проверка словами) успевает встать в live — его
+  // остановит цикл abortRun ниже, а не оставит сиротой со статусом running
+  const engine = routineEngine;
+  engine?.stop();
+  if (engine) await Promise.race([engine.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(5_000, timeoutMs)).unref())]);
+  routineEngine = null;
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
   updater?.stop();
@@ -349,7 +443,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -405,6 +499,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       },
       flows: listFlows,
     });
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
+  // --- рутины: правила «когда → делай», источники, ожидания и «догнать» (src/routines/routes.ts)
+  if (p === '/api/routines' || p.startsWith('/api/routines/')) {
+    if (stopping) return sendJson(res, 503, { error: 'Сервер останавливается' });
+    const r = await routinesRoute(method, url, () => readJson(req), { engine: routines(opts) });
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -1163,6 +1264,10 @@ function startRun(
     autoSpace?: AutoSpaceReport;
     /** Имя исходного запуска (продолжение): без подбора моделью. */
     title?: string;
+    /** Запуск рутины: пауза перед этими блоками (опция раннера pauseBefore). */
+    pauseBefore?: string[];
+    /** Запуск начал движок рутин: его пауза и конец уходят в движок (routineRuns). */
+    routineRun?: boolean;
     /**
      * Рабочая папка — пустая папка с этим именем (runWorkdir(id)/<имя>), а не cwd: черновик Teamwork без репо кода (spec
      * §14). Имя — слаг проекта: по нему список запусков группирует их, как по папке проекта.
@@ -1184,7 +1289,9 @@ function startRun(
     fs.rmSync(runDir, { recursive: true, force: true });
     throw err;
   }
-  const { attachments: _files, attachmentsFrom: _from, emptyCwd: _empty, ...runOpts } = o;
+  const { attachments: _files, attachmentsFrom: _from, emptyCwd: _empty, routineRun, ...runOpts } = o;
+  // до launchRun: пауза перед первым блоком может прийти раньше, чем startRun вернёт id
+  if (routineRun) routineRuns.add(path.basename(runDir));
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
   // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json.
@@ -1309,6 +1416,19 @@ function launchRun(
       if (e.type === 'question' || (e.type === 'end' && !parent)) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
+    // рутины: пауза перед блоком (pauseBefore) — карточка ожидания, конец — журнал, ответ и очередь
+    if (!parent && routineRuns.has(id)) {
+      const toEngine = (ev: RoutineRunEvent) => routineEngine?.onRunEvent(id, ev).catch((err) => console.error(`[рутины] ${errMsg(err)}`));
+      if (e.type === 'pause' && e.state === 'resumed') toEngine({ type: 'resumed' });
+      else if (e.type === 'pause' && e.reason?.before) {
+        const context = lr.report ? routineContext(lr.report) : undefined;
+        toEngine({ type: 'pause', block: e.reason.block, ...(context ? { context } : {}) });
+      } else if (e.type === 'end') {
+        routineRuns.delete(id);
+        const context = routineContext(e.report);
+        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}) });
+      }
+    }
     if (e.type === 'end') {
       lr.pause = null;
       for (const client of lr.clients) client.end();
@@ -1377,6 +1497,23 @@ function launchRun(
     return report;
   });
   return { id, done };
+}
+
+/**
+ * Что агент уже сделал — для карточки ожидания рутины: сводка запуска (report.digest), если она про последний пройденный
+ * блок, иначе вывод последнего этапа этого блока (начало файла), иначе сводка какая есть. Обрезает движок (clipContext).
+ */
+function routineContext(report: RunReport): string | undefined {
+  const last = [...report.phases].reverse().find((ph) => ph.ok && ph.files?.output);
+  if (report.digest?.text && (!last || report.digest.block === last.block)) return report.digest.text;
+  if (last) {
+    const file = path.join(report.runDir, last.files.output);
+    if (isInside(file, report.runDir)) {
+      const text = readHead(file, 8 * 1024)?.trim();
+      if (text) return text;
+    }
+  }
+  return report.digest?.text;
 }
 
 /** Меняет состояние паузы, отпускает раннер при продолжении, пишет в отчёт и рассылает событие. */

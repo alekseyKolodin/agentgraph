@@ -261,7 +261,7 @@ async function main(): Promise<number> {
     }
     case 'ui': {
       // автообновление: после него процесс перезапускается на месте с теми же аргументами (src/update.ts)
-      const url = await startServer({ port: values.port ? Number(values.port) : 4747, host: '127.0.0.1', defaultCwd: cwd, notify: !values['no-notify'], update: true, restart: execveRestart(stopServer) });
+      const url = await startServer({ port: values.port ? Number(values.port) : 4747, host: '127.0.0.1', defaultCwd: cwd, notify: !values['no-notify'], update: true, routines: true, restart: execveRestart(stopServer) });
       console.log(`${c.green('●')} agentgraph ui: ${c.bold(url)}  ${c.dim(`(директория проекта по умолчанию: ${cwd})`)}`);
       // npm run ui собирает UI сам (scripts/ensure-web.mts); agentgraph ui и tsx src/cli.ts ui — нет
       if (!fs.existsSync(path.join(WEB_DIST_DIR, 'index.html'))) console.warn(c.yellow('UI не собран, на / его нет: npm run build:web (или запускай через npm run ui)'));

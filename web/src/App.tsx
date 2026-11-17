@@ -1,4 +1,4 @@
-// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context, /code, /teamwork/…; сервер отдаёт на них index.html. Старые
+// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context, /code, /teamwork/…, /routines/…; сервер отдаёт на них index.html. Старые
 // хеши /#run/<id> и т. п. переводятся на пути ниже (lib/legacy-url.ts), старые /next/… — сервер (308).
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
@@ -33,6 +33,12 @@ const SessionScreen = lazy(() => import('./screens/sessions/SessionScreen').then
 const TeamsScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.TeamsScreen })));
 const TeamScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.TeamScreen })));
 const ProjectScreen = lazy(() => import('./screens/teamwork').then((m) => ({ default: m.ProjectScreen })));
+// «Рутины»: правило «когда → делай» — список, создание, подключение сервиса, редактор, журнал (один файл сборки)
+const RoutinesList = lazy(() => import('./screens/routines').then((m) => ({ default: m.RoutinesList })));
+const NewRoutine = lazy(() => import('./screens/routines').then((m) => ({ default: m.NewRoutine })));
+const ConnectSource = lazy(() => import('./screens/routines').then((m) => ({ default: m.ConnectSource })));
+const RoutineEditor = lazy(() => import('./screens/routines').then((m) => ({ default: m.RoutineEditor })));
+const RoutineLog = lazy(() => import('./screens/routines').then((m) => ({ default: m.RoutineLog })));
 
 // старые ссылки /#run/<id>, /#flow/<имя>, /#tags/<slug>, /#context — до создания роутера: он читает адрес сразу
 const legacy = legacyLocation(location);
@@ -55,6 +61,11 @@ const router = createBrowserRouter(
         { path: 'teamwork', element: <Suspense><TeamsScreen /></Suspense> },
         { path: 'teamwork/:team', element: <Suspense><TeamScreen /></Suspense> },
         { path: 'teamwork/:team/:project/:tab?', element: <Suspense><ProjectScreen /></Suspense> },
+        { path: 'routines', element: <Suspense><RoutinesList /></Suspense> },
+        { path: 'routines/new', element: <Suspense><NewRoutine /></Suspense> },
+        { path: 'routines/connect', element: <Suspense><ConnectSource /></Suspense> },
+        { path: 'routines/:slug', element: <Suspense><RoutineEditor /></Suspense> },
+        { path: 'routines/:slug/log', element: <Suspense><RoutineLog /></Suspense> },
         { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },
         // черновик разового запуска: живёт только в памяти вкладки, после перезагрузки — на главную
         { path: 'draft', element: <Suspense><FlowScreen draft /></Suspense> },

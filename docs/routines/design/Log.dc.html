@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Рутины — срабатывания</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,.chip:focus-visible,.ev:focus-visible,a:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.pill{font-size:11px;font-weight:500;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);position:relative}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.ri .b{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.chip{font-family:inherit;font-size:12px;border:1px solid var(--line-strong);border-radius:999px;padding:2px 10px;color:var(--ink-2);background:transparent;cursor:pointer;min-height:26px}
+.chip:hover{color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--raised);color:var(--ink)}
+.lg{display:grid;grid-template-columns:52px 84px minmax(0,1fr) auto;gap:2px 14px;padding:11px 6px;border-bottom:1px solid var(--line);align-items:baseline;font-size:14px}
+.ev{font-family:inherit;font-size:14px;color:var(--ink);background:transparent;border:0;padding:0;text-align:left;cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev:hover{color:#ffffff}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}.lg{grid-template-columns:46px minmax(0,1fr)}.lg>*{grid-column:2}.lg>.tm{grid-column:1;grid-row:1}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 620px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri" href="Home.dc.html" aria-label="Главная" title="Главная"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg><span class="b"></span></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Flow" title="Flow"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Знания" title="Знания"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M7 3 5.5 15M12.5 3 11 15M3.5 6.5h12M3 11.5h12"/></svg></a>
+    <a class="ri" href="#" aria-label="Teamwork" title="Teamwork"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="12.5" cy="7.5" r="2"/><path d="M2.5 15c0-2.5 1.8-4 4-4s4 1.5 4 4M11 11.2c2.3-.3 4.5 1 4.5 3.8"/></svg></a>
+    <a class="ri" href="#" aria-label="Код" title="Код"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6.5 5-4 4 4 4M11.5 5l4 4-4 4"/></svg></a>
+    <a class="ri on" href="Main.dc.html" aria-label="Рутины" title="Рутины" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 28px 32px; display: flex; flex-direction: column; gap: 14px">
+    <a href="Main.dc.html" style="font-size: 12px; color: var(--ink-3)">‹ Рутины</a>
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+      <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Баг в #bugs → таска и фикс</h1>
+      <span class="pill" style="background: rgba(76,195,138,.18); color: var(--ok)">включена</span>
+    </div>
+    <div role="tablist" style="display: flex; gap: 18px; border-bottom: 1px solid var(--line)">
+      <a role="tab" aria-selected="false" href="Editor.dc.html" style="padding-bottom: 8px; font-weight: 500; color: var(--ink-3)">Правило</a>
+      <span role="tab" aria-selected="true" style="padding-bottom: 8px; font-weight: 500; color: var(--ink); box-shadow: inset 0 -2px 0 #e7e9ec">Срабатывания</span>
+    </div>
+
+    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+      <div role="group" aria-label="Показать" style="display: flex; gap: 6px; flex-wrap: wrap">
+        <sc-for list="{{chips}}" as="c" hint-placeholder-count="4">
+          <button type="button" class="chip" aria-pressed="{{c.on}}" onClick="{{c.pick}}">{{c.label}} <span class="mono" style="color: var(--ink-3); margin-left: 3px">{{c.n}}</span></button>
+        </sc-for>
+      </div>
+      <span style="flex: 1"></span>
+      <span class="mono" style="font-size: 12px; color: var(--ink-2)">за 7 дней · $9.80</span>
+    </div>
+
+    <div style="border-top: 1px solid var(--line)">
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+        <div class="lg" style="{{r.rowStyle}}">
+          <span class="mono tm" style="font-size: 12px; color: var(--ink-2)">{{r.tm}}</span>
+          <span style="{{r.vStyle}}">{{r.v}}</span>
+          <button type="button" class="ev" aria-expanded="{{r.openStr}}" onClick="{{r.toggle}}">{{r.text}}</button>
+          <span>
+            <sc-if value="{{r.primary}}" hint-placeholder-val="{{false}}"><a class="btn s p" href="Home.dc.html">{{r.act}}</a></sc-if>
+            <sc-if value="{{r.secondary}}" hint-placeholder-val="{{true}}"><button type="button" class="btn s g">{{r.act}}</button></sc-if>
+          </span>
+          <sc-if value="{{r.open}}" hint-placeholder-val="{{false}}">
+            <span style="grid-column: 3 / 5; font-size: 13px; color: var(--ink-2); padding: 2px 0 4px">{{r.detail}}</span>
+          </sc-if>
+        </div>
+      </sc-for>
+      <sc-if value="{{empty}}" hint-placeholder-val="{{false}}">
+        <p style="margin: 0; padding: 18px 6px; font-size: 13px; color: var(--ink-3)">За 7 дней таких событий не было.</p>
+      </sc-if>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":620}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { f: 'all', open: { a: true } };
+  }
+  renderVals() {
+    const f = this.state.f;
+    const open = this.state.open;
+    const ALL = [
+      { id: 'a', cat: 'wait', tm: '10:40', v: 'ждёт тебя', col: 'var(--wait)', text: 'После оплаты картой «Мир» заказ висит в pending', act: 'Открыть', primary: true,
+        detail: 'Баг подтверждён, заведена AG-447. Остановился перед блоком «fix». Потрачено $0.41.' },
+      { id: 'b', cat: 'skip', tm: '10:31', v: 'пропуск', col: 'var(--ink-3)', text: 'а у кого-то ещё стейдж лежит?', act: 'Это баг',
+        detail: 'Не подошло под условие: это вопрос, а не баг-репорт.' },
+      { id: 'c', cat: 'skip', tm: '09:58', v: 'повтор', col: 'var(--ink-3)', text: '+1, у меня тоже CSV с кракозябрами', act: 'Не повтор',
+        detail: 'То же, что событие 08:12. В тред ушла ссылка на MR !1290.' },
+      { id: 'd', cat: 'run', tm: '08:12', v: 'готово', col: 'var(--ok)', text: 'Экспорт в CSV ломает кириллицу', act: 'Запуск',
+        detail: 'AG-446 → ты подтвердил в 08:30 → фикс со второй попытки → MR !1290 → ответ в тред. Потрачено $1.92.' },
+      { id: 'e', cat: 'run', tm: 'вчера', v: 'не довёл', col: 'var(--fail)', text: 'Скидка считается дважды при промокоде', act: 'Продолжить',
+        detail: 'AG-440 заведена и подтверждена. Фикс остановился на лимите $3.' },
+      { id: 'g', cat: 'skip', tm: 'вчера', v: 'лимит', col: 'var(--ink-3)', text: 'Не приходит письмо о возврате', act: 'Запустить',
+        detail: 'Подошло под условие, но это шестой запуск за день при лимите 5.' }
+    ];
+    const CHIPS = [['all', 'все', 38], ['wait', 'ждут тебя', 1], ['run', 'запущено', 7], ['skip', 'пропущено', 30]];
+    const chips = CHIPS.map((c) => ({ label: c[1], n: c[2], on: c[0] === f ? 'true' : 'false', pick: () => this.setState({ f: c[0] }) }));
+    const rows = ALL.filter((r) => f === 'all' || r.cat === f).map((r) => {
+      const isOpen = Boolean(open[r.id]);
+      return {
+        tm: r.tm,
+        v: r.v,
+        text: r.text,
+        act: r.act,
+        detail: r.detail,
+        primary: Boolean(r.primary),
+        secondary: !r.primary,
+        open: isOpen,
+        openStr: isOpen ? 'true' : 'false',
+        toggle: () => this.setState({ open: Object.assign({}, open, { [r.id]: !isOpen }) }),
+        vStyle: 'font-size: 12px; font-weight: 500; color: ' + r.col,
+        rowStyle: r.cat === 'wait' ? 'background: color-mix(in srgb, #f2b136 5%, transparent)' : ''
+      };
+    });
+    return { chips, rows, empty: rows.length === 0 };
+  }
+}
+</script>
+</body>
+</html>

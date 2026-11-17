@@ -1,0 +1,216 @@
+<title>Рутины · дизайн</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: документ-разбор механики. Экраны живут на холсте «Рутины · экраны»; здесь путь события, источники,
+   формат правила и вопросы на решение. Тема одна, тёмная: это система самого продукта («Пульт»). */
+:root {
+  color-scheme: dark;
+  --deck: #111316; --panel: #181b20; --raised: #1f232a; --well: #0c0e11;
+  --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.14);
+  --ink: #e7e9ec; --ink-2: #a3a9b3; --ink-3: #7d848e; --ink-off: #4b515a;
+  --live: #7aa7ff; --ok: #4cc38a; --fail: #f06a6a; --wait: #f2b136;
+  --focus: 0 0 0 2px rgba(122,167,255,.55);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body { background: var(--deck); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+.page { max-width: 1040px; margin: 0 auto; padding-block: 40px 96px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 30px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 10px; }
+h2 { font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; }
+p { margin: 0; text-wrap: pretty; }
+a { color: var(--live); }
+a:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 4px; }
+.lead { font-size: 16px; color: var(--ink-2); max-width: 700px; line-height: 1.6; }
+.eyebrow { font: 500 12px var(--mono); color: var(--ink-3); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+section.block { margin-top: 56px; display: grid; gap: 16px; }
+.sub { color: var(--ink-2); max-width: 720px; }
+
+.toc { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--deck); border-bottom: 1px solid var(--line);
+  margin-top: 28px; display: flex; gap: 18px; overflow-x: auto; scrollbar-width: none; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--deck); }
+.toc a { color: var(--ink-3); text-decoration: none; padding: 12px 0 10px; white-space: nowrap; font-weight: 500; }
+.toc a:hover { color: var(--ink); }
+
+.pipe { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.pipe > div { background: var(--panel); padding: 12px 14px; border-right: 1px solid var(--line); display: grid; gap: 6px; align-content: start; }
+.pipe > div:last-child { border-right: 0; }
+.pipe .n { font: 500 11px var(--mono); color: var(--ink-3); display: flex; justify-content: space-between; }
+.pipe .n em { font-style: normal; }
+.pipe .n .new { color: var(--live); }
+.pipe b { font-weight: 600; }
+.pipe p { font-size: 13px; color: var(--ink-2); }
+.pipe .out { font: 11px/1.5 var(--mono); color: var(--ink-3); border-top: 1px dashed var(--line); padding-top: 6px; }
+.pipe .gate { background: color-mix(in srgb, var(--wait) 6%, var(--panel)); }
+.pipe .gate b { color: var(--wait); }
+
+.kinds { display: grid; border-top: 1px solid var(--line); }
+.kind { display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 4px 20px; padding: 12px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.kind.hd { font-size: 12px; color: var(--ink-3); font-weight: 500; padding-block: 6px; }
+.kind b { font-weight: 600; font-size: 14px; }
+.kind .how { color: var(--ink-2); }
+.kind .lim { color: var(--ink-2); }
+.kind .lim.w { color: var(--wait); }
+
+.event { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; align-items: start; }
+.code { background: var(--well); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font: 12.5px/1.7 var(--mono); color: var(--ink-2); overflow-x: auto; white-space: pre; }
+.code .k { color: var(--ink); } .code .c { color: var(--ink-3); } .code .n { color: var(--live); }
+.points { display: grid; gap: 12px; }
+.points div { border-top: 1px solid var(--line-strong); padding-top: 10px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
+.points b { color: var(--ink); font-weight: 600; }
+
+.qs { display: grid; gap: 10px; }
+.q { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 8px; background: var(--panel); }
+.q .h { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.q .h b { font-weight: 600; font-size: 15px; }
+.q .h span { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+.q .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.q .opt { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; color: var(--ink-2); display: grid; gap: 2px; }
+.q .opt b { color: var(--ink); font-weight: 500; }
+.q .opt.rec { border-color: var(--ink-2); }
+.q .opt.rec b::after { content: "решено"; font: 500 10px var(--sans); color: var(--ink); background: var(--raised); border-radius: 999px; padding: 0 6px; margin-left: 6px; vertical-align: 1px; }
+
+@media (max-width: 900px) {
+  .pipe { grid-template-columns: repeat(2, minmax(0,1fr)); } .pipe > div { border-bottom: 1px solid var(--line); }
+  .event { grid-template-columns: 1fr; }
+  .kind { grid-template-columns: 120px minmax(0,1fr); } .kind .lim { grid-column: 2; }
+}
+@media (max-width: 560px) {
+  h1 { font-size: 24px; }
+  .pipe { grid-template-columns: 1fr; }
+  .kind { grid-template-columns: 1fr; } .kind .lim { grid-column: 1; } .kind.hd { display: none; }
+}
+</style>
+
+<div class="page">
+  <div class="eyebrow">agentgraph · рутины · механика · 17.11.2026</div>
+  <h1>Рутины · дизайн</h1>
+  <p class="lead">Как работает рутина: откуда берутся события, как они превращаются в запуск flow и где ждут тебя. Экраны нарисованы на холсте <a href="https://claude.ai/artifact/R3WmQW6SrTs9sv785zvvPg">Рутины · экраны</a>. Здесь механика и то, что нужно решить.</p>
+
+  <nav class="toc" aria-label="Разделы">
+    <a href="#how">Путь события</a><a href="#sources">Источники</a><a href="#event">Событие</a><a href="#file">Файл правила</a><a href="#discuss">Обсудить</a>
+  </nav>
+
+  <section class="block" id="how">
+    <h2>Путь события</h2>
+    <p class="sub">Сначала дешёвые шаги, потом дорогие. Большую часть событий отсеивают условия на поля, без модели. Модель проверяет текст, только если в правиле есть условие словами. Синим отмечено новое, остальное уже есть в agentgraph.</p>
+    <div class="pipe">
+      <div><span class="n">1 <em class="new">новое</em></span><b>Событие</b><p>agentgraph сам забирает новое: проверяет сервис, слушает бота, ждёт времени по расписанию.</p><div class="out">приводится к одному виду</div></div>
+      <div><span class="n">2 <em class="new">новое</em></span><b>Условия</b><p>Без модели: канал, автор, поле равно, метка, не ответ в треде.</p><div class="out">$0</div></div>
+      <div><span class="n">3 <em class="new">новое</em></span><b>Проверка словами</b><p>Необязательно. Haiku читает текст по условию из правила и ищет дубли.</p><div class="out">≈ $0.002 на событие</div></div>
+      <div><span class="n">4 <em>есть</em></span><b>Запуск</b><p>Обычный запуск flow с пространством, рабочим деревом и бюджетом. Событие уходит агенту как данные.</p><div class="out">startRun</div></div>
+      <div class="gate"><span class="n">5 <em class="new">новое</em></span><b>Остановка</b><p>Перед отмеченным блоком запуск ждёт тебя на главной.</p><div class="out">pauseBefore</div></div>
+      <div><span class="n">6 <em class="new">новое</em></span><b>Ответ</b><p>Туда, откуда пришло, или в выбранный чат: тред, Telegram, комментарий в MR.</p><div class="out">черновик или сразу</div></div>
+    </div>
+  </section>
+
+  <section class="block" id="sources">
+    <h2>Источники</h2>
+    <p class="sub">Источник — это проверка, которая возвращает список записей: встречи, письма, заявки, алерты, файлы. agentgraph запускает её раз в несколько минут и помнит, что уже видел. Каждая новая запись становится событием. Так подключается любой сервис, а не только те, что перечислены в примерах. Источник подключают один раз, дальше он доступен любой рутине.</p>
+    <div class="kinds">
+      <div class="kind hd"><span>Как подключить</span><span>Что происходит</span><span>Важно</span></div>
+      <div class="kind"><b>Описать словами</b><span class="how">«Новая запись встречи в Fireflies». Агент находит API сервиса, просит ключ, собирает проверку, запускает её и показывает, что нашёл.</span><span class="lim">Основной путь. Перед сохранением видно, какой запрос будет выполняться. Сами проверки идут без модели.</span></div>
+      <div class="kind"><b>Своя команда</b><span class="how">Любая команда, которая печатает JSON-список записей с id: curl, gh, свой скрипт.</span><span class="lim">Для тех, кто умеет. Этим же способом устроены готовые источники.</span></div>
+      <div class="kind"><b>Подключение claude.ai</b><span class="how">Вызывается инструмент подключения «список…», новые записи становятся событиями.</span><span class="lim w">Ключ не нужен, но подключения доступны только через сессию модели. Каждая проверка тратит лимит, поэтому интервал от 30 минут.</span></div>
+      <div class="kind"><b>Готовые</b><span class="how">Slack, Telegram, GitLab, GitHub, Jira, почта, RSS, папка на диске. Slack и Telegram внутри держат соединение, поэтому сообщения приходят сразу.</span><span class="lim">Источник — небольшой файл. Свой можно отдать коллеге, и он появится у него в готовых.</span></div>
+                        <div class="kind"><b>Расписание</b><span class="how">Внутренний таймер: каждый будний день в 9:30, раз в час.</span><span class="lim w">Пока приложение закрыто, время пропускается. После запуска один раз спросит, догнать ли.</span></div>
+    </div>
+    <p class="sub">Источники работают, пока открыто приложение. Пропущенное за время простоя не запускается само: на главной появляется строка «пришло 9 событий, 2 подходят».</p>
+  </section>
+
+  <section class="block" id="event">
+    <h2>Событие одного вида</h2>
+    <p class="sub">Из-за этого триггер универсальный. Что бы ни прислало событие, рутина видит одни и те же поля. Условия, проверка словами и вход flow работают одинаково для Slack, Fireflies и расписания.</p>
+    <div class="event">
+<div class="code"><span class="c"># новая встреча в Fireflies.ai → событие</span>
+<span class="k">source</span>: fireflies        <span class="c"># вид: сервис по API</span>
+<span class="k">id</span>: 01JD…             <span class="c"># уже виденные id не запускаются повторно</span>
+<span class="k">at</span>: 2026-11-17T10:42
+<span class="k">title</span>: Планёрка billing  <span class="c"># что показать в журнале</span>
+<span class="k">text</span>: краткое содержание встречи
+<span class="k">link</span>: ссылка на встречу в Fireflies
+<span class="k">fields</span>:                <span class="c"># ответ сервиса целиком</span>
+  duration: <span class="n">42</span>
+  participants: [ … ]</div>
+      <div class="points">
+        <div><b>Заголовок и текст известны заранее</b>Для Slack, Telegram, MR и сервисов с готовым шаблоном. В своём запросе ты один раз указываешь, какие поля ответа считать идентификатором, заголовком и текстом.</div>
+        <div><b>Условия на поля</b>«название содержит billing» или «длилась дольше 10 минут» решается без модели. Проверка словами нужна, только когда отбор по смыслу.</div>
+        <div><b>Полный текст забирает flow</b>В событии краткое содержание и идентификатор встречи. Полную расшифровку этап flow читает сам, по идентификатору.</div>
+        <div><b>Вход flow</b>Задача flow плюс событие в обёртке данных, тем же <span class="mono">wrapData</span>, что и задача из Jira. Агент видит текст события как данные, а не как инструкцию.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="file">
+    <h2>Файл правила</h2>
+    <p class="sub">Рутина — небольшой YAML, как и flow. Экран создания и редактор пишут его, руками его тоже можно править. Цепочка «таска → фикс» живёт блоками внутри flow, правило только запускает его.</p>
+    <div class="event">
+<div class="code"><span class="c"># ~/.agentgraph/routines/bug-from-slack.yaml</span>
+<span class="k">title</span>: Баг из #bugs → таска и фикс
+<span class="k">when</span>:
+  <span class="k">source</span>: slack-work
+  <span class="k">match</span>: { channel: bugs, thread: false }
+  <span class="k">check</span>: |                <span class="c"># необязательно</span>
+    Это баг-репорт: описано сломанное
+    поведение продукта. Вопросы — не баг.
+<span class="k">run</span>:
+  <span class="k">flow</span>: bug-to-fix
+  <span class="k">space</span>: billing
+  <span class="k">worktree</span>: new
+  <span class="k">pause_before</span>: [fix]
+<span class="k">mode</span>: until_pause       <span class="c"># suggest | until_pause | auto</span>
+<span class="k">reply</span>: { to: source, on: [pause, end], draft: true }
+<span class="k">limits</span>: { usd: <span class="n">3</span>, per_day: <span class="n">5</span>, parallel: <span class="n">1</span> }</div>
+<div class="code"><span class="c"># ~/.agentgraph/routines/weekday-mr-digest.yaml</span>
+<span class="k">title</span>: Утром сводка по моим MR
+<span class="k">when</span>:
+  <span class="k">schedule</span>: "30 9 * * 1-5"  <span class="c"># будни, 9:30</span>
+  <span class="k">missed</span>: ask              <span class="c"># ask | skip</span>
+<span class="k">run</span>:
+  <span class="k">flow</span>: mr-digest
+  <span class="k">input</span>: Что в моих MR требует ответа сегодня
+<span class="k">mode</span>: auto
+<span class="k">reply</span>: { to: telegram-me, on: [end] }
+<span class="k">limits</span>: { usd: <span class="n">0.5</span> }</div>
+    </div>
+    <div class="points">
+      <div><b>Что меняется в ядре</b>Источники (опрос сервисов по API и через подключения, бот Telegram, опрос Slack, таймер), журнал срабатываний и опция запуска <span class="mono">pauseBefore</span> в раннере: пауза перед блоком задаётся снаружи, сам flow не меняется.</div>
+      <div><b>Источник — тоже файл</b>Лежит в <span class="mono">~/.agentgraph/sources</span>: команда или запрос, интервал и какие поля ответа считать id, заголовком и текстом. Ключи хранятся отдельно и в файл не попадают, поэтому файлом можно делиться.</div>
+      <div><b>Петля на себя</b>Ответ рутины — тоже сообщение. Сообщения своего бота и ответы в тредах не считаются событиями, поэтому рутина не срабатывает сама на себя.</div>
+    </div>
+  </section>
+
+  <section class="block" id="discuss">
+    <h2>Решения</h2>
+    <p class="sub">Все пять вопросов закрыты 17.11.2026. Выбранный вариант помечен.</p>
+    <div class="qs">
+      <div class="q"><div class="h"><b>1. Как человек подключает свой сервис</b><span>от этого зависит, насколько решение универсальное</span></div>
+        <div class="opts">
+          <div class="opt rec"><b>Словами, агент собирает проверку</b>Подходит любому: не нужно знать API. Агент один раз тратит лимит на подключение, дальше проверки идут без модели.</div>
+          <div class="opt"><b>Только готовые и своя команда</b>Проще сделать. Но сервис, которого нет в готовых, подключит только тот, кто умеет писать запросы.</div>
+        </div></div>
+      <div class="q"><div class="h"><b>2. Где лежат правила</b><span>можно ли делиться с командой</span></div>
+        <div class="opts">
+          <div class="opt rec"><b>~/.agentgraph/routines</b>Личные, рядом с источниками и токенами. Адреса и бюджеты у каждого свои.</div>
+          <div class="opt"><b>routines/ в репо рядом с flows</b>Ревьюятся как код. Но два человека с одной рутиной дают двойные запуски.</div>
+        </div></div>
+      <div class="q"><div class="h"><b>3. Ответ наружу</b><span>кто видит, что работа взята</span></div>
+        <div class="opts">
+          <div class="opt rec"><b>Спрашивать при создании рутины</b>Последний шаг создания: «после моей проверки», «сразу» или «не сообщать». Первым стоит «после моей проверки»: текст ждёт на главной и уходит вместе с твоим решением.</div>
+          <div class="opt"><b>Один вариант для всех рутин</b>Проще, но для ревью только на чтение удобнее «сразу», а для бага — «после проверки».</div>
+        </div></div>
+      <div class="q"><div class="h"><b>4. Пропущенное расписание</b><span>ноутбук был закрыт в 9:30</span></div>
+        <div class="opts">
+          <div class="opt rec"><b>Спросить один раз</b>После запуска строка на главной: «сводка за 9:30 не запускалась — запустить?».</div>
+          <div class="opt"><b>Молча пропустить</b>Проще, но утренняя сводка тихо не придёт.</div>
+        </div></div>
+      <div class="q"><div class="h"><b>5. Первая версия</b><span>что входит в MVP</span></div>
+        <div class="opts">
+          <div class="opt rec"><b>Своя команда, подключение словами, расписание, Slack</b>Команда и подключение словами дают любой сервис, расписание — регулярные дела, Slack — обе исходные истории. Остальные готовые источники следующими.</div>
+          <div class="opt"><b>Сразу все виды</b>Шире, но дольше до первой работающей рутины.</div>
+        </div></div>
+    </div>
+  </section>
+</div>

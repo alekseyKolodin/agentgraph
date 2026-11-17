@@ -1,0 +1,21 @@
+# Рецепт: новые необработанные ошибки в Sentry. Токен: Sentry → Settings → Auth Tokens (право event:read).
+# SENTRY_ORG — короткое имя организации из адреса sentry.io/organizations/<имя>/. Для своего сервера замените sentry.io.
+id: sentry
+summary: Новые необработанные ошибки (issues) в Sentry
+spec:
+  title: Sentry · новые ошибки
+  kind: command
+  every: 5m
+  description: Новая необработанная ошибка в Sentry
+  secrets: [SENTRY_TOKEN, SENTRY_ORG]
+  config:
+    command: |-
+      curl -sS --max-time 30 -G "https://sentry.io/api/0/organizations/$SENTRY_ORG/issues/" \
+        --data-urlencode 'query=is:unresolved' --data-urlencode 'sort=new' --data-urlencode 'limit=25' \
+        -H "Authorization: Bearer $SENTRY_TOKEN"
+  map:
+    id: id
+    title: title
+    text: culprit
+    link: permalink
+    at: firstSeen

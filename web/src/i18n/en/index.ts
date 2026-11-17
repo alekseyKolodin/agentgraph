@@ -15,5 +15,6 @@ import { compose } from './compose';
 import { session } from './session';
 import { space } from './space';
 import { teamwork } from './teamwork';
+import { routines } from './routines';
 
-export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork };
+export const EN: Record<string, string> = { ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines };

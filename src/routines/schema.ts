@@ -1,0 +1,202 @@
+// Рутины: схемы файлов (zod), чтение и запись YAML, слаги и проблемы правила (flow не найден, блока нет, источник не
+// подключён, плохой cron). Битый файл не валит движок: рутина показывается с problems.
+import { z } from 'zod';
+import YAML from 'yaml';
+import type { RoutineSpec, SourceSpec } from './types.js';
+import { parseCron } from './schedule.js';
+
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function assertSlug(slug: string): void {
+  if (!SLUG_RE.test(slug)) throw new Error(`Недопустимый слаг: ${slug} (латиница в нижнем регистре, цифры, дефис)`);
+}
+
+const TRANSLIT: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
+  п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+};
+
+/** Слаг из заголовка: кириллица транслитом, всё прочее — дефис. Пусто — 'routine'. */
+export function slugify(title: string, fallback = 'routine'): string {
+  const s = [...title.toLowerCase()]
+    .map((c) => TRANSLIT[c] ?? c)
+    .join('')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+    .replace(/-+$/, '');
+  return s || fallback;
+}
+
+/** Свободный слаг: base, base-2, base-3… */
+export function freeSlug(title: string, taken: (slug: string) => boolean, fallback?: string): string {
+  const base = slugify(title, fallback);
+  if (!taken(base)) return base;
+  for (let i = 2; ; i++) if (!taken(`${base}-${i}`)) return `${base}-${i}`;
+}
+
+// ---------------------------------------------------------------- интервал
+
+/** '30s' | '5m' | '1h' | '1d' → мс; плохое — undefined. */
+export function parseEvery(s: string | undefined): number | undefined {
+  const m = s?.trim().match(/^(\d+(?:\.\d+)?)\s*(s|m|h|d)$/);
+  if (!m) return undefined;
+  const n = Number(m[1]) * { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 's' | 'm' | 'h' | 'd'];
+  return n > 0 ? n : undefined;
+}
+
+// ---------------------------------------------------------------- схемы
+
+const FieldMapSchema = z
+  .object({
+    items: z.string().optional(),
+    id: z.string().min(1),
+    title: z.string().optional(),
+    text: z.string().optional(),
+    link: z.string().optional(),
+    at: z.string().optional(),
+    author: z.string().optional(),
+  })
+  .strict();
+
+export const SourceSpecSchema = z
+  .object({
+    title: z.string().min(1, 'нужен title'),
+    kind: z.string().min(1, 'нужен kind'),
+    config: z.record(z.string(), z.unknown()).default({}),
+    every: z
+      .string()
+      .refine((s) => parseEvery(s) !== undefined, 'every — число и единица: 30s, 5m, 1h')
+      .optional(),
+    map: FieldMapSchema.optional(),
+    description: z.string().optional(),
+    secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'имя ключа — ЗАГЛАВНЫЕ_БУКВЫ_И_ЦИФРЫ')).optional(),
+  })
+  .strict();
+
+const MatchValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number()]))]);
+
+const WhenSourceSchema = z
+  .object({
+    source: z.string().regex(SLUG_RE, 'источник — слаг: латиница в нижнем регистре, цифры, дефис'),
+    match: z.record(z.string(), MatchValue).optional(),
+    check: z.string().optional(),
+  })
+  .strict();
+
+const WhenScheduleSchema = z
+  .object({
+    schedule: z.string().min(1),
+    missed: z.enum(['ask', 'skip']).optional(),
+  })
+  .strict();
+
+export const RoutineSpecSchema = z
+  .object({
+    title: z.string().min(1, 'нужен title'),
+    enabled: z.boolean().optional(),
+    draft: z.boolean().optional(),
+    when: z.union([WhenSourceSchema, WhenScheduleSchema]),
+    run: z
+      .object({
+        flow: z.string().min(1, 'нужен run.flow'),
+        input: z.string().optional(),
+        space: z.string().optional(),
+        cwd: z.string().optional(),
+        worktree: z.enum(['new', 'none']).optional(),
+        pause_before: z.array(z.string()).optional(),
+        knowledge: z.array(z.string()).optional(),
+        model: z.string().optional(),
+      })
+      .strict(),
+    mode: z.enum(['suggest', 'until_pause', 'auto']),
+    reply: z
+      .object({
+        to: z.string().refine((v) => v === 'none' || v === 'source' || SLUG_RE.test(v), 'reply.to — none, source или слаг источника'),
+        on: z.array(z.enum(['start', 'pause', 'end'])).optional(),
+        draft: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    limits: z
+      .object({
+        usd: z.number().positive().optional(),
+        per_day: z.number().int().positive().optional(),
+        parallel: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+function issues(err: z.ZodError): string[] {
+  return err.issues.map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message));
+}
+
+export type Parsed<T> = { spec?: T; problems: string[] };
+
+function parseWith<T>(schema: z.ZodType<T>, raw: unknown): Parsed<T> {
+  const r = schema.safeParse(raw);
+  return r.success ? { spec: r.data, problems: [] } : { problems: issues(r.error) };
+}
+
+function parseYaml(text: string): { raw?: unknown; problem?: string } {
+  try {
+    return { raw: YAML.parse(text) };
+  } catch (err) {
+    return { problem: `YAML не читается: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}` };
+  }
+}
+
+export function parseRoutine(raw: unknown): Parsed<RoutineSpec> {
+  return parseWith(RoutineSpecSchema, raw) as Parsed<RoutineSpec>;
+}
+
+export function parseRoutineYaml(text: string): Parsed<RoutineSpec> {
+  const y = parseYaml(text);
+  return y.problem ? { problems: [y.problem] } : parseRoutine(y.raw);
+}
+
+export function parseSource(raw: unknown): Parsed<SourceSpec> {
+  return parseWith(SourceSpecSchema, raw) as Parsed<SourceSpec>;
+}
+
+export function parseSourceYaml(text: string): Parsed<SourceSpec> {
+  const y = parseYaml(text);
+  return y.problem ? { problems: [y.problem] } : parseSource(y.raw);
+}
+
+export const toYaml = (spec: RoutineSpec | SourceSpec): string => YAML.stringify(spec, { lineWidth: 0 });
+
+export const isSchedule = (when: RoutineSpec['when']): when is Extract<RoutineSpec['when'], { schedule: string }> => 'schedule' in when;
+
+// ---------------------------------------------------------------- проблемы правила
+
+export type ProblemCtx = {
+  /** Блоки flow по имени; нет flow — undefined. */
+  flowBlocks: (name: string) => string[] | undefined;
+  /** Источник подключён (файл есть и читается). */
+  sourceExists: (slug: string) => boolean;
+};
+
+/** Проблемы сохранённого правила: схема прошла, а сослаться не на что. Пусто — правило рабочее. */
+export function routineProblems(spec: RoutineSpec, ctx: ProblemCtx): string[] {
+  const out: string[] = [];
+  let blocks: string[] | undefined;
+  try {
+    blocks = ctx.flowBlocks(spec.run.flow);
+  } catch (err) {
+    out.push(`flow ${spec.run.flow} не читается: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!blocks && !out.length) out.push(`flow ${spec.run.flow} не найден`);
+  if (blocks) for (const b of spec.run.pause_before ?? []) if (!blocks.includes(b)) out.push(`во flow ${spec.run.flow} нет блока «${b}» из pause_before`);
+  if (isSchedule(spec.when)) {
+    const c = parseCron(spec.when.schedule);
+    if (typeof c === 'string') out.push(`расписание: ${c}`);
+  } else if (!ctx.sourceExists(spec.when.source)) out.push(`источник ${spec.when.source} не подключён`);
+  if (spec.reply && spec.reply.to !== 'none' && spec.reply.to !== 'source' && !ctx.sourceExists(spec.reply.to)) out.push(`ответ: источник ${spec.reply.to} не подключён`);
+  if (spec.reply?.to === 'source' && isSchedule(spec.when)) out.push('ответ «в источник» у расписания некуда: выбери источник с чатом');
+  // 7: черновик ждёт решения человека, а на старте решения нет — «Взял в работу» при draft не уходит
+  if (spec.reply?.draft && spec.reply.to !== 'none' && (spec.reply.on ?? ['start']).includes('start')) out.push('ответ: при draft «Взял в работу» на старте не отправляется — черновик уходит на паузе или в конце');
+  return out;
+}

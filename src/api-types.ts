@@ -97,8 +97,8 @@ export type RunDigest = { text: string; block: string; iteration: number; at: st
 
 /** Задача Jira, MR, ветка или задача Teamwork, из которой запущен запуск. */
 export type RunSource = {
-  type: 'jira' | 'mr' | 'branch' | 'teamwork';
-  /** KEY-123, !42 (ref MR), имя ветки или номер задачи Teamwork (PAY-12). */
+  type: 'jira' | 'mr' | 'branch' | 'teamwork' | 'routine';
+  /** KEY-123, !42 (ref MR), имя ветки, номер задачи Teamwork (PAY-12) или слаг рутины (тогда title — заголовок события, url — его ссылка). */
   key: string;
   title: string;
   url?: string;
@@ -904,6 +904,8 @@ export type PauseReason = {
   resumedAt?: string;
   /** Ответ пользователя, дописанный в артефакт decisions при продолжении. Только в истории report.pauses. */
   answer?: PauseAnswer;
+  /** Пауза перед блоком по опции раннера pauseBefore (рутина ждёт человека), а не по просьбе этапа: вывода у неё нет. */
+  before?: true;
 };
 
 export type PhaseFiles = { prompt: string; transcript: string; output: string };

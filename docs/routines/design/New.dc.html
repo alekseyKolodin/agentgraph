@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Новая рутина</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,.pick:focus-visible,.slot:focus-visible,a:focus-visible,input:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);position:relative}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.ri .b{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.step{display:grid;grid-template-columns:26px minmax(0,1fr);gap:14px;padding:20px 0;border-top:1px solid var(--line)}
+.num{width:26px;height:26px;border-radius:6px;background:var(--raised);display:grid;place-items:center;font:500 12px var(--mono);color:var(--ink-2)}
+.sh{margin:0;font-size:16px;font-weight:600;line-height:26px}
+.pick{flex:1 1 200px;min-width:0;text-align:left;font-family:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;cursor:pointer;display:flex;flex-direction:column;gap:1px;transition:border-color .12s,background-color .12s}
+.pick:hover{border-color:var(--line-strong);color:var(--ink)}
+.pick[aria-pressed="true"]{border-color:var(--ink);background:var(--raised)}
+.pick b{font-weight:500;font-size:14px}
+.pick span{font-size:12px;color:var(--ink-2)}
+.pick.new{border-style:dashed;background:transparent}
+.lbl{font-size:12px;font-weight:500;color:var(--ink-3)}
+.inp{font-family:inherit;font-size:14px;color:var(--ink);background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:6px 10px;min-height:34px;width:100%}
+.slot{font-family:inherit;font-size:14px;font-weight:500;color:var(--ink);background:var(--well);border:1px solid var(--line-strong);border-radius:4px;padding:0 8px;line-height:24px;cursor:pointer;margin:2px 0}
+.slot:hover{border-color:rgba(255,255,255,.24)}
+.slot.add{border-style:dashed;color:var(--ink-3);font-weight:400}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden;align-self:flex-start}
+.seg button{font-family:inherit;font-size:13px;color:var(--ink-2);background:transparent;border:0;border-right:1px solid var(--line);padding:4px 14px;line-height:22px;cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:500}
+.seg button:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(122,167,255,.55)}
+.found{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 1040px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri" href="Home.dc.html" aria-label="Главная" title="Главная"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg><span class="b"></span></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Flow" title="Flow"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Знания" title="Знания"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M7 3 5.5 15M12.5 3 11 15M3.5 6.5h12M3 11.5h12"/></svg></a>
+    <a class="ri" href="#" aria-label="Teamwork" title="Teamwork"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="12.5" cy="7.5" r="2"/><path d="M2.5 15c0-2.5 1.8-4 4-4s4 1.5 4 4M11 11.2c2.3-.3 4.5 1 4.5 3.8"/></svg></a>
+    <a class="ri" href="#" aria-label="Код" title="Код"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6.5 5-4 4 4 4M11.5 5l4 4-4 4"/></svg></a>
+    <a class="ri on" href="Main.dc.html" aria-label="Рутины" title="Рутины" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 20px 28px 32px; display: flex; flex-direction: column; gap: 14px">
+    <a href="Main.dc.html" style="font-size: 12px; color: var(--ink-3)">‹ Рутины</a>
+    <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Новая рутина</h1>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start">
+      <div style="flex: 1 1 520px; min-width: 0; max-width: 760px">
+
+        <!-- шаг 1 -->
+        <section class="step" aria-labelledby="s1">
+          <span class="num">1</span>
+          <div style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+            <h2 class="sh" id="s1">Что запускает</h2>
+            <div role="group" aria-labelledby="s1" style="display: flex; flex-wrap: wrap; gap: 8px">
+              <sc-for list="{{sources}}" as="k" hint-placeholder-count="6">
+                <button type="button" class="pick" aria-pressed="{{k.on}}" onClick="{{k.pick}}"><b>{{k.t}}</b><span>{{k.d}}</span></button>
+              </sc-for>
+              <a class="pick new" href="Source.dc.html"><b>Другой сервис…</b><span>Опиши словами, что должно запускать</span></a>
+            </div>
+          </div>
+        </section>
+
+        <!-- шаг 2 -->
+        <section class="step" aria-labelledby="s2">
+          <span class="num">2</span>
+          <div style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+            <h2 class="sh" id="s2">{{step2Title}}</h2>
+
+            <sc-if value="{{isService}}" hint-placeholder-val="{{true}}">
+              <div style="display: flex; flex-direction: column; gap: 10px">
+                <div style="line-height: 2">Запускать <button type="button" class="slot">для каждой новой встречи</button> <button type="button" class="slot add">+ условие</button></div>
+                <div>
+                  <span class="lbl">Последнее, что пришло из источника</span>
+                  <div style="border-top: 1px solid var(--line); margin-top: 6px">
+                    <div class="found"><span>Планёрка billing</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">сегодня 10:00 · 42 мин</span></div>
+                    <div class="found"><span>Созвон с дизайном по выгрузке</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">вчера 15:30 · 28 мин</span></div>
+                    <div class="found"><span>1:1</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">вчера 12:00 · 31 мин</span></div>
+                  </div>
+                </div>
+                <span style="font-size: 12px; color: var(--ink-3)">Эти записи не запустятся. Рутина начнёт с тех, что появятся после включения.</span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{isSlack}}" hint-placeholder-val="{{false}}">
+              <div style="display: flex; flex-direction: column; gap: 8px">
+                <div style="line-height: 2">Сообщения в <button type="button" class="slot">#bugs</button>, <button type="button" class="slot">кроме ответов в тредах</button> <button type="button" class="slot add">+ условие</button></div>
+                <span style="font-size: 12px; color: var(--ink-3)">Отбор по смыслу («это баг-репорт») задаётся на следующем экране.</span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{isTg}}" hint-placeholder-val="{{false}}">
+              <div style="line-height: 2">Сообщения <button type="button" class="slot">в личке боту</button> от <button type="button" class="slot">меня</button> <button type="button" class="slot add">+ условие</button></div>
+            </sc-if>
+
+            <sc-if value="{{isSchedule}}" hint-placeholder-val="{{false}}">
+              <div style="display: flex; flex-direction: column; gap: 12px">
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end">
+                  <div role="group" aria-label="Как часто" style="display: flex; flex-wrap: wrap; gap: 6px">
+                    <sc-for list="{{days}}" as="d" hint-placeholder-count="3"><button type="button" class="btn" aria-pressed="{{d.on}}" onClick="{{d.pick}}" style="{{d.style}}">{{d.t}}</button></sc-for>
+                  </div>
+                  <sc-if value="{{hasTime}}" hint-placeholder-val="{{true}}">
+                    <div style="display: flex; flex-direction: column; gap: 4px; width: 110px">
+                      <label class="lbl" for="sc-time">Время</label>
+                      <input class="inp mono" id="sc-time" type="time" value="{{time}}" onChange="{{onTime}}">
+                    </div>
+                  </sc-if>
+                </div>
+                <span class="mono" style="font-size: 12px; color: var(--ink-2)">Ближайшие: {{nextRuns}}</span>
+                <div style="display: flex; flex-direction: column; gap: 4px">
+                  <label class="lbl" for="sc-task">Задача для flow</label>
+                  <input class="inp" id="sc-task" type="text" value="{{task}}" onChange="{{onTask}}">
+                </div>
+                <span style="font-size: 12px; color: var(--ink-3)">Работает, пока открыто приложение. Пропущенное время спросит один раз после запуска.</span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{isCode}}" hint-placeholder-val="{{false}}">
+              <div style="line-height: 2">Когда <button type="button" class="slot">меня назначили ревьюером</button> <button type="button" class="slot add">+ условие</button></div>
+            </sc-if>
+
+            <sc-if value="{{isTask}}" hint-placeholder-val="{{false}}">
+              <div style="line-height: 2">Когда <button type="button" class="slot">задачу назначили мне</button> <button type="button" class="slot add">+ условие</button></div>
+            </sc-if>
+          </div>
+        </section>
+
+        <!-- шаг 3 -->
+        <section class="step" aria-labelledby="s3">
+          <span class="num">3</span>
+          <div style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+            <h2 class="sh" id="s3">Что запустить</h2>
+            <div role="group" aria-labelledby="s3" style="display: flex; flex-direction: column; gap: 6px">
+              <sc-for list="{{flows}}" as="f" hint-placeholder-count="3">
+                <button type="button" class="pick" style="flex: none" aria-pressed="{{f.on}}" onClick="{{f.pick}}"><b>{{f.name}}</b><span>{{f.d}}</span></button>
+              </sc-for>
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; line-height: 2">в пространстве <button type="button" class="slot">◇ {{space}}</button><span style="flex: 1"></span><button type="button" class="btn s g">Собрать новый flow…</button></div>
+          </div>
+        </section>
+
+        <!-- шаг 4 -->
+        <section class="step" aria-labelledby="s4">
+          <span class="num">4</span>
+          <div style="display: flex; flex-direction: column; gap: 10px; min-width: 0">
+            <h2 class="sh" id="s4">Сообщать о результате</h2>
+            <div class="seg" role="group" aria-labelledby="s4">
+              <sc-for list="{{replies}}" as="r" hint-placeholder-count="3"><button type="button" aria-pressed="{{r.on}}" onClick="{{r.pick}}">{{r.t}}</button></sc-for>
+            </div>
+            <sc-if value="{{hasReply}}" hint-placeholder-val="{{true}}">
+              <div style="line-height: 2">Писать <button type="button" class="slot">{{replyWhere}}</button></div>
+            </sc-if>
+            <span style="font-size: 12px; color: var(--ink-3)">{{replyHint}}</span>
+          </div>
+        </section>
+      </div>
+
+      <!-- итог -->
+      <aside aria-label="Что получится" style="flex: 1 1 280px; max-width: 340px; position: sticky; top: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 16px; display: flex; flex-direction: column; gap: 12px; margin-top: 20px">
+        <span class="lbl">Получится</span>
+        <p style="margin: 0; font-size: 16px; line-height: 1.5; font-weight: 500">{{sentence}}</p>
+        <a class="btn p" href="Editor.dc.html" style="align-self: stretch">Проверить и включить</a>
+        <span style="font-size: 12px; color: var(--ink-3)">Сохранится черновиком. На следующем экране проверка на истории, остановки и лимиты.</span>
+      </aside>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { src: 'ff', reply: 'draft', days: 'weekdays', time: '09:30', task: 'Что в моих MR требует ответа сегодня', flow: null };
+  }
+  renderVals() {
+    const s = this.state;
+    const SOURCES = [
+      { id: 'slack', t: 'Slack · work', d: 'сообщения в каналах', kind: 'slack' },
+      { id: 'tg', t: 'Telegram · @ag_inbox_bot', d: 'сообщения боту', kind: 'tg' },
+      { id: 'gitlab', t: 'GitLab · billing', d: 'MR, ревью, сборки', kind: 'code' },
+      { id: 'jira', t: 'Jira · AG', d: 'задачи', kind: 'task' },
+      { id: 'ff', t: 'Fireflies.ai', d: 'записи встреч', kind: 'service' },
+      { id: 'sched', t: 'Расписание', d: 'в заданное время', kind: 'schedule' }
+    ];
+    const cur = SOURCES.find((x) => x.id === s.src);
+    const kind = cur.kind;
+    const sources = SOURCES.map((k) => ({ t: k.t, d: k.d, on: k.id === s.src ? 'true' : 'false', pick: () => this.setState({ src: k.id, flow: null }) }));
+    const FLOWS = {
+      service: [['meeting-to-tasks', 'Из встречи: задачи в Jira и итог участникам'], ['note-to-space', 'Сохранить итог встречи в документы пространства'], ['bug-to-fix', 'Проверить баг, завести таску, починить']],
+      slack: [['bug-to-fix', 'Проверить баг, завести таску, починить с тестами'], ['review-only', 'Ревью MR по ссылке, только чтение'], ['note-to-space', 'Сохранить заметку в документы пространства']],
+      tg: [['note-to-space', 'Сохранить заметку в документы пространства'], ['bug-to-fix', 'Проверить баг, завести таску, починить'], ['mr-digest', 'Сводка по моим MR']],
+      code: [['review-only', 'Ревью MR, только чтение, замечания черновиком'], ['review-and-fix', 'Три ревьюера и фиксер'], ['fix-ci', 'Починить упавшую сборку']],
+      task: [['ticket-to-branch', 'Задача → ветка с ревью и проверкой критериев'], ['feature-spec-first', 'Спека, план, код'], ['bug-to-fix', 'Проверить баг и починить']],
+      schedule: [['mr-digest', 'Сводка по моим MR: что требует ответа'], ['deps-check', 'Проверить обновления зависимостей'], ['fix-ci', 'Починить упавшую сборку']]
+    };
+    const list = FLOWS[kind];
+    const flow = s.flow || list[0][0];
+    const flows = list.map((f, i) => ({ name: f[0], d: (i === 0 ? 'Подходит по описанию. ' : '') + f[1], on: f[0] === flow ? 'true' : 'false', pick: () => this.setState({ flow: f[0] }) }));
+    const space = kind === 'tg' ? 'inbox' : 'billing';
+    const DAYS = [['weekdays', 'По будням'], ['daily', 'Каждый день'], ['hourly', 'Раз в час']];
+    const days = DAYS.map((d) => ({ t: d[1], on: d[0] === s.days ? 'true' : 'false', style: d[0] === s.days ? 'border-color: var(--ink)' : '', pick: () => this.setState({ days: d[0] }) }));
+    const nextRuns = s.days === 'hourly' ? 'сегодня в 13:00, 14:00, 15:00' : s.days === 'daily' ? 'ср 18.11, чт 19.11, пт 20.11 в ' + s.time : 'ср 18.11, чт 19.11, пт 20.11 в ' + s.time + ', дальше пн 23.11';
+    const when = {
+      service: 'Когда в Fireflies.ai появляется новая встреча',
+      slack: 'Когда в #bugs приходит новое сообщение',
+      tg: 'Когда я пишу боту в Telegram',
+      code: 'Когда меня назначают ревьюером MR в billing',
+      task: 'Когда мне назначают задачу в Jira',
+      schedule: (s.days === 'hourly' ? 'Раз в час' : (s.days === 'daily' ? 'Каждый день' : 'По будням') + ' в ' + s.time)
+    }[kind];
+    const TITLES = { service: 'Какие записи', slack: 'Какие сообщения', tg: 'Какие сообщения', code: 'Какое событие', task: 'Какое событие', schedule: 'Когда' };
+    const REPLIES = [['draft', 'После моей проверки'], ['auto', 'Сразу'], ['off', 'Не сообщать']];
+    const replies = REPLIES.map((r) => ({ t: r[1], on: r[0] === s.reply ? 'true' : 'false', pick: () => this.setState({ reply: r[0] }) }));
+    const replyWhere = { slack: 'в тред сообщения', tg: 'в тот же чат', code: 'комментарием в MR', task: 'комментарием в задаче', service: 'мне в Telegram', schedule: 'мне в Telegram' }[kind];
+    const replyHint = { draft: 'Текст ждёт на главной и уходит, когда ты его одобришь.', auto: 'Рутина пишет сама: когда ждёт тебя и когда закончила.', off: 'Итог будет виден только в agentgraph.' }[s.reply];
+    const replyTail = { draft: ' Ответ уходит после твоей проверки.', auto: ' О результате пишет сама.', off: '' }[s.reply];
+    return {
+      replies, replyWhere, replyHint, hasReply: s.reply !== 'off',
+      sources, flows, space, days, nextRuns,
+      step2Title: TITLES[kind],
+      isService: kind === 'service',
+      isSlack: kind === 'slack',
+      isTg: kind === 'tg',
+      isSchedule: kind === 'schedule',
+      isCode: kind === 'code',
+      isTask: kind === 'task',
+      hasTime: s.days !== 'hourly',
+      time: s.time,
+      onTime: (e) => this.setState({ time: e.target.value || '09:30' }),
+      task: s.task,
+      onTask: (e) => this.setState({ task: e.target.value }),
+      sentence: when + (kind === 'schedule' ? ' запустить ' : ', запустить ') + flow + ' в ◇ ' + space + '.' + replyTail
+    };
+  }
+}
+</script>
+</body>
+</html>

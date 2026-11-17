@@ -8,6 +8,8 @@ import { useEffect, useSyncExternalStore, type ReactNode, type Ref } from 'react
 import { Link, NavLink, useLocation, useMatch } from 'react-router';
 import type { SessionView } from '@server/api-types';
 import { useFeature, useHome, useRuns } from '../../api';
+import { useRoutines } from '../../api/routines';
+import { activeWaits } from '../../lib/routines/view';
 import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
 import { panelForPath, railClick, validPanel, type SidePanel } from '../../lib/side-panel';
 import { useNow } from '../useNow';
@@ -172,6 +174,8 @@ const RAIL_ICON = {
     </>,
   ),
   code: ico(<path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5M9 3l-2 10" />),
+  // рутина — молния «когда → делай», как ↯ у запусков рутин на главной
+  routines: ico(<path d="M9 1.8L3.5 9h4L6.8 14.2 12.5 7h-4z" />),
   tags: ico(<path d="M3 3h3.5A1.5 1.5 0 0 1 8 4.5a1.5 1.5 0 0 1 1.5-1.5H13v9.5H9.5A1.5 1.5 0 0 0 8 14a1.5 1.5 0 0 0-1.5-1.5H3zM8 4.5V14" />),
   context: ico(<path d="M8 2.5l5.5 2.75L8 8 2.5 5.25zM2.5 8L8 10.75 13.5 8M2.5 10.75L8 13.5l5.5-2.75" />),
   panel: ico(<path d="M2.5 3h11v10h-11zM6.5 3v10" />),
@@ -221,7 +225,10 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
   const sessions = useFeature('sessions');
   const teamwork = useFeature('teamwork');
   const code = useFeature('integrations');
-  const questions = inboxCount(useHome().data?.runs ?? []);
+  const routinesOn = useFeature('routines');
+  // ожидания рутин — тоже «ждёт тебя» на главной: в счётчике значка вместе с вопросами агентов
+  const routineWaits = activeWaits(useRoutines(routinesOn).data?.waits ?? []).length;
+  const questions = inboxCount(useHome().data?.runs ?? []) + routineWaits;
   const allSessions = useAllSessions();
   const ended = allSessions.filter((s) => !s.live);
   const saved = usePanel();
@@ -285,12 +292,13 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
             </button>
           );
         })}
-        {(spaces || tags || teamwork || code) && <span className={styles.railSep} aria-hidden="true" />}
+        {(spaces || tags || teamwork || code || routinesOn) && <span className={styles.railSep} aria-hidden="true" />}
         {spaces && <RailLink to="/spaces" icon={RAIL_ICON.spaces} label={t('Пространства')} tip={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')} />}
         {/* знания — рядом с пространствами: у пространства свои теги знаний (вкладка «Знания») */}
         {tags && <RailLink to="/tags" icon={RAIL_ICON.tags} label={t('Знания')} tip={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')} />}
         {teamwork && <RailLink to="/teamwork" icon={RAIL_ICON.teamwork} label="Teamwork" tip={t('Teamwork: команда ведёт проекты в общем git-репо — ТЗ, архитектура, задачи и спринты')} />}
         {code && <RailLink to="/code" icon={RAIL_ICON.code} label={t('Код')} tip={t('Задачи Jira, MR и ветки подключённых проектов — запустить flow по любой из них')} />}
+        {routinesOn && <RailLink to="/routines" icon={RAIL_ICON.routines} label={t('Рутины')} tip={t('Рутины: событие из сервиса, чата или расписания само запускает flow')} />}
         <span className={styles.railGap} />
         {context && <RailLink to="/context" icon={RAIL_ICON.context} label={t('Контекст')} tip={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')} />}
         {/* панель скрыта — плашка обновления и язык переезжают на рельс: о новой версии и ошибке обновления видно и так */}

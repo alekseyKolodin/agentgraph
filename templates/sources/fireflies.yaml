@@ -1,0 +1,22 @@
+# Рецепт: новые записи встреч в Fireflies.ai (GraphQL API). Ключ: Fireflies → Settings → Developer Settings → API Key.
+id: fireflies
+summary: Новые записи встреч в Fireflies.ai
+spec:
+  title: Fireflies.ai · записи встреч
+  kind: command
+  every: 5m
+  description: Новая запись встречи в Fireflies.ai
+  secrets: [FIREFLIES_API_KEY]
+  config:
+    command: |-
+      curl -sS --max-time 30 https://api.fireflies.ai/graphql \
+        -H "Authorization: Bearer $FIREFLIES_API_KEY" \
+        -H 'Content-Type: application/json' \
+        -d '{"query":"{ transcripts(limit: 20) { id title date duration transcript_url organizer_email } }"}'
+  map:
+    items: data.transcripts
+    id: id
+    title: title
+    link: transcript_url
+    at: date
+    author: organizer_email

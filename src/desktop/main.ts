@@ -320,7 +320,7 @@ async function main(): Promise<void> {
     });
   // упакованное приложение не git checkout: проверка обновлений сама скажет, что обновляться не с чего
   origin = `http://localhost:${port}`;
-  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, restart, notifier: showNotice });
+  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, routines: true, restart, notifier: showNotice });
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();

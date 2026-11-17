@@ -32,6 +32,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-v
 }
 .btn:hover { background: color-mix(in srgb, var(--raised) 80%, var(--ink) 8%); }
 .btn:active { transform: scale(.97); }
+/* ссылка-кнопка (переход на экран): без подчёркивания, как button */
+a.btn { display: inline-block; text-decoration: none; }
 /* главное действие — светлое и нейтральное: синий занят статусом «идёт» */
 .btn.primary { background: var(--act); border-color: var(--act); color: var(--on-act); }
 .btn.primary:hover { background: var(--act-hover); border-color: var(--act-hover); }

@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json && tsc -p web/tsconfig.node.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json && tsc -p web/tsconfig.node.json && tsc -p e2e/tsconfig.json",
     "agentgraph": "tsx src/cli.ts",
     "ui": "tsx scripts/ensure-web.mts && tsx src/cli.ts ui",
     "dev:web": "vite --config web/vite.config.ts",
@@ -19,9 +19,10 @@
     "desktop:dev": "tsx scripts/ensure-web.mts && npm run build && electron .",
     "desktop:install": "tsx scripts/ensure-web.mts && npm run build && tsx scripts/desktop-install.mts",
     "desktop:build": "npm run build:web && npm run build && tsx scripts/pty-helper.mts && electron-builder --mac",
-    "test": "tsx --test src/*.test.ts web/src/lib/*.test.ts web/src/lib/*/*.test.ts",
+    "test": "tsx --test src/*.test.ts src/routines/*.test.ts src/routines/sources/*.test.ts web/src/lib/*.test.ts web/src/lib/*/*.test.ts",
     "share": "bash scripts/share.sh",
-    "release": "tsx scripts/release.mts"
+    "release": "tsx scripts/release.mts",
+    "e2e": "playwright test -c e2e"
   },
   "engines": {
     "node": ">=20"
@@ -42,6 +43,7 @@
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
     "@lezer/highlight": "^1.2.5",
+    "@playwright/test": "^1.65.1",
     "@tanstack/react-query": "^5.104.5",
     "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
