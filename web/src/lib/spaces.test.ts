@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Space, SpaceRun, SpaceSession } from '@server/api-types';
 import {
   dirLines, docLine, docSize, filterSpaces, itemsCount, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
-  modelSummary, pickWorkdir, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirHint, workdirNote,
+  modelSummary, pickWorkdir, spacePatch, folderPlan, slugFor, spaceTags, swapSpaceTags, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirHint, workdirNote,
   type CwdState,
 } from './spaces';
 
@@ -56,7 +56,7 @@ test('пространства: сессии и запуски одним спи
 test('пространства: форма — снимок без хвостовых переводов строки, патч только изменённого и с базой mtimeMs', () => {
   const s = space();
   const f = spaceFormOf(s);
-  assert.deepEqual(f, { title: 'Пуш', map: '# Пуш\n', state: 'Суть\n', dirs: '/a\n/b', cwd: '' });
+  assert.deepEqual(f, { title: 'Пуш', map: '# Пуш\n', state: 'Суть\n', dirs: '/a\n/b', cwd: '', tags: [] });
   assert.equal(spaceSnapshot(f), spaceSnapshot({ ...f, map: '# Пуш', dirs: ' /a \n\n/b' }));
   assert.notEqual(spaceSnapshot(f), spaceSnapshot({ ...f, map: '# Другое' }));
   assert.deepEqual(spacePatch(f, s), {});
@@ -71,6 +71,10 @@ test('пространства: форма — снимок без хвосто�
   // рабочая папка: правка — в патче, пустая — снять
   assert.deepEqual(spacePatch({ ...f, cwd: '/code/app' }, s), { cwd: '/code/app' });
   assert.deepEqual(spacePatch({ ...f, cwd: '' }, space({ cwd: '/code/app' })), { cwd: '' });
+  // теги знаний: порядок важен, пустой список снимает
+  assert.deepEqual(spacePatch({ ...f, tags: ['kotlin'] }, s), { tags: ['kotlin'] });
+  assert.deepEqual(spacePatch({ ...f, tags: [] }, space({ tags: ['kotlin'] })), { tags: [] });
+  assert.notEqual(spaceSnapshot(f), spaceSnapshot({ ...f, tags: ['kotlin'] }));
 });
 
 test('поле пространства: пусто — без пространства, неверный слаг — ошибка, новый — заведётся, существующий — что даст', () => {
@@ -156,4 +160,34 @@ test('модель получит: строка-сводка — карта и �
   assert.match(modelSummary(home), /^карта ≈1\.2k ток\. — памятью/);
   assert.equal(modelSummary({ space: { ...space, map: { ...space.map, chars: 0 }, state: '', docs: [], dirs: [] }, knowledge: [] }), 'карты нет · состояния ещё нет');
   assert.equal(modelSummary({ knowledge: [{ slug: 'qa', title: '', inline: true, text: '' }] }), 'знаний: 1');
+});
+
+test('теги пространства в форме: смена пространства меняет его теги, выбранные руками остаются', () => {
+  assert.deepEqual(swapSpaceTags([], undefined, ['kotlin', 'release']), ['kotlin', 'release']);
+  assert.deepEqual(swapSpaceTags(['mine', 'kotlin', 'release'], ['kotlin', 'release'], ['release', 'ios']), ['mine', 'release', 'ios']);
+  assert.deepEqual(swapSpaceTags(['mine', 'kotlin'], ['kotlin'], []), ['mine']);
+  // снятый руками тег прежнего пространства не возвращается, повторов нет
+  assert.deepEqual(swapSpaceTags(['mine'], ['kotlin'], ['mine']), ['mine']);
+  assert.deepEqual(spaceTags(' p ', [{ slug: 'p', tags: ['a'] }, { slug: 'q' }]), ['a']);
+  assert.deepEqual(spaceTags('q', [{ slug: 'q' }]), []);
+});
+
+test('слаг нового пространства по папке: латиница и дефис, занятый — с номером', () => {
+  assert.equal(slugFor('My_App 2', []), 'my-app-2');
+  assert.equal(slugFor('android', ['android', 'android-2']), 'android-3');
+  assert.equal(slugFor('Проект', []), 'work');
+  assert.match(slugFor('a'.repeat(100), []), /^a{56}$/);
+});
+
+test('набор папок формы сессии: сохранить в существующем, завести новое, второй раз не заводить', () => {
+  const known = { slug: 'kai', dirs: ['/a'] };
+  assert.deepEqual(folderPlan({ target: 'kai', known, dirs: ['/a'], cwd: '/p' }), { kind: 'none' });
+  assert.deepEqual(folderPlan({ target: 'kai', known, dirs: ['/a', '/x'], cwd: '/p' }), { kind: 'save', slug: 'kai', dirs: ['/a', '/x'] });
+  assert.deepEqual(folderPlan({ target: 'kai', known, dirs: [], cwd: '/p' }), { kind: 'save', slug: 'kai', dirs: [] });
+  assert.deepEqual(folderPlan({ target: 'new', dirs: ['/x'], cwd: ' /p ' }), { kind: 'create', slug: 'new', dirs: ['/x'], cwd: '/p' });
+  // новое без папок заводит сервер сессии; без пространства — ничего
+  assert.deepEqual(folderPlan({ target: 'new', dirs: [], cwd: '/p' }), { kind: 'none' });
+  assert.deepEqual(folderPlan({ target: '', dirs: ['/x'], cwd: '/p' }), { kind: 'none' });
+  // уже заведено этой формой, а список ещё старый — сохранить, а не завести (409)
+  assert.deepEqual(folderPlan({ target: 'new', dirs: ['/x'], cwd: '/p', created: 'new' }), { kind: 'save', slug: 'new', dirs: ['/x'] });
 });

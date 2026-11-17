@@ -315,7 +315,7 @@ export function spaceSettingsDetail(slug: string, args: { title?: string; dirs?:
   return metaDiff(prev, { ...prev, ...(title ? { title } : { title: undefined }), dirs, cwd });
 }
 
-/** Что изменит правка space.json: заголовок, папки чтения (их откроют все сессии и запуски), рабочая папка. */
+/** Что изменит правка space.json: заголовок, папки чтения (их откроют все сессии и запуски), рабочая папка, теги знаний. */
 function metaDiff(prev: SpaceMeta | undefined, next: SpaceMeta): string {
   const out: string[] = [];
   if ((prev?.title ?? '') !== (next.title ?? '')) out.push(`заголовок → «${next.title ?? ''}»`);
@@ -326,7 +326,14 @@ function metaDiff(prev: SpaceMeta | undefined, next: SpaceMeta): string {
   if (added.length) out.push(`откроет на чтение всем сессиям и запускам пространства: ${added.join(', ')}`);
   if (removed.length) out.push(`уберёт из папок чтения: ${removed.join(', ')}`);
   if ((prev?.cwd ?? '') !== (next.cwd ?? '')) out.push(`рабочая папка → ${next.cwd ?? 'нет'}`);
-  return out.length ? `${out.join('; ')}` : 'Заголовок, папки и рабочая папка не меняются';
+  // теги знаний пространства формы подставляют в каждую его сессию и запуск
+  const tagsWas = prev?.tags ?? [];
+  const tagsNow = next.tags ?? [];
+  const tagsAdded = tagsNow.filter((x) => !tagsWas.includes(x));
+  const tagsRemoved = tagsWas.filter((x) => !tagsNow.includes(x));
+  if (tagsAdded.length) out.push(`добавит теги знаний, которые получат сессии и запуски пространства: ${tagsAdded.join(', ')}`);
+  if (tagsRemoved.length) out.push(`снимет теги знаний: ${tagsRemoved.join(', ')}`);
+  return out.length ? `${out.join('; ')}` : 'Заголовок, папки, рабочая папка и теги знаний не меняются';
 }
 
 function askText(t: EditTarget): string {

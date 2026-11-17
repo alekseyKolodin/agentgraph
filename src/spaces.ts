@@ -41,6 +41,8 @@ export const SPACE_GIST_MAX = 300;
 export const SPACE_TITLE_MAX = 120;
 /** Папок у пространства не больше: каждая уходит --add-dir сессии и доп. директорией этапов. */
 export const SPACE_DIRS_MAX = 20;
+/** Тегов знаний у пространства: их строки уходят в контекст каждой сессии и этапа. */
+export const SPACE_TAGS_MAX = 10;
 /** Документов не больше: их список идёт в контекст. */
 export const SPACE_DOCS_MAX = 30;
 /** Текст документа, который правят в UI и пишет space_write. */
@@ -148,6 +150,7 @@ export function parseSpaceMeta(slug: string, text: string): SpaceMeta {
   const title = typeof raw.title === 'string' ? cleanLine(raw.title, SPACE_TITLE_MAX) : '';
   const dirs = strList(raw.dirs).filter((d) => path.isAbsolute(d));
   const cwd = typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined;
+  const tags = [...new Set(strList(raw.tags).filter((t) => TAG_SLUG_RE.test(t)))].slice(0, SPACE_TAGS_MAX);
   const from = raw.migratedFrom as { tag?: unknown; at?: unknown; summaryMtimeMs?: unknown; runs?: unknown } | undefined;
   const fromRuns = strList(from?.runs).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
   return {
@@ -158,6 +161,7 @@ export function parseSpaceMeta(slug: string, text: string): SpaceMeta {
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : typeof raw.createdAt === 'string' ? raw.createdAt : now,
     ...(dirs.length ? { dirs } : {}),
     ...(cwd ? { cwd } : {}),
+    ...(tags.length ? { tags } : {}),
     history: readUpdates(raw.history),
     ...(from && typeof from.tag === 'string' && typeof from.at === 'string'
       ? { migratedFrom: { tag: from.tag, at: from.at, ...(Number.isFinite(from.summaryMtimeMs) ? { summaryMtimeMs: Number(from.summaryMtimeMs) } : {}), ...(fromRuns.length ? { runs: fromRuns } : {}) } }
@@ -218,8 +222,12 @@ export function listDocs(slug: string): SpaceDoc[] {
 
 export function readSpace(slug: string): Space | undefined {
   migrateTaskTags();
-  const meta = readSpaceMeta(slug);
-  if (!meta) return undefined;
+  const raw = readSpaceMeta(slug);
+  if (!raw) return undefined;
+  // тег знаний удалили после того, как его привязали: формы его не подставят (сессия с ним не открылась бы — 400)
+  const { tags: _tags, ...rest } = raw;
+  const tags = liveKnowledgeTags(raw.tags);
+  const meta: SpaceMeta = { ...rest, ...(tags.length ? { tags } : {}) };
   const mapMtimeMs = mtimeOf(mapFile(slug));
   const stateMtimeMs = mtimeOf(stateFile(slug));
   return {
@@ -261,6 +269,8 @@ export function listSpaces(): SpaceListItem[] {
       hasMap: Boolean(s.map.trim()),
       hasState: Boolean(s.state.trim()),
       ...(s.cwd ? { cwd: s.cwd } : {}),
+      ...(s.dirs?.length ? { dirs: s.dirs } : {}),
+      ...(s.tags?.length ? { tags: s.tags } : {}),
       ...(s.migratedFrom ? { migratedFrom: s.migratedFrom } : {}),
     });
   }
@@ -288,6 +298,34 @@ export function checkSpaceDirs(raw: unknown): string[] {
     }
   }
   return [...new Set(dirs.map((d) => path.resolve(d)))];
+}
+
+/** Только существующие теги знаний: удалённый и старый тег задачи выпадают. */
+export function liveKnowledgeTags(tags: string[] | undefined): string[] {
+  return (tags ?? []).filter((t) => {
+    try {
+      return readTag(t)?.kind === 'knowledge';
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Теги знаний пространства — формы сессии и запуска подставляют их при выборе пространства: слаги существующих тегов
+ * знаний, без повторов, не больше SPACE_TAGS_MAX. Старый тег задачи (перенесён в пространство) — ошибка.
+ */
+export function checkSpaceTags(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.some((t) => typeof t !== 'string')) throw new Error('tags — список слагов тегов знаний');
+  const tags = [...new Set((raw as string[]).map((t) => t.trim()).filter(Boolean))];
+  if (tags.length > SPACE_TAGS_MAX) throw new Error(`Тегов знаний у пространства больше ${SPACE_TAGS_MAX}`);
+  for (const t of tags) {
+    if (!TAG_SLUG_RE.test(t)) throw new Error(`Неверный слаг тега знаний: ${t}`);
+    const tag = readTag(t);
+    if (!tag) throw new Error(`Тега знаний ${t} нет: заведи его на странице «Знания»`);
+    if (tag.kind !== 'knowledge') throw new Error(`${t} — старый тег задачи (теперь пространство), а не тег знаний`);
+  }
+  return tags;
 }
 
 /**
@@ -431,7 +469,7 @@ export class SpaceError extends Error {
  * mtimeMs файла, с которого начали правку (0 — файла не было): файл с тех пор изменился (сессия в папке пространства,
  * сессия состояния) — 409, правка не пишется.
  */
-export type SpacePatch = { title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; mapBase?: unknown; stateBase?: unknown; legacySummary?: unknown; keepTitle?: unknown };
+export type SpacePatch = { title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; tags?: unknown; mapBase?: unknown; stateBase?: unknown; legacySummary?: unknown; keepTitle?: unknown };
 
 export function updateSpace(slug: string, patch: SpacePatch): Space | undefined {
   const meta = readSpaceMeta(slug);
@@ -452,9 +490,11 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
   }
   let dirs: string[] | undefined;
   let cwd: string | undefined;
+  let tags: string[] | undefined;
   try {
     dirs = patch.dirs === undefined ? meta.dirs : checkSpaceDirs(patch.dirs);
     cwd = patch.cwd === undefined ? meta.cwd : checkSpaceCwd(patch.cwd);
+    tags = patch.tags === undefined ? meta.tags : checkSpaceTags(patch.tags);
   } catch (err) {
     throw new SpaceError(400, (err as Error).message);
   }
@@ -475,14 +515,14 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
   }
   // переписанный руками заголовок — уже текст пользователя; keepTitle — «оставить как есть» без правки текста
   const autoTitle = meta.autoTitle && title === meta.title && patch.keepTitle !== true;
-  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, migratedFrom, ...rest } = meta;
+  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, tags: _g, migratedFrom, ...rest } = meta;
   const from = migratedFrom && legacy ? { ...migratedFrom, summaryMtimeMs: legacy.mtimeMs } : migratedFrom;
-  writeMeta({ ...rest, ...(title ? { title } : {}), ...(autoTitle ? { autoTitle: true as const } : {}), ...(dirs?.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), ...(from ? { migratedFrom: from } : {}), updatedAt: new Date().toISOString() });
+  writeMeta({ ...rest, ...(title ? { title } : {}), ...(autoTitle ? { autoTitle: true as const } : {}), ...(dirs?.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), ...(tags?.length ? { tags } : {}), ...(from ? { migratedFrom: from } : {}), updatedAt: new Date().toISOString() });
   return readSpace(slug)!;
 }
 
 /** Поля space.json: что пишет writeMeta. Лишний ключ — опечатка («dir» вместо «dirs»), а не новое поле. */
-const META_KEYS = ['slug', 'title', 'autoTitle', 'createdAt', 'updatedAt', 'dirs', 'cwd', 'history', 'migratedFrom'];
+const META_KEYS = ['slug', 'title', 'autoTitle', 'createdAt', 'updatedAt', 'dirs', 'cwd', 'tags', 'history', 'migratedFrom'];
 /**
  * Поля, которые API не даёт менять: history и migratedFrom открывают артефакты своих запусков всем сессиям и этапам
  * пространства (spaceArtifactDirs), createdAt — экземпляр пространства (заведённое заново — другое).
@@ -491,7 +531,7 @@ const META_FIXED = ['createdAt', 'history', 'migratedFrom'] as const;
 
 /**
  * Текст space.json, который пишет не API (сессия терминала правит файл): та же проверка, что у PUT /api/spaces —
- * меняются только заголовок, папки чтения (checkSpaceDirs: абсолютные, не шире разумного — они станут --add-dir всех
+ * меняются только заголовок, теги знаний (checkSpaceTags), папки чтения (checkSpaceDirs: абсолютные, не шире разумного — они станут --add-dir всех
  * сессий пространства) и рабочая папка (checkSpaceCwd), — и сверх неё то, что API гарантирует сам: JSON-объект, слаг —
  * имя папки, типы полей, без лишних ключей. Ошибки — все сразу одним SpaceError 400 (модель исправит за один заход).
  * prev — space.json до правки: неизменённые папки не перепроверяются (как у API, который проверяет только переданные
@@ -526,7 +566,7 @@ export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta 
     // служебные поля — как были (нормализованные так же, как их читает agentgraph)
     const base: Partial<SpaceMeta> = prev ?? { history: [] };
     const changed = META_FIXED.filter((k) => (k !== 'createdAt' || prev) && JSON.stringify(next[k] ?? null) !== JSON.stringify(base[k] ?? null));
-    if (changed.length) problems.push(`${changed.join(', ')} ведёт agentgraph: их не меняют (меняются title, dirs, cwd)`);
+    if (changed.length) problems.push(`${changed.join(', ')} ведёт agentgraph: их не меняют (меняются title, dirs, cwd, tags)`);
   }
   const sameDirs = prev && JSON.stringify(r.dirs ?? []) === JSON.stringify(prev.dirs ?? []);
   const sameCwd = prev && (r.cwd ?? undefined) === prev.cwd;
@@ -542,6 +582,13 @@ export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta 
   if (r.cwd !== undefined && !sameCwd) {
     try {
       cwd = checkSpaceCwd(r.cwd);
+    } catch (err) {
+      problems.push((err as Error).message);
+    }
+  }
+  if (r.tags !== undefined && !(prev && JSON.stringify(r.tags) === JSON.stringify(prev.tags ?? []))) {
+    try {
+      checkSpaceTags(r.tags);
     } catch (err) {
       problems.push((err as Error).message);
     }

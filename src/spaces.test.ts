@@ -50,8 +50,9 @@ import {
   writeSpaceState,
   type SpaceUpdate,
   wrapModelData,
+  checkSpaceMetaText,
 } from './spaces.js';
-import { createTag, readTag, tagDir, tagsDir } from './tags.js';
+import { createTag, deleteTag, readTag, tagDir, tagsDir } from './tags.js';
 import { teamsDir } from './teamwork.js';
 import { spaceContextReply } from './model-context.js';
 import type { SpaceListItem } from './api-types.js';
@@ -173,6 +174,41 @@ test(
     assert.equal(updateSpaceReply('p', { dirs: ['rel'] }).status, 400);
     assert.equal(updateSpaceReply('p', { dirs: [] }).status, 200);
     assert.equal(readSpace('p')!.dirs, undefined);
+  }),
+);
+
+test(
+  'пространства: теги знаний — только существующие теги знаний, без повторов, снимаются пустым списком; сессия правит space.json с той же проверкой',
+  withConfigDir(() => {
+    createSpace('p', {});
+    createTag('kotlin');
+    createTag('release');
+    let r = updateSpaceReply('p', { tags: ['kotlin', ' kotlin ', 'release'] });
+    assert.equal(r.status, 200);
+    assert.deepEqual(readSpace('p')!.tags, ['kotlin', 'release']);
+    // список пространств отдаёт их формам сессии и запуска
+    const item = (spacesListReply().body as { spaces: SpaceListItem[] }).spaces.find((x) => x.slug === 'p');
+    assert.deepEqual(item?.tags, ['kotlin', 'release']);
+    // правка других полей теги не трогает
+    assert.equal(updateSpaceReply('p', { title: 'T' }).status, 200);
+    assert.deepEqual(readSpace('p')!.tags, ['kotlin', 'release']);
+    r = updateSpaceReply('p', { tags: ['nope'] });
+    assert.equal(r.status, 400);
+    assert.match((r.body as { error: string }).error, /Тега знаний nope нет/);
+    assert.equal(updateSpaceReply('p', { tags: ['Bad Slug'] }).status, 400);
+    assert.equal(updateSpaceReply('p', { tags: 'kotlin' }).status, 400);
+    assert.deepEqual(readSpace('p')!.tags, ['kotlin', 'release']);
+    // space.json, записанный сессией: несуществующий тег не пройдёт
+    const prev = readSpace('p')!;
+    const text = JSON.stringify({ slug: 'p', title: 'T', createdAt: prev.createdAt, updatedAt: prev.updatedAt, tags: ['kotlin', 'ghost'], history: [] });
+    assert.throws(() => checkSpaceMetaText('p', text, prev), /Тега знаний ghost нет/);
+    assert.deepEqual(checkSpaceMetaText('p', text.replace(', "ghost"', '').replace(',"ghost"', ''), prev).tags, ['kotlin']);
+    // удалённый тег знаний формы больше не получают: его нет ни в пространстве, ни в списке
+    assert.equal(deleteTag('release'), true);
+    assert.deepEqual(readSpace('p')!.tags, ['kotlin']);
+    assert.deepEqual((spacesListReply().body as { spaces: SpaceListItem[] }).spaces.find((x) => x.slug === 'p')?.tags, ['kotlin']);
+    assert.equal(updateSpaceReply('p', { tags: [] }).status, 200);
+    assert.equal(readSpace('p')!.tags, undefined);
   }),
 );
 

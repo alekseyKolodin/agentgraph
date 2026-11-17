@@ -103,12 +103,13 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
 } from './space-draft.js';
-import type { SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
+import type { SessionReviewEstimate, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
+import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
 
 export type ServerOptions = {
@@ -348,7 +349,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -629,7 +630,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     // проверка и пометка — синхронно, без await между ними
     const key = input.space ? `space:${input.space.slug}` : `new:${++draftSeq}`;
     if (spaceDrafts.has(key)) return sendJson(res, 409, { error: `Черновик пространства ${input.space!.slug} уже пишется`, code: 'busy' });
-    if ([...spaceDrafts].filter((k) => k !== 'groups').length >= DRAFTS_MAX) return sendJson(res, 409, { error: `Уже пишутся ${DRAFTS_MAX} черновика: дождись одного из них`, code: 'busy' });
+    if ([...spaceDrafts].filter((k) => k !== 'groups' && k !== 'review').length >= DRAFTS_MAX) return sendJson(res, 409, { error: `Уже пишутся ${DRAFTS_MAX} черновика: дождись одного из них`, code: 'busy' });
     spaceDrafts.add(key);
     try {
       return await respondFlowAi(req, res, generations, (ai) => draftReply(input, ai, draftDeps(opts)));
@@ -654,6 +655,25 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       return await respondFlowAi(req, res, generations, (ai) => groupsReply(items, skipped, model, ai, draftDeps(opts)));
     } finally {
       spaceDrafts.delete('groups');
+    }
+  }
+  // «Не доделано» на главной: недавние сессии разбирает модель (sonnet без инструментов); ничего не пишет
+  if (method === 'POST' && p === '/api/session-review') {
+    const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
+    let model: ReturnType<typeof draftModel>;
+    try {
+      model = draftModel(body?.model, REVIEW_MODEL);
+    } catch (err) {
+      return sendJson(res, 400, { error: errMsg(err) });
+    }
+    const { items, skipped } = reviewItems(await sessionReviewSources().catch(() => []));
+    if (body?.estimate === true) return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
+    if (spaceDrafts.has('review')) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
+    spaceDrafts.add('review');
+    try {
+      return await respondFlowAi(req, res, generations, (ai) => reviewReply(items, skipped, model, ai, draftDeps(opts)));
+    } finally {
+      spaceDrafts.delete('review');
     }
   }
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));

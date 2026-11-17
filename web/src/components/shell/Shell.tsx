@@ -15,6 +15,7 @@ import { FileDialog } from '../file/FileDialog';
 import { PathLinks } from '../PathLink';
 import { DraftsDialog } from '../../screens/run/DraftsDialog';
 import { useDocRunTitle } from './docTitle';
+import { QuickSession } from './QuickSession';
 import { Sidebar } from './Sidebar';
 import { useHomeEvents } from './useHomeEvents';
 import styles from './Shell.module.css';
@@ -186,6 +187,7 @@ function Ready() {
       </main>
       <FileDialog />
       <DraftsDialog />
+      <QuickSession />
       <PathLinks />
     </div>
   );

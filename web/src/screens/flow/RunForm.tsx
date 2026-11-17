@@ -26,7 +26,7 @@ import {
   recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
   worktreeRequest, type RunLink,
 } from '../../lib/run-form';
-import { pickWorkdir, spaceWorkdir, workdirHint } from '../../lib/spaces';
+import { pickWorkdir, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
 import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm } from './formStore';
@@ -146,7 +146,9 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
    */
   const pickSpace = (slug: string) => {
     const next = pickWorkdir(slug, spaceWorkdir(slug, spaceList), { cwd: runForm.cwd, from: runForm.cwdFrom, touched: runForm.cwdTouched, locked: Boolean(runForm.link?.worktree || runForm.link?.project) });
-    setForm({ space: slug, cwd: next.cwd, cwdFrom: next.from, cwdTouched: next.touched });
+    // теги знаний прежнего пространства уходят, нового — подставляются (их можно снять)
+    const tags = swapSpaceTags(runForm.tags, spaceTags(runForm.space, spaceList), spaceTags(slug, spaceList));
+    setForm({ space: slug, cwd: next.cwd, cwdFrom: next.from, cwdTouched: next.touched, tags });
     if (next.cwd !== runForm.cwd) cwdChanged();
   };
   const applyWorkdir = (path: string) => {

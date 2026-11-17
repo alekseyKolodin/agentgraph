@@ -46,6 +46,7 @@ import { parseTeamworkLink } from './teamwork-status.js';
 import { teamsCwdProblem } from './teamwork-trust.js';
 import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
+import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
@@ -339,6 +340,27 @@ export class SessionManager {
     if (!s) return undefined;
     const r = s.rec;
     return { id: r.id, name: r.name, cwd: r.cwd, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, turns: readTurns(this.turnsFile(r.id)) };
+  }
+
+  /** Сессии для разбора моделью (session-review.ts): статус, кто завершил и ходы из журнала. */
+  reviewSources(now = Date.now()): ReviewSource[] {
+    this.load();
+    const since = new Date(now - REVIEW_DAYS * 86_400_000).toISOString();
+    return [...this.sessions.values()].map((s) => {
+      const v = this.view(s);
+      return {
+        id: v.id,
+        name: v.name,
+        ...(v.space ? { space: v.space } : {}),
+        cwd: v.cwd,
+        live: v.live,
+        status: v.status,
+        ...(v.endedBy ? { endedBy: v.endedBy } : {}),
+        lastActivityAt: v.lastActivityAt,
+        // журнал читаем только у тех, что войдут в разбор по дате: остальным он не нужен
+        turns: v.turns > 0 && v.lastActivityAt >= since ? readTurns(this.turnsFile(v.id)) : [],
+      };
+    });
   }
 
   /** Сессии без пространства (и не старые с тегами задач) для «Предложить пространства»: с первым сообщением. */
@@ -1799,6 +1821,11 @@ export const releaseSpaceSessions = (slug: string) => sessionManager().releaseSp
 export async function sessionDraftSource(id: string): Promise<DraftSession | undefined> {
   const mgr = sessionManager();
   return (await mgr.available()) ? mgr.draftSource(id) : undefined;
+}
+/** Сессии для разбора «Не доделано» на главной. */
+export async function sessionReviewSources(): Promise<ReviewSource[]> {
+  const mgr = sessionManager();
+  return (await mgr.available()) ? mgr.reviewSources() : [];
 }
 /** Сессии без пространства для «Предложить пространства». */
 export async function spacelessSessions(): Promise<ReturnType<SessionManager['spacelessSessions']>> {

@@ -2,12 +2,14 @@
 // подставляется в «Папку» с подписью «из пространства»), папка, теги знаний, «Дополнительно» (название, модель, режим
 // разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху. ?space=x — форма
 // открыта с этим пространством, его рабочую папку подставит список пространств (кнопка «Новая сессия» на странице
-// пространства); &cwd= — с этой папкой, её выбор пространства не затирает («Сессия в папке»); ?tags=a,b — с тегами знаний.
+// пространства); &cwd= — с этой папкой, её выбор пространства не затирает («Сессия в папке»); ?tags=a,b — с тегами знаний;
+// ?new=1 — форма открыта («Настроить…» быстрой сессии). Выбор пространства подставляет его теги знаний и папки чтения;
+// папки чтения, изменённые здесь, сохраняются в пространстве (набор как шаблон), а без пространства — заводят новое.
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView } from '@server/api-types';
-import { ApiError, errorText, fetchTag, keys, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
+import { ApiError, createSpace, errorText, fetchTag, keys, saveSpace, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
 import { continueSession, createSession, putSession, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
@@ -21,7 +23,7 @@ import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
 import { canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone } from '../../lib/sessions';
-import { pickWorkdir, SPACE_SLUG_RE, spaceWorkdir, workdirHint, type CwdState } from '../../lib/spaces';
+import { dirLines, folderPlan, pickWorkdir, slugFor, SPACE_SLUG_RE, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint, type CwdState } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { RENAME_HOST, SessionName } from './SessionName';
 import { Loading } from './Loading';
@@ -49,7 +51,7 @@ export function SessionsScreen() {
   };
   const sessions = list.data?.sessions ?? [];
   const [open, setOpen] = useState<boolean | null>(null);
-  const formOpen = open ?? (preset.tags.length > 0 || Boolean(preset.space) || (list.isSuccess && !sessions.length));
+  const formOpen = open ?? (preset.tags.length > 0 || Boolean(preset.space) || Boolean(preset.cwd) || params.get('new') === '1' || (list.isSuccess && !sessions.length));
   if (!on) {
     return (
       <div className="empty">
@@ -111,6 +113,12 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const cwd = folder.cwd;
   const [space, setSpace] = useState(preset.space);
   const [tags, setTags] = useState<string[]>(preset.tags);
+  // папки чтения: у выбранного пространства — его (правка сохранится в нём); без пространства — заведут новое
+  const [extra, setExtra] = useState('');
+  const [extraTouched, setExtraTouched] = useState(false);
+  const [newSlug, setNewSlug] = useState('');
+  // пространство, которое форма уже завела, а сессия потом не открылась: второй раз его не заводим
+  const created = useRef('');
   const [tagText, setTagText] = useState('');
   const [name, setName] = useState('');
   const [model, setModel] = useState('');
@@ -125,6 +133,10 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
    * вписанную руками или пришедшую ссылкой (&cwd=), не трогаем — под полем появится «подставить».
    */
   const pickSpace = (slug: string) => {
+    setTags((list) => swapSpaceTags(list, spaceTags(space, spaceList), spaceTags(slug, spaceList)));
+    // другое пространство — его набор папок: правка прежнего ушла бы в чужое пространство
+    setExtra((spaceList.find((x) => x.slug === slug.trim())?.dirs ?? []).join('\n'));
+    setExtraTouched(false);
     setSpace(slug);
     setFolder((st) => pickWorkdir(slug, spaceWorkdir(slug, spaceList), st));
   };
@@ -135,7 +147,16 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
     if (presetDone.current || !spacesQuery.isSuccess) return;
     presetDone.current = true;
     setFolder((st) => pickWorkdir(space, spaceWorkdir(space, spaceList), st));
+    setTags((list) => swapSpaceTags(list, [], spaceTags(space, spaceList)));
+    // папки, вписанные, пока список грузился, не затираем
+    if (!extraTouched) setExtra((spaceList.find((x) => x.slug === space.trim())?.dirs ?? []).join('\n'));
   }, [spaceList]);
+  const known = spaceList.find((x) => x.slug === space.trim());
+  const extraDirs = dirLines(extra);
+  const extraChanged = extraDirs.join('\n') !== (known?.dirs ?? []).join('\n');
+  // папки чтения без пространства: их даёт сессии только пространство — набор сохранится новым
+  const needSpace = !space.trim() && extraDirs.length > 0;
+  const slugValue = newSlug || slugFor(baseName(cwd.trim()), spaceList.map((x) => x.slug));
   const { note: cwdNote, offer: cwdOffer, wd: workdir } = workdirHint(space, spaceList, folder);
 
   /** Тег знаний — только существующий: пустой из формы бесполезен, его заводят на странице «Знания». */
@@ -156,13 +177,25 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
+    if (needSpace && !SPACE_SLUG_RE.test(slugValue)) return setMsg({ text: t('Слаг пространства: строчные латинские буквы, цифры и дефис'), tone: 'err' });
     setBusy(true);
     setMsg({ text: t('Открываю терминал…'), tone: '' });
+    const target = space.trim() || (needSpace ? slugValue : '');
     try {
+      // набор папок — в пространство до сессии: она получит их на чтение. Новое (вписанное или из набора) — с папками
+      // и рабочей папкой; существующее — только изменённые папки
+      const plan = folderPlan({ target, known, dirs: extraDirs, cwd, created: created.current });
+      if (plan.kind === 'create') {
+        await createSpace({ slug: plan.slug, dirs: plan.dirs, ...(plan.cwd ? { cwd: plan.cwd } : {}) });
+        // дальше форма — уже про него: повтор после сбоя сессии сохранит папки, а не упрётся в «слаг занят»
+        created.current = plan.slug;
+        setSpace(plan.slug);
+        void qc.invalidateQueries({ queryKey: keys.spaces });
+      } else if (plan.kind === 'save') await saveSpace(plan.slug, { dirs: plan.dirs });
       // примерный размер терминала по окну: claude перерисуется под него при подключении
       const s = await createSession({
         cwd: cwd.trim(),
-        ...(space.trim() ? { space: space.trim() } : {}),
+        ...(target ? { space: target } : {}),
         tags,
         ...(name.trim() ? { name: name.trim() } : {}),
         ...(model ? { model } : {}),
@@ -207,6 +240,40 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
           {recent.map((d) => (
             <button key={d.path} type="button" className={cx('chip', d.path === cwd.trim() && 'on')} title={d.path} onClick={() => editCwd(d.path)}>{d.label}</button>
           ))}
+        </div>
+      )}
+      {spacesOn && (
+        <div className={styles.extra}>
+          <label htmlFor="new-session-dirs" className="field-label" title={t('Репозитории и папки, которые Claude получит на чтение: они хранятся в пространстве и подставятся в следующий раз')}>{t('Ещё папки (чтение)')}</label>
+          <PickDirButton
+            className="btn small pick-dir"
+            prompt={t('Папка на чтение')}
+            title={t('Выбрать папку в Finder — путь добавится новой строкой')}
+            start={() => extraDirs.at(-1) ?? cwd}
+            onPick={(p) => {
+              setExtraTouched(true);
+              if (!extraDirs.includes(p)) setExtra([...extraDirs, p].join('\n'));
+            }}
+          >{t('+ Добавить папку…')}</PickDirButton>
+          <textarea
+            id="new-session-dirs"
+            rows={Math.min(5, Math.max(1, extraDirs.length))}
+            spellCheck={false}
+            placeholder="/Users/me/code/api"
+            value={extra}
+            onChange={(e) => {
+              setExtraTouched(true);
+              setExtra(e.target.value);
+            }}
+          />
+          {known && extraChanged && <span className="muted small">{t('Набор сохранится в пространстве {slug}: в следующий раз папки подставятся сами', { slug: known.slug })}</span>}
+          {!known && space.trim() && extraDirs.length > 0 && <span className="muted small">{t('Новое пространство {slug} заведётся с этим набором папок', { slug: space.trim() })}</span>}
+          {needSpace && (
+            <label className={styles.saveAs}>
+              <span className="muted small">{t('Папки чтения хранит пространство — набор сохранится как новое:')}</span>
+              <input aria-label={t('Слаг нового пространства')} className="mono" value={slugValue} onChange={(e) => setNewSlug(e.target.value.trim())} />
+            </label>
+          )}
         </div>
       )}
       <div className={styles.tags}>

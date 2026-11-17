@@ -1,7 +1,8 @@
 // Страница «Пространства» (/spaces, /spaces/<slug>): фича или проект, над которыми идут сессии и запуски. Слева —
 // список с поиском и новым пространством над ним; справа — пространство: шапка с действиями (новая сессия, сессия в
-// папке пространства, удалить), вкладки «Карта» (CLAUDE.md), «Состояние» (STATE.md), «Документы», «Контекст» (что
-// уходит модели) и «Настройки» (заголовок, папки); сессии и запуски пространства — колонкой справа или ниже.
+// папке пространства, удалить), вкладки «Карта» (CLAUDE.md), «Состояние» (STATE.md), «Документы», «Папки» (рабочая и
+// папки чтения — набор, с которым откроется сессия), «Знания» (теги знаний, которые формы подставят сами), «Контекст» (что
+// уходит модели) и «Настройки» (заголовок); сессии и запуски пространства — колонкой справа или ниже.
 // Каждое открытие страницы (переход, в том числе на тот же адрес) перечитывает список и пространство с сервера; правка
 // пространства сессией терминала (событие space) — тоже, если здесь нет несохранённого.
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
@@ -10,7 +11,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SpaceDetail, SpaceDoc } from '@server/api-types';
 import {
   addSpaceDoc, api, ApiError, createSpace, deleteSpace, deleteSpaceDoc, errorText, fetchSpace, fetchSpaceContext, fetchSpaceDoc, keys, saveSpace, saveSpaceDoc, useConfig,
-  useFeature, useSpaces,
+  useFeature, useSpaces, useTags,
 } from '../../api';
 import { setSessionSpace } from '../../api/sessions';
 import { onSpaceChanged } from '../../api/spaces';
@@ -18,6 +19,7 @@ import { Badge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
 import { readBase64 } from '../../components/readBase64';
+import { TagInput } from '../../components/TagInput';
 import { useToast } from '../../components/Toast';
 import { useMemoryState } from '../../components/useMemoryState';
 import { feedTime } from '../../lib/format';
@@ -36,11 +38,13 @@ const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boole
 
 type Msg = { cls: string; text: string };
 const NO_MSG: Msg = { cls: 'msg', text: '' };
-const EMPTY_FORM: SpaceForm = { title: '', map: '', state: '', dirs: '', cwd: '' };
+const EMPTY_FORM: SpaceForm = { title: '', map: '', state: '', dirs: '', cwd: '', tags: [] };
 type NewSpace = { open: boolean; slug: string; title: string; gist: string; dirs: string; cwd?: string };
 const NEW_CLOSED: NewSpace = { open: false, slug: '', title: '', gist: '', dirs: '', cwd: '' };
-type Tab = 'map' | 'state' | 'docs' | 'context' | 'settings';
-const TABS: [Tab, string][] = [['map', t('Карта')], ['state', t('Состояние')], ['docs', t('Документы')], ['context', t('Контекст')], ['settings', t('Настройки')]];
+type Tab = 'map' | 'state' | 'docs' | 'folders' | 'knowledge' | 'context' | 'settings';
+const TABS: [Tab, string][] = [
+  ['map', t('Карта')], ['state', t('Состояние')], ['docs', t('Документы')], ['folders', t('Папки')], ['knowledge', t('Знания')], ['context', t('Контекст')], ['settings', t('Настройки')],
+];
 
 const spacePath = (slug?: string) => (slug ? `/spaces/${encodeURIComponent(slug)}` : '/spaces');
 
@@ -287,7 +291,7 @@ export function SpacesScreen() {
     }
   };
 
-  const edit = (field: keyof SpaceForm, value: string) => setForm((f) => ({ ...f, [field]: value }));
+  const edit: EditFn = (field, value) => setForm((f) => ({ ...f, [field]: value }));
   const spacesMsg = editorErr || listErr;
 
   return (
@@ -461,12 +465,14 @@ export function SpacesScreen() {
   );
 }
 
+type EditFn = <K extends keyof SpaceForm>(field: K, value: SpaceForm[K]) => void;
+
 type EditorProps = {
   space: SpaceDetail;
   form: SpaceForm;
   tab: Tab;
   setTab: (t: Tab) => void;
-  edit: (field: keyof SpaceForm, value: string) => void;
+  edit: EditFn;
   dirty: boolean;
   msg: Msg;
   conflict: boolean;
@@ -521,6 +527,8 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
   // папка «Новой сессии»: рабочая папка пространства, иначе папка его последней сессии или запуска (считает сервер;
   // «Сессия в папке» пространства не в счёт)
   const workdir = s.workdir;
+  // набор папок сессии: рабочая (заданная или последней работы) и папки чтения
+  const folderCount = (form.cwd.trim() || workdir ? 1 : 0) + dirLines(form.dirs).length;
   return (
     <div className={styles.editorGrid}>
       <section className={cx('panel', styles.editor)}>
@@ -574,6 +582,8 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
               <button key={id} type="button" role="tab" data-space-tab={id} aria-selected={tab === id} aria-controls={`space-pane-${id}`} tabIndex={tab === id ? 0 : -1} className={cx('tab', tab === id && 'active')} onClick={() => setTab(id)}>
                 {label}
                 {id === 'docs' && s.docs.length > 0 && <span className={styles.tabCount}>{s.docs.length}</span>}
+                {id === 'folders' && folderCount > 0 && <span className={styles.tabCount}>{folderCount}</span>}
+                {id === 'knowledge' && form.tags.length > 0 && <span className={styles.tabCount}>{form.tags.length}</span>}
               </button>
             ))}
           </div>
@@ -639,6 +649,13 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                   <button type="button" className="btn small ghost" disabled={form.title !== (s.title ?? '')} title={t('Заголовок станет твоим и пойдёт в текст для модели')} onClick={() => onQuick({ keepTitle: true }, t('Заголовок оставлен'))}>{t('оставь как есть')}</button>
                 </p>
               )}
+              <p className="muted small">{t('Папка пространства: {dir}. Запись в неё у сессий закрыта (документ пишется инструментом space_write с твоим подтверждением), у этапов запуска — тоже.', { dir: tildePath(s.dir, home) })}</p>
+            </div>
+          )}
+          {!draftPanel && tab === 'knowledge' && <KnowledgeTab tags={form.tags} onChange={(tags) => edit('tags', tags)} />}
+          {!draftPanel && tab === 'folders' && (
+            <div id="space-pane-folders" role="tabpanel" className={styles.tabBody}>
+              <p className={cx('muted small', styles.hint)}>{t('Набор папок, с которым откроется сессия пространства: в рабочей Claude работает, остальные получает на чтение. Быстрая сессия (+ в меню слева или ⌘N) открывает его одним нажатием.')}</p>
               <label>
                 <span title={t('Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Пусто — папка последней сессии или запуска в нём')}>{t('Рабочая папка')}</span>
                 <div className="path-field">
@@ -661,7 +678,6 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                 >{t('+ Добавить папку…')}</PickDirButton>
                 <textarea id="space-dirs" name="dirs" rows={4} className={styles.mono} spellCheck={false} placeholder="/Users/me/code/api" value={form.dirs} onChange={(e) => edit('dirs', e.target.value)} />
               </div>
-              <p className="muted small">{t('Папка пространства: {dir}. Запись в неё у сессий закрыта (документ пишется инструментом space_write с твоим подтверждением), у этапов запуска — тоже.', { dir: tildePath(s.dir, home) })}</p>
             </div>
           )}
         </div>
@@ -871,6 +887,45 @@ function ContextTab({ slug, version }: { slug: string; version: string }) {
         <summary>{t('Этап запуска — в конце промпта каждого этапа')} <span className="muted small mono">{t('{n} знаков', { n: c.phase.length })}</span></summary>
         <pre>{c.phase}</pre>
       </details>
+    </div>
+  );
+}
+
+/**
+ * Вкладка «Знания»: теги знаний пространства — формы сессии и запуска подставят их сами при выборе пространства (их там
+ * можно снять). Сохраняются вместе с остальным кнопкой «Сохранить».
+ */
+function KnowledgeTab({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
+  const tagList = useTags(true).data?.tags ?? [];
+  const [text, setText] = useState('');
+  const [err, setErr] = useState('');
+  const add = (raw: string) => {
+    const slug = raw.trim();
+    if (!slug) return;
+    setText('');
+    setErr('');
+    if (tags.includes(slug)) return;
+    if (!tagList.some((x) => x.slug === slug)) return setErr(t('Тега знаний {slug} нет: заведи его на странице «Знания»', { slug }));
+    onChange([...tags, slug]);
+  };
+  return (
+    <div id="space-pane-knowledge" role="tabpanel" className={styles.tabBody}>
+      <p className={cx('muted small', styles.hint)}>{t('Правила и справка для работы в этом пространстве. Формы сессии и запуска подставят эти теги сами, как только выберешь пространство; там их можно снять.')}</p>
+      <TagInput
+        label={t('Теги знаний')}
+        listId="space-tags"
+        options={tagList.filter((x) => !tags.includes(x.slug))}
+        placeholder={t('выбери тег знаний и нажми Enter')}
+        text={text}
+        onText={setText}
+        onAdd={add}
+        tags={tags}
+        kindOf={() => 'knowledge'}
+        onRemove={(slug) => onChange(tags.filter((x) => x !== slug))}
+        removeTitle={t('Убрать тег')}
+      />
+      {err && <p className="msg err">{err}</p>}
+      <p className="muted small"><Link to="/tags">{t('Все теги знаний')}</Link></p>
     </div>
   );
 }

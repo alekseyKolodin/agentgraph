@@ -461,7 +461,7 @@ export class DraftModelError extends Error {
   }
 }
 
-function sessionFailure(res: SessionResult, what: string): DraftModelError {
+export function sessionFailure(res: SessionResult, what: string): DraftModelError {
   if (res.subtype === 'error_max_budget_usd') return new DraftModelError('budget', `${what} упёрся в потолок цены`, res.costUsd);
   return new DraftModelError('model', `${what}: модель завершилась с ошибкой — ${res.errors.join('; ') || res.subtype}`, res.costUsd);
 }
@@ -592,7 +592,7 @@ export function estimateCost(model: SpaceDraftModel, o: { start: number; request
  * Калибровка 2026-11-04: черновик sonnet с промптом в 4,2 тыс. знаков — contextStart 6,1 тыс. токенов.
  */
 const START_TOOLS = 5_000;
-const START_BARE = 4_000;
+export const START_BARE = 4_000;
 
 export function draftEstimate(input: DraftInput): SpaceDraftEstimate {
   const roots = draftReadRoots(input);
@@ -606,7 +606,7 @@ export function draftEstimate(input: DraftInput): SpaceDraftEstimate {
 
 // --- сессия модели с таймаутом и отменой
 
-async function runDraftSession(req: SessionRequest, hooks: FlowAiHooks, deps: DraftDeps, timeoutMs: number, what: string): Promise<SessionResult> {
+export async function runDraftSession(req: SessionRequest, hooks: FlowAiHooks, deps: DraftDeps, timeoutMs: number, what: string): Promise<SessionResult> {
   const session = deps.session ?? ((r: SessionRequest, log: LogFn) => runSession(r, log));
   if (hooks.abort.signal.aborted) throw new DraftModelError('aborted', `${what}: отменено`, 0);
   let timedOut = false;
@@ -634,7 +634,7 @@ async function runDraftSession(req: SessionRequest, hooks: FlowAiHooks, deps: Dr
   }
 }
 
-const failure = (err: unknown, started: number): FlowAiReply => {
+export const failure = (err: unknown, started: number): FlowAiReply => {
   const e = err instanceof DraftModelError ? err : new DraftModelError('model', err instanceof Error ? err.message : String(err), 0);
   return { status: 502, body: { error: e.message, code: e.code, costUsd: e.costUsd } satisfies SpaceDraftFailure, durationMs: Date.now() - started };
 };

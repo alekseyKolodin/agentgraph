@@ -15,7 +15,7 @@ const { bashDecision, classifyEdit, cwdSpace, editDecision, flowWriteDetail, rec
 const { createSpace, spaceDir, spacesDir } = await import('./spaces.js');
 const { saveFlowYaml } = await import('./flows.js');
 const { FLOWS_DIR } = await import('./paths.js');
-const { tagsDir } = await import('./tags.js');
+const { createTag, tagsDir } = await import('./tags.js');
 const { teamsDir } = await import('./teamwork.js');
 const { configDir } = await import('./settings.js');
 type Scope = import('./session-edit.js').EditScope;
@@ -120,6 +120,12 @@ test('space.json: проверяется до вопроса, как у API — 
   bad({ ...cur, createdAt: 'вчера' }, /createdAt — дата ISO строкой/);
   bad('{ "slug": ', /не JSON/);
   bad('[]', /JSON-объект/);
+  // теги знаний: вопрос называет добавленные (их получит каждая сессия пространства); несуществующий — отказ
+  createTag('kotlin-rules');
+  const withTag = write({ ...cur, tags: ['kotlin-rules'] });
+  assert.equal(withTag?.decision, 'ask');
+  assert.match(withTag!.reason, /добавит теги знаний, которые получат сессии и запуски пространства: kotlin-rules/);
+  bad({ ...cur, tags: ['ghost-tag'] }, /Тега знаний ghost-tag нет/);
   // рабочая папка, которой уже нет, правке заголовка не мешает: неизменённое не перепроверяется (как у API)
   fs.writeFileSync(meta, JSON.stringify({ ...cur, cwd: path.join(home, 'gone') }));
   assert.equal(write({ ...cur, cwd: path.join(home, 'gone'), title: 'Новый' })?.decision, 'ask');

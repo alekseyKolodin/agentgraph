@@ -1,6 +1,7 @@
 // Главная (ui/index.html #view-home, ui/app.js renderHome): вопросы агентов с ответом и сессии терминала, которые ждут
-// тебя, идущие запуски и работающие сессии, мои задачи Teamwork, мои MR, которым нужно внимание, лента событий справа. Ни
-// запусков, ни сессий ещё не было — строка «с чего начать». «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
+// тебя, идущие запуски и работающие сессии, «Не доделано» (разбор недавних сессий моделью по кнопке, Review.tsx), мои задачи
+// Teamwork, мои MR, которым нужно внимание, лента событий справа. Ни запусков, ни сессий ещё не было — строка «с чего
+// начать». «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
 // Все задачи Jira, MR и ветки проектов — в своём разделе «Код» (screens/code); здесь только строка «ничего не подключено».
 import { lazy, Suspense, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
@@ -25,6 +26,7 @@ import { FlowPicker, pickerAt, type PickerState } from './FlowPicker';
 import { HomeRuns } from './HomeRuns';
 import { HomeSessions } from './HomeSessions';
 import { Limits } from './Limits';
+import { Review } from './Review';
 import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
 
@@ -51,6 +53,7 @@ export function HomeScreen() {
   const [settings, setSettings] = useState(false);
   // сессии терминала: тот же список, что у «Сейчас» в сайдбаре, — пока есть живые, он обновляется сам
   const sessionsOn = useFeature('sessions');
+  const reviewOn = useFeature('session-review');
   const sessionList = useSessions(sessionsOn);
   const sessions = homeSessions(sessionList.data?.sessions ?? []);
   const history = useRuns();
@@ -114,6 +117,7 @@ export function HomeScreen() {
               {sessions.live.length > 0 && <HomeSessions sessions={sessions.live} now={now} />}
             </section>
           )}
+          {reviewOn && <Review />}
           {Boolean(mine.data?.teams.length) && (
             <Suspense fallback={null}>
               <MyTasks mine={mine.data!} className={styles.homeSec} />

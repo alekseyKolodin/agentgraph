@@ -2,8 +2,10 @@
 // Список нужен сайдбару («Сейчас») и странице «Сессии»: пока есть живые сессии, он обновляется сам — статус
 // «работает / ждёт тебя» меняется хуками claude, а не действиями в этой вкладке.
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { SessionList, SessionPermissionMode, SessionView } from '@server/api-types';
+import type { SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionView } from '@server/api-types';
 import { api } from './client';
+import type { FlowAiProgressEvent } from './flows';
+import { draftStream } from './spaces';
 
 const enc = encodeURIComponent;
 
@@ -38,6 +40,10 @@ export const endSession = (id: string) => api<SessionView>('POST', `/api/session
 export const continueSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, {});
 /** «Перезапустить»: claude заново тем же разговором, папки пространства и тегов пересчитаны. */
 export const restartSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/restart`);
+/** Оценка разбора «Не доделано» до запуска: модель не зовётся. */
+export const estimateReview = () => api<SessionReviewEstimate>('POST', '/api/session-review', { estimate: true });
+/** Разбор недавних сессий моделью (sonnet) потоком; сбой — DraftError с ценой. Ничего не пишет. */
+export const reviewSessions = (onEvent: (e: FlowAiProgressEvent) => void, signal: AbortSignal) => draftStream<SessionReviewReply>('/api/session-review', {}, onEvent, signal);
 /** «Обновить состояние»: ответ сразу, состояние пространства пишется в фоне (updatingState). */
 export const updateSessionState = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/state`);
 export const deleteSession = (id: string) => api<{ ok: true }>('DELETE', `/api/sessions/${enc(id)}`);

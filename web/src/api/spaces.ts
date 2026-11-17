@@ -23,7 +23,7 @@ export const createSpace = (body: { slug: string; title?: string; gist?: string;
  */
 export const saveSpace = (
   slug: string,
-  patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number; legacySummary?: 'import' | 'dismiss'; keepTitle?: true },
+  patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; tags?: string[]; mapBase?: number; stateBase?: number; legacySummary?: 'import' | 'dismiss'; keepTitle?: true },
 ) => api<Space>('PUT', `/api/spaces/${enc(slug)}`, patch);
 export const deleteSpace = (slug: string) => api<{ ok: true }>('DELETE', `/api/spaces/${enc(slug)}`);
 export const fetchSpaceContext = (slug: string) => api<SpaceContextView>('GET', `/api/spaces/${enc(slug)}/context`);
@@ -78,7 +78,7 @@ export class DraftError extends Error {
 }
 
 /** Ответ потока: сбой модели приходит телом done с error — это исключение с ценой. */
-async function draftStream<B extends object>(url: string, body: unknown, onEvent: (e: FlowAiProgressEvent) => void, signal: AbortSignal): Promise<B> {
+export async function draftStream<B extends object>(url: string, body: unknown, onEvent: (e: FlowAiProgressEvent) => void, signal: AbortSignal): Promise<B> {
   const done = await aiStream<B | SpaceDraftFailure>(url, body, onEvent, signal);
   if ('error' in done && typeof done.error === 'string') throw new DraftError(done as SpaceDraftFailure);
   return done as B;

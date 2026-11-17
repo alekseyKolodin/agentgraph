@@ -184,18 +184,18 @@ export function itemsCount(sessions: number, runs: number): string {
 // ---------- форма пространства: карта, состояние, заголовок, папки
 
 /** cwd — рабочая папка пространства (её подставят формы сессии и запуска); пусто — папка последней работы. */
-export type SpaceForm = { title: string; map: string; state: string; dirs: string; cwd: string };
+export type SpaceForm = { title: string; map: string; state: string; dirs: string; cwd: string; tags: string[] };
 export type SpaceField = 'map' | 'state' | 'dirs';
 
-export const spaceFormOf = (s: Space): SpaceForm => ({ title: s.title || '', map: s.map, state: s.state, dirs: (s.dirs || []).join('\n'), cwd: s.cwd || '' });
+export const spaceFormOf = (s: Space): SpaceForm => ({ title: s.title || '', map: s.map, state: s.state, dirs: (s.dirs || []).join('\n'), cwd: s.cwd || '', tags: s.tags ?? [] });
 
 /** Снимок полей формы: по нему — «есть несохранённое». Перевод строки в конце карты и состояния не считается правкой. */
-export const spaceSnapshot = (f: SpaceForm): string => JSON.stringify([f.title.trim(), f.map.trimEnd(), f.state.trim(), dirLines(f.dirs).join('\n'), f.cwd.trim()]);
+export const spaceSnapshot = (f: SpaceForm): string => JSON.stringify([f.title.trim(), f.map.trimEnd(), f.state.trim(), dirLines(f.dirs).join('\n'), f.cwd.trim(), f.tags.join(',')]);
 
 /** Строки поля «Папки»: без пробелов по краям и пустых. */
 export const dirLines = (text: string): string[] => text.split('\n').map((x) => x.trim()).filter(Boolean);
 
-export type SpacePatch = { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; mapBase?: number; stateBase?: number };
+export type SpacePatch = { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; tags?: string[]; mapBase?: number; stateBase?: number };
 
 /**
  * Только изменённые поля, с базой: пока страница открыта, сессия состояния могла переписать STATE.md — сервер ответит
@@ -209,8 +209,21 @@ export function spacePatch(f: SpaceForm, s: Space): SpacePatch {
     ...(f.state.trim() !== s.state.trim() ? { state: f.state, stateBase: s.stateMtimeMs ?? 0 } : {}),
     ...(dirs.join('\n') !== (s.dirs || []).join('\n') ? { dirs } : {}),
     ...(f.cwd.trim() !== (s.cwd || '') ? { cwd: f.cwd.trim() } : {}),
+    ...(f.tags.join(',') !== (s.tags ?? []).join(',') ? { tags: f.tags } : {}),
   };
 }
+
+/**
+ * Теги знаний формы сессии или запуска при смене пространства: теги прежнего пространства уходят, теги нового —
+ * добавляются в конец; выбранные руками остаются. Тег, который есть у обоих, остаётся на своём месте.
+ */
+export function swapSpaceTags(tags: string[], prev: string[] = [], next: string[] = []): string[] {
+  const kept = tags.filter((x) => !prev.includes(x) || next.includes(x));
+  return [...kept, ...next.filter((x) => !kept.includes(x))];
+}
+
+/** Теги знаний пространства по слагу из списка; нет такого — пусто. */
+export const spaceTags = (slug: string, options: Pick<SpaceListItem, 'slug' | 'tags'>[]): string[] => options.find((x) => x.slug === slug.trim())?.tags ?? [];
 
 /** Тело POST /api/spaces; пустой слаг — null (форма не уходит). */
 export function newSpaceBody(
@@ -235,3 +248,32 @@ export const spaceDeleteText = (slug: string): string =>
 
 /** Подсказка структуры карты — в placeholder редактора, не в файле: всё в CLAUDE.md модель читает как инструкции. */
 export const MAP_PLACEHOLDER = t('# Название фичи или проекта\n\nСуть: что делаем и зачем, в двух фразах.\n\n## Где что\n- ~/code/android — клиент, экран тревоги в feature/alert\n- ~/code/api — бэкенд, эндпоинт /alerts\n\n## Куда за чем ходить\n- спека — docs/spec.md\n\n## Договорённости\n- …');
+
+/**
+ * Слаг нового пространства по имени папки: строчная латиница, цифры и дефис; занятый — с номером (-2, -3…). Кириллица и
+ * прочее выпадают; ничего не осталось — «work».
+ */
+export function slugFor(name: string, taken: string[]): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56).replace(/-+$/, '') || 'work';
+  let slug = base;
+  for (let n = 2; taken.includes(slug); n++) slug = `${base}-${n}`;
+  return slug;
+}
+
+/** Что сделать с набором папок формы сессии до её открытия. */
+export type FolderPlan = { kind: 'none' } | { kind: 'create'; slug: string; dirs: string[]; cwd?: string } | { kind: 'save'; slug: string; dirs: string[] };
+
+/**
+ * Набор папок формы сессии → пространство. target — выбранное пространство или слаг нового для папок без пространства.
+ * Существующее — сохранить папки, если изменились; новое с папками — завести с ними и рабочей папкой (без папок новое
+ * заведёт сам сервер сессии); created — пространство, которое эта форма уже завела (сессия потом не открылась, а список
+ * ещё старый): его не заводим второй раз, а сохраняем папки.
+ */
+export function folderPlan(o: { target: string; known?: Pick<SpaceListItem, 'slug' | 'dirs'>; dirs: string[]; cwd: string; created?: string }): FolderPlan {
+  const slug = o.target.trim();
+  if (!slug) return { kind: 'none' };
+  if (o.known) return o.dirs.join('\n') !== (o.known.dirs ?? []).join('\n') ? { kind: 'save', slug, dirs: o.dirs } : { kind: 'none' };
+  if (o.created === slug) return { kind: 'save', slug, dirs: o.dirs };
+  if (!o.dirs.length) return { kind: 'none' };
+  return { kind: 'create', slug, dirs: o.dirs, ...(o.cwd.trim() ? { cwd: o.cwd.trim() } : {}) };
+}

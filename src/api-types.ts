@@ -369,6 +369,8 @@ export type SpaceMeta = {
   dirs?: string[];
   /** Рабочая папка (проект): её подставляют формы сессии и запуска при выборе пространства. Нет — папка последней работы. */
   cwd?: string;
+  /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства (их можно снять). */
+  tags?: string[];
   /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
   history: SpaceUpdate[];
   /**
@@ -393,6 +395,10 @@ export type SpaceListItem = {
   hasState: boolean;
   /** Рабочая папка, заданная у пространства. */
   cwd?: string;
+  /** Папки чтения пространства: набор папок, который получит сессия (быстрый запуск показывает их число). */
+  dirs?: string[];
+  /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства. */
+  tags?: string[];
   /**
    * Что подставят формы сессии и запуска: заданная рабочая папка (space) или папка последней сессии или запуска в нём —
    * не в worktree, не дочернего и не внутри папки настроек agentgraph или папки запусков («Сессия в папке» не в счёт).
@@ -608,6 +614,19 @@ export type SessionView = {
   /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
   teamwork?: RunTeamworkLink;
 };
+
+/**
+ * Разбор сессий моделью (POST /api/session-review, src/session-review.ts): по каждой недавней сессии — доведена ли работа.
+ * continue — работа не закончена, к ней стоит вернуться; wrap — сделано, остался последний шаг (коммит, пуш, ответ
+ * ревьюеру); done — сделано, сессию можно отпустить.
+ */
+export type SessionReviewVerdict = 'continue' | 'wrap' | 'done';
+/** Сессия в разборе: что сделано, что осталось, с чего продолжить — одной строкой каждое. */
+export type SessionReviewItem = { id: string; name: string; space?: string; verdict: SessionReviewVerdict; done: string; left: string; next: string };
+/** Ответ разбора: reviewed — сколько сессий видела модель, skipped — сколько не вошло (старые сверх лимита). */
+export type SessionReviewReply = { items: SessionReviewItem[]; reviewed: number; skipped: number; at: string; costUsd: number; model?: string; durationMs: number };
+/** Оценка цены разбора до запуска модели. */
+export type SessionReviewEstimate = { model: SpaceDraftModel; sessions: number; skipped: number; low: number; high: number; ceiling: number };
 
 /** GET /api/sessions. */
 export type SessionList = { sessions: SessionView[]; max: number };

@@ -73,7 +73,9 @@ const fakeDraft = async (req: SessionRequest, log: (line: string) => void): Prom
   req.abort?.signal.addEventListener('abort', () => (draftKnobs.aborted = true), { once: true });
   if (draftKnobs.gate) await Promise.race([draftKnobs.gate, new Promise((r) => req.abort?.signal.addEventListener('abort', r, { once: true }))]);
   const props = (req.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
-  const structured = 'groups' in props
+  const structured = 'items' in props
+    ? { items: [{ ref: 's1', verdict: 'wrap', done: 'Поправил корзину', left: 'Закоммитить', next: 'Закоммить и открой MR' }] }
+    : 'groups' in props
     ? { groups: [{ slug: 'cart-flow', title: 'Корзина', gist: 'чиним корзину', items: ['s1'] }] }
     : { title: 'Корзина', slug: 'cart-flow', map: '# Корзина\n\n## Документы\n- docs/tests.md — перед MR', docs: [{ name: 'tests.md', text: '# Как прогнать тесты\nКогда открывать: перед MR' }], state: 'Суть: корзина', doubts: [] };
   return { ok: true, subtype: 'success', text: '', structured, costUsd: 0.3, turns: 5, durationMs: 1, errors: [], model: 'claude-sonnet-5-5' };
@@ -842,6 +844,54 @@ test('черновик пространства по ходам сессии: х
   assert.equal(bad.status, 400);
   assert.equal((await call('POST', '/api/space-drafts', { space: 'no-such-space', about: 'x' })).status, 404);
   assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('space-drafts'));
+});
+
+test('разбор сессий: оценка без модели; разбор — ходы в source-data, по сессии вердикт; идущая сессия не разбирается; второй — 409 busy', async () => {
+  const proj = path.join(root, 'proj');
+  const { body: v } = await call<SessionView>('POST', '/api/sessions', { cwd: proj, name: 'разбор-корзины' });
+  const token = tokenOf(spawned.at(-1)!);
+  await hook(v.id, token, { hook_event_name: 'SessionStart', session_id: v.id });
+  await hook(v.id, token, { hook_event_name: 'UserPromptSubmit', session_id: v.id, prompt: 'почини корзину-разбор' });
+  // работает прямо сейчас — в разбор не идёт
+  const promptOf = () => drafts.at(-1)!.prompt;
+  const before = drafts.length;
+  let est = await call<{ sessions: number; low: number; high: number; ceiling: number }>('POST', '/api/session-review', { estimate: true });
+  assert.equal(est.status, 200);
+  const working = est.body.sessions;
+  await hook(v.id, token, { hook_event_name: 'Stop', session_id: v.id, last_assistant_message: 'Поправил cart.ts, тесты не гонял' });
+  await call('POST', `/api/sessions/${v.id}/end`);
+  est = await call('POST', '/api/session-review', { estimate: true });
+  assert.equal(est.body.sessions, working + 1);
+  assert.ok(est.body.low < est.body.high && est.body.high <= est.body.ceiling);
+  assert.equal(drafts.length, before, 'оценка модель не зовёт');
+
+  const r = await call<{ items: { id: string; verdict: string; next: string }[]; reviewed: number; costUsd: number }>('POST', '/api/session-review', {});
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(drafts.at(-1)!.model, 'sonnet');
+  assert.deepEqual(drafts.at(-1)!.tools, []);
+  assert.match(promptOf(), /<source-data>\nразбор-корзины\n\nХод 1\. Пользователь:\nпочини корзину-разбор\nОтвет модели:\nПоправил cart\.ts, тесты не гонял\n<\/source-data>/);
+  assert.match(promptOf(), /\[s1\] папка [^\n]+, завершена кнопкой/);
+  // модель ответила про s1 — самую свежую, это наша
+  assert.deepEqual(r.body.items.map((x) => [x.id, x.verdict]), [[v.id, 'wrap']]);
+  assert.equal(r.body.costUsd, 0.3);
+
+  let release = () => {};
+  draftKnobs.gate = new Promise<void>((res) => (release = res));
+  try {
+    const first = call('POST', '/api/session-review', {});
+    await until(() => drafts.length > before + 1);
+    const second = await call<{ code: string }>('POST', '/api/session-review', {});
+    assert.deepEqual([second.status, second.body.code], [409, 'busy']);
+    // разбор не занимает место черновиков пространств
+    assert.notEqual((await call('POST', '/api/space-drafts', { about: 'магазин', estimate: true })).status, 409);
+    release();
+    assert.equal((await first).status, 200);
+  } finally {
+    draftKnobs.gate = undefined;
+    release();
+  }
+  assert.equal((await call('POST', '/api/session-review', { model: 'gpt' })).status, 400);
+  assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('session-review'));
 });
 
 test('черновик пространства: второй по тому же пространству — 409 busy; закрытое соединение прерывает сессию модели', async () => {

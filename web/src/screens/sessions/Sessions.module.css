@@ -8,6 +8,13 @@
 /* «из пространства …» под папкой: папку подставило выбранное пространство */
 .cwd-from { margin-top: -4px; }
 .tags { display: flex; flex-direction: column; gap: 8px; }
+/* «Ещё папки (чтение)»: подпись и «+ Добавить папку…» в строку, поле под ними; набор без пространства — слаг нового */
+.extra { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 8px; }
+.extra textarea, .extra > span, .extra .save-as { grid-column: 1 / -1; }
+.extra textarea { font-family: var(--font-mono); font-size: var(--fs-small); }
+/* сильнее глобального «.form label» (столбик): подпись и слаг в строку */
+.extra .save-as { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
+.extra .save-as input { width: 220px; }
 .tags p { margin: 0; }
 .more { border-top: 1px solid var(--line); padding-top: 10px; }
 .more > summary { cursor: pointer; color: var(--ink-2); font-weight: 500; font-size: var(--fs-small); width: max-content; }

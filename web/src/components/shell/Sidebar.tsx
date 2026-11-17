@@ -19,6 +19,7 @@ import { FlowList, FlowSectionActions } from './FlowList';
 import { RunList, RunSectionActions } from './RunList';
 import { SessionList, SessionSectionActions, useAllSessions } from './SessionList';
 import { panelState, setPanel, usePanel } from './panel';
+import { openQuickSession } from './QuickSession';
 import { UpdateBadge } from './UpdateBadge';
 import styles from './Sidebar.module.css';
 
@@ -174,6 +175,7 @@ const RAIL_ICON = {
   tags: ico(<path d="M3 3h3.5A1.5 1.5 0 0 1 8 4.5a1.5 1.5 0 0 1 1.5-1.5H13v9.5H9.5A1.5 1.5 0 0 0 8 14a1.5 1.5 0 0 0-1.5-1.5H3zM8 4.5V14" />),
   context: ico(<path d="M8 2.5l5.5 2.75L8 8 2.5 5.25zM2.5 8L8 10.75 13.5 8M2.5 10.75L8 13.5l5.5-2.75" />),
   panel: ico(<path d="M2.5 3h11v10h-11zM6.5 3v10" />),
+  plus: ico(<path d="M8 3.5v9M3.5 8h9" />),
 };
 
 /** Списки панели: значок, подпись и подсказка. */
@@ -259,6 +261,11 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
         >
           {questions > 0 && <span className={styles.railCount} aria-hidden="true">{questions}</span>}
         </RailLink>
+        {sessions && (
+          <button type="button" className={styles.railBtn} aria-haspopup="dialog" aria-label={t('Новая сессия')} title={`${t('Новая сессия (⌘N)')}\n${t('Пространство или папка — и терминал открыт')}`} onClick={openQuickSession}>
+            {RAIL_ICON.plus}
+          </button>
+        )}
         <span className={styles.railSep} aria-hidden="true" />
         {tabs.map((p) => {
           const on = state.panel === p && !state.hidden;
@@ -278,12 +285,13 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
             </button>
           );
         })}
-        {(spaces || teamwork || code) && <span className={styles.railSep} aria-hidden="true" />}
+        {(spaces || tags || teamwork || code) && <span className={styles.railSep} aria-hidden="true" />}
         {spaces && <RailLink to="/spaces" icon={RAIL_ICON.spaces} label={t('Пространства')} tip={t('Пространства: фича или проект — карта (CLAUDE.md), документы, состояние «где мы сейчас», все их сессии и запуски')} />}
+        {/* знания — рядом с пространствами: у пространства свои теги знаний (вкладка «Знания») */}
+        {tags && <RailLink to="/tags" icon={RAIL_ICON.tags} label={t('Знания')} tip={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')} />}
         {teamwork && <RailLink to="/teamwork" icon={RAIL_ICON.teamwork} label="Teamwork" tip={t('Teamwork: команда ведёт проекты в общем git-репо — ТЗ, архитектура, задачи и спринты')} />}
         {code && <RailLink to="/code" icon={RAIL_ICON.code} label={t('Код')} tip={t('Задачи Jira, MR и ветки подключённых проектов — запустить flow по любой из них')} />}
         <span className={styles.railGap} />
-        {tags && <RailLink to="/tags" icon={RAIL_ICON.tags} label={t('Знания')} tip={t('Теги знаний: правила и справка для этапов flow и сессий — строка в промпте, полный текст по запросу')} />}
         {context && <RailLink to="/context" icon={RAIL_ICON.context} label={t('Контекст')} tip={t('Что уходит в контекст сессии: CLAUDE.md и правила, скиллы, сабагенты, MCP, токены')} />}
         {/* панель скрыта — плашка обновления и язык переезжают на рельс: о новой версии и ошибке обновления видно и так */}
         {state.hidden && <UpdateBadge compact />}
