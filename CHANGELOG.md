@@ -2,6 +2,20 @@
 
 agentgraph versions. Sections are written by `npm run release`; when a new version reaches `main`, CI publishes the GitHub release `v<version>` with its section.
 
+## 0.5.0 — 2026-11-17
+
+### Features
+
+- Routines: a "when → do" rule starts a flow on an event from any source — a Slack message in #bugs, a new MR to review, a finished meeting, a weekday at 9:30. Events from every source look the same (title, text, link, author, fields), so conditions, the check and the flow input work the same way for all of them. agentgraph fetches events itself while the app is open; rules live in `~/.agentgraph/routines`, sources in `~/.agentgraph/sources`, keys separately in `secrets.json`
+- Sources: your own command (anything that prints a JSON list of records), a schedule (cron), Slack (live with an app token, polling otherwise), Telegram bot, GitLab and GitHub (MRs/PRs to review, mentions, comments), Jira (JQL), RSS/Atom, a folder, email over IMAP and claude.ai connectors, plus ready recipes for Fireflies, Sentry, Linear and GitHub notifications. "Describe in words" connects any other service: an agent finds its API, asks for the key, builds the check and shows what it found and what will run before you save it
+- The path of an event: field conditions without a model, an optional check in words (haiku reads the event against your condition and looks for duplicates), then an ordinary run with space, worktree and budget. "Wait for me" stops the run before chosen blocks (new runner option `pauseBefore`) and shows a card on Home with what the agent already did: "Fix", "Not now", "Not a bug". The result goes back where the event came from — Slack thread, Telegram chat, MR or Jira comment — after your check, right away, or not at all, chosen when you create the routine. Your own bot's messages never trigger a routine
+- Routines screens: the list with recent triggers and a pause switch, "New routine" in four steps with the rule as a sentence, "Connect a service", the editor with "Check on history" (what would have run, where the rule disagrees with your past answers, an estimate per week), the trigger log with filters and "It's a bug" / "Not a duplicate" feedback that teaches the check. Limits per day, in parallel and per run. What arrived while the app was closed and missed schedules are offered once on Home instead of running on their own
+- Quick session: "+" on the rail and ⌘N — pinned folder sets, spaces, folders of past sessions; Enter opens the terminal right away, ⌘Enter the full form. A space keeps its folder set and knowledge tags (the "Folders" and "Knowledge" tabs), and session and run forms fill them in
+- "Unfinished" on Home: a model reviews recent sessions and says, for each, what is left and where to continue; the price is estimated first and it runs only on your click
+- "Code" section: Jira tasks, MRs and project branches moved from Home to their own screen. The left menu is now a rail of section icons and one panel with "Now" and a single list — Flows, Runs or Sessions
+- Desktop: `npm run desktop:install` puts AgentGraph.app in Applications to start from Finder and keep in the Dock. Notifications come from the app itself, and clicking one opens the run or session it is about
+- e2e tests on Playwright (`npm run e2e`): a real server on temporary folders with fake `claude`, Slack and Telegram
+
 ## 0.4.0 — 2026-11-14
 
 ### Features
