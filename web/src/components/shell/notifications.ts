@@ -24,5 +24,11 @@ export async function requestNotify(): Promise<void> {
 /** Вкладка сама показывает уведомления. */
 export const browserNotifies = (): boolean => read() === 'granted';
 
+/**
+ * Событие окна от десктопного приложения (src/desktop/main.ts): открыть экран, detail — путь («/run/<id>»).
+ * Слушает оболочка (useHomeEvents).
+ */
+export const NAVIGATE_EVENT = 'agentgraph:navigate';
+
 /** Вкладка не на виду: уведомление вместо всплывашки. */
 export const tabAway = (): boolean => document.hidden || !document.hasFocus();

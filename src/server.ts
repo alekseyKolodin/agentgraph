@@ -30,7 +30,7 @@ import { editBase } from './edit.js';
 import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunOptions, type RunReport } from './runner.js';
 import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
-import { osNotify } from './notify.js';
+import { noticesShown, osNotify, type Notice } from './notify.js';
 import { pickRunTitle } from './run-title.js';
 import { RunNameError, runName, writeRunName } from './run-name.js';
 import { writeDigest } from './run-digest.js';
@@ -117,6 +117,11 @@ export type ServerOptions = {
   defaultCwd: string;
   /** Системные уведомления о вопросах и конце запуска, когда UI их сам не покажет. По умолчанию включены. */
   notify?: boolean;
+  /**
+   * Свой показ уведомлений вместо системного (десктоп, src/desktop/main.ts): хост сам знает, на виду ли окно, и по клику
+   * открывает экран в нём. Сервер зовёт его на каждое событие, а вкладки свои уведомления не показывают (`host-notify`).
+   */
+  notifier?: (n: Notice) => void;
   /**
    * Автообновление checkout agentgraph (src/update.ts): проверка по таймеру и /api/update. Включают CLI `ui` и десктоп;
    * по умолчанию выключено — тесты и встраивания сервера в сеть не ходят.
@@ -343,7 +348,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -1991,38 +1996,57 @@ function homeBroadcast(e: HomeEvent): void {
 const runLabel = (flow: string, title?: string): string => (title ? `${title} (${flow})` : flow);
 
 /**
- * Системное уведомление — когда ни одна открытая вкладка не покажет своё (UI закрыт или уведомления браузера не включены).
+ * Уведомление о событии. Хост со своим показом (десктоп) получает каждое: он сам знает, на виду ли окно. Иначе —
+ * системное, и только когда открытые вкладки своё не покажут (shownByTab).
+ */
+function sendNotice(srv: ServerOptions, n: Notice, shownByTab: boolean): void {
+  if (srv.notify === false) return;
+  // AGENTGRAPH_NOTIFY=off и log решает osNotify — и за хост тоже
+  if (srv.notifier && noticesShown()) {
+    // сбой показа у хоста не должен сорвать рассылку события и конец запуска
+    try {
+      srv.notifier(n);
+    } catch (err) {
+      console.warn(`[notify] показ хоста не сработал: ${errMsg(err)}`);
+    }
+    return;
+  }
+  if (srv.notifier || !shownByTab) osNotify(n, `http://${srv.host}:${srv.port}`);
+}
+
+/** Есть вкладка, которая покажет уведомление сама: уведомления браузера в ней включены. */
+const tabNotifies = (): boolean => [...homeClients.values()].some(Boolean);
+
+/**
+ * Вопрос агента и конец запуска. По клику — страница запуска: вопрос на ней виден над любой вкладкой.
  * Остановку руками не объявляем: её только что нажали.
  */
 function notifyOs(srv: ServerOptions, id: string, flow: string, e: Extract<RunEvent, { type: 'question' | 'end' }>): void {
-  if (srv.notify === false || [...homeClients.values()].some(Boolean)) return;
-  const base = `http://${srv.host}:${srv.port}/`;
+  const path = `/run/${id}`;
   if (e.type === 'question') {
     const q = e.question;
-    osNotify({ title: `${flow}: вопрос от «${q.title || q.phase}»`, body: q.questions.map((x) => x.question).join(' · '), url: base, group: q.id, sound: true });
+    sendNotice(srv, { title: `${flow}: вопрос от «${q.title || q.phase}»`, body: q.questions.map((x) => x.question).join(' · '), path, group: q.id, sound: true }, tabNotifies());
     return;
   }
   const r = e.report;
   if (r.status === 'aborted') return;
   const body = `${STATUS_LABEL[r.status]} · итераций ${r.iterations} · $${r.totalCostUsd.toFixed(2)}${r.error ? ` · ${r.error}` : ''}`;
-  osNotify({ title: `${flow}: запуск завершён`, body, url: `${base}run/${id}`, group: id, sound: r.status !== 'done' });
+  sendNotice(srv, { title: `${flow}: запуск завершён`, body, path, group: id, sound: r.status !== 'done' }, tabNotifies());
 }
 
 /** Агент сам поставил запуск на паузу: ему нужен ответ пользователя, это как вопрос. */
 function notifyPause(srv: ServerOptions, id: string, flow: string, r: PauseReason): void {
-  if (srv.notify === false || [...homeClients.values()].some(Boolean)) return;
   const body = r.text.replace(/\s+/g, ' ').slice(0, 300);
-  osNotify({ title: `${flow}: «${r.phase}» ждёт решения`, body, url: `http://${srv.host}:${srv.port}/run/${id}`, group: id, sound: true });
+  sendNotice(srv, { title: `${flow}: «${r.phase}» ждёт решения`, body, path: `/run/${id}`, group: id, sound: true }, tabNotifies());
 }
 
 /**
- * Сессия терминала закончила ход и ждёт тебя. Строже, чем у вопроса: только когда UI не открыт вовсе. Открытая вкладка
- * сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода, пока
- * человек сидит в этом терминале.
+ * Сессия терминала закончила ход и ждёт тебя. Системное — строже, чем у вопроса: только когда UI не открыт вовсе. Открытая
+ * вкладка сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода,
+ * пока человек сидит в этом терминале.
  */
 function notifySession(srv: ServerOptions, s: HomeSessionWait): void {
-  if (srv.notify === false || homeClients.size > 0) return;
-  osNotify({ title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', url: `http://${srv.host}:${srv.port}/sessions/${s.id}`, group: s.id });
+  sendNotice(srv, { title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', path: `/sessions/${encodeURIComponent(s.id)}`, group: `session:${s.id}` }, homeClients.size > 0);
 }
 
 /** Общий поток без переигрывания: при (пере)подключении UI сам забирает состояние из /api/home и /api/runs. */

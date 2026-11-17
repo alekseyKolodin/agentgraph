@@ -1,16 +1,24 @@
 // Главный процесс Electron: поднимает тот же сервер, что `npm run ui` (src/server.ts), на 127.0.0.1 и открывает окно
 // на http://localhost:<порт>/. Не file://: server-guard.ts пускает только Host localhost/127.0.0.1 и Origin того же адреса.
 // UI — сборка dist/web, общение с сервером только по HTTP и SSE; Node в окне нет (contextIsolation, sandbox).
-import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+// Три способа запуска: `npm run desktop:dev` (голый Electron из терминала), ярлык checkout'а из `npm run desktop:install`
+// (тот же код и данные, но свой AgentGraph.app в Dock и запуск из Finder) и упакованное приложение (`desktop:build`).
+import { app, BrowserWindow, dialog, Menu, Notification, shell, type MenuItemConstructorOptions } from 'electron';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { linkedElectronDrift } from '../desktop-link.js';
+import { osNotify, type Notice } from '../notify.js';
 import { askQuit, type UnsentTeam } from '../quit-dialog.js';
 
 const HOST = '127.0.0.1';
+/** Ярлык checkout'а (scripts/desktop-install.mts): приложение не упаковано, но и не `electron .` — код лежит в Resources/app. */
+const linked = !app.isPackaged && !process.defaultApp;
+/** Событие окна «открой экран» (web/src/components/shell/notifications.ts, NAVIGATE_EVENT). */
+const NAVIGATE_EVENT = 'agentgraph:navigate';
 
 /** Запомненное между запусками: порт (localStorage UI привязан к origin, с портом) и папка данных. */
 type DesktopState = { port?: number; home?: string };
@@ -121,7 +129,7 @@ async function pickPort(): Promise<number> {
 let win: BrowserWindow | null = null;
 let origin = '';
 
-function openWindow(): void {
+function openWindow(route = '/'): void {
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -164,7 +172,63 @@ function openWindow(): void {
     }
   });
   win.on('closed', () => (win = null));
-  void win.loadURL(`${origin}/`);
+  // загрузку может перебить переход по клику уведомления (reveal): отказ первой — не ошибка
+  void win.loadURL(origin + route).catch(() => undefined);
+}
+
+/**
+ * Окно на передний план и, если задан, на нужный экран: клик по уведомлению, значок в Dock, повторный запуск.
+ * Окна нет (его закрыли, запуски идут) — открываем сразу на этом экране. Экран в открытом окне меняет сам UI
+ * (событие окна), а не loadURL: перезагрузка сбросила бы несохранённое.
+ */
+function reveal(route?: string): void {
+  // сервер ещё поднимается (повторный клик по ярлыку во время старта): окно откроет main()
+  if (!origin) return;
+  if (!win) return openWindow(route);
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  app.focus({ steal: true });
+  if (!route) return;
+  // страница ещё грузится — слушателя события нет: грузим сразу нужный экран
+  if (win.webContents.isLoadingMainFrame()) return void win.loadURL(origin + route).catch(() => undefined);
+  void win.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent(${JSON.stringify(NAVIGATE_EVENT)}, { detail: ${JSON.stringify(route)} }))`).catch(() => undefined);
+}
+
+/** Сколько показанных уведомлений держим: по клику в Центре уведомлений старое всё ещё должно открыть свой экран. */
+const NOTES_MAX = 50;
+/** Показанные уведомления по группе: без ссылки сборщик мусора снимает обработчик клика; новое той же группы заменяет старое. */
+const notes = new Map<string, Notification>();
+
+/**
+ * Уведомление сервера (вопрос агента, пауза, конец запуска, сессия ждёт) — от имени приложения, клик открывает экран в окне.
+ * Приложение на виду — молчим: вопрос покажет всплывашка в окне, остальное видно в «Сейчас» и на главной.
+ */
+function showNotice(n: Notice): void {
+  if (BrowserWindow.getFocusedWindow()) return;
+  if (!Notification.isSupported()) return osNotify(n, origin);
+  const key = n.group ?? `${n.title}\n${n.body}`;
+  notes.get(key)?.close();
+  notes.delete(key);
+  const note = new Notification({ title: n.title, body: n.body, silent: !n.sound });
+  note.on('click', () => {
+    notes.delete(key);
+    reveal(n.path);
+  });
+  // macOS не дала показать: разрешение на уведомления ещё не выдано или выключено, либо приложение не подписано
+  // (голый Electron у desktop:dev). Событие не теряем — показываем системным, как сервер без окна.
+  note.on('failed', (_e, error) => {
+    if (notes.get(key) === note) notes.delete(key);
+    console.warn(`agentgraph desktop: уведомление не показано (${error}) — показываю системным`);
+    osNotify(n, origin);
+  });
+  notes.set(key, note);
+  // Map хранит порядок вставки: лишнее — самое старое
+  for (const old of notes.keys()) {
+    if (notes.size <= NOTES_MAX) break;
+    notes.delete(old);
+  }
+  note.show();
 }
 
 function setMenu(): void {
@@ -229,26 +293,21 @@ async function main(): Promise<void> {
     app.quit();
     return;
   }
-  app.on('second-instance', () => {
-    if (!win) return openWindow();
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  });
+  // повторный запуск (ещё один клик по ярлыку) — показываем уже открытое приложение
+  app.on('second-instance', () => reveal());
 
   await app.whenReady();
-  if (app.isPackaged) {
-    importShellEnv();
-    unpackedClaude();
-  } else {
-    // desktop:dev запускает голый Electron.app: без этого в Dock его иконка, у упакованного — build/icon.icns
-    app.dock?.setIcon(path.join(app.getAppPath(), 'build', 'icon.png'));
-  }
+  // из Finder и Dock окружение урезано; у desktop:dev оно уже из терминала
+  if (app.isPackaged || linked) importShellEnv();
+  if (app.isPackaged) unpackedClaude();
+  // desktop:dev запускает голый Electron.app: без этого в Dock его иконка; у ярлыка и упакованного она своя, из бандла
+  else if (!linked) app.dock?.setIcon(path.join(app.getAppPath(), 'build', 'icon.png'));
   const dir = await dataHome();
   if (dir) process.env.AGENTGRAPH_HOME = dir;
 
   // после AGENTGRAPH_HOME: paths.ts читает его при загрузке модуля
   const server = await import('../server.js');
-  const { ROOT } = await import('../paths.js');
+  const { ROOT, APP_DIR } = await import('../paths.js');
   home = ROOT;
   const port = await pickPort();
   // после автообновления (src/update.ts) — обычный выход и новый экземпляр приложения; про живые сессии UI уже
@@ -260,24 +319,48 @@ async function main(): Promise<void> {
       app.quit();
     });
   // упакованное приложение не git checkout: проверка обновлений сама скажет, что обновляться не с чего
-  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, restart });
+  origin = `http://localhost:${port}`;
+  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, restart, notifier: showNotice });
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();
   const teamwork = await import('../teamwork-server.js');
   unsentTeams = () => teamwork.unsentTeams();
   pushTeams = (slugs) => teamwork.pushTeams(slugs);
-  origin = `http://localhost:${port}`;
   console.log(`agentgraph desktop: ${origin} (данные: ${ROOT})`);
 
   setMenu();
+  if (linked) aboutLinked(APP_DIR);
   openWindow();
   // macOS: окно закрыли — запуски идут дальше, клик по иконке в Dock открывает окно снова
   app.on('activate', () => {
     if (!win) openWindow();
   });
+  if (linked) warnElectronDrift();
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+}
+
+/** «О программе» у ярлыка: версия checkout'а, а не Electron из Info.plist. */
+function aboutLinked(appDir: string): void {
+  try {
+    const { version } = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8')) as { version?: string };
+    app.setAboutPanelOptions({ applicationName: 'AgentGraph', applicationVersion: version ?? '', version: `Electron ${process.versions.electron}` });
+  } catch {
+    // без версии «О программе» покажет то, что в Info.plist
+  }
+}
+
+/** Ярлык — копия Electron на момент установки: checkout обновил Electron (npm install) — просим пересобрать ярлык. */
+function warnElectronDrift(): void {
+  const drift = linkedElectronDrift(process.versions.electron, (id) => createRequire(import.meta.url)(id) as { version?: string });
+  if (!drift || !win) return;
+  void dialog.showMessageBox(win, {
+    type: 'info',
+    buttons: ['Понятно'],
+    message: 'Ярлык AgentGraph пора обновить',
+    detail: `Ярлык собран на Electron ${drift.running}, в checkout — ${drift.installed}. Закрой приложение и выполни в папке agentgraph: npm run desktop:install`,
   });
 }
 

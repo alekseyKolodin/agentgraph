@@ -2,6 +2,8 @@
 // Живёт в оболочке, на любом экране: без него, пока открыт один запуск, вопрос из другого flow было не увидеть. Сюда же
 // приходит «сессия терминала закончила ход и ждёт тебя» (session): список сессий — сразу, уведомление — если вкладка не на виду;
 // и «сессия поменяла пространство или flow» (space, flows): списки и открытое пространство перечитываются.
+// В десктопном приложении (`host-notify`) уведомления показывает его главный процесс: вкладка своих не шлёт, а по клику
+// приложение просит открыть экран событием окна NAVIGATE_EVENT.
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,7 +16,7 @@ import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { useToast } from '../Toast';
-import { browserNotifies, tabAway, useNotifyPermission } from './notifications';
+import { browserNotifies, NAVIGATE_EVENT, tabAway, useNotifyPermission } from './notifications';
 
 /** После них в списке запусков меняются статус, итерации или стоимость. */
 const RUN_LIST_EVENTS = new Set(['start', 'end', 'question', 'answer', 'pause', 'iteration', 'phase_end', 'condition', 'title', 'digest']);
@@ -27,6 +29,9 @@ export function useHomeEvents(): void {
   const toast = useToast();
   const feedOn = useFeature('feed');
   const permission = useNotifyPermission();
+  // уведомления показывает приложение-хост: вкладка молчит и серверу о своих не говорит
+  const hostNotifies = useFeature('host-notify');
+  const notifies = () => !hostNotifies && browserNotifies();
   const path = useLocation().pathname;
   // обработчики событий читают текущий экран без переподключения потока
   const where = useRef(path);
@@ -46,30 +51,42 @@ export function useHomeEvents(): void {
     [qc],
   );
 
+  // клик по уведомлению приложения: оно уже подняло окно, экран открываем здесь — без перезагрузки страницы
+  useEffect(() => {
+    const go = (e: Event) => {
+      const to = (e as CustomEvent<unknown>).detail;
+      // только путь внутри UI: «//хост» и обратная косая — уже чужой адрес
+      if (typeof to === 'string' && to.startsWith('/') && !to.startsWith('//') && !to.includes('\\')) void navigate(to);
+    };
+    window.addEventListener(NAVIGATE_EVENT, go);
+    return () => window.removeEventListener(NAVIGATE_EVENT, go);
+  }, [navigate]);
+
   // Вкладка не на виду — системное уведомление; на виду, но открыт другой экран — всплывашка. На главной и на странице этого запуска карточка и так появится.
+  // Клик ведёт на страницу запуска: вопрос там виден над любой вкладкой.
   const announceQuestion = (e: HomeEvent) => {
     const q = e.question!;
     const text = q.questions.map((x) => x.question).join(' · ');
     const title = t('{flow}: вопрос от «{phase}»', { flow: e.flow, phase: q.title || q.phase });
     if (tabAway()) {
-      if (browserNotifies()) {
+      if (notifies()) {
         const n = new Notification(title, { body: text, tag: q.id });
         n.onclick = () => {
           window.focus();
           n.close();
-          void navigate('/');
+          void navigate(`/run/${e.runId}`);
         };
       }
       return;
     }
     const visibleHere = where.current === '/' || where.current === `/run/${e.runId}`;
-    if (!visibleHere) toast(`${title}. ${text}`, () => void navigate('/'));
+    if (!visibleHere) toast(`${title}. ${text}`, () => void navigate(`/run/${e.runId}`));
   };
 
   // Конец запуска объявляем только уведомлением, когда вкладка не на виду; остановку руками — нет, её только что нажали.
   // Конец дочернего запуска блока-вызова — нет: о связке скажет конец родителя (как и сервер в системных уведомлениях).
   const announceEnd = (e: HomeEvent) => {
-    if (e.status === 'aborted' || e.parent || !tabAway() || !browserNotifies()) return;
+    if (e.status === 'aborted' || e.parent || !tabAway() || !notifies()) return;
     const n = new Notification(t('{flow}: запуск завершён', { flow: e.flow }), { body: `${statusLabel(e.status ?? '')} · ${usd(e.costUsd)}`, tag: e.runId });
     n.onclick = () => {
       window.focus();
@@ -82,7 +99,7 @@ export function useHomeEvents(): void {
   // только системное уведомление, когда вкладка не на виду
   const announceSession = (e: HomeEvent) => {
     const s = e.session!;
-    if (!tabAway() || !browserNotifies()) return;
+    if (!tabAway() || !notifies()) return;
     const n = new Notification(t('Сессия «{name}» ждёт тебя', { name: s.name }), { body: s.space ? `◇ ${s.space}` : t('Claude закончил ход'), tag: `session:${s.id}` });
     n.onclick = () => {
       window.focus();
@@ -92,7 +109,7 @@ export function useHomeEvents(): void {
   };
 
   // notify=1 — уведомления покажет эта вкладка, системные с сервера не нужны; разрешение сменилось — переподключаемся
-  useEventStream<HomeEvent>(`/api/events${permission === 'granted' ? '?notify=1' : ''}`, {
+  useEventStream<HomeEvent>(`/api/events${permission === 'granted' && !hostNotifies ? '?notify=1' : ''}`, {
     // при переподключении события за время обрыва потеряны: забираем состояние заново
     onOpen: () => {
       soon(keys.home);

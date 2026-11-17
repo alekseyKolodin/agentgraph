@@ -17,6 +17,7 @@
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
     "desktop:dev": "tsx scripts/ensure-web.mts && npm run build && electron .",
+    "desktop:install": "tsx scripts/ensure-web.mts && npm run build && tsx scripts/desktop-install.mts",
     "desktop:build": "npm run build:web && npm run build && tsx scripts/pty-helper.mts && electron-builder --mac",
     "test": "tsx --test src/*.test.ts web/src/lib/*.test.ts web/src/lib/*/*.test.ts",
     "share": "bash scripts/share.sh",
