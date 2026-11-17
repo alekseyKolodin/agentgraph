@@ -1,5 +1,6 @@
-// Главная: «Задачи и код» (ui/dash.js) — задачи Jira и MR или ветки проектов; «Запустить…» заполнит форму запуска
-// выбранного flow, запустишь сам. Разделы обновляются своими запросами; данные старше 5 минут подтягиваются при возврате.
+// «Задачи и код» (ui/dash.js; раньше на главной, теперь свой раздел /code — screens/code) — задачи Jira и MR или ветки
+// проектов; «Запустить…» заполнит форму запуска выбранного flow, запустишь сам. Разделы обновляются своими запросами;
+// данные старше 5 минут подтягиваются при возврате. Файл остался здесь: useIntegrations и LaunchButton берут главная и формы.
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,14 +22,11 @@ export type OnLaunch = (target: IntakeTarget, btn: HTMLElement) => void;
 export const useIntegrations = (enabled = true) =>
   useQuery({ queryKey: keys.integrations, queryFn: fetchIntegrations, staleTime: DASH_STALE_MS, enabled });
 
-export function Dash({ onLaunch, onSettings }: { onLaunch: OnLaunch; onSettings: () => void }) {
+/** Задачи Jira и проекты с MR и ветками — тело раздела «Задачи и код» (screens/code); заголовок и «Подключения» — у раздела. */
+export function Dash({ onLaunch }: { onLaunch: OnLaunch }) {
   const info = useIntegrations();
   return (
-    <section className={`${homeStyles.homeSec} ${homeStyles.homeDash}`}>
-      <div className={styles.dashHead}>
-        <h2 title={t('«Запустить…» заполнит форму запуска, запустишь сам')}>{t('Задачи и код')}</h2>
-        <button className="btn small" onClick={onSettings}>{t('Подключения')}</button>
-      </div>
+    <section className={homeStyles.homeSec}>
       {/* Jira без токена не показываем: подключить её можно в «Подключениях» */}
       {(info.error || info.data?.jira?.hasToken) && (
         <div className={styles.dashBox}>

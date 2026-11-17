@@ -13,7 +13,8 @@ import styles from './Sidebar.module.css';
 /** Сколько ждать новый сервер после перезапуска, прежде чем сказать, что он не вернулся. */
 const RESTART_WAIT_MS = 3 * 60_000;
 
-export function UpdateBadge() {
+/** compact — точка на рельсе вместо плашки с текстом (панель меню скрыта); текст — в подсказке и для диктора. */
+export function UpdateBadge({ compact = false }: { compact?: boolean }) {
   const on = useFeature('update');
   const q = useUpdate(on);
   const s = q.data;
@@ -43,11 +44,12 @@ export function UpdateBadge() {
     <>
       <button
         type="button"
-        className={`${styles.updateBadge} ${tone}`}
-        title={s.latest && s.latest !== s.version ? t('Новая версия agentgraph: {from} → {to}', { from: s.version, to: s.latest }) : t('Новая версия agentgraph')}
+        className={`${compact ? styles.updateDot : styles.updateBadge} ${tone}`}
+        title={`${compact ? `${badge.text}\n` : ''}${s.latest && s.latest !== s.version ? t('Новая версия agentgraph: {from} → {to}', { from: s.version, to: s.latest }) : t('Новая версия agentgraph')}`}
+        aria-label={compact ? badge.text : undefined}
         onClick={() => setOpen(true)}
       >
-        {badge.text}
+        {!compact && badge.text}
       </button>
       {open && <UpdateDialog status={s} lost={lost} onClose={() => setOpen(false)} />}
     </>

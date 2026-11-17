@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FeedItem, FlowListItem, RunSummary } from '@server/api-types';
-import { dashCap, dashMore, mrSign, pickerFlows, pickerPosition, runsForBranch, runsForJira } from './dash';
+import { dashCap, dashMore, hasConnections, mrSign, pickerFlows, pickerPosition, runsForBranch, runsForJira } from './dash';
 import { feedTone, feedWhat, isUnread, unreadCount } from './feed';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
@@ -75,4 +75,12 @@ test('лента: новые после отметки, цвет точки и �
 test('знак номера: PR GitHub — #, MR GitLab — !', () => {
   assert.equal(mrSign('octo/app#12'), '#');
   assert.equal(mrSign('tools/agentgraph!42'), '!');
+});
+
+test('подключения есть: Jira с токеном или хотя бы один проект; Jira без токена не в счёт', () => {
+  const proj = { path: '/p', name: 'p' };
+  assert.equal(hasConnections({ jira: null, projects: [] }), false);
+  assert.equal(hasConnections({ jira: { baseUrl: 'u', email: 'e', hasToken: false }, projects: [] }), false);
+  assert.equal(hasConnections({ jira: { baseUrl: 'u', email: 'e', hasToken: true }, projects: [] }), true);
+  assert.equal(hasConnections({ jira: null, projects: [proj] }), true);
 });

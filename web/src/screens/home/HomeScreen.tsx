@@ -1,6 +1,7 @@
 // Главная (ui/index.html #view-home, ui/app.js renderHome): вопросы агентов с ответом и сессии терминала, которые ждут
-// тебя, идущие запуски и работающие сессии, мои задачи Teamwork, мои MR, которым нужно внимание, задачи и код, лента событий справа. Ни
+// тебя, идущие запуски и работающие сессии, мои задачи Teamwork, мои MR, которым нужно внимание, лента событий справа. Ни
 // запусков, ни сессий ещё не было — строка «с чего начать». «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
+// Все задачи Jira, MR и ветки проектов — в своём разделе «Код» (screens/code); здесь только строка «ничего не подключено».
 import { lazy, Suspense, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -11,18 +12,20 @@ import { useTeamMine } from '../../api/teamwork';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
 import { QuestionCard } from '../../components/question/QuestionCard';
 import { useNow } from '../../components/useNow';
+import { hasConnections } from '../../lib/dash';
 import { homeMeta, inbox, withoutQuestion } from '../../lib/home';
 import { t } from '../../lib/i18n';
 import { homeSessions } from '../../lib/sessions';
 import { NewFlowDialog } from '../flow/NewFlowDialog';
 import { Attention } from './Attention';
-import { Dash } from './Dash';
+import { useIntegrations } from './Dash';
 import { DashSettings } from './DashSettings';
 import { Feed } from './Feed';
 import { FlowPicker, pickerAt, type PickerState } from './FlowPicker';
 import { HomeRuns } from './HomeRuns';
 import { HomeSessions } from './HomeSessions';
 import { Limits } from './Limits';
+import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
 
 const TICK_MS = 30_000;
@@ -36,7 +39,10 @@ export function HomeScreen() {
   const home = useHome();
   const limits = useFeature('limits');
   const dashOn = useFeature('integrations');
-  const attentionOn = useFeature('attention') && dashOn;
+  // ничего не подключено — вместо MR (их неоткуда взять) строка с «Подключениями»; пока не знаем — ни того, ни другого
+  const integrations = useIntegrations(dashOn);
+  const connected = integrations.data ? hasConnections(integrations.data) : undefined;
+  const attentionOn = useFeature('attention') && dashOn && connected === true;
   const feedOn = useFeature('feed');
   const now = useNow(TICK_MS);
   const [picker, setPicker] = useState<PickerState>(null);
@@ -114,14 +120,15 @@ export function HomeScreen() {
             </Suspense>
           )}
           {attentionOn && <Attention onLaunch={onLaunch} />}
-          {dashOn && <Dash onLaunch={onLaunch} onSettings={() => setSettings(true)} />}
+          {dashOn && connected === false && <Connect onSettings={() => setSettings(true)} />}
           {down && (
             <p className={`run-paused ${styles.homeDown}`}>
               {t('Главная заработает после перезапуска UI-сервера: этот сервер запущен до её появления и не отдаёт вопросы и идущие запуски. Пока они видны в списке слева. Перезапуск остановит идущие запуски — дождись их конца.')}
             </p>
           )}
-          {/* дашборд сам объясняет, что делать: большая пустая заглушка под ним не нужна */}
-          {!dashOn && !down && !fresh && !waiting && !going && (
+          {/* строка «ничего не подключено» сама говорит, что делать: большая пустая заглушка под ней не нужна; пока
+              подключения грузятся — тоже нет (не мигать), не ответили — есть */}
+          {(!dashOn || connected === true || integrations.isError) && !down && !fresh && !waiting && !going && (
             <div className={`empty ${styles.homeEmpty}`}>
               <h1>{t('Ничего не идёт, вопросов нет')}</h1>
               <p title={t('Flow — цепочка этапов. Каждый этап идёт в отдельной сессии Claude Code со своим промптом и получает то, что ему передали предыдущие. После всех этапов проверяется условие, и цикл повторяется, пока оно не выполнится.')}>
@@ -140,7 +147,8 @@ export function HomeScreen() {
 }
 
 /**
- * Диалог «Новый flow» — один, в сайдбаре: генерация идёт в нём и переживает уход с главной. Свой экземпляр здесь
+ * Диалог «Новый flow» — один, в шапке списка Flow панели меню (смонтирован, даже когда виден другой список или панель
+ * скрыта; сам диалог — в портале): генерация идёт в нём и переживает уход с главной. Свой экземпляр здесь
  * размонтировался бы с главной, а с ним — ход платной генерации и защита от второй параллельной.
  */
 const sidebarNewFlow = () => document.querySelector<HTMLButtonElement>(`button[title="${CSS.escape(t('Создать flow'))}"]`);
@@ -173,9 +181,28 @@ function Start({ sessions }: { sessions: boolean }) {
   );
 }
 
-/** Без разрешения браузера о вопросах сообщит сам сервер системным уведомлением; заблокированы — подсказка. */
+/** Ничего не подключено: одна тихая строка с «Подключениями» — задачи и MR потом будут в разделе «Код». */
+function Connect({ onSettings }: { onSettings: () => void }) {
+  return (
+    <section className={`${styles.homeSec} ${styles.homeConnect}`}>
+      <div className={`${dashStyles.dashHead} ${dashStyles.dashQuiet}`}>
+        <h2 title={t('Подключи Jira или git-репозиторий: задачи, MR и ветки появятся в разделе «Код», а MR, которым нужно внимание, — здесь')}>
+          {t('Задачи и код')} <span className="muted small">{t('— ничего не подключено')}</span>
+        </h2>
+        <button className="btn small" onClick={onSettings}>{t('Подключения')}</button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Без разрешения браузера о вопросах сообщит сам сервер системным уведомлением; заблокированы — подсказка.
+ * В десктопном приложении (`host-notify`) уведомления показывает оно само: включать нечего.
+ */
 function NotifyControl() {
   const perm = useNotifyPermission();
+  const hostNotifies = useFeature('host-notify');
+  if (hostNotifies) return null;
   if (perm === 'denied') {
     return <span className="muted small" title={t('Заблокированы в настройках браузера для этого адреса. Включи их там')}>{t('Уведомления выключены')}</span>;
   }

@@ -1,5 +1,5 @@
-/* Раскладка приложения: сайдбар слева, контент справа (ui/style.css .app, .main). */
-.app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+/* Раскладка приложения: сайдбар слева (ширину задаёт он сам: рельс с панелью или один рельс), контент справа. */
+.app { display: grid; grid-template-columns: auto minmax(0, 1fr); height: 100vh; }
 .main { overflow-y: auto; padding: 22px 28px 40px; }
 /* фокус после «К содержимому» и в открытом выдвижном сайдбаре: это не элементы управления, кольцо им не нужно */
 .main:focus, .side:focus { outline: none; box-shadow: none; }

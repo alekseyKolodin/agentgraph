@@ -1,5 +1,6 @@
-// «Задачи и код» и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски и выбор flow. Без React и DOM.
-import type { FlowListItem, RunSummary } from '@server/api-types';
+// «Задачи и код» (свой раздел /code) и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски
+// и выбор flow. Без React и DOM.
+import type { FlowListItem, IntegrationsInfo, RunSummary } from '@server/api-types';
 import { t } from './i18n';
 
 /** Сколько строк списка видно сразу; остальные — по «Ещё N». */
@@ -16,6 +17,9 @@ export type JiraPreset = keyof typeof PRESET_LABEL;
 export const dashCap = <T>(arr: T[], all: boolean): T[] => (all ? arr : arr.slice(0, DASH_SHOWN));
 /** Сколько строк спрятано за «Ещё N»; 0 — кнопки нет. */
 export const dashMore = (arr: unknown[], all: boolean): number => (!all && arr.length > DASH_SHOWN ? arr.length - DASH_SHOWN : 0);
+
+/** Подключено хоть что-то: Jira с токеном или хотя бы один проект (добавленный или из директорий запусков). */
+export const hasConnections = (info: Pick<IntegrationsInfo, 'jira' | 'projects'>): boolean => Boolean(info.jira?.hasToken) || info.projects.length > 0;
 
 /** Знак номера по ref: PR GitHub (owner/repo#N) — «#», MR GitLab (group/project!N) — «!». */
 export const mrSign = (ref: string): '#' | '!' => (/#\d+$/.test(ref) ? '#' : '!');

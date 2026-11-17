@@ -1,5 +1,5 @@
 /* Главная (ui/style.css «главная», «лента событий справа», «идущие запуски строками»): правила перенесены как есть,
-   в том же порядке, с поздними перебивками в конце. #home-dash, #home-down, #home-empty → .home-dash, .home-down, .home-empty. */
+   в том же порядке, с поздними перебивками в конце. #home-down, #home-empty → .home-down, .home-empty. */
 .home-sec { margin-bottom: 22px; }
 .home-sec > h2 { font-size: var(--fs-small); color: var(--ink-2); margin: 0 0 4px; }
 .home-sec > h2 :global(.small) { text-transform: none; letter-spacing: 0; }
@@ -8,11 +8,11 @@
 .home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
 /* без ленты (сервер её не умеет) — одна колонка */
 .home-grid.no-feed { grid-template-columns: minmax(0, 1fr); }
-/* узко: одна колонка, лента сразу после вопросов и идущих запусков, а не под длинным разделом «Задачи и код» */
+/* узко: одна колонка, лента сразу после вопросов и идущих запусков, а не под MR и задачами */
 @media (max-width: 1100px) {
   .home-grid { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
   .home-main { display: contents; }
-  .home-dash, .home-down, .home-empty { order: 1; }
+  .home-connect, .home-down, .home-empty { order: 1; }
 }
 
 /* ---------- «Пульт»: заголовки секций — тихие подписи, а не капс (system.md → «Иерархия») */

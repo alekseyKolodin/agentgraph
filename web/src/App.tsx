@@ -1,4 +1,4 @@
-// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context, /teamwork/…; сервер отдаёт на них index.html. Старые
+// Маршруты UI. Адреса — пути /flow/<имя>, /run/<id>, /spaces/<slug>, /tags/<slug>, /context, /code, /teamwork/…; сервер отдаёт на них index.html. Старые
 // хеши /#run/<id> и т. п. переводятся на пути ниже (lib/legacy-url.ts), старые /next/… — сервер (308).
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
@@ -24,6 +24,8 @@ const RunScreen = lazy(() => import('./screens/run/RunScreen').then((m) => ({ de
 const SpacesScreen = lazy(() => import('./screens/spaces/SpacesScreen').then((m) => ({ default: m.SpacesScreen })));
 const TagsScreen = lazy(() => import('./screens/tags/TagsScreen').then((m) => ({ default: m.TagsScreen })));
 const ContextScreen = lazy(() => import('./screens/context/ContextScreen').then((m) => ({ default: m.ContextScreen })));
+// «Код»: задачи Jira, MR и ветки проектов (раньше — на главной)
+const CodeScreen = lazy(() => import('./screens/code/CodeScreen').then((m) => ({ default: m.CodeScreen })));
 // «Сессии»: список с формой и экран терминала; терминал (xterm) — отдельным файлом, только экрану сессии
 const SessionsScreen = lazy(() => import('./screens/sessions/SessionsScreen').then((m) => ({ default: m.SessionsScreen })));
 const SessionScreen = lazy(() => import('./screens/sessions/SessionScreen').then((m) => ({ default: m.SessionScreen })));
@@ -46,6 +48,7 @@ const router = createBrowserRouter(
         { path: 'spaces/:slug?', element: <Suspense><SpacesScreen /></Suspense> },
         { path: 'tags/:slug?', element: <Suspense><TagsScreen /></Suspense> },
         { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
+        { path: 'code', element: <Suspense><CodeScreen /></Suspense> },
         { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },
         { path: 'sessions/:id', element: <Suspense><SessionScreen /></Suspense> },
         // Teamwork (spec §11): команды, команда (вкладка — ?tab=), проект с вкладкой; ?task=ID открывает панель задачи поверх любой вкладки

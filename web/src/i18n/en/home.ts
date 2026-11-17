@@ -103,7 +103,13 @@ export const home: Record<string, string> = {
   'ждёт|ждут|ждут': 'waiting for reply|waiting for reply',
   'Конфликты с {branch}': 'Conflicts with {branch}',
   'конфликты': 'conflicts',
-  '«Запустить…» заполнит форму запуска, запустишь сам': '“Run…” fills in the run form; you start it yourself',
+  // HomeScreen.tsx: ничего не подключено; screens/code: раздел «Код»
+  '— ничего не подключено': '— nothing connected',
+  'Подключи Jira или git-репозиторий: задачи, MR и ветки появятся в разделе «Код», а MR, которым нужно внимание, — здесь':
+    'Connect Jira or a git repository: tasks, MRs and branches will appear under “Code”, and MRs that need attention — here',
+  'Задачи Jira, MR и ветки проектов. «Запустить…» заполнит форму запуска, запустишь сам': 'Jira tasks, MRs and project branches. “Run…” fills in the run form; you start it yourself',
+  'Jira Cloud и git-репозитории: откуда берутся задачи, MR и ветки': 'Jira Cloud and git repositories: where tasks, MRs and branches come from',
+  'Этот сервер не умеет подключения — перезапусти UI-сервер.': "This server doesn't support connections — restart the UI server.",
   'Задачи и код': 'Tasks and code',
   'Подключения': 'Connections',
   'Проектов пока нет. Они появятся из директорий проектов запусков или их можно добавить в «Подключениях».':

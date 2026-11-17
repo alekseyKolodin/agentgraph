@@ -66,7 +66,7 @@ You don't have to write this flow yourself: `npm run agentgraph -- "Fix the fail
 
 ### 2. Jira ticket → reviewed branch
 
-**Home → Tasks and code** lists your Jira sprint. **Run…** on a ticket puts its description, subtasks and links into the task. **Prepare worktree** gives the ticket its own branch and folder, so your main checkout stays untouched and several tickets can run at once. In the recording, the ticket text is the task and the branch is a worktree. An implementer writes the code and tests, a read-only reviewer checks the diff, and a judge goes through the acceptance criteria.
+**Code** (in the sidebar) lists your Jira sprint. **Run…** on a ticket puts its description, subtasks and links into the task. **Prepare worktree** gives the ticket its own branch and folder, so your main checkout stays untouched and several tickets can run at once. In the recording, the ticket text is the task and the branch is a worktree. An implementer writes the code and tests, a read-only reviewer checks the diff, and a judge goes through the acceptance criteria.
 
 <p align="center"><img src="docs/assets/case-ticket.gif" width="900" alt="A real ticket-to-branch run on the graph: Implement, then a read-only Review, then the judge checks the acceptance criteria and accepts"></p>
 
@@ -252,7 +252,7 @@ npm run agentgraph -- run add-feature --cwd ~/code/my-repo --space loyalty-card
 npm run agentgraph -- eval fix-tests --compare fix-tests-solo --tasks evals/tasks.yaml --runs 2 --cwd ~/code/my-repo
 ```
 
-To get the same interface as a macOS app, run `npm run desktop:dev`. Integrations (Jira, `gh`, `glab`) are set up in **Connections** on Home; see the [guide](docs/GETTING_STARTED.md#run-from-a-jira-issue-mr-or-branch).
+To get the same interface as a macOS app you can launch by its icon and keep in the Dock, run `npm run desktop:install` (or `npm run desktop:dev` for a window straight from the terminal). Integrations (Jira, `gh`, `glab`) are set up in **Connections** on Home; see the [guide](docs/GETTING_STARTED.md#run-from-a-jira-issue-mr-or-branch).
 
 ## How it works
 
@@ -311,6 +311,7 @@ The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<
 | `npm run typecheck` | Type check of the server and UI |
 | `npm test` | Tests |
 | `npm run build:web` | UI build into `dist/web` |
+| `npm run desktop:install` | Put `AgentGraph.app` (runs this checkout) into Applications |
 | `npm run desktop:build` | Build `.app` and `.dmg` into `release/desktop/` |
 
 The rules for working on the code live as skills in `.claude/skills/` and load into a Claude Code session on their own when an edit touches their area: `agentgraph-core` for `src/`, `agentgraph-web` for `web/`, `agentgraph-tests` for tests, `flow-author` for flows. Independent review before a commit is the `code-reviewer` subagent in `.claude/agents/`: read-only and a clean context.
