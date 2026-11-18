@@ -190,3 +190,24 @@ test('connector-build: проверка тела, старт и опрос сб�
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('POST …/log/<id>/ask: стартовый запрос сессии; неизвестная рутина или строка — 404, пустой вопрос — 400', async () => {
+  const t = setup(null);
+  try {
+    t.engine.saveRoutine('morning', { spec });
+    await t.engine.runNow('morning');
+    const id = t.engine.logOf('morning', {})[0].id;
+    const r = await t.call('POST', `/api/routines/morning/log/${id}/ask`, { question: 'почему?' });
+    assert.equal(r?.status, 200);
+    const b = r!.body as { prompt: string; name: string };
+    assert.match(b.prompt, /Вопрос пользователя:\nпочему\?/);
+    assert.match(b.prompt, /по расписанию/);
+    assert.equal(b.name, 'Рутина Утро: вопрос по срабатыванию');
+    assert.equal((await t.call('POST', `/api/routines/morning/log/${id}/ask`, { question: ' ' }))?.status, 400);
+    assert.equal((await t.call('POST', '/api/routines/morning/log/nope/ask', { question: 'почему?' }))?.status, 404);
+    assert.equal((await t.call('POST', `/api/routines/nope/log/${id}/ask`, { question: 'почему?' }))?.status, 404);
+    assert.equal(await t.call('GET', `/api/routines/morning/log/${id}/ask`), undefined);
+  } finally {
+    t.done();
+  }
+});

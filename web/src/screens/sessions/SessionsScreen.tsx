@@ -10,7 +10,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView } from '@server/api-types';
 import { ApiError, createSpace, errorText, fetchTag, keys, saveSpace, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
-import { continueSession, createSession, putSession, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
+import { continueSession, createSession, defaultSessionCwd, putSession, SESSION_CWD_KEY, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -31,7 +31,6 @@ import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 /** Папка последней сессии: форма открывается с ней. */
-const CWD_KEY = 'agentgraph.sessionCwd';
 const PERMISSION_MODES: SessionPermissionMode[] = ['auto', 'acceptEdits', 'manual', 'plan'];
 const MODE_HINT: Record<SessionPermissionMode, string> = {
   auto: t('auto — Claude сам решает, что спрашивать'),
@@ -108,7 +107,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const spaceList = spacesQuery.data?.spaces ?? [];
   // папка и откуда она: ссылка с &cwd= — задана сами (выбор пространства её не затирает), иначе — запомненная
   const [folder, setFolder] = useState<CwdState>(() =>
-    preset.cwd ? { cwd: preset.cwd, from: '', touched: true } : { cwd: LS.raw(CWD_KEY) || LS.raw('agentgraph.cwd') || config?.defaultCwd || '', from: '', touched: false },
+    preset.cwd ? { cwd: preset.cwd, from: '', touched: true } : { cwd: defaultSessionCwd(config?.defaultCwd), from: '', touched: false },
   );
   const cwd = folder.cwd;
   const [space, setSpace] = useState(preset.space);
@@ -204,7 +203,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         cols: Math.max(80, Math.floor((window.innerWidth - 380) / 8)),
         rows: Math.max(24, Math.floor((window.innerHeight - 190) / 17)),
       });
-      LS.setRaw(CWD_KEY, s.cwd);
+      LS.setRaw(SESSION_CWD_KEY, s.cwd);
       qc.setQueryData(sessionKeys.one(s.id), s);
       void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
       // новый слаг сервер завёл пустым пространством: подсказки и страница «Пространства» — заново

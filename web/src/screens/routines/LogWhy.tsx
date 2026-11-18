@@ -1,13 +1,15 @@
 // Раскрытая строка «Срабатываний»: почему сработало (или пропущено) и как исправить. Событие целиком, условия на поля
 // по текущему правилу — каждое с тем, что было в событии, — «Если» и ответ проверки словами. Ниже — «Если» можно
 // поправить и проверить на этом же событии до сохранения, затем сохранить правило; «Зря запустилась» — пример для
-// следующих проверок.
+// следующих проверок. «Спросить Claude» — когда причина не в условиях, а в источнике: сервер собирает стартовый запрос
+// (событие данными, проверка, YAML рутины и источника), UI открывает с ним обычную сессию в ручном режиме.
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LogEntry, LogRecheck, RoutineSpec } from '@server/routines/types';
-import { errorText } from '../../api';
-import { explainLog, recheckLog, routineKeys, saveRoutine } from '../../api/routines';
+import { errorText, useConfig, useFeature } from '../../api';
+import { askLog, explainLog, recheckLog, routineKeys, saveRoutine } from '../../api/routines';
+import { createSession, defaultSessionCwd, sessionKeys } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
@@ -57,6 +59,9 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
     }
   };
   const fb = feedbackOptions(e);
+  const askOn = useFeature('routine-ask');
+  const sessionsOn = useFeature('sessions');
+  const canAsk = askOn && sessionsOn;
   return (
     <div className={styles.lgDetail}>
       {q.isPending && <span className="muted">{t('Загрузка…')}</span>}
@@ -113,6 +118,8 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
             {e.costUsd ? <p className="muted">{t('Потрачено {usd}.', { usd: usd(e.costUsd) })}</p> : null}
           </section>
 
+          {canAsk && <AskClaude slug={slug} logId={e.id} />}
+
           {!x.schedule && (
             <section aria-label={t('Исправить')}>
               <span className={styles.lbl}>{t('Исправить')}</span>
@@ -158,5 +165,50 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
         </div>
       )}
     </div>
+  );
+}
+
+/** «Спросить Claude»: вопрос по срабатыванию → сессия Claude со стартовым запросом от сервера, режим manual. */
+function AskClaude({ slug, logId }: { slug: string; logId: string }) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const serverCwd = useConfig().data?.defaultCwd;
+  const [question, setQuestion] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const ask = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await askLog(slug, logId, question.trim());
+      const s = await createSession({ cwd: r.cwd ?? defaultSessionCwd(serverCwd), prompt: r.prompt, name: r.name, tags: [], saveState: false, permissionMode: 'manual' });
+      qc.setQueryData(sessionKeys.one(s.id), s);
+      void qc.invalidateQueries({ queryKey: sessionKeys.list });
+      void navigate(`/sessions/${encodeURIComponent(s.id)}`);
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label={t('Спросить Claude')}>
+      <span className={styles.lbl}>{t('Спросить Claude')}</span>
+      <textarea
+        className={styles.inp}
+        rows={2}
+        aria-label={t('Вопрос Claude')}
+        placeholder={t('Например: почему это событие запустило рутину?')}
+        value={question}
+        maxLength={2000}
+        onChange={(ev) => setQuestion(ev.target.value)}
+      />
+      <div className={styles.inline}>
+        <button type="button" className="btn small" disabled={!question.trim() || busy} onClick={() => void ask()}>
+          {busy ? t('Открываю…') : t('Спросить в сессии')}
+        </button>
+        <span className={styles.hint}>{t('Откроется сессия Claude с этим событием, рутиной и источником. Правки она только предложит.')}</span>
+      </div>
+      {error && <p className={styles.err}>{error}</p>}
+    </section>
   );
 }

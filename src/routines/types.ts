@@ -258,6 +258,9 @@ export type LogExplain = {
   answer?: string;
 };
 
+/** Стартовый запрос сессии «Спросить Claude» по строке журнала. */
+export type LogAsk = { prompt: string; cwd?: string; name: string };
+
 export type LogRecheck = { match: boolean; duplicate: boolean; reason: string; costUsd: number };
 
 /** Карточка ожидания на главной. */

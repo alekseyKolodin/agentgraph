@@ -449,7 +449,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
     } satisfies ConfigResponse);
   }
 

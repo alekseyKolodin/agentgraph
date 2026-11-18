@@ -3,11 +3,17 @@
 // «работает / ждёт тебя» меняется хуками claude, а не действиями в этой вкладке.
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionView } from '@server/api-types';
+import { LS } from '../lib/storage';
 import { api } from './client';
 import type { FlowAiProgressEvent } from './flows';
 import { draftStream } from './spaces';
 
 const enc = encodeURIComponent;
+
+/** Последняя папка новой сессии (общая с формой «Сессии»). */
+export const SESSION_CWD_KEY = 'agentgraph.sessionCwd';
+/** Папка по умолчанию для новой сессии: последняя папка сессии, папка запусков, папка сервера. */
+export const defaultSessionCwd = (serverDefault?: string): string => LS.raw(SESSION_CWD_KEY) || LS.raw('agentgraph.cwd') || serverDefault || '';
 
 export const sessionKeys = {
   list: ['sessions'] as const,
@@ -24,6 +30,8 @@ export type NewSession = {
   model?: string;
   permissionMode?: SessionPermissionMode;
   saveState: boolean;
+  /** Первое сообщение новой сессии. */
+  prompt?: string;
   /** Начальный размер терминала: claude перерисуется под окно при подключении. */
   cols?: number;
   rows?: number;

@@ -439,4 +439,10 @@ export const routines: Record<string, string> = {
   'С этим текстом — повтор, не запустилась бы: {why}': 'With this text it is a repeat and would not run: {why}',
   'С этим текстом не запустилась бы: {why}': 'With this text it would not run: {why}',
   'Без «Если» отметка «Зря запустилась» ничего не изменит: она служит примером только для проверки словами.': 'Without an “If”, marking “Shouldn’t have run” changes nothing: it is only an example for the check in words.',
+  'Спросить Claude': 'Ask Claude',
+  'Вопрос Claude': 'Question for Claude',
+  'Например: почему это событие запустило рутину?': 'For example: why did this event start the routine?',
+  'Открываю…': 'Opening…',
+  'Спросить в сессии': 'Ask in a session',
+  'Откроется сессия Claude с этим событием, рутиной и источником. Правки она только предложит.': 'A Claude session opens with this event, the routine and the source. It will only suggest changes.',
 };
