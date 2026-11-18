@@ -97,7 +97,7 @@ export function HomeScreen() {
       <div className={`${styles.homeGrid}${feedOn ? '' : ` ${styles.noFeed}`}`}>
         <div className={styles.homeMain}>
           {fresh && <Start sessions={sessionsOn} />}
-          <RoutineHome waits={routineWaits} catchUp={catchUp} now={now} />
+          <RoutineHome waits={routineWaits} catchUp={catchUp} sources={routines.data?.sources ?? []} now={now} />
           {waiting - routineWaits.length > 0 && (
             <section className={styles.homeSec}>
               <h2 title={t('Вопросы агентов, сначала те, что ждут дольше; под ними — сессии, где ход за тобой')}>{t('Ждёт тебя')}</h2>

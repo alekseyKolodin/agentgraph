@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RoutineStore, SEEN_MAX } from './store.js';
+import { execFileSync } from 'node:child_process';
+import { ARRIVALS_MAX, LOG_TRIM_BYTES, LogReadError, RoutineStore, SEEN_MAX } from './store.js';
 import type { LogEntry, RoutineEvent } from './types.js';
 
 function tmp(): { store: RoutineStore; root: string; done: () => void } {
@@ -102,6 +103,129 @@ test('события рутины и история источника: повт
     assert.deepEqual(store.lastChecks(), { src: 'T1', 'schedule-r': 'T2' });
     store.setCursor('src', { offset: 5 });
     assert.deepEqual(store.cursor('src'), { offset: 5 });
+  } finally {
+    done();
+  }
+});
+
+const line = (id: string, extra: Partial<LogEntry> = {}): LogEntry => ({ id, at: '2026-11-17T10:00:00Z', routine: 'r', event: { source: 'src', id, title: `t${id}`, at: '2026-11-17T10:00:00Z' }, outcome: 'filtered', ...extra });
+
+test('журнал: запись обрезает разросшийся файл, свежие запуски переживают обрезку', () => {
+  const { store, root, done } = tmp();
+  try {
+    const started = new Date(Date.now() - 3600_000).toISOString();
+    store.appendLog(line('run', { outcome: 'started', runId: 'r1', startedAt: started }));
+    const reason = 'x'.repeat(1500);
+    for (let i = 0; i < 1600; i++) store.appendLog(line(`f${i}`, { reason }));
+    const file = path.join(root, 'routines-state', 'log', 'r.json');
+    assert.ok(fs.statSync(file).size <= LOG_TRIM_BYTES, String(fs.statSync(file).size));
+    const all = store.logAll('r');
+    assert.ok(all.length > 0 && all.length < 1601);
+    // последняя строка на месте, запуск за последние сутки — тоже (по нему per_day)
+    assert.equal(all[all.length - 1].id, 'f1599');
+    assert.equal(all[0].id, 'run');
+  } finally {
+    done();
+  }
+});
+
+test('журнал больше 8 МБ читается хвостом, а не пустым; следующая запись его обрезает', () => {
+  const { store, root, done } = tmp();
+  try {
+    const file = path.join(root, 'routines-state', 'log', 'r.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const row = JSON.stringify(line('old', { reason: 'y'.repeat(2000) })) + '\n';
+    fs.writeFileSync(file, row.repeat(Math.ceil((9 * 1024 * 1024) / row.length)) + JSON.stringify(line('last', { outcome: 'started', startedAt: new Date().toISOString() })) + '\n');
+    assert.ok(fs.statSync(file).size > 8 * 1024 * 1024);
+    const all = store.logAll('r');
+    assert.ok(all.length > 1000, String(all.length));
+    assert.equal(all[all.length - 1].id, 'last');
+    // битой первой строки хвоста нет: каждая строка — целая запись
+    assert.ok(all.every((e) => e.routine === 'r'));
+    store.appendLog(line('next'));
+    assert.ok(fs.statSync(file).size <= LOG_TRIM_BYTES);
+    assert.deepEqual(store.log('r', { limit: 2 }).map((e) => e.id), ['next', 'last']);
+  } finally {
+    done();
+  }
+});
+
+test('журнал не обычный файл — LogReadError, а не пустой журнал; нет файла — пусто', () => {
+  const { store, root, done } = tmp();
+  try {
+    assert.deepEqual(store.logAll('r'), []);
+    const dir = path.join(root, 'routines-state', 'log');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(root, 'elsewhere.json'), JSON.stringify(line('a')) + '\n');
+    fs.symlinkSync(path.join(root, 'elsewhere.json'), path.join(dir, 'r.json'));
+    assert.throws(() => store.logAll('r'), (e) => e instanceof LogReadError && /ссылка/.test(e.message));
+  } finally {
+    done();
+  }
+});
+
+test('seen: пришедший снова id освежается и не вытесняется новыми', () => {
+  const { store, done } = tmp();
+  try {
+    store.addSeen('src', ['open']);
+    for (let i = 0; i < SEEN_MAX; i += 100) {
+      // долго открытая вещь приходит в каждом опросе вместе с новыми
+      store.addSeen('src', ['open', ...Array.from({ length: 100 }, (_, j) => `n${i + j}`)]);
+    }
+    assert.equal(store.seen('src').length, SEEN_MAX);
+    assert.ok(store.hasSeen('src', 'open'));
+    assert.ok(!store.hasSeen('src', 'n0'));
+    // без новостей файл не переписывается: порядок тот же
+    const before = store.seen('src');
+    store.addSeen('src', before.slice(-3));
+    assert.deepEqual(store.seen('src'), before);
+  } finally {
+    done();
+  }
+});
+
+test('итоги проверок источника: последняя проверка, приходы и расход по дням с пределами', () => {
+  const { store, done } = tmp();
+  try {
+    assert.deepEqual(store.checks('src'), { arrivals: [], spent: {} });
+    const arrivals = Array.from({ length: ARRIVALS_MAX + 10 }, (_, i) => new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString());
+    const spent = Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`2026-0${1 + Math.floor(i / 28)}-${String((i % 28) + 1).padStart(2, '0')}`, 0.1]));
+    store.setChecks('src', { last: { at: 'x', ok: false, total: 0, fresh: 0, error: 'нет' }, arrivals, spent, alerted: 'error' });
+    const c = store.checks('src');
+    assert.equal(c.last?.error, 'нет');
+    assert.equal(c.alerted, 'error');
+    assert.equal(c.arrivals.length, ARRIVALS_MAX);
+    assert.equal(c.arrivals[c.arrivals.length - 1], arrivals[arrivals.length - 1]);
+    assert.equal(Object.keys(c.spent).length, 60);
+    store.deleteChecks('src');
+    assert.deepEqual(store.checks('src'), { arrivals: [], spent: {} });
+  } finally {
+    done();
+  }
+});
+
+test('журнал — FIFO: запись не вешает сервер, а даёт LogReadError', () => {
+  const { store, root, done } = tmp();
+  try {
+    const dir = path.join(root, 'routines-state', 'log');
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('mkfifo', [path.join(dir, 'r.json')]);
+    assert.throws(() => store.appendLog(line('a')), (e) => e instanceof LogReadError && /не пишется: не обычный файл/.test(e.message));
+    assert.throws(() => store.logAll('r'), LogReadError);
+  } finally {
+    done();
+  }
+});
+
+test('журнал: обрезка — хвост подряд, длинная строка не оставляет дыру из старых коротких', () => {
+  const { store, done } = tmp();
+  try {
+    for (let i = 0; i < 10; i++) store.appendLog(line(`old${i}`));
+    store.appendLog(line('huge', { reason: 'h'.repeat(LOG_TRIM_BYTES / 2) }));
+    for (let i = 0; i < 10; i++) store.appendLog(line(`new${i}`));
+    store.updateLog('r', 'new9', { reason: 'правка' });
+    const ids = store.logAll('r').map((e) => e.id);
+    assert.deepEqual(ids, Array.from({ length: 10 }, (_, i) => `new${i}`));
   } finally {
     done();
   }

@@ -10,6 +10,7 @@ import { wrapData } from '../intake.js';
 import { STATUS_LABEL } from '../reporters.js';
 import { SESSION_PROMPT_MAX } from '../sessions.js';
 import type { RunStatus } from '../api-types.js';
+import type { Notice } from '../notify.js';
 import { checkEvent, eventText, type CheckInput, type CheckResult } from './check.js';
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
@@ -19,8 +20,8 @@ import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
 import { builtinKinds } from './sources/index.js';
-import type { CatchUpRecord, FeedbackRecord, QueueItem, StoredWait } from './store.js';
-import { RoutineStore } from './store.js';
+import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait } from './store.js';
+import { LogReadError, RoutineStore } from './store.js';
 import type {
   CatchUp,
   Feedback,
@@ -58,7 +59,7 @@ export type RoutineRunRequest = {
 export type RoutineRunEvent =
   | { type: 'pause'; block: string; /** Что агент уже сделал: итог последнего блока или сводка запуска. */ context?: string }
   | { type: 'resumed' }
-  | { type: 'end'; status: RunStatus | string; costUsd: number; summary?: string; context?: string };
+  | { type: 'end'; status: RunStatus | string; costUsd: number; summary?: string; context?: string; /** Текст ошибки запуска (для уведомления). */ error?: string };
 
 export type Timers = {
   setInterval: (fn: () => void, ms: number) => unknown;
@@ -88,6 +89,11 @@ export type EngineDeps = {
   check?: (input: CheckInput) => Promise<CheckResult>;
   /** Что-то поменялось (журнал, ожидание, статус источника): сервер шлёт homeBroadcast({ type: 'routines' }). */
   onChange?: () => void;
+  /**
+   * Системное уведомление: источник сломался или замолчал (один раз на поломку), рутина ждёт человека, запуск рутины
+   * кончился не «готово». Успешный конец запуска рутины не уведомляет. Заголовок называет событие, а не flow.
+   */
+  notify?: (n: Notice) => void;
   log?: (msg: string) => void;
   /** Тик опроса и расписания; по умолчанию 30 с. */
   tickMs?: number;
@@ -99,6 +105,19 @@ export type EngineDeps = {
 
 const DEFAULT_EVERY_MS = 5 * 60_000;
 const CATCHUP_ITEMS_MAX = 100;
+const DAY_MS = 86_400_000;
+/** live-соединение без ошибки дольше этого — проверка «соединение живо». */
+const LIVE_ALIVE_MS = 60_000;
+/** Ошибка источника уведомляет, когда держится столько проверок подряд… */
+const ALERT_FAILURES = 3;
+/** …или столько времени. */
+const ALERT_FAILING_MS = 15 * 60_000;
+/** Столько устойчивого ok — и отметка поломки снята: следующая поломка уведомит снова. */
+const ALERT_CLEAR_MS = 30 * 60_000;
+/** «Пусто дольше обычного»: самый долгий недавний разрыв между новыми записями × 1.5, но не меньше трёх суток (выходные). */
+const EMPTY_MIN_MS = 3 * DAY_MS;
+/** Истории ещё мало (меньше трёх приходов нового) — пусто дольше недели. */
+const EMPTY_DEFAULT_MS = 7 * DAY_MS;
 
 const newId = () => randomBytes(6).toString('hex');
 
@@ -110,7 +129,6 @@ class HttpishError extends Error {
 export { HttpishError as RoutineError };
 
 type Active = { routine: string; event: RoutineEvent; logId: string; paused: Set<string> };
-type SourceState = { status?: SourceStatus; error?: string; lastCheckAt?: string };
 type Listener = { abort: AbortController; key: string };
 
 export class RoutineEngine {
@@ -127,7 +145,11 @@ export class RoutineEngine {
   private readonly backlogBefore = new Map<string, number>();
   /** stop() был: новые запуски не начинаются, события ждут в очереди до следующего старта. */
   private stopped = false;
-  private readonly state = new Map<string, SourceState>();
+  /**
+   * live-источник → с какого времени его соединение держится без ошибки. Держится дольше LIVE_ALIVE_MS — тик пишет
+   * проверку «соединение живо»: падающее сразу соединение не выглядит то живым, то сломанным (и не уведомляет по кругу).
+   */
+  private readonly liveSince = new Map<string, number>();
   private readonly polling = new Set<string>();
   private readonly lastPoll = new Map<string, number>();
   private readonly listeners = new Map<string, Listener>();
@@ -225,6 +247,7 @@ export class RoutineEngine {
       this.store.setLastCheck(slug, at);
     }
     this.listeners.clear();
+    this.liveSince.clear();
     this.pollAbort.abort();
   }
 
@@ -273,8 +296,14 @@ export class RoutineEngine {
       if (last !== undefined && now.getTime() - last < every) continue;
       due.push(this.pollSource(slug));
     }
-    // live-источники: время последней проверки — «соединение живо сейчас»
-    for (const slug of this.listeners.keys()) this.store.setLastCheck(slug, now.toISOString());
+    // live-источники: время последней проверки — «соединение живо сейчас»; живое соединение без событий — тоже проверка
+    for (const slug of this.listeners.keys()) {
+      this.store.setLastCheck(slug, now.toISOString());
+      const since = this.liveSince.get(slug);
+      if (since !== undefined && now.getTime() - since >= LIVE_ALIVE_MS) this.recordCheck(slug, { ok: true, total: 0, fresh: 0 });
+    }
+    // «пусто дольше обычного» наступает со временем, без новой проверки
+    for (const slug of this.usedSources()) this.alert(slug);
     await Promise.all(due);
     await this.drainQueue();
   }
@@ -295,11 +324,12 @@ export class RoutineEngine {
     return (spec.secrets ?? []).filter((n) => !extra?.[n] && !this.store.hasSecret(n));
   }
 
-  private ctx(slug: string, spec: SourceSpec, signal: AbortSignal, o: { secrets?: Record<string, string>; readonlyCursor?: boolean } = {}): SourceCtx {
+  private ctx(slug: string, spec: SourceSpec, signal: AbortSignal, o: { secrets?: Record<string, string>; readonlyCursor?: boolean; /** Пробная проверка несохранённого источника: расход не к кому записать. */ test?: boolean } = {}): SourceCtx {
     let cursor = this.store.cursor(slug);
     return {
       slug,
       spec,
+      ...(o.test ? {} : { cost: (usd: number) => this.addSpent(slug, usd) }),
       secret: (name) => o.secrets?.[name] || this.store.secret(name),
       fetch: this.deps.fetch ?? fetch,
       run: this.deps.run ?? runCommand,
@@ -322,12 +352,109 @@ export class RoutineEngine {
     return out;
   }
 
-  private setState(slug: string, s: SourceState): void {
-    // текст ошибки сервиса бывает с ключом в адресе (?api_key=…): наружу — только замаскированным
-    if (s.error) s = { ...s, error: redact(s.error, this.store.secrets()) };
-    const prev = this.state.get(slug);
-    this.state.set(slug, { ...prev, ...s });
-    if (prev?.status !== s.status || prev?.error !== s.error) this.changed();
+  /**
+   * Итог проверки источника — на диск (routines-state/checks): статус переживает перезапуск. fresh — сколько записей ещё
+   * не видено; нет новых — emptySince держит, с какого времени (последний приход нового или первая пустая проверка).
+   */
+  private recordCheck(slug: string, r: { ok: boolean; total: number; fresh: number; error?: string }): void {
+    // учёт проверок не должен сорвать сам опрос и путь события (диск, права): сбой — в лог сервера
+    try {
+      const at = this.now().toISOString();
+      const c = this.store.checks(slug);
+      const prev = c.last;
+      // текст ошибки сервиса бывает с ключом в адресе (?api_key=…): на диск и наружу — только замаскированным
+      const error = r.error ? redact(r.error, this.store.secrets()) : undefined;
+      const fresh = r.ok ? r.fresh : 0;
+      if (fresh > 0) c.arrivals.push(at);
+      const emptySince = fresh > 0 ? undefined : (prev?.emptySince ?? c.arrivals[c.arrivals.length - 1] ?? at);
+      c.last = { at, ok: r.ok, total: r.ok ? r.total : 0, fresh, ...(error ? { error } : {}), ...(emptySince ? { emptySince } : {}) };
+      if (r.ok) {
+        delete c.failingSince;
+        delete c.failures;
+      } else {
+        c.failingSince ??= at;
+        c.failures = (c.failures ?? 0) + 1;
+      }
+      this.store.setChecks(slug, c);
+      if (!prev || prev.ok !== c.last.ok || prev.error !== c.last.error || Boolean(prev.emptySince) !== Boolean(emptySince)) this.changed();
+      this.alert(slug);
+    } catch (err) {
+      this.say(`[${slug}] итог проверки не записан: ${msg(err)}`);
+    }
+  }
+
+  /** Расход опроса моделью (connector без скрипта) — в итог проверок источника, по дням. */
+  private addSpent(slug: string, usd: number): void {
+    if (!(usd > 0)) return;
+    try {
+      const c = this.store.checks(slug);
+      const day = dayKey(this.now());
+      c.spent[day] = round((c.spent[day] ?? 0) + usd);
+      this.store.setChecks(slug, c);
+      this.changed();
+    } catch (err) {
+      this.say(`[${slug}] расход опроса не записан: ${msg(err)}`);
+    }
+  }
+
+  /** Сколько записей ещё не видено (повторы id внутри ответа — одна запись). */
+  private freshCount(slug: string, events: RoutineEvent[]): number {
+    const seen = new Set(this.store.seen(slug));
+    return new Set(events.map((e) => e.id).filter((id) => !seen.has(id))).size;
+  }
+
+  /**
+   * Поломка источника — одно уведомление: сломался (error) или замолчал дольше обычного (empty). Ошибка уведомляет, только
+   * когда держится: ALERT_FAILURES проверок подряд или ALERT_FAILING_MS — разовый сбой после сна ноутбука или 429 через раз
+   * не шумят (статус error виден сразу). Повторные проверки той же поломки и перезапуск не уведомляют; отметка снимается
+   * после ALERT_CLEAR_MS устойчивого ok — тогда следующая поломка уведомит снова.
+   */
+  private alert(slug: string): void {
+    const src = this.store.source(slug);
+    if (!src?.spec || !this.usedSources().has(slug)) return;
+    const c = this.store.checks(slug);
+    const st = this.statusOf(slug, src.spec, c, true);
+    const now = this.now().getTime();
+    const lasting = (c.failures ?? 0) >= ALERT_FAILURES || (c.failingSince !== undefined && now - Date.parse(c.failingSince) >= ALERT_FAILING_MS);
+    const kind = st.status === 'error' && lasting ? 'error' : st.status === 'empty' ? 'empty' : undefined;
+    let dirty = false;
+    if (st.status === 'ok') {
+      if (!c.okSince) (c.okSince = new Date(now).toISOString()), (dirty = true);
+      if (c.alerted && now - Date.parse(c.okSince) >= ALERT_CLEAR_MS) delete c.alerted, (dirty = true);
+    } else if (c.okSince) delete c.okSince, (dirty = true);
+    if (!kind || kind === c.alerted) {
+      if (dirty) this.store.setChecks(slug, c);
+      return;
+    }
+    c.alerted = kind;
+    this.store.setChecks(slug, c);
+    this.changed();
+    const title = src.spec.title || slug;
+    const since = c.last?.emptySince ? new Date(c.last.emptySince).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+    this.notice(
+      kind === 'error'
+        ? { title: `Источник «${title}» не отвечает`, body: `${clip(st.error ?? 'проверка не прошла', 300)} · рутины его не видят`, path: '/routines', group: `source:${slug}`, sound: true }
+        : { title: `Источник «${title}» молчит`, body: `Новых записей нет${since ? ` с ${since}` : ''} — дольше обычного. Проверь ключ и условия источника`, path: '/routines', group: `source:${slug}` },
+    );
+  }
+
+  private notice(n: Notice): void {
+    try {
+      this.deps.notify?.(n);
+    } catch {
+      /* уведомление не валит движок */
+    }
+  }
+
+  /** Состояние источника по итогам проверок на диске (сломан, молчит, не проверялся) — для списка, главной и уведомлений. */
+  private statusOf(slug: string, spec: SourceSpec, c: SourceChecks, active: boolean): { status: SourceStatus; error?: string } {
+    if (!this.kind(spec.kind)) return { status: 'error', error: `неизвестный вид ${spec.kind}` };
+    if (this.missingSecrets(spec).length) return { status: 'needs_secret' };
+    if (!active) return { status: 'idle' };
+    if (!c.last) return { status: 'unchecked' };
+    if (!c.last.ok) return { status: 'error', error: c.last.error };
+    if (emptyTooLong(c, this.now().getTime())) return { status: 'empty' };
+    return { status: 'ok' };
   }
 
   /** Опрос одного источника и обработка его записей. */
@@ -339,13 +466,22 @@ export class RoutineEngine {
     this.polling.add(slug);
     this.lastPoll.set(slug, this.now().getTime());
     try {
-      const events = await kind.poll(this.ctx(slug, src.spec, this.pollAbort.signal));
+      let events: RoutineEvent[];
+      try {
+        events = await kind.poll(this.ctx(slug, src.spec, this.pollAbort.signal));
+      } catch (err) {
+        if (!this.pollAbort.signal.aborted) this.recordCheck(slug, { ok: false, total: 0, fresh: 0, error: msg(err) });
+        return;
+      }
       const at = this.now().toISOString();
-      this.setState(slug, { status: 'ok', error: undefined, lastCheckAt: at });
-      await this.ingest(slug, events);
-      this.store.setLastCheck(slug, at);
-    } catch (err) {
-      if (!this.pollAbort.signal.aborted) this.setState(slug, { status: 'error', error: msg(err), lastCheckAt: this.now().toISOString() });
+      this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
+      try {
+        await this.ingest(slug, events);
+        this.store.setLastCheck(slug, at);
+      } catch (err) {
+        // сбой обработки — не поломка источника, и он не должен сорвать тик (очередь, другие источники)
+        this.say(`[${slug}] события не обработаны: ${msg(err)}`);
+      }
     } finally {
       this.polling.delete(slug);
     }
@@ -365,6 +501,7 @@ export class RoutineEngine {
       if (!w || JSON.stringify(w.spec) !== l.key) {
         l.abort.abort();
         this.listeners.delete(slug);
+        this.liveSince.delete(slug);
       }
     }
     for (const [slug, { spec, kind }] of want) {
@@ -376,15 +513,16 @@ export class RoutineEngine {
       const loop = async (): Promise<void> => {
         while (!l.abort.signal.aborted && this.running) {
           try {
-            this.setState(slug, { status: 'ok', error: undefined, lastCheckAt: this.now().toISOString() });
+            this.liveSince.set(slug, this.now().getTime());
             await kind.listen!(this.ctx(slug, spec, l.abort.signal), (events) => {
-              this.setState(slug, { status: 'ok', error: undefined, lastCheckAt: this.now().toISOString() });
+              this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
               this.safe(this.ingest(slug, events));
             });
             if (l.abort.signal.aborted) return;
           } catch (err) {
             if (l.abort.signal.aborted) return;
-            this.setState(slug, { status: 'error', error: msg(err), lastCheckAt: this.now().toISOString() });
+            this.liveSince.delete(slug);
+            this.recordCheck(slug, { ok: false, total: 0, fresh: 0, error: msg(err) });
           }
           await new Promise<void>((resolve) => {
             // слушатель abort снимается и по таймеру: иначе за сутки переподключений их накопились бы тысячи
@@ -421,8 +559,9 @@ export class RoutineEngine {
         seen.add(e.id);
         fresh.push(e);
       }
+      // и новые, и пришедшие снова: виденное освежается, долго открытая вещь не вытесняется и не придёт «новой»
+      this.store.addSeen(source, events.map((e) => e.id));
       if (!fresh.length) return;
-      this.store.addSeen(source, fresh.map((e) => e.id));
       this.store.addHistory(source, fresh);
       const ctx = src?.spec && this.ctx(source, src.spec, this.pollAbort.signal);
       const real = fresh.filter((e) => {
@@ -451,15 +590,21 @@ export class RoutineEngine {
       for (const e of now) {
         for (const r of this.store.routines()) {
           if (!r.spec || r.spec.enabled === false || isSchedule(r.spec.when) || r.spec.when.source !== source) continue;
-          await this.process(r.slug, r.spec, e);
+          try {
+            await this.process(r.slug, r.spec, e);
+          } catch (err) {
+            // журнал одной рутины не пишется (ссылка, права) — остальные рутины и события пачки идут дальше
+            this.failed(r.slug, e, err);
+          }
         }
       }
     });
   }
 
   /** Полный путь события для рутины: условия → проверка словами → ожидание или запуск. */
-  async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
+  async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; /** «Догнать»: человек только что нажал — уведомлять о каждом предложении незачем. */ quiet?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
     let why: string | undefined;
+    let checkCost: number | undefined;
     if (!isSchedule(spec.when)) {
       const m = matchRule(spec.when.match, e);
       if (!m.ok) return this.record(slug, e, 'filtered', { reason: m.reason });
@@ -471,14 +616,18 @@ export class RoutineEngine {
         } catch (err) {
           return this.record(slug, e, 'error', { reason: msg(err) });
         }
-        if (!c.match) return this.record(slug, e, 'check_no', { reason: c.reason, costUsd: c.costUsd });
+        const cost = c.costUsd > 0 ? { costUsd: c.costUsd, checkCostUsd: c.costUsd } : {};
+        if (!c.match) return this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
         // «Не повтор» от человека сильнее ответа модели
-        if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') return this.record(slug, e, 'duplicate', { reason: c.reason, costUsd: c.costUsd });
+        if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') return this.record(slug, e, 'duplicate', { reason: c.reason, ...cost });
         why = c.reason?.trim() || undefined;
+        checkCost = c.costUsd > 0 ? c.costUsd : undefined;
       }
     }
+    // проверка словами у подошедшего события стоит денег так же: её расход — в строку ожидания или запуска
+    const spent = checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {};
     if (spec.mode === 'suggest' && !o.human) {
-      const entry = this.log(slug, e, 'waiting', why ? { why } : {});
+      const entry = this.log(slug, e, 'waiting', { ...(why ? { why } : {}), ...spent });
       const wait: RoutineWait = {
         id: newId(),
         routine: slug,
@@ -490,16 +639,18 @@ export class RoutineEngine {
       };
       this.store.setWaits([...this.store.waits(), { ...wait, logId: entry.id }]);
       this.changed();
+      // предложения одной рутины заменяют друг друга в центре уведомлений: шумная рутина не засыпает экран
+      if (!o.quiet) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
       return { outcome: 'waiting', wait };
     }
-    return this.launch(slug, spec, e, { human: o.human, why });
+    return this.launch(slug, spec, e, { human: o.human, why, checkCost });
   }
 
   /** Запуск с лимитами: per_day (кроме решения человека), parallel — в очередь, usd — бюджет запуска. */
-  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; why?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
+  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; why?: string; checkCost?: number } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
     const lim = spec.limits ?? {};
-    // строка ожидания или очереди уже хранит why — патч его не трогает
-    const w = o.why ? { why: o.why } : {};
+    // строка ожидания или очереди уже хранит why и расход проверки — патч их не трогает
+    const w = { ...(o.why ? { why: o.why } : {}), ...(o.checkCost ? { costUsd: o.checkCost, checkCostUsd: o.checkCost } : {}) };
     // сервер останавливается: запуск не начинаем, событие ждёт в очереди следующего старта (виденным оно уже стало)
     if (this.stopped) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId, ...w });
@@ -522,7 +673,7 @@ export class RoutineEngine {
     try {
       runId = await this.deps.startRun({ routine: slug, spec, event: e, eventBlock: eventBlock(e), pauseBefore });
     } catch (err) {
-      return this.record(slug, e, 'error', { reason: `запуск не начался: ${msg(err)}`, logId: o.logId });
+      return this.record(slug, e, 'error', { reason: `запуск не начался: ${msg(err)}`, logId: o.logId, ...w });
     } finally {
       const n = (this.starting.get(slug) ?? 1) - 1;
       if (n > 0) this.starting.set(slug, n);
@@ -583,7 +734,23 @@ export class RoutineEngine {
     this.store.setQueue(rest);
     for (const item of taken) {
       const r = this.store.routine(item.routine);
-      if (r?.spec) await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human });
+      if (!r?.spec) continue;
+      try {
+        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human });
+      } catch (err) {
+        this.failed(item.routine, item.event, err);
+      }
+    }
+  }
+
+  /** Событие не прошло путь из-за сбоя движка (журнал не пишется, диск): строка error, если журнал жив, и всегда — лог сервера. */
+  private failed(slug: string, e: RoutineEvent, err: unknown): void {
+    this.say(`[${slug}] событие «${e.title}» не обработано: ${msg(err)}`);
+    try {
+      this.log(slug, e, 'error', { reason: `не обработано: ${msg(err)}` });
+      this.changed();
+    } catch {
+      /* журнал и есть то, что сломано: остаётся строка в логе сервера */
     }
   }
 
@@ -709,6 +876,7 @@ export class RoutineEngine {
       };
       this.store.setWaits([...this.store.waits(), wait]);
       this.changed();
+      this.notice({ title: `${a.event.title} — ждёт решения`, body: `${spec?.title ?? a.routine} · перед «${ev.block}»`, path: '/', group: runId, sound: true });
       if (reply && !reply.draft && spec) await this.reply(a.routine, spec, a.event, text, a.logId);
       return;
     }
@@ -717,11 +885,14 @@ export class RoutineEngine {
     const waits = this.store.waits();
     const left = waits.filter((w) => !(w.runId === runId && w.kind === 'pause'));
     if (left.length !== waits.length) this.store.setWaits(left);
-    this.store.updateLog(a.routine, a.logId, { costUsd: ev.costUsd });
+    const line = this.store.logAll(a.routine).find((x) => x.id === a.logId);
+    // проверка словами уже стоила денег: запуск добавляется к ней, а не затирает
+    this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd) });
     if (ev.status === 'budget_exceeded') this.log(a.routine, a.event, 'limit', { runId, reason: `бюджет запуска превышен${spec?.limits?.usd ? ` (limits.usd = ${spec.limits.usd})` : ''}` });
     const reply = spec?.reply && spec.reply.to !== 'none' && (spec.reply.on ?? ['start']).includes('end') ? spec.reply : undefined;
     // остановлен человеком («Это не баг») — отвечать нечего
-    const rejected = this.store.logAll(a.routine).find((x) => x.id === a.logId)?.outcome === 'rejected';
+    const rejected = line?.outcome === 'rejected';
+    let replyWaits = false;
     if (reply && spec && !rejected) {
       const text = ev.summary?.trim() || `${a.event.title}: ${eventLang(a.event) === 'en' ? ev.status : (STATUS_LABEL[ev.status as RunStatus] ?? ev.status)}`;
       if (reply.draft) {
@@ -740,11 +911,30 @@ export class RoutineEngine {
             at: this.now().toISOString(),
           },
         ]);
+        replyWaits = true;
       } else await this.reply(a.routine, spec, a.event, text, a.logId);
     }
     this.changed();
+    this.endNotice(runId, a, spec, ev, { rejected, replyWaits });
     // очередь — в общей цепочке: слоты и лимиты считаются по одному
     this.safe(this.enqueue(() => this.drainQueue()));
+  }
+
+  /**
+   * Уведомление о конце запуска рутины — заголовком событие («Ревью !123 — готово»). Успешный конец молчит, кроме ответа-
+   * черновика, который ждёт проверки; остановку руками («Это не баг», «Стоп») не объявляем — её только что нажали.
+   */
+  private endNotice(runId: string, a: Active, spec: RoutineSpec | undefined, ev: Extract<RoutineRunEvent, { type: 'end' }>, o: { rejected: boolean; replyWaits: boolean }): void {
+    if (o.rejected || ev.status === 'aborted') return;
+    const label = STATUS_LABEL[ev.status as RunStatus] ?? ev.status;
+    const routine = spec?.title ?? a.routine;
+    if (ev.status === 'done') {
+      if (o.replyWaits) this.notice({ title: `${a.event.title} — ${label}`, body: `${routine}: ответ ждёт твоей проверки`, path: '/', group: runId, sound: true });
+      return;
+    }
+    const error = ev.error?.trim() ? clip(redact(ev.error.trim(), this.store.secrets()), 300) : undefined;
+    const body = [routine, `$${ev.costUsd.toFixed(2)}`, error].filter(Boolean).join(' · ');
+    this.notice({ title: `${a.event.title} — ${label}`, body, path: `/run/${runId}`, group: runId, sound: true });
   }
 
   // ============================================================ ответы человека
@@ -817,6 +1007,9 @@ export class RoutineEngine {
         row.items.push(e);
         if (matchRule(match, e).ok) row.matchingIds.push(e.id);
       }
+      // «догнать» держит последние CATCHUP_ITEMS_MAX: подходящее под условия, что не вошло, — в журнал строкой missed, а не
+      // молча (неподходящее рутина и так не запустила бы — им журнал не забиваем)
+      for (const e of row.items.slice(0, -CATCHUP_ITEMS_MAX)) if (row.matchingIds.includes(e.id)) this.log(r.slug, e, 'missed', { reason: `пришло, пока приложение было закрыто; в «Догнать» не вошло — там последние ${CATCHUP_ITEMS_MAX}` });
       row.items = row.items.slice(-CATCHUP_ITEMS_MAX);
       row.events = row.items.length;
       row.matchingIds = row.matchingIds.filter((id) => row!.items.some((x) => x.id === id));
@@ -845,7 +1038,11 @@ export class RoutineEngine {
           this.log(row.routine, e, 'missed', { reason: 'пришло, пока приложение было закрыто' });
           continue;
         }
-        await this.process(row.routine, spec, e);
+        try {
+          await this.process(row.routine, spec, e, { quiet: true });
+        } catch (err) {
+          this.failed(row.routine, e, err);
+        }
       }
     });
     this.changed();
@@ -933,7 +1130,15 @@ export class RoutineEngine {
     const f = this.store.routine(slug);
     if (!f) return undefined;
     const spec = f.spec ?? fallbackSpec(f.yaml, slug);
-    const log = this.store.logAll(slug);
+    // журнал не читается (не обычный файл, нет прав) — это проблема рутины на виду, а не «ничего не было»
+    let log: LogEntry[] = [];
+    let logProblem: string | undefined;
+    try {
+      log = this.store.logAll(slug);
+    } catch (err) {
+      if (!(err instanceof LogReadError)) throw err;
+      logProblem = err.message;
+    }
     const now = this.now();
     const day = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
     const started = log.filter((x) => x.outcome === 'started');
@@ -946,7 +1151,7 @@ export class RoutineEngine {
       slug,
       spec,
       yaml: f.yaml,
-      problems: f.spec ? this.problems(f.spec) : f.problems,
+      problems: [...(f.spec ? this.problems(f.spec) : f.problems), ...(logProblem ? [logProblem] : [])],
       stats: {
         today: log.filter((x) => startedAtOf(x) && day(new Date(startedAtOf(x)!)) === day(now)).length,
         started: started.length,
@@ -972,24 +1177,19 @@ export class RoutineEngine {
     return this.store.sources().map((f) => {
       const spec = f.spec ?? { title: f.slug, kind: '?', config: {} };
       const missing = f.spec ? this.missingSecrets(f.spec) : [];
-      const st = this.state.get(f.slug);
-      const lastCheckAt = st?.lastCheckAt ?? this.store.lastCheck(f.slug);
-      let status: SourceStatus = st?.status ?? (active.has(f.slug) ? 'ok' : 'idle');
-      let error = st?.error;
-      if (!f.spec) {
-        status = 'error';
-        error = f.problems.join('; ');
-      } else if (!this.kind(f.spec.kind)) {
-        status = 'error';
-        error = `неизвестный вид ${f.spec.kind}`;
-      } else if (missing.length) status = 'needs_secret';
-      else if (!active.has(f.slug) && status !== 'error') status = 'idle';
+      const c = this.store.checks(f.slug);
+      // время проверки — из итога проверки; last-check.json (граница простоя) — только для старых данных без итога
+      const lastCheckAt = c.last?.at ?? this.store.lastCheck(f.slug);
+      const { status, error } = f.spec ? this.statusOf(f.slug, f.spec, c, active.has(f.slug)) : { status: 'error' as const, error: f.problems.join('; ') };
+      const pollCostUsd = spentOf(c, this.now());
       return {
         slug: f.slug,
         spec,
         status,
         ...(error && status === 'error' ? { error } : {}),
         ...(lastCheckAt ? { lastCheckAt } : {}),
+        ...(c.last ? { check: c.last } : {}),
+        ...(pollCostUsd ? { pollCostUsd } : {}),
         missingSecrets: missing,
         usedBy: used.get(f.slug) ?? [],
       };
@@ -1181,7 +1381,7 @@ export class RoutineEngine {
     let perWeek = (runs * 7 * DAY) / span;
     if (spec.limits?.per_day) perWeek = Math.min(perWeek, spec.limits.per_day * 7);
     // стоимость запусков этой рутины — строки с runId и расходом (проверка словами отдельной строкой без runId не считается)
-    const costs = this.store.logAll(slug).filter((x) => x.runId && (x.costUsd ?? 0) > 0).map((x) => x.costUsd!);
+    const costs = this.store.logAll(slug).map((x) => (x.runId ? (x.costUsd ?? 0) - (x.checkCostUsd ?? 0) : 0)).filter((n) => n > 0);
     let avg = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : undefined;
     if (avg === undefined) {
       try {
@@ -1320,7 +1520,14 @@ export class RoutineEngine {
     if (!this.kind(p.spec.kind)) throw new HttpishError(400, `Неизвестный вид источника: ${p.spec.kind}`);
     if (secrets) this.store.setSecrets(cleanSecrets(secrets));
     this.store.writeSource(slug, p.spec);
-    this.state.delete(slug);
+    // настройки или ключ поменялись: прошлый итог проверки (и отметка поломки) к новому источнику не относится — до
+    // следующей проверки он «не проверялся»; история приходов и расход остаются
+    const c = this.store.checks(slug);
+    if (c.last || c.alerted) {
+      delete c.last;
+      delete c.alerted;
+      this.store.setChecks(slug, c);
+    }
     this.lastPoll.delete(slug);
     this.changed();
     if (this.running) this.syncListeners();
@@ -1332,7 +1539,7 @@ export class RoutineEngine {
     if (!view) throw new HttpishError(404, 'Источник не найден');
     if (view.usedBy.length) throw new HttpishError(409, `Источник используют рутины: ${view.usedBy.join(', ')}`, { usedBy: view.usedBy });
     this.store.deleteSource(slug);
-    this.state.delete(slug);
+    this.store.deleteChecks(slug);
     this.changed();
     if (this.running) this.syncListeners();
   }
@@ -1350,7 +1557,7 @@ export class RoutineEngine {
     if (missing.length) return { ok: false, request, sample: [], total: 0, error: `Не хватает ключей: ${missing.join(', ')}` };
     const abort = new AbortController();
     try {
-      const ctx = this.ctx('test', spec, abort.signal, { secrets: extra, readonlyCursor: true });
+      const ctx = this.ctx('test', spec, abort.signal, { secrets: extra, readonlyCursor: true, test: true });
       ctx.cursor = { get: () => undefined, set: () => {} };
       let events: RoutineEvent[];
       if (kind.poll) events = await kind.poll(ctx);
@@ -1491,6 +1698,34 @@ function msg(err: unknown): string {
 }
 
 const round = (n: number) => Math.round(n * 10000) / 10000;
+
+/** День по местному времени: ключ расхода по дням. */
+const dayKey = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Расход опроса за сегодня и 7 дней; ничего не потрачено — undefined. */
+function spentOf(c: SourceChecks, now: Date): { today: number; week: number } | undefined {
+  const days = new Set<string>();
+  for (let i = 0; i < 7; i++) days.add(dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)));
+  const week = round(Object.entries(c.spent).filter(([d]) => days.has(d)).reduce((n, [, v]) => n + v, 0));
+  if (!week) return undefined;
+  return { today: round(c.spent[dayKey(now)] ?? 0), week };
+}
+
+/**
+ * Новых записей нет дольше обычного: обычное — самый долгий разрыв между последними приходами нового, предел — в полтора
+ * раза больше, но не меньше трёх суток (выходные рабочего источника — не поломка); приходов меньше трёх — неделя. Только у
+ * последней проверки без ошибки (ошибка — свой статус).
+ */
+export function emptyTooLong(c: Pick<SourceChecks, 'last' | 'arrivals'>, now: number): boolean {
+  const since = c.last?.ok ? c.last.emptySince : undefined;
+  if (!since) return false;
+  const times = c.arrivals.map((x) => Date.parse(x)).filter(Number.isFinite).sort((a, b) => a - b);
+  const gaps = times.slice(1).map((t, i) => t - times[i]);
+  const limit = gaps.length >= 2 ? Math.max(1.5 * Math.max(...gaps), EMPTY_MIN_MS) : EMPTY_DEFAULT_MS;
+  return now - Date.parse(since) > limit;
+}
+
+const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
 function strip<T extends Record<string, unknown>>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;

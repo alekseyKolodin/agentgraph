@@ -6,8 +6,8 @@ import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } f
 import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
-  catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, routineState, strip, verdict,
-  waitButtons, weekCost,
+  brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
+  sourceState, stateLabel, stateTone, strip, verdict, waitButtons, weekCost,
 } from './view';
 import { commandSpec, everyLabel, everyOptions, foundRow, foundText, kindSpec, missingFields } from './source';
 
@@ -313,4 +313,50 @@ test('отложенное решение: уходит через 5 с, отм�
   assert.deepEqual(sent, ['w2:reject', 'w3:run']);
   assert.equal(d.has('w3'), false);
   assert.ok(changes >= 6);
+});
+
+test('состояние рутины по источнику: не отвечает, молчит дольше обычного, ещё не проверялся — понятными словами', () => {
+  const now = new Date(2026, 10, 17, 12, 0);
+  const on = view({ spec: { ...view().spec, mode: 'auto' } });
+  const check = { at: now.toISOString(), ok: true, total: 3, fresh: 0, emptySince: new Date(2026, 10, 14, 9, 0).toISOString() };
+  assert.equal(routineState(on, [src({ status: 'empty', check })], []), 'source_empty');
+  assert.equal(routineState(on, [src({ status: 'unchecked' })], []), 'unchecked');
+  assert.equal(routineState(on, [src({ status: 'error', error: '401' })], []), 'source_error');
+  assert.equal(stateLabel('source_error'), 'Источник не отвечает');
+  assert.equal(stateLabel('source_empty'), 'Источник молчит дольше обычного');
+  assert.equal(stateLabel('unchecked'), 'Источник ещё не проверялся');
+  assert.deepEqual([stateTone('source_error'), stateTone('source_empty'), stateTone('unchecked')], ['fail', 'wait', 'muted']);
+  assert.deepEqual(routineNote('source_empty', on, src({ status: 'empty', check }), now), { text: 'нет новых записей с 14.11 — дольше обычного', tone: 'wait' });
+  assert.deepEqual(routineNote('source_error', on, src({ status: 'error', error: '401 токен отозван' })), { text: '401 токен отозван', tone: 'fail' });
+  assert.equal(routineNote('ok', on, src()), null);
+});
+
+test('источник в списке: тон и подпись по статусу; расход опроса моделью', () => {
+  assert.deepEqual(sourceState(src({ status: 'error', error: 'нет сети' })), { tone: 'fail', label: 'Не отвечает', note: 'нет сети' });
+  assert.equal(sourceState(src({ status: 'unchecked' })).tone, 'muted');
+  assert.equal(sourceState(src({ status: 'empty' })).note, 'нет новых записей дольше обычного');
+  assert.equal(sourceState(src({ status: 'needs_secret', missingSecrets: ['SLACK_TOKEN'] })).note, 'нет ключа SLACK_TOKEN');
+  assert.deepEqual(sourceState(src()), { tone: 'ok', label: 'Отвечает' });
+  assert.equal(pollCostText(src({ pollCostUsd: { today: 0.12, week: 0.8 } })), 'опрос моделью: сегодня $0.12 · 7 дней $0.80');
+  assert.equal(pollCostText(src()), '');
+});
+
+test('главная: сломанные источники рутин — сначала не отвечающие; неиспользуемые и исправные не показываются', () => {
+  const list = brokenSources([
+    src({ slug: 'a', status: 'empty', usedBy: ['r1'], spec: { title: 'Почта', kind: 'email', config: {} } }),
+    src({ slug: 'b', status: 'error', error: '401 токен отозван', usedBy: ['r1', 'r2'] }),
+    src({ slug: 'c', status: 'error', error: 'нет сети', usedBy: [] }),
+    src({ slug: 'd', status: 'ok', usedBy: ['r3'] }),
+    src({ slug: 'e', status: 'needs_secret', missingSecrets: ['TOKEN'], usedBy: ['r4'] }),
+  ]);
+  assert.deepEqual(list.map((b) => [b.slug, b.tone]), [['b', 'fail'], ['a', 'wait'], ['e', 'wait']]);
+  assert.equal(list[0]!.text, 'Источник «Slack» не отвечает');
+  assert.equal(list[0]!.detail, '401 токен отозван');
+  assert.equal(list[0]!.routines, 2);
+  assert.equal(list[1]!.text, 'Источник «Почта» молчит');
+});
+
+test('шапка списка: расход опроса источников за сегодня входит в деньги дня', () => {
+  const meta = overviewMeta([view({ stats: { today: 1, started: 1, waiting: 0, costUsd: 1 }, recent: [entry({ outcome: 'started', at: new Date().toISOString(), costUsd: 1 })] })], new Date(), [src({ pollCostUsd: { today: 0.5, week: 2 } })]);
+  assert.equal(meta, 'сегодня 1 запуск · $1.50');
 });

@@ -17,6 +17,8 @@ export type SourceCtx = {
   cursor: { get: () => unknown; set: (v: unknown) => void };
   log: (msg: string) => void;
   signal: AbortSignal;
+  /** Сколько стоила проверка ($): опрос моделью — движок суммирует в расход источника. У пробной проверки нет. */
+  cost?: (usd: number) => void;
 };
 
 export type SourceKind = {

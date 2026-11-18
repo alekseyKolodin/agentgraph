@@ -1,13 +1,14 @@
 // Файлы рутин в папке настроек (configDir()): routines/<slug>.yaml, sources/<slug>.yaml, recipes/<slug>.yaml,
 // secrets.json (0600, наружу не отдаётся) и routines-state/ — seen, cursors, log (jsonl), waits, catchup, last-check,
-// очередь и события рутин (для проверки словами и «на истории»). Пути — только по проверенному слагу.
+// checks (итоги проверок источников), очередь и события рутин (для проверки словами и «на истории»). Пути — только по
+// проверенному слагу.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { configDir } from '../settings.js';
 import { readRegular, writeAtomic } from '../safe-fs.js';
 import { assertSlug, parseRoutineYaml, parseSourceYaml, SLUG_RE, toYaml, type Parsed } from './schema.js';
-import type { CatchUp, Feedback, LogEntry, LogOutcome, RoutineEvent, RoutineSpec, RoutineWait, SourceSpec } from './types.js';
+import type { CatchUp, CheckResult, Feedback, LogEntry, LogOutcome, RoutineEvent, RoutineSpec, RoutineWait, SourceSpec } from './types.js';
 
 const FILE_MAX = 1024 * 1024;
 const LOG_MAX = 8 * 1024 * 1024;
@@ -20,6 +21,32 @@ export const STARTED_MAX = 20;
 export const REJECTED_MAX = 20;
 /** Строк журнала рутины: при перезаписи старые обрезаются. */
 export const LOG_KEEP = 2000;
+/** Журнал дорос до этого размера — запись обрезает его до LOG_KEEP строк и не больше LOG_TRIM_BYTES / 2. */
+export const LOG_TRIM_BYTES = 2 * 1024 * 1024;
+/** Строки с запуском за это время переживают обрезку: по ним считается per_day и «сегодня». */
+const LOG_KEEP_STARTED_MS = 48 * 3600_000;
+/** Сколько последних «пришло новое» и дней расхода хранит итог проверок источника. */
+export const ARRIVALS_MAX = 50;
+const SPENT_DAYS = 60;
+
+/** Журнал рутины не читается (не обычный файл, нет прав): это не «журнал пуст». */
+export class LogReadError extends Error {}
+
+/**
+ * Итог проверок источника на диске: последняя проверка, когда приходило новое (для «пусто дольше обычного»), расход
+ * опроса моделью по дням (ключ — ГГГГ-ММ-ДД по местному времени) и о какой поломке уже ушло уведомление.
+ */
+export type SourceChecks = {
+  last?: CheckResult;
+  arrivals: string[];
+  spent: Record<string, number>;
+  alerted?: 'error' | 'empty';
+  /** С какой проверки и сколько проверок подряд источник не отвечает: уведомляет только устойчивая поломка. */
+  failingSince?: string;
+  failures?: number;
+  /** С какого времени статус снова ok: отметка поломки снимается после устойчивого ok. */
+  okSince?: string;
+};
 
 export type FileEntry<T> = { slug: string; yaml: string } & Parsed<T>;
 
@@ -176,13 +203,21 @@ export class RoutineStore {
     return this.seen(source).includes(id);
   }
 
-  /** Добавляет id в виденные (не больше SEEN_MAX, старые забываются). */
+  /**
+   * Добавляет id в виденные или освежает уже виденные (переносит в конец): забываются самые давно не приходившие, а не
+   * самые старые — долго открытая вещь, которая приходит в каждом опросе, не станет «новой» после вытеснения.
+   * Не больше SEEN_MAX; ничего не поменялось — файл не переписывается.
+   */
   addSeen(source: string, ids: string[]): void {
     if (!ids.length) return;
     const cur = this.seen(source);
-    const set = new Set(cur);
-    for (const id of ids) if (!set.has(id)) cur.push(id), set.add(id);
-    this.writeJson(this.keyed('seen', source), cur.slice(-SEEN_MAX));
+    const add = [...new Set(ids)];
+    const tail = cur.slice(-add.length);
+    // уже в конце в том же порядке — частый случай опроса без новостей
+    if (tail.length === add.length && tail.every((id, i) => id === add[i])) return;
+    const moved = new Set(add);
+    const next = [...cur.filter((id) => !moved.has(id)), ...add];
+    this.writeJson(this.keyed('seen', source), next.slice(-SEEN_MAX));
   }
 
   cursor = (source: string): unknown => this.readJson<{ v?: unknown }>(this.keyed('cursors', source), {}).v;
@@ -212,14 +247,12 @@ export class RoutineStore {
 
   private logFile = (routine: string) => this.keyed('log', routine);
 
-  /** Журнал рутины по порядку записи (старые первыми). */
+  /**
+   * Журнал рутины по порядку записи (старые первыми). Файл больше LOG_MAX (старый, разросшийся до обрезки при записи) —
+   * читается его хвост: история и per_day не пропадают. Не читается вовсе — LogReadError, а не пустой журнал.
+   */
   logAll(routine: string): LogEntry[] {
-    let text: string | undefined;
-    try {
-      text = readRegular(this.logFile(routine), { max: LOG_MAX, follow: false });
-    } catch {
-      return [];
-    }
+    const text = readLogText(this.logFile(routine));
     const out: LogEntry[] = [];
     for (const line of (text ?? '').split('\n')) {
       if (!line.trim()) continue;
@@ -239,10 +272,12 @@ export class RoutineStore {
     return o.limit ? f.slice(0, o.limit) : f;
   }
 
+  /** Строка в конец журнала; дорос до LOG_TRIM_BYTES — обрезается здесь же (шумная рутина пишет только append). */
   appendLog(entry: LogEntry): void {
     const file = this.logFile(entry.routine);
     this.ensure(path.dirname(file));
-    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+    const size = appendLogLine(file, JSON.stringify(entry) + '\n');
+    if (size > LOG_TRIM_BYTES) this.writeLog(entry.routine, this.logAll(entry.routine));
   }
 
   /** Правка строки журнала (стоимость и ответ после конца запуска); файл переписывается, старые строки обрезаются. */
@@ -251,9 +286,60 @@ export class RoutineStore {
     const i = all.findIndex((e) => e.id === id);
     if (i < 0) return undefined;
     all[i] = { ...all[i], ...patch };
-    this.ensure(path.dirname(this.logFile(routine)));
-    writeAtomic(this.logFile(routine), all.slice(-LOG_KEEP).map((e) => JSON.stringify(e)).join('\n') + '\n');
+    this.writeLog(routine, all);
     return all[i];
+  }
+
+  /**
+   * Журнал целиком: последние LOG_KEEP строк и не больше LOG_TRIM_BYTES / 2, а строки с запуском за последние 48 часов —
+   * всегда (по ним per_day и «сегодня»; тысяча отфильтрованных событий за день их не вытеснит).
+   */
+  private writeLog(routine: string, all: LogEntry[]): void {
+    const now = Date.now();
+    const lines = all.map((e) => JSON.stringify(e));
+    const keep = new Array<boolean>(all.length).fill(false);
+    let bytes = 0;
+    // хвост — подряд, без дыр: первая строка, которая не влезла, заканчивает его
+    let tail = true;
+    let extra = 0;
+    for (let i = all.length - 1, n = 0; i >= 0; i--) {
+      const size = Buffer.byteLength(lines[i]) + 1;
+      if (tail && n < LOG_KEEP && bytes + size <= LOG_TRIM_BYTES / 2) {
+        keep[i] = true;
+        bytes += size;
+        n++;
+        continue;
+      }
+      tail = false;
+      // свежие запуски старше хвоста — тоже, но не больше LOG_TRIM_BYTES / 2: иначе обрезка шла бы на каждой записи
+      const started = all[i].startedAt ?? (all[i].outcome === 'started' ? all[i].at : undefined);
+      if (started && now - Date.parse(started) < LOG_KEEP_STARTED_MS && extra + size <= LOG_TRIM_BYTES / 2) {
+        keep[i] = true;
+        extra += size;
+      }
+    }
+    this.ensure(path.dirname(this.logFile(routine)));
+    writeAtomic(this.logFile(routine), lines.filter((_, i) => keep[i]).map((l) => l + '\n').join(''));
+  }
+
+  // итоги проверок источников
+
+  checks(source: string): SourceChecks {
+    const r = this.readJson<Partial<SourceChecks>>(this.keyed('checks', source), {});
+    return {
+      ...r,
+      arrivals: Array.isArray(r.arrivals) ? r.arrivals : [],
+      spent: r.spent && typeof r.spent === 'object' && !Array.isArray(r.spent) ? r.spent : {},
+    };
+  }
+
+  setChecks(source: string, c: SourceChecks): void {
+    const days = Object.keys(c.spent).sort().slice(-SPENT_DAYS);
+    this.writeJson(this.keyed('checks', source), { ...c, arrivals: c.arrivals.slice(-ARRIVALS_MAX), spent: Object.fromEntries(days.map((d) => [d, c.spent[d]])) });
+  }
+
+  deleteChecks(source: string): void {
+    fs.rmSync(this.keyed('checks', source), { force: true });
   }
 
   deleteRoutineState(routine: string): void {
@@ -285,5 +371,61 @@ export class RoutineStore {
   lastCheck = (key: string): string | undefined => this.lastChecks()[key];
   setLastCheck(key: string, at: string): void {
     this.writeJson(this.stateFile('last-check.json'), { ...this.lastChecks(), [key]: at });
+  }
+}
+
+/**
+ * Текст журнала: нет файла — undefined; больше LOG_MAX — последние LOG_MAX байт с первой целой строки. Открытие — как в
+ * readRegular: без ожидания на FIFO, без перехода по ссылке, только обычный файл; иначе LogReadError.
+ */
+function readLogText(file: string): string | undefined {
+  const fail = (why: string) => new LogReadError(`журнал ${path.basename(file)} не читается: ${why}`);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    // только код ошибки: сообщение fs несёт абсолютный путь, а текст уходит в problems ответа API
+    throw fail(code === 'ELOOP' ? 'это ссылка' : (code ?? 'ошибка чтения'));
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw fail('не обычный файл');
+    const len = Math.min(st.size, LOG_MAX);
+    const buf = Buffer.alloc(len);
+    let off = 0;
+    while (off < len) {
+      const n = fs.readSync(fd, buf, off, len - off, st.size - len + off);
+      if (!n) break;
+      off += n;
+    }
+    const text = buf.subarray(0, off).toString('utf8');
+    // хвост большого файла начинается с обрезанной строки — её пропускаем
+    return st.size > len ? text.slice(text.indexOf('\n') + 1) : text;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Строка в конец журнала — как читается: без ожидания на FIFO (O_NONBLOCK: FIFO без читателя — ENXIO, а не зависший
+ * сервер), без перехода по ссылке, только обычный файл (0600). Возвращает размер файла после записи.
+ */
+function appendLogLine(file: string, line: string): number {
+  const fail = (why: string) => new LogReadError(`журнал ${path.basename(file)} не пишется: ${why}`);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw fail(code === 'ELOOP' ? 'это ссылка' : code === 'ENXIO' ? 'не обычный файл' : (code ?? 'ошибка записи'));
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw fail('не обычный файл');
+    fs.writeSync(fd, line);
+    return fs.fstatSync(fd).size;
+  } finally {
+    fs.closeSync(fd);
   }
 }
