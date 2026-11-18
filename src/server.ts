@@ -31,6 +31,7 @@ import { editReply, generateReply, respondFlowAi } from './flow-ai.js';
 import { blockMaxIterations, canContinue, continuationFrom, finalPhases, makeRunDir, resolveDirList, runFlow, setBlockMaxIterations, type BlockReport, type Continuation, type PauseReason, type RunWorktree, type QuestionRecord, type RunControl, type RunEvent, type RunOptions, type RunReport } from './runner.js';
 import { chatAction, chatTurn, clearChat, readChat, type ChatControls, type ChatLog, type FlowSnapshots, type RunView } from './chat.js';
 import { noticesShown, osNotify, type Notice } from './notify.js';
+import { runnerAlive } from './pid.js';
 import { pickRunTitle } from './run-title.js';
 import { RunNameError, runName, writeRunName } from './run-name.js';
 import { writeDigest } from './run-digest.js';
@@ -2586,22 +2587,13 @@ function withFinal(r: RunReport): RunReport {
  * Значит, процесс умер, не дописав отчёт, — показываем запуск прерванным. Файл не трогаем.
  */
 function markInterrupted(r: RunReport): RunReport {
-  if (r.status !== 'running' || live.has(r.id) || (r.pid && r.pid !== process.pid && pidAlive(r.pid))) return r;
+  if (r.status !== 'running' || live.has(r.id) || (r.pid && r.pid !== process.pid && runnerAlive(r.pid, r.startedAt))) return r;
   return {
     ...r,
     status: 'interrupted',
     blocks: (r.blocks ?? []).map((b) => (b.status === 'running' ? { ...b, status: 'interrupted' } : b)),
     error: r.error ?? 'Запуск прервался: процесс раннера завершился, не дописав отчёт (сервер перезапущен или упал). Продолжить с первого незавершённого блока: POST /api/runs/:id/continue.',
   };
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
 }
 
 const isDir = (d: string) => Boolean(fs.statSync(d, { throwIfNoEntry: false })?.isDirectory());

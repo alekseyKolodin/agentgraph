@@ -35,7 +35,8 @@ function report(id: string, extra: Record<string, unknown>) {
 let base = '';
 before(async () => {
   report(DONE, { title: 'Имя от модели', titleSession: { costUsd: 0.001 }, finishedAt: '2026-11-01T10:05:00.000Z' });
-  report(RUNNING, { status: 'running', pid: process.ppid });
+  // startedAt — сейчас: раннер (здесь родительский процесс) должен стартовать не позже запуска (src/pid.ts)
+  report(RUNNING, { status: 'running', pid: process.ppid, startedAt: new Date().toISOString() });
   const port = await new Promise<number>((resolve) => {
     const s = net.createServer();
     s.listen(0, '127.0.0.1', () => {
