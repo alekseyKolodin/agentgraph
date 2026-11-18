@@ -12,10 +12,10 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { ago, clock } from '../../lib/format';
-import { t } from '../../lib/i18n';
+import { plural, t } from '../../lib/i18n';
 import { describeSchedule } from '../../lib/routines/schedule';
 import { everyLabel, foundText } from '../../lib/routines/source';
-import { activeWaits, overviewMeta, routineState, routineSub, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
+import { activeWaits, overviewMeta, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
 import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
 import styles from './Routines.module.css';
 
@@ -128,10 +128,9 @@ function List({ data, runs }: { data: RoutinesOverview; runs: RunStatuses }) {
         const src = 'source' in r.spec.when ? data.sources.find((s) => s.slug === (r.spec.when as { source: string }).source) : undefined;
         const on = r.spec.enabled !== false;
         const sub = routineSub(r, data.sources, describeSchedule);
-        const note =
-          st === 'source_error' ? <span className={styles.bad}> · {src?.error || t('источник не отвечает')}</span>
-          : st === 'needs_secret' ? <span className={styles.ask}> · {t('нет ключа {names}', { names: src?.missingSecrets.join(', ') ?? '' })}</span>
-          : st === 'problem' ? <span className={styles.bad}> · {r.problems[0]}</span>
+        const rn = routineNote(st, r, src);
+        const noteCls = rn?.tone === 'fail' ? styles.bad : rn?.tone === 'wait' ? styles.ask : styles.mute;
+        const note = rn ? <span className={noteCls}> · {rn.text}</span>
           : st === 'paused' ? ` · ${t('на паузе')}`
           : st === 'draft' ? ` · ${t('черновик')}`
           : st === 'waiting' ? <span className={styles.ask}> · {t('ждёт тебя')}</span>
@@ -210,8 +209,9 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const missing = s.missingSecrets;
-  const tone = missing.length || s.status === 'needs_secret' ? 'wait' : s.status === 'error' ? 'fail' : s.status === 'idle' ? 'off' : 'ok';
-  const meta = [kind?.title ?? s.spec.kind, s.spec.every ? everyLabel(s.spec.every) : kind?.delivery === 'live' ? t('сразу') : '', s.lastCheckAt ? t('проверен {at}', { at: clock(s.lastCheckAt) }) : '', s.usedBy.length ? t('рутин: {n}', { n: s.usedBy.length }) : '']
+  const ss = sourceState(s);
+  const tone = ss.tone;
+  const meta = [kind?.title ?? s.spec.kind, s.spec.every ? everyLabel(s.spec.every) : kind?.delivery === 'live' ? t('сразу') : '', s.check?.ok ? t('проверен {at}, {n} {w}', { at: clock(s.check.at), n: s.check.total, w: plural(s.check.total, 'запись', 'записи', 'записей') }) : s.lastCheckAt && !s.check ? t('проверен {at}', { at: clock(s.lastCheckAt) }) : '', s.usedBy.length ? t('рутин: {n}', { n: s.usedBy.length }) : '']
     .filter(Boolean)
     .join(' · ');
   const done = () => void qc.invalidateQueries({ queryKey: routineKeys.all });
@@ -257,7 +257,7 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
         <span className={styles.rname}>{s.spec.title}</span>
         <span className={styles.rsub}>
           {meta}
-          {s.status === 'error' && <span className={styles.bad}> · {s.error || t('не отвечает')}</span>}
+          {ss.note && <span className={ss.tone === 'fail' ? styles.bad : ss.tone === 'wait' ? styles.ask : styles.mute}> · {ss.note}</span>}
         </span>
       </span>
       <span className="row">
