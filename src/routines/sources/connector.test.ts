@@ -314,3 +314,18 @@ test('isSelf коннектора: автор совпал с профилем (
   const empty = connectorKind({ session: async () => ok({}), profile: () => ({ names: [], emails: [] }) });
   assert.equal(empty.isSelf!(ctx, ev('')), false, 'пустой профиль никого не считает своим');
 });
+
+test('isSelf коннектора: без автора, регистр, «@логин», «Имя <почта>» и скобки', () => {
+  const profile = { names: ['Алексей  Колодин'], emails: ['me@corp.test'], gitlab: 'akol', slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({}), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author?: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', ...(author === undefined ? {} : { author }), fields });
+  assert.equal(k.isSelf!(ctx, ev()), false, 'без автора — не свой');
+  assert.equal(k.isSelf!(ctx, ev(undefined, { user: 'U-other' })), false);
+  assert.equal(k.isSelf!(ctx, ev('@AKol')), true);
+  assert.equal(k.isSelf!(ctx, ev('  алексей колодин ')), true);
+  assert.equal(k.isSelf!(ctx, ev('"Колодин А." <Me@Corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('Колодин А. <other@corp.test>')), false);
+  assert.equal(k.isSelf!(ctx, ev('@anna')), false);
+  assert.equal(k.isSelf!(ctx, ev('Алексей')), false, 'часть имени — не совпадение');
+});

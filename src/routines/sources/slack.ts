@@ -25,6 +25,8 @@ export type SlackMessage = {
   subtype?: string;
   ts: string;
   thread_ts?: string;
+  /** У ответа в треде — автор первого сообщения треда. */
+  parent_user_id?: string;
   reply_count?: number;
   latest_reply?: string;
   user?: string;
@@ -118,7 +120,7 @@ const ID_RE = /^[CGD][A-Z0-9]+$/;
 async function channelsOf(ctx: SourceCtx): Promise<Channel[]> {
   const tok = token(ctx);
   const wanted = cfgList(ctx.spec, 'channels').map((c) => c.replace(/^#/, ''));
-  const key = `${tok}|${wanted.join(',')}`;
+  const key = `${tok}|${wanted.join(',')}|${dmsOn(ctx.spec)}`;
   const cached = channelCache.get(key);
   if (cached && Date.now() - cached.at < CHANNELS_TTL_MS) return cached.list;
   let list: Channel[] = [];
@@ -220,19 +222,25 @@ export function isUserMessage(m: SlackMessage): boolean {
   return Boolean(m.text?.trim() || m.files?.length);
 }
 
-/** Обращено ко мне: упомянут <@id> или это личка (id канала на D), если автор не я сам. me — id пользователя из профиля или владельца токена. */
-function toMe(ch: Channel, m: SlackMessage, me?: string): boolean {
+/**
+ * Обращено ко мне: меня упомянули (<@id> или <@id|имя>), ответили в моём треде или написали в личку. Своё сообщение — нет.
+ * Личка считается моей, только если токен мой (с токеном бота лички — бота, а не человека из профиля).
+ */
+function toMe(ch: Channel, m: SlackMessage, me: string | undefined, ownToken: boolean): boolean {
   if (!me || m.user === me) return false;
-  return Boolean(m.text?.includes(`<@${me}>`)) || ch.id.startsWith('D');
+  if (m.text?.includes(`<@${me}>`) || m.text?.includes(`<@${me}|`)) return true;
+  if (m.parent_user_id === me) return true;
+  return ownToken && ch.id.startsWith('D');
 }
 
 /** Кто я для Slack: id из профиля, если задан (с токеном бота владелец токена — бот, не человек), иначе владелец токена. */
-function myUserId(ident: Identity): string | undefined {
-  return loadProfile().slackUserId || ident.userId;
+function myUserId(ident: Identity): { me?: string; own: boolean } {
+  const me = loadProfile().slackUserId || ident.userId;
+  return { me, own: Boolean(me) && me === ident.userId };
 }
 
 /** Сообщение Slack → событие. author — имя автора, link — адрес рабочего пространства (https://acme.slack.com/). */
-export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { author?: string; url?: string; me?: string } = {}): RoutineEvent {
+export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { author?: string; url?: string; me?: string; ownToken?: boolean } = {}): RoutineEvent {
   const text = m.text ?? '';
   const files = (m.files ?? []).map((f) => f.name || f.title || 'файл');
   const bot = Boolean(m.bot_id) || m.subtype === 'bot_message';
@@ -246,14 +254,15 @@ export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { 
     text,
     link: extra.url ? `${extra.url}archives/${ch.id}/p${m.ts.replace('.', '')}` : undefined,
     author: author || undefined,
-    fields: { channel: ch.name, channel_id: ch.id, thread, author, user: m.user ?? '', bot, bot_id: m.bot_id ?? '', files, ts: m.ts, thread_ts: m.thread_ts ?? '', subtype: m.subtype ?? '', to_me: toMe(ch, m, extra.me) },
+    fields: { channel: ch.name, channel_id: ch.id, thread, author, user: m.user ?? '', bot, bot_id: m.bot_id ?? '', files, ts: m.ts, thread_ts: m.thread_ts ?? '', subtype: m.subtype ?? '', to_me: toMe(ch, m, extra.me, extra.ownToken ?? true) },
     replyTo: { channel: ch.id, thread_ts: m.thread_ts ?? m.ts },
   };
 }
 
 async function toEvent(ctx: SourceCtx, ch: Channel, m: SlackMessage, ident: Identity): Promise<RoutineEvent> {
   const author = m.user ? await nameOfUser(ctx, m.user) : undefined;
-  return slackEvent(ctx.slug, ch, m, { author, url: ident.url, me: myUserId(ident) });
+  const { me, own } = myUserId(ident);
+  return slackEvent(ctx.slug, ch, m, { author, url: ident.url, me, ownToken: own });
 }
 
 type Cursor = { ts?: Record<string, string> };
@@ -355,7 +364,7 @@ function socketSession(ctx: SourceCtx, url: string, app: string, ident: Identity
     ctx.signal.addEventListener('abort', onAbort, { once: true });
     ws.on('message', (raw) => {
       void (async () => {
-        let msg: { type?: string; envelope_id?: string; payload?: { event?: SlackMessage & { channel?: string; type?: string } } };
+        let msg: { type?: string; envelope_id?: string; payload?: { event?: SlackMessage & { channel?: string; type?: string; channel_type?: string } } };
         try {
           msg = JSON.parse(String(raw));
         } catch {
@@ -370,6 +379,9 @@ function socketSession(ctx: SourceCtx, url: string, app: string, ident: Identity
         const ev = msg.payload?.event;
         if (msg.type !== 'events_api' || !ev || ev.type !== 'message' || !ev.channel || !isUserMessage(ev)) return;
         if (allowed && !allowed.has(ev.channel)) return;
+        // без списка каналов лички читаем только по «Лички: да»: подписка message.im на приложении сама их не включает
+        const dm = ev.channel_type === 'im' || ev.channel_type === 'mpim' || ev.channel.startsWith('D');
+        if (!allowed && dm && !dmsOn(ctx.spec)) return;
         const ch: Channel = { id: ev.channel, name: await nameOfChannel(ctx, ev.channel) };
         emit([await toEvent(ctx, ch, ev, ident)]);
       })().catch((err) => ctx.log(`Slack: событие не разобрано: ${(err as Error).message}`));

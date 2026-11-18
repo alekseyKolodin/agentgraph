@@ -138,7 +138,7 @@ export function loadProfile(): Profile {
 const isEmpty = (p: Profile, k: keyof Profile): boolean => (Array.isArray(p[k]) ? (p[k] as string[]).length === 0 : !p[k]);
 
 const tryRun = (x: Exec, cmd: string, args: string[]): Promise<string> =>
-  x(cmd, args, { timeoutMs: 15_000 }).then(
+  x(cmd, args, { timeoutMs: 8_000 }).then(
     (o) => o.trim(),
     () => '',
   );
@@ -148,14 +148,16 @@ export async function guessProfile(jiraEmail: string | undefined, x: Exec = exec
   const [glab, gh, name, email] = await Promise.all([
     tryRun(x, 'glab', ['api', 'user']).then((o) => {
       try {
-        return (JSON.parse(o) as { username?: string }).username;
+        const u = (JSON.parse(o) as { username?: unknown }).username;
+        return typeof u === 'string' ? u : undefined;
       } catch {
         return undefined;
       }
     }),
     tryRun(x, 'gh', ['api', 'user']).then((o) => {
       try {
-        return (JSON.parse(o) as { login?: string }).login;
+        const u = (JSON.parse(o) as { login?: unknown }).login;
+        return typeof u === 'string' ? u : undefined;
       } catch {
         return undefined;
       }
@@ -176,21 +178,27 @@ export async function guessProfile(jiraEmail: string | undefined, x: Exec = exec
 /** Профиль с автозаполнением пустых полей; введённое человеком не трогается. Найденное сохраняется с пометкой auto. */
 export async function readProfile(x: Exec = exec): Promise<ProfileResponse> {
   const s = loadSettings();
-  const profile = normalizeProfile(s.profile?.value);
-  const auto = new Set<keyof Profile>(s.profile?.auto ?? []);
-  if (PROFILE_KEYS.some((k) => isEmpty(profile, k))) {
+  const stored = normalizeProfile(s.profile?.value);
+  if (PROFILE_KEYS.some((k) => isEmpty(stored, k))) {
     const guess = await guessProfile(s.jira?.email?.trim() || undefined, x);
-    let changed = false;
-    for (const k of PROFILE_KEYS) {
-      const v = guess[k];
-      if (!isEmpty(profile, k) || v === undefined || (Array.isArray(v) && !v.length)) continue;
-      (profile as Record<string, unknown>)[k] = v;
-      auto.add(k);
-      changed = true;
-    }
-    if (changed) updateSettings((t) => (t.profile = { value: profile, auto: [...auto] }));
+    // команды шли долго: человек мог сохранить профиль в это время, поэтому заполняем пустое по свежему состоянию файла
+    updateSettings((t) => {
+      const cur = normalizeProfile(t.profile?.value);
+      const auto = new Set<keyof Profile>(t.profile?.auto ?? []);
+      let changed = false;
+      for (const k of PROFILE_KEYS) {
+        const v = normalizeProfile({ [k]: guess[k] })[k];
+        if (!isEmpty(cur, k) || v === undefined || (Array.isArray(v) && !v.length)) continue;
+        (cur as Record<string, unknown>)[k] = v;
+        auto.add(k);
+        changed = true;
+      }
+      if (changed) t.profile = { value: cur, auto: [...auto] };
+    });
   }
-  return { profile, auto: PROFILE_KEYS.filter((k) => auto.has(k)) };
+  const fresh = loadSettings().profile;
+  const profile = normalizeProfile(fresh?.value);
+  return { profile, auto: PROFILE_KEYS.filter((k) => (fresh?.auto ?? []).includes(k) && !isEmpty(profile, k)) };
 }
 
 /** Сохранить профиль, введённый человеком: изменённые им поля перестают быть «заполнено само». */

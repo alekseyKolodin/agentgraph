@@ -117,3 +117,24 @@ test('профиль: имена и почты из строки — без пу
   assert.deepEqual(r.profile, { names: ['Анна', 'Борис'], emails: ['a@b.test'] });
   assert.deepEqual(await guessProfile(undefined, fakeExec({})), {});
 }));
+
+test('профиль: все команды недоступны или отвечают мусором — чтение не падает и ничего не записывает', withCfg(async () => {
+  const r = await readProfile(fakeExec({}));
+  assert.deepEqual(r, { profile: { names: [], emails: [] }, auto: [] });
+  assert.equal(loadSettings().profile, undefined, 'мусора в файле нет');
+  const junk = await readProfile(fakeExec({ 'glab api user': 'not json', 'gh api user': '{"login":42}', 'git config --global user.name': '  ', 'git config --global user.email': '' }));
+  assert.deepEqual(junk.profile, { names: [], emails: [] });
+  assert.equal(loadSettings().profile, undefined);
+}));
+
+test('профиль: сохранение во время долгого автозаполнения не затирается найденным', withCfg(async () => {
+  const slow = async (cmd: string, args: string[]) => {
+    if (cmd === 'glab') writeProfile({ gitlab: 'ручной', names: ['Лёша'] }); // человек сохранил, пока шли команды
+    return fakeExec(FULL)(cmd, args);
+  };
+  const r = await readProfile(slow);
+  assert.equal(r.profile.gitlab, 'ручной');
+  assert.deepEqual(r.profile.names, ['Лёша']);
+  assert.equal(r.profile.github, 'akol-gh');
+  assert.ok(!r.auto.includes('gitlab') && !r.auto.includes('names'));
+}));

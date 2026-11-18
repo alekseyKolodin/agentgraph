@@ -364,15 +364,18 @@ function describe(spec: SourceSpec): string {
   return `Сервис через Claude: сессия haiku вызывает ${tools.length ? tools.map(short).join(', ') : '(инструменты не выбраны)'} — «${cfgStr(spec, 'request') ?? 'последние записи'}» — и возвращает список записей. Только чтение; тратит лимит, не чаще раза в 30 минут.`;
 }
 
+/** Для сравнения: регистр, пробелы, ведущая «@» (логин в упоминании) не важны. */
+const norm = (v: string): string => v.normalize('NFC').trim().replace(/^@+/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 /** Автор записи — я: имя, почта, логин или id Slack целиком совпали с профилем. Подстрока не годится: у встречи автор — список участников. */
 export function isMyRecord(p: Profile, e: RoutineEvent): boolean {
-  const mine = new Set([...p.names, ...p.emails, p.gitlab, p.github, p.slackUserId, p.jiraEmail].filter(Boolean).map((v) => v!.trim().toLowerCase()));
+  const mine = new Set([...p.names, ...p.emails, p.gitlab, p.github, p.slackUserId, p.jiraEmail].filter((v): v is string => Boolean(v)).map(norm).filter(Boolean));
   if (!mine.size) return false;
-  const a = (e.author ?? '').trim().toLowerCase();
-  const email = /<([^<>]+)>/.exec(a)?.[1]?.trim();
-  const bare = a.replace(/<[^<>]*>/, '').replace(/^["'\s]+|["'\s]+$/g, '');
-  const uid = typeof e.fields.user === 'string' ? e.fields.user : typeof e.fields.user_id === 'string' ? e.fields.user_id : '';
-  return [a, email, bare, uid.trim().toLowerCase()].some((v) => v && mine.has(v));
+  const a = typeof e.author === 'string' ? e.author : '';
+  const email = /<([^<>]+)>/.exec(a)?.[1];
+  const bare = a.replace(/<[^<>]*>/g, '').replace(/^["'\s]+|["'\s]+$/g, '');
+  const uid = typeof e.fields?.user === 'string' ? e.fields.user : typeof e.fields?.user_id === 'string' ? e.fields.user_id : '';
+  return [a, email, bare, uid].some((v) => v && mine.has(norm(v)));
 }
 
 export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
