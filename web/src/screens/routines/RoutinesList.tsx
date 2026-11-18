@@ -15,7 +15,7 @@ import { ago, clock } from '../../lib/format';
 import { plural, t } from '../../lib/i18n';
 import { describeSchedule } from '../../lib/routines/schedule';
 import { everyLabel, foundText } from '../../lib/routines/source';
-import { activeWaits, overviewMeta, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
+import { activeWaits, overviewMeta, pollCostText, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
 import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
 import styles from './Routines.module.css';
 
@@ -54,7 +54,7 @@ export function RoutinesList() {
       <header className="view-head">
         <div>
           <h1>{t('Рутины')}</h1>
-          {data && data.routines.length > 0 && <p className={cx(styles.mono, styles.headMeta)}>{overviewMeta(data.routines, new Date(now))}</p>}
+          {data && data.routines.length > 0 && <p className={cx(styles.mono, styles.headMeta)}>{overviewMeta(data.routines, new Date(now), data.sources)}</p>}
         </div>
         {data && data.routines.length > 0 && (
           <div className="row">
@@ -209,9 +209,10 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const missing = s.missingSecrets;
+  const cost = pollCostText(s);
   const ss = sourceState(s);
   const tone = ss.tone;
-  const meta = [kind?.title ?? s.spec.kind, s.spec.every ? everyLabel(s.spec.every) : kind?.delivery === 'live' ? t('сразу') : '', s.check?.ok ? t('проверен {at}, {n} {w}', { at: clock(s.check.at), n: s.check.total, w: plural(s.check.total, 'запись', 'записи', 'записей') }) : s.lastCheckAt && !s.check ? t('проверен {at}', { at: clock(s.lastCheckAt) }) : '', s.usedBy.length ? t('рутин: {n}', { n: s.usedBy.length }) : '']
+  const meta = [kind?.title ?? s.spec.kind, s.spec.every ? everyLabel(s.spec.every) : kind?.delivery === 'live' ? t('сразу') : '', s.check?.ok ? t('проверен {at}, {n} {w}', { at: clock(s.check.at), n: s.check.total, w: plural(s.check.total, 'запись', 'записи', 'записей') }) : s.lastCheckAt && !s.check ? t('проверен {at}', { at: clock(s.lastCheckAt) }) : '', s.usedBy.length ? t('рутин: {n}', { n: s.usedBy.length }) : '', cost]
     .filter(Boolean)
     .join(' · ');
   const done = () => void qc.invalidateQueries({ queryKey: routineKeys.all });
