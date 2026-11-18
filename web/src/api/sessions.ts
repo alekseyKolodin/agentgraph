@@ -44,8 +44,12 @@ export const setSessionTags = (id: string, tags: string[]) => api<SessionView>('
 export const setSessionSpace = (id: string, space: string | null) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/space`, { space });
 export const renameSession = (id: string, name: string) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/name`, { name });
 export const endSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/end`);
-/** «Продолжить»: тот же разговор (--resume), если есть транскрипт, иначе новый — в той же папке с текущими пространством и тегами. */
-export const continueSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, {});
+/**
+ * «Продолжить»: тот же разговор (--resume), если есть транскрипт, иначе новый — в той же папке с текущими пространством и
+ * тегами. prompt — первое сообщение продолженного разговора (ответ на вопрос); пусто — claude ждёт тебя. Живых сессий уже
+ * предел — ApiError 409 с code limit.
+ */
+export const continueSession = (id: string, prompt?: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, prompt?.trim() ? { prompt } : {});
 /** «Перезапустить»: claude заново тем же разговором, папки пространства и тегов пересчитаны. */
 export const restartSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/restart`);
 /** Оценка разбора «Не доделано» до запуска: модель не зовётся. */

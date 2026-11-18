@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import type { SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
+import type { SessionAsk, SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
 import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { configDir } from './settings.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
@@ -346,7 +346,7 @@ export type SessionLaunch = {
   claudeVersion?: string;
   model?: string;
   permissionMode?: SessionPermissionMode;
-  /** Первое сообщение нового разговора: claude отправит его сам, как `claude "задача"`. */
+  /** Первое сообщение: claude отправит его сам, как `claude "задача"` (у --resume — следом за прошлым разговором). */
   prompt?: string;
 };
 
@@ -538,6 +538,8 @@ export type HookInput = {
   cwd?: string;
   /** id вызова инструмента: PreToolUse и PostToolUse одного вызова — по нему (снимок файла до записи). */
   tool_use_id?: string;
+  /** Текст уведомления (Notification): «Claude needs your permission to use Bash». */
+  message?: string;
 };
 
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
@@ -549,7 +551,7 @@ export function parseHookInput(raw: unknown): HookInput | undefined {
   if (!event) return undefined;
   const input = r.tool_input && typeof r.tool_input === 'object' && !Array.isArray(r.tool_input) ? (r.tool_input as Record<string, unknown>) : undefined;
   const out: HookInput = { hook_event_name: event };
-  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode', 'cwd', 'tool_use_id'] as const) {
+  for (const k of ['session_id', 'transcript_path', 'source', 'reason', 'agent_id', 'prompt', 'last_assistant_message', 'notification_type', 'tool_name', 'permission_mode', 'cwd', 'tool_use_id', 'message'] as const) {
     const v = str(r[k]);
     if (v !== undefined) out[k] = v;
   }
@@ -576,6 +578,8 @@ export type HookState = {
   permissionMode?: string;
   /** Сессия до пространств: её теги задач. В её транскрипте мог остаться их контекст от прошлой версии agentgraph. */
   preSpacesTags?: string[];
+  /** Открытый вопрос человеку (вопрос в ответе, разрешение, форма MCP); в правке null — снят. */
+  ask?: SessionAsk | null;
 };
 
 /**
@@ -621,6 +625,8 @@ export type HookDeps = {
    * undefined — ни то, ни другое.
    */
   bashGuard?: (command: string, call: WriteCall) => WriteVerdict | undefined;
+  /** Время для ask.at; по умолчанию — сейчас. */
+  now?: () => string;
 };
 /** Что нужно решению PreToolUse: сессия терминала и сценарий check-sdk-hooks решают одной функцией. */
 export type PreToolDeps = Pick<HookDeps, 'askDetail' | 'writeGuard' | 'claudeVersion' | 'bashGuard'>;
@@ -631,6 +637,65 @@ export type WriteVerdict = { decision: 'deny' | 'ask'; reason: string };
 
 /** Ожидание человека в TUI: запрос разрешения, простой, форма MCP. */
 const WAIT_NOTIFICATIONS = ['permission_prompt', 'idle_prompt', 'elicitation_dialog'];
+/** Уведомления, после которых сессия ждёт ответа (а не просто простаивает): вид вопроса. */
+const ASK_NOTIFICATIONS: Record<string, SessionAsk['kind']> = { permission_prompt: 'permission', elicitation_dialog: 'elicitation' };
+/** Текст вопроса в записи сессии не длиннее: начало длинного абзаца режется, вопрос — в конце. */
+export const ASK_TEXT_MAX = 400;
+
+/** Одной строкой и не длиннее ASK_TEXT_MAX: длинное режется с начала — вопрос обычно в конце абзаца. */
+export function askText(raw: string): string {
+  const text = raw.replace(/\s+/g, ' ').trim();
+  return text.length <= ASK_TEXT_MAX ? text : `…${text.slice(text.length - ASK_TEXT_MAX + 1).trimStart()}`;
+}
+
+/** Строка — пункт списка: «- a», «* a», «1. a», «2) a». */
+const LIST_ITEM_RE = /^\s*(?:[-*+•]|\d{1,2}[.)])\s+\S/;
+/**
+ * Хвост строки, который не меняет её конец: разметка выделения, закрывающие скобки и «(y/n)». Кавычки — нет: «…почему
+ * падает?»» — цитата чужого вопроса, а не вопрос человеку.
+ */
+const TAIL_RE = /(?:\s*\((?:y\/n|да\/нет)\))?[\s*_`)\]]*$/iu;
+const endsWithQ = (line: string) => /[?？]$/.test(line.replace(TAIL_RE, ''));
+/** Заголовок или строка целиком жирным: «## Почему падало?» над списком — подпись сводки, а не вопрос. */
+const isHeading = (line: string) => /^#+\s/.test(line) || /^(\*\*|__).*\1$/.test(line.trim());
+/** Абзац — код с отступом: «?» в нём не вопрос. */
+const isIndentedCode = (para: string) => para.split('\n').every((l) => /^( {4}|\t)/.test(l));
+/** Текст вопроса без разметки заголовка, цитаты и выделения: его покажут простой строкой. */
+const plain = (t: string) => t.replace(/^(?:#+|>)\s*/gm, '').replace(/\*\*|__/g, '');
+
+/**
+ * Вопрос в конце ответа Claude — без модели: последний абзац (после пустой строки; блок кода в конце — не вопрос)
+ * кончается знаком вопроса, или последний абзац — список вариантов, а строка перед ним — вопрос («Как сделать?» и
+ * варианты). Возвращает текст вопроса одной строкой; не вопрос — undefined.
+ */
+export function questionOf(answer: string): string | undefined {
+  const text = answer.replace(/\r\n?/g, '\n').trim();
+  if (!text || text.endsWith('```')) return undefined;
+  const raw = text.split(/\n\s*\n/).filter((p) => p.trim());
+  if (!raw.length || isIndentedCode(raw.at(-1)!)) return undefined;
+  const paras = raw.map((p) => p.trim());
+  const last = paras.at(-1)!;
+  if (endsWithQ(last)) return askText(plain(last));
+  const lines = last.split('\n');
+  const items = lines.findIndex((l) => LIST_ITEM_RE.test(l));
+  if (items < 0 || !lines.slice(items).every((l) => LIST_ITEM_RE.test(l) || /^\s+\S/.test(l))) return undefined;
+  // строка вопроса — в том же абзаце над списком или абзацем выше
+  const head = items > 0 ? lines.slice(0, items).join(' ') : paras.at(-2);
+  if (!head || isHeading(head.trim()) || !endsWithQ(head.trim())) return undefined;
+  return askText(plain(`${head.trim()} ${lines.slice(items).map((l) => l.trim()).join(' ')}`));
+}
+
+/** Что просят разрешить: инструмент и его главный аргумент (команда, файл, адрес). AskUserQuestion — его вопросы. */
+function permissionAsk(input: HookInput): Pick<SessionAsk, 'kind' | 'text'> {
+  const tool = input.tool_name ?? '';
+  const args = input.tool_input ?? {};
+  if (tool === 'AskUserQuestion' && Array.isArray(args.questions)) {
+    const qs = args.questions.flatMap((q) => (q && typeof q === 'object' && typeof (q as { question?: unknown }).question === 'string' ? [(q as { question: string }).question] : []));
+    if (qs.length) return { kind: 'question', text: askText(qs.join(' · ')) };
+  }
+  const main = ['command', 'file_path', 'notebook_path', 'url', 'path', 'pattern', 'query', 'description'].map((k) => args[k]).find((v) => typeof v === 'string' && v.trim());
+  return { kind: 'permission', text: askText(main ? `${tool}: ${main as string}` : tool || (input.message ?? '')) };
+}
 /** Чтение файлов: какой ключ tool_input несёт путь. */
 const READ_TOOLS: Record<string, string> = { Read: 'file_path', Grep: 'path', Glob: 'path' };
 /** id разговора Claude Code — UUID; другое в --resume не пойдёт. */
@@ -706,6 +771,7 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
   if (input.permission_mode && !input.agent_id && input.permission_mode !== s.permissionMode) patch.permissionMode = input.permission_mode;
   const event = input.hook_event_name;
   const ctx = () => deps.readCtx(s.space, s.tags);
+  const now = deps.now ?? (() => new Date().toISOString());
 
   switch (event) {
     case 'SessionStart': {
@@ -714,12 +780,20 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       const c = ctx();
       const text = sessionContext(c, s.launchSpace);
       const note = input.source === 'resume' && s.preSpacesTags?.length ? preSpacesNote(s.preSpacesTags) : '';
-      return { reply: withContext(event, [note, text].filter(Boolean).join('\n\n')), patch: { ...patch, started: true, status: 'waiting' }, delivered: delivered(c) };
+      // /clear — новый разговор: вопрос прошлого больше не ждёт ответа; «Продолжить» и /resume его сохраняют
+      const cleared = input.source === 'clear' && s.ask ? { ask: null } : {};
+      return { reply: withContext(event, [note, text].filter(Boolean).join('\n\n')), patch: { ...patch, ...cleared, started: true, status: 'waiting' }, delivered: delivered(c) };
     }
     case 'UserPromptSubmit':
     case 'PostToolBatch': {
-      // пачка инструментов сабагента: его контекст живёт отдельно, основной разговор изменения не увидел бы
-      if (input.agent_id) return { reply: {}, patch: { ...patch, status: 'working' } };
+      // пачка инструментов сабагента: его контекст живёт отдельно, основной разговор изменения не увидел бы. Разрешения
+      // ждёт другой сабагент (или основной разговор) — его вопрос и «ждёт» остаются: диалог в TUI ещё висит
+      if (input.agent_id) {
+        if (s.ask && s.ask.agent !== input.agent_id) return { reply: {}, patch };
+        return { reply: {}, patch: { ...patch, ...(s.ask ? { ask: null } : {}), status: 'working' } };
+      }
+      // ответили или модель пошла дальше (разрешение дали): вопроса больше нет
+      if (s.ask) patch.ask = null;
       const c = ctx();
       const text = s.injected === null ? sessionContext(c, s.launchSpace) : contextDelta(c, s.injected, s.launchSpace);
       const working = { ...patch, status: 'working' as const };
@@ -727,14 +801,32 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       if (event === 'UserPromptSubmit') working.turns = s.turns + 1;
       return { reply: withContext(event, text), patch: working, ...(text || s.injected === null ? { delivered: delivered(c) } : {}), ...(turn ? { turn } : {}) };
     }
-    case 'Stop':
-      return { reply: {}, patch: { ...patch, status: 'waiting' }, turn: { answer: input.last_assistant_message ?? '' } };
+    case 'Stop': {
+      // ждёт ответа, только если ответ кончился вопросом; иначе — просто закончил ход
+      const answer = input.last_assistant_message ?? '';
+      const q = questionOf(answer);
+      const ask = q ? { kind: 'question' as const, text: q, at: now() } : s.ask ? null : undefined;
+      return { reply: {}, patch: { ...patch, status: 'waiting', ...(ask !== undefined ? { ask } : {}) }, turn: { answer } };
+    }
     case 'StopFailure':
-      return { reply: {}, patch: { ...patch, status: 'waiting' } };
-    case 'Notification':
-      return { reply: {}, patch: WAIT_NOTIFICATIONS.includes(input.notification_type ?? '') ? { ...patch, status: 'waiting' } : patch };
-    case 'PermissionRequest':
-      return { reply: permissionReply(input, deps.readTargets(ctx()), deps.realpath), patch };
+      return { reply: {}, patch: { ...patch, status: 'waiting', ...(s.ask ? { ask: null } : {}) } };
+    case 'Notification': {
+      const type = input.notification_type ?? '';
+      if (!WAIT_NOTIFICATIONS.includes(type)) return { reply: {}, patch };
+      const kind = ASK_NOTIFICATIONS[type];
+      // запрос разрешения уже записал PermissionRequest с инструментом — уведомление его не затирает
+      const ask = kind && !(kind === 'permission' && s.ask) ? { ask: { kind, text: askText(input.message ?? ''), at: now() } } : {};
+      return { reply: {}, patch: { ...patch, status: 'waiting', ...ask } };
+    }
+    case 'PermissionRequest': {
+      const reply = permissionReply(input, deps.readTargets(ctx()), deps.realpath);
+      // чтение из папок сессии пропущено без вопроса; остальное решает человек в TUI — сессия ждёт его ответа. Снимает
+      // вопрос шаг того, кто спросил (agent — сабагент), сообщение пользователя или конец хода. Отказ в TUI (Esc) хода
+      // не продолжает: вопрос держится до следующего сообщения, а у закрытой так сессии — «закончилась на запросе»
+      if (Object.keys(reply).length) return { reply, patch };
+      const ask: SessionAsk = { ...permissionAsk(input), at: now(), ...(input.agent_id ? { agent: input.agent_id } : {}) };
+      return { reply, patch: { ...patch, status: 'waiting', ask } };
+    }
     case 'PreToolUse':
       return { reply: preToolDecision(input, deps), patch };
     case 'PostToolUse': {

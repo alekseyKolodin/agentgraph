@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  RunTeamworkLink, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
+  RunTeamworkLink, SessionAsk, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
   SpaceEditPart, SpaceSession, TeamTask, TeamTaskWork,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
@@ -31,7 +31,7 @@ import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import { configDir } from './settings.js';
 import {
-  findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
+  askText, findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
   sessionArgs, sessionEnv, childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_MAP_WRITE_FULL,
   SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
   type SessionCtx, type WriteCall,
@@ -95,6 +95,11 @@ export type SessionRecord = {
   statePending?: 'app-closed';
   /** Сессия открыта из задачи Teamwork (spec §8.9): инструменты задачи в MCP, старт и конец — в статусы задачи. */
   teamwork?: RunTeamworkLink;
+  /**
+   * Открытый вопрос человеку: последний ход кончился вопросом, запросом разрешения или формой MCP (handleHook). Остаётся
+   * после выхода claude и перезапуска сервера — «закончилась на вопросе»; снимается сообщением пользователя или шагом модели.
+   */
+  ask?: SessionAsk;
 };
 
 /**
@@ -429,6 +434,7 @@ export class SessionManager {
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
       ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
+      ...(r.ask ? { ask: r.ask } : {}),
     };
   }
 
@@ -744,25 +750,31 @@ export class SessionManager {
 
   /**
    * «Продолжить»: новый процесс claude в той же папке с текущими пространством и тегами (папки и запреты — заново). Транскрипт последнего
-   * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же.
+   * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же. prompt —
+   * первое сообщение продолженного разговора (ответ на вопрос, «с чего продолжить»): claude отправит его сам.
    */
-  async resume(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
+  async resume(id: string, port: number, size?: { cols: number; rows: number }, prompt?: string): Promise<SessionView> {
     const s = this.get(id);
     if (s.pty?.alive) throw new SessionError(409, 'Сессия ещё идёт');
     const kit = await this.deps.kit();
     if (!kit) throw new SessionError(501, `Терминал недоступен: node-pty не загрузился (${ptyKitError()})`, 'no_pty');
     if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
-    if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     if (!fs.statSync(s.rec.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Папки сессии больше нет: ${s.rec.cwd}`);
     // сессия, заведённая до запрета с рабочей папкой в клоне команды, там не продолжается (spec §14)
     const inTeams = teamsCwdProblem(s.rec.cwd);
     if (inTeams) throw new SessionError(400, inTeams);
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
+    // предел — после проверок, которые не зависят от других сессий: экран предлагает завершить одну из ждущих, и 409
+    // limit значит, что после этого «Продолжить» пройдёт
+    if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     await this.knownVersion(bin);
     const target = resumeTarget(s.rec);
+    // транскрипта нет — новый разговор: вопрос прошлого он не увидит и ответа на него не ждёт
+    if (!target) delete s.rec.ask;
     try {
-      this.spawn(s, kit, bin, port, target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false }, size ?? s.screen ?? DEFAULT_SIZE);
+      const conv = target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false };
+      this.spawn(s, kit, bin, port, { ...conv, ...(prompt ? { prompt } : {}) }, size ?? s.screen ?? DEFAULT_SIZE);
     } catch (err) {
       throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
     }
@@ -951,6 +963,7 @@ export class SessionManager {
       turns: s.rec.turns,
       permissionMode: s.mode,
       ...(s.rec.preSpacesTags?.length ? { preSpacesTags: s.rec.preSpacesTags } : {}),
+      ...(s.rec.ask ? { ask: s.rec.ask } : {}),
     };
     const r = handleHook(state, input, {
       readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
@@ -973,6 +986,10 @@ export class SessionManager {
     if (p.started) s.started = true;
     if (p.permissionMode) s.mode = p.permissionMode;
     if (p.status && s.pty?.alive) s.status = p.status;
+    // вопрос — на диск сразу: признак «ждёт ответа» переживает закрытие приложения
+    const asked = p.ask !== undefined;
+    if (p.ask) s.rec.ask = p.ask;
+    else if (p.ask === null) delete s.rec.ask;
     s.lastHookAt = Date.now();
     s.rec.lastActivityAt = new Date().toISOString();
     if (r.delivered) {
@@ -984,7 +1001,7 @@ export class SessionManager {
     }
     if (r.turn) this.appendTurn(s, r.turn);
     if (r.turn && 'prompt' in r.turn) this.nameFrom(s, r.turn.prompt);
-    if (reinstanced || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
+    if (reinstanced || asked || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
     // SessionStart ставит «ждёт тебя» и посреди хода (сжатие контекста, source: compact): это не конец хода
     this.changed(s, input.hook_event_name !== 'SessionStart');
     return r.reply;
@@ -1305,16 +1322,17 @@ export class SessionManager {
   }
 
   /**
-   * Статус сменился с прошлого changed: время начала «ждёт тебя»; переход «работает → ждёт тебя» — подписчикам
-   * onSessionWaiting. Не в счёт: запуск («запускается → ждёт тебя»), SessionStart (announce: false) и хуки, пришедшие,
-   * пока claude гасят («Завершить», «Перезапустить», остановка сервера): окно, может быть, уже закрыто, а ждать некого.
+   * Статус сменился с прошлого changed: время начала «ход за тобой»; переход «работает → ждёт ответа» (с вопросом или
+   * запросом разрешения — ask) — подписчикам onSessionWaiting. Просто закончила ход — без ленты и уведомления. Не в счёт:
+   * запуск («запускается → ждёт»), SessionStart (announce: false) и хуки, пришедшие, пока claude гасят («Завершить»,
+   * «Перезапустить», остановка сервера): окно, может быть, уже закрыто, а ждать некого.
    */
   private noteStatus(s: Live, announce: boolean): void {
     const prev = s.seenStatus;
     if (prev === s.status) return;
     s.seenStatus = s.status;
     s.waitingSince = s.status === 'waiting' ? new Date().toISOString() : undefined;
-    if (!announce || prev !== 'working' || s.status !== 'waiting' || !waitSubs.size) return;
+    if (!announce || prev !== 'working' || s.status !== 'waiting' || !s.rec.ask || !waitSubs.size) return;
     if (s.ending || s.restarting || s.appClosed || this.stopping) return;
     const v = this.view(s);
     for (const fn of waitSubs) {
@@ -1633,7 +1651,8 @@ export function readRecord(file: string, id: string): { rec: SessionRecord; lega
     return undefined;
   }
   if (!raw || raw.id !== id || typeof raw.cwd !== 'string' || typeof raw.createdAt !== 'string') return undefined;
-  const { saveTag, summary, summaryPending, ...rest } = raw;
+  const { saveTag, summary, summaryPending, ask: rawAsk, ...rest } = raw;
+  const ask = askOf(rawAsk);
   const tags = strings(raw.tags);
   const legacy = raw.saveState === undefined && saveTag !== undefined;
   const task = legacy ? tags.filter((t) => !isKnowledge(t)) : strings(raw.legacyTaskTags);
@@ -1666,8 +1685,19 @@ export function readRecord(file: string, id: string): { rec: SessionRecord; lega
     turns: Number.isFinite(raw.turns) ? Number(raw.turns) : 0,
     ...(state ? { stateUpdate: state } : {}),
     ...(raw.statePending === 'app-closed' || summaryPending === 'app-closed' ? { statePending: 'app-closed' as const } : {}),
+    ...(ask ? { ask } : {}),
   };
   return { rec, legacy, ended: typeof raw.endedAt === 'string' };
+}
+
+const ASK_KINDS: SessionAsk['kind'][] = ['question', 'permission', 'elicitation'];
+
+/** Вопрос из session.json: испорченный (правили руками, чужая версия) — без вопроса, а не битая сессия. */
+function askOf(raw: unknown): SessionAsk | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const a = raw as Record<string, unknown>;
+  if (!ASK_KINDS.includes(a.kind as SessionAsk['kind']) || typeof a.text !== 'string' || typeof a.at !== 'string') return undefined;
+  return { kind: a.kind as SessionAsk['kind'], text: askText(a.text), at: a.at, ...(typeof a.agent === 'string' ? { agent: a.agent } : {}) };
 }
 
 /** Итог саммари старой сессии как итог состояния её пространства (тег задачи с тем же слагом). */
@@ -1793,7 +1823,13 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/state$/)) && method === 'POST') return done(202, mgr.startState(m[1]) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/continue$/)) && method === 'POST') {
       const body = asObject(await ctx.readJson());
-      return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
+      let prompt: string | undefined;
+      try {
+        prompt = sessionPrompt(body.prompt);
+      } catch (err) {
+        throw new SessionError(400, errMsg(err));
+      }
+      return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined, prompt)) satisfies SessionView);
     }
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/restart$/)) && method === 'POST') return done(200, (await mgr.restart(m[1], req.socket.localPort ?? 0)) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'DELETE') {
@@ -1845,7 +1881,7 @@ export function onSessionEdit(fn: (e: SessionEdit) => void): () => void {
   editSubs.add(fn);
   return () => void editSubs.delete(fn);
 }
-/** Работавшая сессия закончила ход (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
+/** Работавшая сессия закончила ход вопросом (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
 export function onSessionWaiting(fn: (v: SessionView) => void): () => void {
   waitSubs.add(fn);
   return () => void waitSubs.delete(fn);

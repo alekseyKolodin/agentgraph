@@ -10,7 +10,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView } from '@server/api-types';
 import { ApiError, createSpace, errorText, fetchTag, keys, saveSpace, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
-import { continueSession, createSession, defaultSessionCwd, putSession, SESSION_CWD_KEY, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
+import { createSession, defaultSessionCwd, putSession, SESSION_CWD_KEY, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
@@ -22,11 +22,12 @@ import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { askNote, canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone } from '../../lib/sessions';
 import { dirLines, folderPlan, pickWorkdir, slugFor, SPACE_SLUG_RE, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint, type CwdState } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { RENAME_HOST, SessionName } from './SessionName';
 import { Loading } from './Loading';
+import { useContinue } from './useContinue';
 import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -338,10 +339,14 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState('');
-  const run = async (id: string, fn: () => Promise<SessionView>, open: boolean) => {
+  // «Продолжить» при пределе живых сессий — диалог «кого завершить»; закрыли его — undefined, никуда не переходим
+  const cont = useContinue();
+  const run = async (id: string, fn: () => Promise<SessionView | undefined>, open: boolean) => {
     setBusy(id);
     try {
-      putSession(qc, await fn());
+      const v = await fn();
+      if (!v) return;
+      putSession(qc, v);
       if (open) void navigate(`/sessions/${id}`);
     } catch (err) {
       toast(errorText(err));
@@ -369,6 +374,7 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
           {sessions.map((s) => {
             const update = canUpdateState(s);
             const dir = tildePath(s.cwd, home);
+            const ask = askNote(s);
             return (
               <tr key={s.id} className={cx(!s.live && styles.ended, RENAME_HOST)}>
                 <td><span className={cx(styles.status, styles[sessionTone(s)])} title={sessionExitTitle(s) || undefined}><span className={styles.dot} aria-hidden="true" /><span className={styles.statusText}>{sessionStatusLabel(s)}</span></span></td>
@@ -376,6 +382,8 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
                   <SessionName s={s} to={`/sessions/${s.id}`} title={s.name} />
                   {/* имя по умолчанию — та же папка: второй строкой её не повторяем */}
                   {baseName(s.cwd) !== s.name && <span className={styles.nameDir} title={dir}>{baseName(s.cwd)}</span>}
+                  {/* на чём остановилась: живая спрашивает, завершённая — закончилась на вопросе (видно и после перезапуска) */}
+                  {ask && <span className={styles.ask} title={ask}>{ask}</span>}
                   {/* пометка и её действие — рядом: «Обновить состояние» нужно только такой сессии */}
                   {s.statePending && (
                     <span className={styles.pending}>
@@ -401,7 +409,7 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
                   {s.live ? (
                     <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
                   ) : (
-                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
+                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => cont.resume(s.id), true)}>
                       {t('Продолжить')}
                     </button>
                   )}
@@ -411,6 +419,7 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
           })}
         </tbody>
       </table>
+      {cont.dialog}
     </div>
   );
 }

@@ -202,6 +202,8 @@
 /* сессии терминала в «Сейчас»: работает — синяя точка с ореолом, запускается — серая; ждёт тебя — общий тон .wait */
 .lrun.session-working .lrun-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
 .lrun.session-starting .lrun-dot { background: var(--ink-3); }
+/* закончила ход без вопроса: жива, но без тревоги («ждёт тебя» — только с вопросом) */
+.lrun.session-idle .lrun-dot { background: var(--ink-3); }
 
 /* завершённые сессии (SessionList.tsx): строка — имя с переименованием на месте и мета; группы по пространству — как
    проекты запусков */
