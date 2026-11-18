@@ -9,6 +9,7 @@ import { useMemoryState } from '../../components/useMemoryState';
 import { DASH_STALE_MS, dashCap, dashMore, mrSign, runsForBranch } from '../../lib/dash';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import { projectHint, projectLabel } from '../../lib/spaces';
 import { LaunchButton, RelatedRuns, type OnLaunch } from './Dash';
 import { useToFlow } from './FlowPicker';
 import homeStyles from './Home.module.css';
@@ -97,7 +98,8 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
                     {m.draft && <span className="muted">draft · </span>}
                     {m.title}
                   </span>
-                  <span className={styles.dashMeta} title={`${m.project} · ${m.sourceBranch} → ${m.targetBranch}`}>{m.projectName}</span>
+                  {/* подпись проекта — как у запусков и сессий: пространство репозитория, без проекта — имя репозитория */}
+                  <span className={styles.dashMeta} title={`${projectHint(m.projectRef)}\n${m.projectName}: ${m.project} · ${m.sourceBranch} → ${m.targetBranch}`}>{m.projectRef?.space ? projectLabel(m.projectRef) : m.projectName}</span>
                   <Reasons m={m} />
                   {/* подходящего flow нет — ничего не подсказываем */}
                   <span className={styles.attSuggest}>

@@ -1,8 +1,8 @@
 // Страница «Пространства» и выбор пространства в формах без React и DOM: поиск, подписи, снимок формы и патч,
 // документы, история обновлений состояния, сессии и запуски пространства.
-import type { ModelContextView, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate, SpaceWorkdir } from '@server/api-types';
+import type { ModelContextView, ProjectRef, Space, SpaceDoc, SpaceListItem, SpaceRun, SpaceSession, SpaceUpdate, SpaceWorkdir } from '@server/api-types';
 import { ctxTokens } from './context';
-import { plural, when } from './format';
+import { baseName, feedTime, plural, when } from './format';
 import { t } from './i18n';
 import { searchWords, textMatches } from './search';
 
@@ -16,6 +16,31 @@ export const SPACE_STATE_MAX = 2500;
 
 /** Подпись пространства: заголовок, иначе слаг. */
 export const spaceLabel = (s: Pick<SpaceListItem, 'slug' | 'title'>): string => s.title || s.slug;
+
+// ---------- проект = пространство: подпись одна везде (сайдбар, Главная, «Код»); сам проект считает сервер (ProjectRef)
+
+/** Подпись проекта: «◇ заголовок» пространства; без проекта — «Без проекта». Нет ref (старый сервер) — без проекта. */
+export const projectLabel = (ref: ProjectRef | undefined): string => (ref?.space ? `◇ ${ref.title}` : t('Без проекта'));
+
+/** Подпись строки, где места мало: проект, а работа без проекта — своей папкой (по ней её и различают). */
+export const projectOrFolder = (ref: ProjectRef | undefined, cwd: string | undefined): string =>
+  ref?.space ? projectLabel(ref) : cwd ? baseName(cwd) : t('Без проекта');
+
+/** Подсказка к подписи проекта. */
+export const projectHint = (ref: ProjectRef | undefined): string =>
+  ref?.space ? t('Проект — пространство {slug}', { slug: ref.space }) : t('Без проекта: папка не привязана ни к одному пространству');
+
+/** Ключ проекта для группировки: слаг, '' — без проекта. */
+export const projectKeyOf = (ref: ProjectRef | undefined): string => ref?.space ?? '';
+
+/** Открытые и закрытые пространства — в списке отдельно, закрытые ниже; в выборе пространства закрытых нет. */
+export function splitClosed<T extends Pick<SpaceListItem, 'slug' | 'closedAt'>>(list: T[]): { open: T[]; closed: T[] } {
+  return { open: list.filter((s) => !s.closedAt), closed: list.filter((s) => s.closedAt) };
+}
+
+/** Дата у превью: когда переписано состояние, иначе (превью — карта) — пусто. */
+export const spaceStateAt = (s: Pick<SpaceListItem, 'stateMtimeMs'>, now: Date = new Date()): string =>
+  s.stateMtimeMs ? feedTime(new Date(s.stateMtimeMs).toISOString(), now) : '';
 
 /** Поиск по слагу, заголовку и превью: каждое слово запроса должно найтись хоть где-то. */
 export function filterSpaces<T extends Pick<SpaceListItem, 'slug' | 'title' | 'preview'>>(list: T[], query: string): { shown: T[]; count: string } {
@@ -106,7 +131,8 @@ export type PickerRow = { kind: 'space'; s: SpaceListItem; at: string } | { kind
  */
 export function pickerRows(query: string, options: SpaceListItem[]): PickerRow[] {
   const at = (s: SpaceListItem) => (s.lastWorkAt && s.lastWorkAt > s.updatedAt ? s.lastWorkAt : s.updatedAt);
-  const shown = filterSpaces(options, query).shown.map((s) => ({ kind: 'space' as const, s, at: at(s) }));
+  // закрытое пространство не выбирают; слаг закрытого — не «новое пространство» (оно есть, его открывают на его странице)
+  const shown = filterSpaces(splitClosed(options).open, query).shown.map((s) => ({ kind: 'space' as const, s, at: at(s) }));
   shown.sort((a, b) => b.at.localeCompare(a.at));
   const q = query.trim();
   const fresh = SPACE_SLUG_RE.test(q) && !options.some((o) => o.slug === q);

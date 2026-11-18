@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec, forgeOf, originUrl, parseRemote, repoRoot, type Exec, type Forge, type Remote } from './git.js';
 import type { ProjectSettings, Settings } from './settings.js';
-import type { RecentDir } from './api-types.js';
+import type { ProjectRef, RecentDir } from './api-types.js';
+import { projectResolver } from './spaces.js';
 
-export type Project = ProjectSettings & { name: string; remote?: Remote; forge?: Forge; webUrl?: string };
+/** Репозиторий «Подключений»; projectRef — пространство, к которому он относится (projectOfPath). */
+export type Project = ProjectSettings & { name: string; remote?: Remote; forge?: Forge; webUrl?: string; projectRef?: ProjectRef };
 
 /** Добавляет в настройки репо из cwd запусков, которых там нет и которые не убраны руками. Возвращает true, если что-то добавлено. */
 export async function autodetectProjects(s: Settings, cwds: string[], x: Exec = exec): Promise<boolean> {
@@ -46,14 +48,22 @@ export function removeProject(s: Settings, root: string): void {
   s.hiddenProjects = [...new Set([...(s.hiddenProjects ?? []), root])];
 }
 
-/** Проект с разобранным origin; отсутствующие на диске пропускаются. */
+/** Проект с разобранным origin и пространством; отсутствующие на диске пропускаются. */
 export async function describeProjects(s: Settings, x: Exec = exec): Promise<Project[]> {
   const out: Project[] = [];
+  const proj = projectResolver();
   for (const p of s.projects) {
     if (!fs.existsSync(p.path)) continue;
     const url = await originUrl(p.path, x);
     const remote = url ? parseRemote(url) : undefined;
-    out.push({ ...p, name: p.name || path.basename(p.path), remote, forge: remote ? forgeOf(remote.host) : undefined, webUrl: remote ? `https://${remote.host}/${remote.path}` : undefined });
+    out.push({
+      ...p,
+      name: p.name || path.basename(p.path),
+      remote,
+      forge: remote ? forgeOf(remote.host) : undefined,
+      webUrl: remote ? `https://${remote.host}/${remote.path}` : undefined,
+      projectRef: proj.path(p.path),
+    });
   }
   return out;
 }

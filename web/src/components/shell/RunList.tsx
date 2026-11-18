@@ -1,7 +1,7 @@
 // Секция «Запуски» сайдбара (ui/app.js renderRunList, runFilterHtml, foldAll, wireSideSearch, setRunHidden, deleteRun): поиск,
 // фильтр по статусу одной строкой, группы по проектам с «ещё N» и живыми счётчиками, скрытые, скрыть и удалить запуск. Строка
 // запуска — ссылка (Cmd+клик — в новом окне, Tab и Enter), «Скрыть» и «Удалить» — кнопки поверх неё. Логика — lib/runs.ts;
-// свёрнутость проектов — fold.ts (proj:<cwd>), группировка, скрытые и фильтр — те же ключи localStorage, что у старого UI.
+// свёрнутость проектов — fold.ts (proj:<слаг пространства>), группировка, скрытые и фильтр — те же ключи localStorage, что у старого UI.
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { Link, useMatch, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { deleteRun, errorText, keys, setRunHidden, useFeature, useRuns } from '.
 import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import { ProposeSpaces } from './ProposeSpaces';
 import { deleteRunText, projKey, runDepths, runListView, runManageable, runRowMeta, runRowTitle } from '../../lib/runs';
 import { LS } from '../../lib/storage';
 import { isOpen, reveal, setOpen, useFold } from './fold';
@@ -63,12 +64,12 @@ export function RunSectionActions() {
     <div className={styles.sideActions}>
       <button
         className={cx('chip', s.grouped && 'on')}
-        title={t('Группировать запуски по директории проекта')}
+        title={t('Группировать запуски по проекту — пространству, как сессии')}
         onClick={() => {
           side.grouped = !side.grouped;
           LS.set('agentgraph.groupRuns', side.grouped);
           const open = activeId ? all.find((r) => r.id === activeId) : undefined;
-          if (side.grouped && open) setOpen(projKey(open.cwd), true);
+          if (side.grouped && open) setOpen(projKey(open), true);
           changed();
         }}
       >
@@ -101,10 +102,10 @@ export function RunList() {
   const feed = useFeature('feed');
 
   // открыли запуск (по ссылке, из «Сейчас», после «Запустить»): раздел и его проект раскрыты, как в openRun
-  const activeCwd = activeId ? all.find((r) => r.id === activeId)?.cwd : undefined;
-  const activeKnown = activeId ? all.some((r) => r.id === activeId) : false;
+  const activeRun = activeId ? all.find((r) => r.id === activeId) : undefined;
+  const activeKnown = Boolean(activeRun);
   useEffect(() => {
-    if (activeId && activeKnown) reveal('sec:runs', side.grouped ? projKey(activeCwd) : null);
+    if (activeId && activeKnown) reveal('sec:runs', side.grouped ? projKey(activeRun) : null);
   }, [activeId, activeKnown]);
 
   const refresh = async () => {
@@ -151,7 +152,7 @@ export function RunList() {
           {meta.space && (
             <>
               {' · '}
-              <Link className={styles.metaSpace} to={`/spaces/${encodeURIComponent(meta.space)}`} title={`${meta.space}\n${t('Пространство: карта, документы, состояние «где мы сейчас»')}`}>{`◇ ${meta.space}`}</Link>
+              <Link className={styles.metaSpace} to={`/spaces/${encodeURIComponent(meta.space)}`} title={`${meta.space}\n${t('Пространство: карта, документы, состояние «где мы сейчас»')}`}>{meta.spaceText}</Link>
             </>
           )}
           {` · ${meta.tail}`}
@@ -271,6 +272,7 @@ export function RunList() {
                     </button>
                   </li>
                 )}
+                {!g.space && <ProposeSpaces />}
               </ul>
             </div>
           );

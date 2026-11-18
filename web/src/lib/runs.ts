@@ -1,18 +1,20 @@
 // Список запусков в сайдбаре без React и DOM (ui/app.js renderRunList, runFilterHtml): скрытые, фильтр по статусу, поиск,
-// группы по проектам с «ещё N» и живыми счётчиками, подписи строк.
+// группы по проекту (пространству — его считает сервер, RunSummary.projectRef) с «ещё N» и живыми счётчиками, подписи строк.
 import type { RunSummary } from '@server/api-types';
-import { baseName, clock, projectLabels, statusLabel, usd, when } from './format';
+import { clock, statusLabel, usd, when } from './format';
 import { t } from './i18n';
 import { LIVE_STATUSES } from './home';
 import { iterWord } from './graph/text';
 import { runMatches, searchWords } from './search';
+import { projectHint, projectKeyOf, projectLabel, projectOrFolder } from './spaces';
 
 /** Порядок чипов фильтра: сначала то, что требует внимания. */
 export const STATUS_ORDER = ['waiting', 'running', 'paused', 'done', 'max_iterations', 'failed', 'budget_exceeded', 'interrupted', 'aborted'];
 export const RUNS_FLAT_LIMIT = 40;
 export const RUNS_GROUP_LIMIT = 10;
 
-export const projKey = (cwd: string | undefined): string => 'proj:' + (cwd || '');
+/** Ключ свёрнутости группы проекта в fold.ts: proj:<слаг>, proj: — без проекта. */
+export const projKey = (r: Pick<RunSummary, 'projectRef'> | undefined): string => 'proj:' + projectKeyOf(r?.projectRef);
 
 /** Скрывать и удалять можно только закончившийся запуск; оборвавшийся тоже закончился. live — у строк /api/home. */
 export const runManageable = (r: RunSummary & { live?: boolean }, can: boolean): boolean => can && !r.live && !LIVE_STATUSES.includes(r.status);
@@ -28,7 +30,8 @@ export type StatusChip = { status: string; count: number; on: boolean };
 
 export type RunGroup = {
   key: string;
-  cwd: string;
+  /** Слаг пространства проекта; '' — без проекта. */
+  space: string;
   label: string;
   title: string;
   count: number;
@@ -79,25 +82,23 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
   const chips = statusChips(visible, searching ? visible.filter((r) => runMatches(r, words)) : visible, o.statuses);
   const empty = runs.length ? '' : !visible.length ? (hiddenCount ? t('все запуски скрыты') : t('запусков ещё не было')) : searching ? t('Ничего не нашлось') : t('нет запусков с таким статусом');
   if (!grouped) return { chips, runs: runs.slice(0, RUNS_FLAT_LIMIT), groups: [], searching, hiddenCount, empty };
-  // запуски отсортированы от новых, поэтому и проекты идут по свежести последнего запуска
+  // запуски отсортированы от новых, поэтому и проекты идут по свежести последнего запуска; проект — как у сессий
   const byProject = new Map<string, RunSummary[]>();
   for (const r of runs) {
-    // запуск в worktree — в группе своего проекта, а не отдельной папкой на каждую ветку
-    const k = r.project || r.cwd || '';
+    const k = projectKeyOf(r.projectRef);
     if (!byProject.has(k)) byProject.set(k, []);
     byProject.get(k)!.push(r);
   }
-  const labels = projectLabels([...byProject.keys()]);
-  const groups = [...byProject].map(([cwd, list]): RunGroup => {
-    const key = projKey(cwd);
+  const groups = [...byProject].map(([space, list]): RunGroup => {
+    const key = projKey(list[0]);
     const activeIdx = list.findIndex((r) => r.id === o.activeId);
     const shown = showAll.has(key) || activeIdx >= RUNS_GROUP_LIMIT ? list : list.slice(0, RUNS_GROUP_LIMIT);
     const n = (s: string) => list.filter((r) => r.status === s).length;
     return {
       key,
-      cwd,
-      label: labels.get(cwd)!,
-      title: cwd || t('директория проекта не записана в run.json'),
+      space,
+      label: projectLabel(list[0]!.projectRef),
+      title: projectHint(list[0]!.projectRef),
       count: list.length,
       live: { waiting: n('waiting'), paused: n('paused'), running: n('running') },
       runs: shown,
@@ -160,13 +161,15 @@ export const runRowTitle = (r: RunSummary): string =>
   [
     r.title ? `${r.title}\nflow ${r.flow}` : r.flow,
     [statusLabel(r.status), when(r.startedAt), iterWord(r.iterations), `≈${usd(r.totalCostUsd)}`].join(' · '),
-    ...(r.space ? [`◇ ${r.space}`] : []),
+    projectLabel(r.projectRef),
+    ...(r.space && r.space !== r.projectRef?.space ? [`◇ ${r.space}`] : []),
     ...(r.knowledge?.length ? [r.knowledge.map((k) => `#${k}`).join(' ')] : []),
     ...(r.cwd ? [r.cwd] : []),
     ...(r.parent ? [t('вызван блоком {block} запуска {id}', { block: r.parent.block, id: r.parent.runId })] : []),
   ].join('\n');
 
-export type RunRowMeta = { status: string; tone: StatusTone; when: string; space: string; tail: string };
+/** space — слаг явного пространства (ссылка), spaceText — его подпись: проектом, как у групп и на Главной. */
+export type RunRowMeta = { status: string; tone: StatusTone; when: string; space: string; spaceText: string; tail: string };
 
 /**
  * Строка меты под именем (одна, с многоточием): статус словом (у истории пять конечных статусов — точкой их не
@@ -178,9 +181,11 @@ export const runRowMeta = (r: RunSummary, withProject: boolean, now: Date = new 
   tone: statusTone(r.status),
   when: clock(r.startedAt, now),
   space: r.space ?? '',
+  spaceText: !r.space ? '' : r.projectRef?.space === r.space ? projectLabel(r.projectRef) : `◇ ${r.space}`,
   tail: [
     ...(r.title ? [r.flow] : []),
-    ...(withProject && r.cwd ? [baseName(r.cwd)] : []),
+    // проект без явного пространства (оно ссылкой выше) — подписью проекта, без проекта — папкой
+    ...(withProject && !r.space && (r.projectRef?.space || r.cwd) ? [projectOrFolder(r.projectRef, r.cwd)] : []),
     `≈${usd(r.totalCostUsd)}`,
     ...(r.knowledge ?? []).map((k) => `#${k}`),
     ...(r.adhoc ? [t('разовый')] : []),

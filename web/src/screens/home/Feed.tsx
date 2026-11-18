@@ -11,6 +11,7 @@ import { feedTime, usd, when } from '../../lib/format';
 import { FEED_SEEN_KEY, FEED_SHOWN, feedTone, feedWhat, isUnread, unreadCount } from '../../lib/feed';
 import { LS } from '../../lib/storage';
 import { t } from '../../lib/i18n';
+import { projectHint, projectLabel } from '../../lib/spaces';
 import { useMemoryState } from '../../components/useMemoryState';
 import styles from './Feed.module.css';
 
@@ -81,6 +82,8 @@ function FeedRow({ x, unread, now }: { x: FeedItem; unread: boolean; now: number
         <span className={styles.feedDot} />
         <span className={styles.feedTop}>
           <span className={styles.feedFlow}>{x.flow}</span>
+          {/* проект запуска — как в сайдбаре; без проекта ленту не шумим */}
+          {x.projectRef?.space && <span className={styles.feedProject} title={projectHint(x.projectRef)}>{projectLabel(x.projectRef)}</span>}
           <time className={styles.feedTime} title={when(x.at)}>{feedTime(x.at, at)}</time>
         </span>
         <span className={styles.feedWhat} title={w.tip}>

@@ -23,7 +23,7 @@ export const createSpace = (body: { slug: string; title?: string; gist?: string;
  */
 export const saveSpace = (
   slug: string,
-  patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; tags?: string[]; mapBase?: number; stateBase?: number; legacySummary?: 'import' | 'dismiss'; keepTitle?: true },
+  patch: { title?: string; map?: string; state?: string; dirs?: string[]; cwd?: string; tags?: string[]; mapBase?: number; stateBase?: number; legacySummary?: 'import' | 'dismiss'; keepTitle?: true; repos?: string[]; closed?: boolean },
 ) => api<Space>('PUT', `/api/spaces/${enc(slug)}`, patch);
 export const deleteSpace = (slug: string) => api<{ ok: true }>('DELETE', `/api/spaces/${enc(slug)}`);
 export const fetchSpaceContext = (slug: string) => api<SpaceContextView>('GET', `/api/spaces/${enc(slug)}/context`);
