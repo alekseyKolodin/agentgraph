@@ -1,7 +1,7 @@
 // «Новая рутина» (/routines/new, docs/routines/design/New.dc.html): четыре шага — что запускает (подключённый источник,
 // расписание или «Другой сервис…»), какие записи (условия на поля, проверка словами, что пришло последним) или когда,
 // что запустить (flow, пространство, папка, когда ждать меня), сообщать ли о результате. Сбоку — фраза-итог из выбора.
-// «Проверить и включить» сохраняет рутину выключенной (черновиком) и открывает редактор с проверкой на истории.
+// «Дальше: проверка на истории» сохраняет рутину выключенной (черновиком) и открывает редактор с проверкой на истории.
 // ?tpl= — шаблон из пустого списка, ?source= — источник, только что подключённый на «Подключить сервис».
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
@@ -25,7 +25,10 @@ import styles from './Routines.module.css';
 
 const MESSAGE_KINDS = ['slack', 'telegram'];
 const CODE_KINDS = ['gitlab', 'github'];
-const SERVICE_SKIP = new Set([...MESSAGE_KINDS, ...CODE_KINDS, 'jira', 'email', 'rss', 'folder']);
+const MEETING_RE = /fireflies|otter|granola|fathom|zoom|meet\b|meeting|transcript|встреч|созвон|транскрипт/i;
+
+/** Источник встреч: Fireflies и подобные — по виду, названию и описанию источника (рецепт кладёт их в title/description). */
+const isMeetingSource = (s: SourceView): boolean => MEETING_RE.test(`${s.spec.kind} ${s.spec.title} ${s.spec.description ?? ''}`);
 
 /** Источник под шаблон пустого списка: бaг — чат, MR — код, встреча — сервис, сводка — расписание. */
 function sourceForTemplate(tpl: string | null, sources: SourceView[]): string {
@@ -33,7 +36,7 @@ function sourceForTemplate(tpl: string | null, sources: SourceView[]): string {
   const pick = (ok: (kind: string) => boolean) => sources.find((s) => ok(s.spec.kind))?.slug ?? '';
   if (tpl === 'bug') return pick((k) => MESSAGE_KINDS.includes(k));
   if (tpl === 'mr') return pick((k) => CODE_KINDS.includes(k));
-  if (tpl === 'meeting') return pick((k) => !SERVICE_SKIP.has(k));
+  if (tpl === 'meeting') return sources.find(isMeetingSource)?.slug ?? '';
   return '';
 }
 
@@ -63,6 +66,8 @@ function NewForm({ data }: { data: RoutinesOverview }) {
   const set = (patch: Partial<RoutineDraft>) => setD((x) => ({ ...x, ...patch }));
 
   const source = data.sources.find((s) => s.slug === d.source);
+  // шаблон «Встреча…», а источника встреч нет: не подсовываем чужой сервис, зовём подключить Fireflies
+  const needFireflies = tpl === 'meeting' && !d.source && !data.sources.some(isMeetingSource);
   const kind = source ? data.kinds.find((k) => k.kind === source.spec.kind) : undefined;
   const fields = useMemo(() => matchFields(kind), [kind]);
   const replyTargets = data.sources.filter((s) => data.kinds.find((k) => k.kind === s.spec.kind)?.canReply);
@@ -113,6 +118,11 @@ function NewForm({ data }: { data: RoutinesOverview }) {
       <div className={styles.newGrid}>
         <div>
           <Step n={1} id="s1" title={t('Что запускает')}>
+            {needFireflies && (
+              <span className={styles.hint}>
+                {t('Источника встреч пока нет.')} <Link to="/routines/connect?from=new">{t('Подключить Fireflies.ai')}</Link> {t('(готовый рецепт, нужен ключ API) или выбери другой источник.')}
+              </span>
+            )}
             <div className={styles.picks} role="group" aria-labelledby="s1">
               {data.sources.map((s) => {
                 const k = data.kinds.find((x) => x.kind === s.spec.kind);
@@ -170,11 +180,11 @@ function NewForm({ data }: { data: RoutinesOverview }) {
             />
           </label>
           <button type="button" className="btn primary" disabled={saving || missing.length > 0 || !title.trim()} title={missingText || undefined} onClick={() => void save()}>
-            {t('Проверить и включить')}
+            {t('Дальше: проверка на истории')}
           </button>
           {missing.length > 0 && <span className={styles.hint}>{missingText[0]!.toUpperCase() + missingText.slice(1)}.</span>}
           {error && <span className={styles.err}>{error}</span>}
-          <span className={styles.hint}>{t('Сохранится черновиком. На следующем экране проверка на истории, остановки и лимиты.')}</span>
+          <span className={styles.hint}>{t('Рутина сохранится выключенным черновиком. На следующем экране — проверка на истории, остановки и лимиты, и там её можно включить.')}</span>
         </aside>
       </div>
     </>
@@ -302,6 +312,13 @@ function FlowStep({ d, set }: StepProps) {
         <span className={styles.barGap} />
         <button type="button" className="btn small ghost" title={t('Описать задачу словами — ИИ соберёт flow')} onClick={openNewFlow}>{t('Собрать новый flow…')}</button>
       </div>
+      {!isSchedule(d) && (
+        <div className={styles.field}>
+          <span className={styles.lbl}>{t('Задача для flow')}</span>
+          <textarea className={styles.inp} rows={2} aria-label={t('Задача flow')} placeholder={t('Задача flow; событие дописывается к ней как данные')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
+          <span className={styles.hint}>{t('К задаче flow получит событие: заголовок, автора, ссылку, текст и поля. Передавать их отдельно не нужно: что именно придёт — «Что получит flow» в проверке справа.')}</span>
+        </div>
+      )}
       <div className={styles.field}>
         <span className={styles.lbl}>{t('Папка проекта')}</span>
         <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
