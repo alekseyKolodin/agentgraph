@@ -307,6 +307,8 @@ async function modelPoll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEv
   } finally {
     link.release();
   }
+  // опрос моделью стоит денег и тогда, когда записей нет или сессия не удалась: в расход источника — один раз за опрос
+  ctx.cost?.(r.costUsd);
   if (!r.ok) throw new Error(`Сессия подключения не удалась: ${r.errors.join('; ') || r.subtype}`);
   const records = (r.structured as { records?: unknown } | undefined)?.records;
   if (!Array.isArray(records)) throw new Error('Сессия подключения не вернула список записей');

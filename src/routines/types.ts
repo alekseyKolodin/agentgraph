@@ -114,14 +114,31 @@ export type SourceKindView = {
   recipe?: boolean;
 };
 
-export type SourceStatus = 'ok' | 'error' | 'idle' | 'needs_secret';
+/**
+ * ok — последняя проверка прошла; error — не прошла (статус переживает перезапуск); idle — источник не нужен ни одной
+ * включённой рутине; needs_secret — не хватает ключа; unchecked — ни одной проверки ещё не было; empty — проверки идут,
+ * но новых записей нет дольше обычного для этого источника (протухший токен, фильтр по дате, limit).
+ */
+export type SourceStatus = 'ok' | 'error' | 'idle' | 'needs_secret' | 'unchecked' | 'empty';
+
+/**
+ * Итог одной проверки источника (опрос или пачка live-соединения), хранится в routines-state/checks/<slug>.json.
+ * at — когда проверка была (не время «рутина отработала» и не граница простоя из last-check.json); total — сколько записей
+ * вернул сервис; fresh — сколько из них новых (ещё не виденных); emptySince — с какого времени новых записей нет.
+ */
+export type CheckResult = { at: string; ok: boolean; total: number; fresh: number; error?: string; emptySince?: string };
 
 export type SourceView = {
   slug: string;
   spec: SourceSpec;
   status: SourceStatus;
   error?: string;
+  /** Время последней проверки (check.at; для старых данных — last-check.json). */
   lastCheckAt?: string;
+  /** Итог последней проверки; нет — источник ещё ни разу не проверялся. */
+  check?: CheckResult;
+  /** Расход опроса моделью (вид connector без скрипта): сегодня и за 7 дней, $. Нет — опрос ничего не тратит. */
+  pollCostUsd?: { today: number; week: number };
   /** Каких ключей не хватает. */
   missingSecrets: string[];
   /** Какие рутины его используют (слаги). */
@@ -231,7 +248,10 @@ export type LogEntry = {
   /** Почему событие подошло — ответ проверки словами; остаётся у строки ожидания, очереди и запуска. */
   why?: string;
   runId?: string;
+  /** Всё, что потрачено на строку: проверка словами + запуск. */
   costUsd?: number;
+  /** Из costUsd — проверка словами (у запущенных событий её не затирает стоимость запуска). */
+  checkCostUsd?: number;
   /** Отправленный наружу ответ (ссылка), если был. */
   replied?: { at: string; link?: string; text: string };
   /** Когда начался запуск по этой строке (per_day и «сегодня» считаются по нему, каким бы ни стал исход). */

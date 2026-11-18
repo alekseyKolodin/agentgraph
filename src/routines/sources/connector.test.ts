@@ -289,3 +289,14 @@ test('сборка: ответ модели → spec; битые аргумен�
   if (a.ok) assert.deepEqual((a.spec.config.script as { steps: unknown[] }).steps, [{ tool: READ, args: {}, say: 'Читает', text: { split: '^---', id: 'id: (\\S+)' } }]);
   assert.deepEqual(buildSpecOf({ ok: true, steps: [] }, { tools: [READ], request: 'r' }), { ok: false, error: 'Сессия не вернула шагов скрипта', retry: true });
 });
+
+test('connector без скрипта: стоимость опроса моделью уходит в ctx.cost один раз — и когда записей нет, и когда сессия не удалась', async () => {
+  const spent: number[] = [];
+  const ctx = { ...makeCtx({ config: { tool: TOOL } }), cost: (usd: number) => void spent.push(usd) };
+  const many = connectorKind({ session: async () => ok({ records: [{ id: 'a' }, { id: 'b' }] }) });
+  assert.equal((await many.poll!(ctx)).length, 2);
+  await connectorKind({ session: async () => ok({ records: [] }) }).poll!(ctx);
+  const failed = connectorKind({ session: async () => ({ ...ok(undefined), ok: false, subtype: 'error_max_turns', errors: ['долго'], costUsd: 0.03 }) });
+  await assert.rejects(() => failed.poll!(ctx), /долго/);
+  assert.deepEqual(spent, [0.01, 0.01, 0.03]);
+});
