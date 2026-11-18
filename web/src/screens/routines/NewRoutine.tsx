@@ -19,6 +19,7 @@ import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset
 import { foundRow } from '../../lib/routines/source';
 import { buildSpec, draftMissing, emptyDraft, isSchedule, REPLY_CHOICES, SCHEDULE, slugify, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
 import { NotAvailable } from './RoutinesList';
+import { CwdField } from './CwdField';
 import { Conditions, cx, Seg, useFlowBlocks, WaitClause } from './parts';
 import styles from './Routines.module.css';
 
@@ -301,10 +302,10 @@ function FlowStep({ d, set }: StepProps) {
         <span className={styles.barGap} />
         <button type="button" className="btn small ghost" title={t('Описать задачу словами — ИИ соберёт flow')} onClick={openNewFlow}>{t('Собрать новый flow…')}</button>
       </div>
-      <label className={styles.field}>
+      <div className={styles.field}>
         <span className={styles.lbl}>{t('Папка проекта')}</span>
-        <input className={cx(styles.inp, styles.mono)} value={d.cwd} placeholder={t('папка пространства или папка по умолчанию')} onChange={(e) => set({ cwd: e.target.value })} />
-      </label>
+        <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
+      </div>
       <div className={styles.field}>
         <span className={styles.lbl}>{t('Ждать меня')}</span>
         <WaitClause mode={d.mode} blocks={blocks} pauseBefore={d.pauseBefore} onChange={(mode, pauseBefore) => set({ mode, pauseBefore })} />

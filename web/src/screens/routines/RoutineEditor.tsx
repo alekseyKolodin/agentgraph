@@ -20,6 +20,7 @@ import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset
 import { buildSpec, draftFromSpec, draftMissing, isSchedule, REPLY_CHOICES, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
 import { estimateText, historyVerdict, isDraft, type Verdict } from '../../lib/routines/view';
 import { NotAvailable } from './RoutinesList';
+import { CwdField } from './CwdField';
 import { Conditions, cx, RoutineHead, Seg, useFlowBlocks, WaitClause } from './parts';
 import styles from './Routines.module.css';
 
@@ -319,7 +320,7 @@ function More({ d, set, r, data, kindCanReply, onYamlSaved }: ClauseProps & { r:
               <option value="new">{t('новом рабочем дереве')}</option>
             </select>
           </div>
-          <input className={cx(styles.inp, styles.mono)} aria-label={t('Папка проекта')} placeholder={t('папка пространства или папка по умолчанию')} value={d.cwd} onChange={(e) => set({ cwd: e.target.value })} />
+          <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
         </div>
       </div>
       <div className={styles.clause}>

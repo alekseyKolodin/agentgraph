@@ -398,4 +398,5 @@ export const routines: Record<string, string> = {
   'Модель смотрит сервис и собирает скрипт…': 'The model is looking at the service and building a script…',
   'Исправляю скрипт по результату прогона…': 'Fixing the script after the test run…',
   'Прогоняю скрипт без модели…': 'Running the script without a model…',
+  'Папка проекта для рутины': 'Project folder for the routine',
 };

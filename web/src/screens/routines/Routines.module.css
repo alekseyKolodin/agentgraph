@@ -249,3 +249,7 @@ select.inp { height: 34px; }
   .clause { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .cond-edit { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
+
+/* «Папка проекта»: чипы недавних папок под полем */
+.recent-dirs { align-items: center; }
+.recent-dirs :global(.chip) { padding: 2px 9px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
