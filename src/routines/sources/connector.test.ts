@@ -315,7 +315,7 @@ test('isSelf коннектора: автор совпал с профилем (
   const ctx = makeCtx({ kind: 'connector' });
   const ev = (author: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', author, fields });
   assert.equal(k.isSelf!(ctx, ev('иван петров')), true);
-  assert.equal(k.isSelf!(ctx, ev('Алекс <ME@corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('Ваня <ME@corp.test>')), true);
   assert.equal(k.isSelf!(ctx, ev('', { user: 'UME' })), true);
   assert.equal(k.isSelf!(ctx, ev('Анна')), false);
   assert.equal(k.isSelf!(ctx, ev('Анна, Иван Петров')), false, 'участники встречи — не моя реплика');
@@ -330,10 +330,10 @@ test('isSelf коннектора: без автора, регистр, «@ло�
   const ev = (author?: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', ...(author === undefined ? {} : { author }), fields });
   assert.equal(k.isSelf!(ctx, ev()), false, 'без автора — не свой');
   assert.equal(k.isSelf!(ctx, ev(undefined, { user: 'U-other' })), false);
-  assert.equal(k.isSelf!(ctx, ev('@AKol')), true);
+  assert.equal(k.isSelf!(ctx, ev('@IPet')), true);
   assert.equal(k.isSelf!(ctx, ev('  иван петров ')), true);
-  assert.equal(k.isSelf!(ctx, ev('"Петров А." <Me@Corp.test>')), true);
-  assert.equal(k.isSelf!(ctx, ev('Петров А. <other@corp.test>')), false);
+  assert.equal(k.isSelf!(ctx, ev('"Петров И." <Me@Corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('Петров И. <other@corp.test>')), false);
   assert.equal(k.isSelf!(ctx, ev('@anna')), false);
   assert.equal(k.isSelf!(ctx, ev('Иван')), false, 'часть имени — не совпадение');
 });
