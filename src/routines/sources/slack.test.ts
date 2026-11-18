@@ -338,9 +338,9 @@ function dmApi(history: Record<string, unknown[]>, wsPort?: number) {
   });
 }
 
-test('опрос без списка запрашивает и лички: имя лички — имя собеседника', async () => {
+test('опрос с «Лички: да» и пустым списком запрашивает и лички: имя лички — имя собеседника', async () => {
   const { fetch, calls } = dmApi({ D1: [{ ts: '1700000001.000000', user: 'U2', text: 'привет, глянь баг' }] });
-  const ctx = makeCtx({ slug: 's', config: {}, secrets, fetch });
+  const ctx = makeCtx({ slug: 's', config: { dms: 'да' }, secrets, fetch });
   const events = await slackKind.poll!(ctx);
   assert.equal(calls.find((c) => c.url.pathname.endsWith('users.conversations'))?.url.searchParams.get('types'), 'public_channel,private_channel,im,mpim');
   const dm = events.find((e) => e.fields.channel_id === 'D1')!;
@@ -407,4 +407,31 @@ test('to_me: упоминание id из профиля и личка — об�
   assert.equal(f({ id: 'D9', name: 'Анна' }, { user: 'U1', text: 'привет' }), true);
   assert.equal(f(ch, { user: 'UME', text: 'я же <@UME>' }), false);
   assert.equal(slackEvent('s', ch, { ts: '1700000000.000100', user: 'U1', text: '<@UME>' }).fields.to_me, false, 'без id профиля и токена сказать нечего');
+});
+
+test('опрос без «Лички: да» и с пустым списком читает только каналы', async () => {
+  const { fetch, calls } = dmApi({ D1: [{ ts: '1700000001.000000', user: 'U2', text: 'личное' }] });
+  const events = await slackKind.poll!(makeCtx({ slug: 's', config: {}, secrets, fetch }));
+  assert.equal(calls.find((c) => c.url.pathname.endsWith('users.conversations'))?.url.searchParams.get('types'), 'public_channel,private_channel');
+  assert.ok(!events.some((e) => e.fields.channel_id === 'D1'));
+});
+
+test('«Лички: да», но у токена нет im:read (missing_scope): повтор только по каналам, источник не ломается', async () => {
+  const types: string[] = [];
+  const { fetch } = fakeFetch(({ url }) => {
+    const m = url.pathname.replace('/api/', '');
+    if (m === 'auth.test') return { ok: true, user_id: 'UBOT', bot_id: 'BBOT', url: 'https://acme.slack.com/' };
+    if (m === 'users.conversations') {
+      types.push(url.searchParams.get('types') ?? '');
+      return url.searchParams.get('types')!.includes('im') ? { ok: false, error: 'missing_scope' } : { ok: true, channels: [{ id: 'C1', name: 'bugs' }] };
+    }
+    if (m === 'conversations.history') return { ok: true, messages: [{ ts: '1700000001.000000', user: 'U1', text: 'привет' }] };
+    if (m === 'users.info') return { ok: true, user: { name: 'ann', profile: { display_name: 'Анна' } } };
+    return { ok: false, error: 'unknown_method' };
+  });
+  const ctx = makeCtx({ slug: 's', config: { dms: 'да' }, secrets, fetch });
+  const events = await slackKind.poll!(ctx);
+  assert.deepEqual(types, ['public_channel,private_channel,im,mpim', 'public_channel,private_channel']);
+  assert.equal(events.length, 1);
+  assert.ok(ctx.logs.some((l) => /im:read/.test(l)));
 });

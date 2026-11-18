@@ -3,8 +3,8 @@
 import { WebSocket } from 'ws';
 import { BASE_MATCH, type SourceCtx, type SourceKind } from '../kind.js';
 import { loadProfile } from '../../settings.js';
-import type { RoutineEvent } from '../types.js';
-import { cfgList, firstLine, isoOfSlackTs, parseEvery, redact, sleep } from './util.js';
+import type { RoutineEvent, SourceSpec } from '../types.js';
+import { cfgList, cfgStr, firstLine, isoOfSlackTs, parseEvery, redact, sleep } from './util.js';
 
 const DEFAULT_API = 'https://slack.com/api';
 const apiBase = (): string => (process.env.AGENTGRAPH_SLACK_API || DEFAULT_API).replace(/\/+$/, '');
@@ -12,8 +12,10 @@ const MIN_POLL_MS = 30_000;
 const FIRST_LIMIT = 20;
 const PAGE_LIMIT = 50;
 const CHANNELS_TTL_MS = 10 * 60_000;
-/** Каналы, лички (im) и групповые лички (mpim). */
-const CONV_TYPES = 'public_channel,private_channel,im,mpim';
+/** Каналы; лички (im) и групповые лички (mpim) добавляются только когда в настройках источника «Лички: да». */
+const CHANNEL_TYPES = 'public_channel,private_channel';
+const DM_TYPES = 'im,mpim';
+const dmsOn = (spec: SourceSpec): boolean => /^(да|yes|true|1|on)$/i.test(cfgStr(spec, 'dms') ?? '');
 
 type Channel = { id: string; name: string };
 type Identity = { userId?: string; botId?: string; url?: string };
@@ -121,7 +123,18 @@ async function channelsOf(ctx: SourceCtx): Promise<Channel[]> {
   if (cached && Date.now() - cached.at < CHANNELS_TTL_MS) return cached.list;
   let list: Channel[] = [];
   if (!wanted.length) {
-    const r = await api(ctx, 'users.conversations', { query: { types: CONV_TYPES, exclude_archived: 'true', limit: '200' } });
+    const ask = (types: string) => api(ctx, 'users.conversations', { query: { types, exclude_archived: 'true', limit: '200' } });
+    let r: SlackReply;
+    if (dmsOn(ctx.spec)) {
+      try {
+        r = await ask(`${CHANNEL_TYPES},${DM_TYPES}`);
+      } catch (err) {
+        // токен без im:read/mpim:read: остаёмся на каналах, источник не ломается
+        if (!/missing_scope/.test((err as Error).message)) throw err;
+        ctx.log('Slack: у токена нет прав на лички (im:read, mpim:read) — смотрю только каналы');
+        r = await ask(CHANNEL_TYPES);
+      }
+    } else r = await ask(CHANNEL_TYPES);
     list = await namedConversations(ctx, r.channels);
   } else {
     const byName = wanted.filter((w) => !ID_RE.test(w));
@@ -159,7 +172,7 @@ async function namedConversations(ctx: SourceCtx, raw: unknown): Promise<Channel
   return out;
 }
 
-async function listAllChannels(ctx: SourceCtx, types = CONV_TYPES): Promise<Channel[]> {
+async function listAllChannels(ctx: SourceCtx, types = CHANNEL_TYPES): Promise<Channel[]> {
   const out: Channel[] = [];
   let cursor = '';
   for (let page = 0; page < 5; page++) {
@@ -392,9 +405,10 @@ export const slackKind: SourceKind = {
   delivery: 'live',
   minEveryMs: MIN_POLL_MS,
   setup: [
-    { key: 'SLACK_TOKEN', label: 'Токен Slack', placeholder: 'xoxb-… или xoxp-…', secret: true, hint: 'Нужны права: channels:history, groups:history, channels:read, groups:read, users:read, chat:write. Для личек и групповых личек добавьте im:history, mpim:history, im:read, mpim:read.' },
-    { key: 'SLACK_APP_TOKEN', label: 'Токен приложения для мгновенных сообщений', placeholder: 'xapp-…', secret: true, optional: true, hint: 'Включите Socket Mode в приложении и создайте токен с правом connections:write. Без него сообщения проверяются раз в 30 секунд, а ответы в тредах видны только у тредов, начатых после прошлой проверки.' },
-    { key: 'channels', label: 'Каналы и лички', placeholder: 'bugs, alerts, @Анна', optional: true, hint: 'Названия каналов, имя собеседника (для лички, можно с @) или id через запятую. Пусто — все каналы, лички и групповые лички, где участвует бот.' },
+    { key: 'SLACK_TOKEN', label: 'Токен Slack', placeholder: 'xoxb-… или xoxp-…', secret: true, hint: 'Нужны права: channels:history, groups:history, channels:read, groups:read, users:read, chat:write. Для личек — im:history, mpim:history, im:read, mpim:read.' },
+    { key: 'SLACK_APP_TOKEN', label: 'Токен приложения для мгновенных сообщений', placeholder: 'xapp-…', secret: true, optional: true, hint: 'Включите Socket Mode в приложении и создайте токен с правом connections:write. Для личек через Socket Mode добавьте подписки на события message.im и message.mpim. Без него сообщения проверяются раз в 30 секунд, а ответы в тредах видны только у тредов, начатых после прошлой проверки.' },
+    { key: 'channels', label: 'Каналы и лички', placeholder: 'bugs, alerts, @Анна', optional: true, hint: 'Названия каналов, имя собеседника (для лички, можно с @) или id через запятую. Пусто — все каналы, где состоит токен; лички — только если ниже включено «Лички: да».' },
+    { key: 'dms', label: 'Лички', placeholder: 'да', optional: true, hint: 'При пустом списке каналов: «да» — читать ещё лички и групповые лички (нужны права im:history, mpim:history, im:read, mpim:read). Пусто — не читать. Лички, названные в «Каналах», читаются всегда.' },
   ],
   match: [
     ...BASE_MATCH,
@@ -417,7 +431,7 @@ export const slackKind: SourceKind = {
   },
   describe: (spec) => {
     const channels = cfgList(spec, 'channels');
-    const where = channels.length ? channels.map((c) => (c.startsWith('@') ? c : `#${c.replace(/^#/, '')}`)).join(', ') : 'всех каналах и личках, где участвует бот';
+    const where = channels.length ? channels.map((c) => (c.startsWith('@') ? c : `#${c.replace(/^#/, '')}`)).join(', ') : dmsOn(spec) ? 'всех каналах и личках, где состоит токен' : 'всех каналах, где состоит токен';
     return `Slack: новые сообщения в ${where}. Соединение Socket Mode (если задан SLACK_APP_TOKEN) или опрос conversations.history раз в 30 секунд. Только чтение; ответ — chat.postMessage в тред.`;
   },
 };
