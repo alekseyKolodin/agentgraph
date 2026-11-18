@@ -5,7 +5,7 @@ import type { SessionRequest, SessionResult } from '../../agent.js';
 import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { SourceSpec, SourceTestResult } from '../types.js';
-import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, scriptOf, textItems } from './connector.js';
+import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, plainText, sameTitle, scriptOf, textItems } from './connector.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
@@ -139,6 +139,19 @@ test('скрипт: текстовый ответ разбирается рег�
   assert.deepEqual(events.map((e) => [e.id, e.title, e.author]), [['https://slack.test/p1', 'Не грузится профиль', 'Anna'], ['https://slack.test/p2', 'Падает оплата', 'Boris']]);
 });
 
+test('скрипт: текст в JSON-обёртке разбирается по самому тексту, шапка ответа — не запись', async () => {
+  const body = '# Search Results for: in:#android-code-review\n\n### Ревью: MR !12 Авторизация\nTime: 2026-11-18 09:00\nhttps://slack.test/p1\n\n### Ревью: MR !13 Профиль\nTime: 2026-11-18 09:05\nhttps://slack.test/p2';
+  assert.equal(plainText(toResult(textOf({ results: body }))), body);
+  assert.equal(plainText(toResult(textOf('просто текст'))), 'просто текст');
+  // массив — не обёртка: отдаём сырой текст
+  assert.equal(plainText(toResult(textOf(['a', 'b']))), '["a","b"]');
+  const f = fakeMcp({ [SEARCH]: textOf({ results: body }) });
+  const kind = connectorKind({ session: async () => assert.fail('модель не нужна'), mcp: f.mcp });
+  const steps = [{ tool: SEARCH, args: {}, say: 'Ищет', text: { split: '^### ', id: '(https://\\S+)', title: '^Ревью: (.+)' } }];
+  const events = await kind.poll!(makeCtx({ config: scriptSpec(steps).config }));
+  assert.deepEqual(events.map((e) => [e.id, e.title]), [['https://slack.test/p1', 'MR !12 Авторизация'], ['https://slack.test/p2', 'MR !13 Профиль']]);
+});
+
 test('скрипт: несколько шагов — записи вместе, повторы id один раз; ошибка инструмента — понятная', async () => {
   const f = fakeMcp({ [SEARCH]: textOf([{ id: 'a' }, { id: 'b' }]), [READ]: textOf([{ id: 'b' }, { id: 'c' }]) });
   const kind = connectorKind({ session: async () => assert.fail(), mcp: f.mcp });
@@ -209,6 +222,25 @@ test('сборка: прогон не удался — модель правит
   assert.match(v.problem!, /ничего не нашёл/);
   assert.equal(v.spec.every, '30m');
   assert.equal('script' in v.spec.config, false);
+});
+
+test('сборка: у всех записей один заголовок — модель пересобирает с замечанием; на последней попытке скрипт как есть', async () => {
+  const same = (n: number): SourceTestResult => ({ ok: true, request: 'r', total: n, sample: Array.from({ length: n }, (_, i) => ({ source: 's', id: `m${i}`, at: '', title: 'Channel: #android-code-review (ID: C1)', text: '', fields: {} })) });
+  assert.equal(sameTitle(same(2).sample), 'Channel: #android-code-review (ID: C1)');
+  assert.equal(sameTitle(same(1).sample), undefined);
+  const prompts: string[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (prompts.push(req.prompt), ok({ ok: true, expected: 2, steps: [step] })),
+    testSource: async () => same(2),
+    newId: () => 'b3',
+  });
+  const v = await settle(b, b.start({ tools: [SEARCH], request: 'ревью' }).id);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /У всех найденных записей одинаковый заголовок: «Channel: #android-code-review \(ID: C1\)»/);
+  assert.equal(v.state, 'ready');
+  if (v.state !== 'ready') return;
+  assert.equal(v.mode, 'script');
+  assert.ok(v.spec.config.script);
 });
 
 test('сборка: сервис не подходит — ошибка словами модели; поправка словами помнит прошлый скрипт', async () => {

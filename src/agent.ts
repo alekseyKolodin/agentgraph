@@ -301,6 +301,20 @@ export function wantsClaudeAiConnectors(req: Pick<SessionRequest, 'tools' | 'all
 
 export const NO_CLAUDEAI_CONNECTORS_ENV = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
 
+/** Сессия может вызвать MCP: коннекторы claude.ai или MCP пользователя. MCP артефактов живёт в процессе и не ждёт. */
+export function waitsForMcp(req: Pick<SessionRequest, 'tools' | 'allow' | 'permissionMode'>): boolean {
+  if (wantsClaudeAiConnectors(req)) return true;
+  return [...(req.tools ?? []), ...(req.allow ?? [])].some((t) => t.startsWith('mcp__') && !t.startsWith('mcp__artifacts__'));
+}
+
+/**
+ * Claude Code в режиме SDK не ждёт MCP-серверы на старте, а Claude Desktop ещё и ставит MCP_CONNECTION_NONBLOCKING=true:
+ * на первом ходу коннектор бывает pending, и у модели нет его инструментов. Явное 'false' ждёт подключения.
+ */
+export function blockingMcpEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, MCP_CONNECTION_NONBLOCKING: 'false' };
+}
+
 /** Как долго ждём окно у getContextUsage: оно только украшает чип, сессию из-за него не задерживаем. */
 const WINDOW_PROBE_MS = 5000;
 
@@ -405,7 +419,7 @@ export function sessionOptions(req: SessionRequest, preface?: Preface): Options 
     persistSession: req.persist ?? true,
     permissionMode: req.permissionMode ?? 'default',
     env: {
-      ...process.env,
+      ...(waitsForMcp(req) ? blockingMcpEnv() : process.env),
       CLAUDE_AGENT_SDK_CLIENT_APP: 'agentgraph/0.1.0',
       // CLAUDE.md из доп. директорий без этого флага не грузится (скиллы из них грузятся и так).
       ...(req.additionalDirectories?.length ? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1' } : {}),
@@ -446,6 +460,9 @@ export function sessionOptions(req: SessionRequest, preface?: Preface): Options 
       PreToolUse: [{
         hooks: [async (input) => {
           if (input.hook_event_name !== 'PreToolUse') return {};
+          // StructuredOutput — служебный инструмент SDK, через него сессия со схемой отдаёт ответ:
+          // guard со списком «только эти инструменты» иначе не даёт ей закончить
+          if (req.outputSchema && input.tool_name === 'StructuredOutput') return {};
           let why: string | undefined;
           try {
             why = guard(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, { cwd: input.cwd });

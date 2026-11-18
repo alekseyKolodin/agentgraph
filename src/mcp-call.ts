@@ -4,7 +4,7 @@
 // ошибка понятная, и источник «Сервис через Claude» остаётся на проверке через модель.
 import os from 'node:os';
 import { query, type Options, type Query } from '@anthropic-ai/claude-agent-sdk';
-import { claudeExecutable } from './agent.js';
+import { blockingMcpEnv, claudeExecutable } from './agent.js';
 
 /** Что вернул инструмент: structuredContent, если сервер его дал, иначе текст (JSON — разобранный). */
 export type McpCallResult = { data: unknown; text: string; isError: boolean };
@@ -20,7 +20,7 @@ async function* noPrompt(): AsyncGenerator<never> {
 /** Сессия для нескольких вызовов подряд: серверы поднимаются один раз (около двух секунд). */
 export function openMcp(deps: McpCallDeps = { query: query as unknown as McpCallDeps['query'] }, signal?: AbortSignal): McpCaller {
   // нейтральная папка: те же серверы, что видит выбор сервиса (getMcpServers), без серверов проекта
-  const q = deps.query({ prompt: noPrompt(), options: { ...claudeExecutable(), cwd: os.tmpdir(), persistSession: false, tools: [] } });
+  const q = deps.query({ prompt: noPrompt(), options: { ...claudeExecutable(), cwd: os.tmpdir(), persistSession: false, tools: [], env: blockingMcpEnv() } });
   const close = () => q.close();
   signal?.addEventListener('abort', close, { once: true });
   return {

@@ -24,6 +24,8 @@ test('mcp_call: запрос без модели в нейтральной па�
   assert.deepEqual(sent, [{ subtype: 'mcp_call', tool: 'mcp__claude_ai_Slack__slack_read_channel', arguments: { channel: 'C1' } }]);
   assert.equal(opts?.cwd, os.tmpdir());
   assert.deepEqual(opts?.tools, []);
+  // серверы ждём на старте, иначе коннектор бывает ещё pending
+  assert.equal(opts?.env?.MCP_CONNECTION_NONBLOCKING, 'false');
   ac.abort();
   assert.equal(closed, 1);
 });

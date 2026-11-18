@@ -616,6 +616,14 @@ test('agent.ts: исключение внутри guard — отказ, cwd пр
   assert.equal(spec.permissionDecision, 'deny');
   assert.match(spec.permissionDecisionReason, /сломалось.*отклонён/);
 });
+test('agent.ts: StructuredOutput проходит guard только у сессии со схемой ответа', async () => {
+  const guard = (tool: string) => (tool === 'mcp__x__read' ? undefined : 'Разрешены только отмеченные инструменты');
+  const call = (o: ReturnType<typeof sessionOptions>) =>
+    o.hooks!.PreToolUse![0].hooks[0]({ hook_event_name: 'PreToolUse', tool_name: 'StructuredOutput', tool_input: {}, tool_use_id: 't', session_id: 's', transcript_path: '', cwd: '/w' }, 't', { signal: new AbortController().signal });
+  assert.deepEqual(await call(sessionOptions({ prompt: 'x', cwd: '/w', tools: [], guard, outputSchema: { type: 'object' } })), {});
+  const denied = (await call(sessionOptions({ prompt: 'x', cwd: '/w', tools: [], guard }))) as { hookSpecificOutput: { permissionDecision: string } };
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+});
 test('canonical: вход — как у Claude Code (trim, ~, «..» лексически, обратный слэш — часть имени); висячая ссылка — по цели, а её цель — как у ядра', () => {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-canon-')));
   try {

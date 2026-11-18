@@ -29,3 +29,20 @@ test('коннекторы: остаются, если сессия может �
   // без вопросов о разрешении canUseTool не спросят — инструмент коннектора пройдёт и без списка
   assert.equal(flag({ prompt: 'x', cwd: '/w', tools: ['Read'], permissionMode: 'bypassPermissions' }), process.env.ENABLE_CLAUDEAI_MCP_SERVERS);
 });
+
+test('коннекторы: сессия, которая может вызвать MCP, ждёт его подключения на старте', () => {
+  const before = process.env.MCP_CONNECTION_NONBLOCKING;
+  process.env.MCP_CONNECTION_NONBLOCKING = 'true';
+  try {
+    const wait = (req: SessionRequest) => sessionOptions(req).env?.MCP_CONNECTION_NONBLOCKING;
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: [], allow: ['mcp__claude_ai_Slack__slack_read_channel'] }), 'false');
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['Read', 'mcp__wiki__search'] }), 'false');
+    assert.equal(wait({ prompt: 'x', cwd: '/w' }), 'false');
+    // MCP артефактов живёт в процессе — ждать нечего, как и сессии без MCP
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['Read'], allow: ['mcp__artifacts__artifact_read'] }), 'true');
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['Read'] }), 'true');
+  } finally {
+    if (before === undefined) delete process.env.MCP_CONNECTION_NONBLOCKING;
+    else process.env.MCP_CONNECTION_NONBLOCKING = before;
+  }
+});

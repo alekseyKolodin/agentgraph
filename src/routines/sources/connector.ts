@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult } from '../../agent.js';
 import { wrapData } from '../../intake.js';
-import { openMcp, type McpCaller } from '../../mcp-call.js';
+import { openMcp, type McpCaller, type McpCallResult } from '../../mcp-call.js';
 import { mapItems } from '../command.js';
 import { BASE_MATCH, stampAt, type SourceCtx, type SourceKind } from '../kind.js';
 import type { ConnectorBuildView, ConnectorScript, ConnectorStep, FieldMap, McpServiceView, RoutineEvent, SourceSpec, SourceTestResult, TextRule } from '../types.js';
@@ -196,7 +196,18 @@ export function fillArgs(args: unknown, since: Date): unknown {
   return args;
 }
 
-/** Записи из текстового ответа: куски по split, поля — первая группа регулярки. */
+/** Текст для разбора регулярками: из JSON-обёртки берём её строковые поля; массив и прочее — как пришло. */
+export function plainText(r: Pick<McpCallResult, 'data' | 'text'>): string {
+  const d = r.data;
+  if (typeof d === 'string') return d;
+  if (d && typeof d === 'object' && !Array.isArray(d)) {
+    const strings = Object.values(d).filter((v): v is string => typeof v === 'string' && v.trim() !== '');
+    if (strings.length) return strings.join('\n\n');
+  }
+  return r.text;
+}
+
+/** Записи из текстового ответа: куски по split, поля — первая группа регулярки. Кусок без id — шапка или подвал. */
 export function textItems(text: string, rule: TextRule, source: string): RoutineEvent[] {
   const split = regex(rule.split, 'split');
   const out: RoutineEvent[] = [];
@@ -205,6 +216,7 @@ export function textItems(text: string, rule: TextRule, source: string): Routine
       const src = rule[k];
       return src ? (regex(src, k).exec(chunk)?.[1] ?? '').trim() : '';
     };
+    if (rule.id && !get('id')) continue;
     const link = get('link');
     const id = get('id') || link || createHash('sha1').update(chunk).digest('hex').slice(0, 16);
     const rawAt = get('at');
@@ -236,7 +248,7 @@ export async function runScript(script: ConnectorScript, caller: McpCaller, sinc
       if (step.json) {
         if (typeof r.data === 'string') throw new Error('ответ не JSON');
         events = mapItems(r.data, step.json, source);
-      } else events = textItems(r.text, step.text!, source);
+      } else events = textItems(plainText(r), step.text!, source);
     } catch (e) {
       throw new Error(`Шаг ${i + 1} (${name}): ${(e as Error).message}`);
     }
@@ -389,7 +401,8 @@ const BUILD_SYSTEM = `Ты собираешь «источник» для agentg
 2. Составь скрипт из 1–${MAX_STEPS} шагов. Шаг — один вызов инструмента с готовыми аргументами (args_json — объект JSON строкой). Аргументы постоянные; время прошлой проверки можно подставить строкой {{since}} (ISO 8601), {{since_unix}} (секунды) или {{since_date}} (ГГГГ-ММ-ДД). Бери самый прямой способ: обычно хватает одного шага.
 3. Для каждого шага скажи, как достать записи из ответа:
    - format "json", если ответ — JSON: map_items — путь к массиву через точку (пусто, если ответ сам массив), map_id — поле стабильного id записи (обязательно), map_title, map_text, map_link, map_at, map_author — пути к полям внутри записи;
-   - format "text", если ответ — текст: split — регулярка JavaScript, которая разделяет записи; map_id, map_title, map_text, map_link, map_at, map_author — регулярки с одной группой захвата, применяются к куску одной записи. id — то, что не меняется у записи (ссылка, ts, номер).
+   - format "text", если ответ — текст: split — регулярка JavaScript, которая разделяет записи; map_id, map_title, map_text, map_link, map_at, map_author — регулярки с одной группой захвата, применяются к куску одной записи. id — то, что не меняется у записи (ссылка, ts, номер). Так же, если ответ — JSON-обёртка вокруг текста вроде {"results": "…"}: правила пишутся по самому тексту, обёртку agentgraph снимет сам.
+   title — то, по чему человек узнает запись (тема, название задачи или MR, первая строка сообщения), а не служебное поле вроде канала; text — сам текст записи.
 4. say — по-русски, коротко и по-человечески, что делает шаг: «Ищет сообщения в #bugs с упоминанием @anna».
 5. expected — сколько записей по твоему скрипту нашлось бы сейчас (по ответам, которые ты видел).
 Если сделать нельзя (нет нужного инструмента, сервис не отвечает) — ok: false и в reason объясни по-русски почему.
@@ -466,6 +479,13 @@ export function buildSpecOf(raw: unknown, req: BuildRequest): Answer {
   return { ok: true, spec, expected: typeof a.expected === 'number' ? a.expected : 0 };
 }
 
+/** Заголовок, одинаковый у всех записей (их хотя бы две), — значит, title взят из служебного поля. */
+export function sameTitle(sample: RoutineEvent[]): string | undefined {
+  if (sample.length < 2) return undefined;
+  const t = sample[0].title;
+  return sample.every((e) => e.title === t) ? t : undefined;
+}
+
 type Build = { id: string; req: BuildRequest; notes: string[]; spec?: SourceSpec; view: ConnectorBuildView; at: number };
 const MAX_BUILDS = 20;
 const MAX_RETRIES = 1;
@@ -479,7 +499,7 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
     const parts = [`Что нужно пользователю:\n${wrapData(b.req.request)}`, `Разрешённые инструменты:\n${b.req.tools.join('\n')}`];
     if (b.notes.length) parts.push(`Поправки пользователя к предыдущему варианту:\n${wrapData(b.notes.join('\n'))}`);
     if (b.spec) parts.push(`Предыдущий вариант скрипта:\n${wrapData(JSON.stringify(b.spec.config.script, null, 2))}`);
-    if (feedback) parts.push(`Прогон предыдущего варианта без модели не удался. Исправь шаги или правило разбора:\n${wrapData(feedback)}`);
+    if (feedback) parts.push(`Прогон предыдущего варианта без модели показал проблему. Исправь шаги или правило разбора:\n${wrapData(feedback)}`);
     return parts.join('\n\n');
   }
 
@@ -511,6 +531,12 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
   async function drive(b: Build): Promise<void> {
     let feedback: string | undefined;
     let last: { spec: SourceSpec; error: string } | undefined;
+    // рабочий скрипт с одинаковыми заголовками: если исправленный вариант сломается, остаётся он
+    let kept: { spec: SourceSpec; test: SourceTestResult } | undefined;
+    const ready = (k: { spec: SourceSpec; test: SourceTestResult }): ConnectorBuildView => {
+      b.spec = k.spec;
+      return { id: b.id, state: 'ready', spec: k.spec, test: k.test, mode: 'script' };
+    };
     for (let run = 0; run <= MAX_RETRIES; run++) {
       b.view = { id: b.id, state: 'working', step: run === 0 ? 'Модель смотрит сервис и собирает скрипт…' : 'Исправляю скрипт по результату прогона…' };
       const a = await ask(b, feedback);
@@ -519,21 +545,28 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
           feedback = a.error;
           continue;
         }
-        b.view = last ? fallback(b, last) : { id: b.id, state: 'error', error: a.error };
+        b.view = kept ? ready(kept) : last ? fallback(b, last) : { id: b.id, state: 'error', error: a.error };
         return;
       }
       b.spec = a.spec;
       b.view = { id: b.id, state: 'working', step: 'Прогоняю скрипт без модели…' };
       const test = await deps.testSource(a.spec).catch((e: Error): SourceTestResult => ({ ok: false, request: '', sample: [], total: 0, error: e.message }));
       if (test.ok && !(test.total === 0 && a.expected > 0)) {
-        b.view = { id: b.id, state: 'ready', spec: a.spec, test, mode: 'script' };
-        return;
+        const same = sameTitle(test.sample);
+        // попыток больше нет — скрипт работает, заголовки не главное: принимаем как есть
+        if (same === undefined || run === MAX_RETRIES) {
+          b.view = ready({ spec: a.spec, test });
+          return;
+        }
+        kept = { spec: a.spec, test };
+        feedback = `У всех найденных записей одинаковый заголовок: «${same}». Возьми для title то, по чему человек узнает запись (тема, название задачи или MR, первая строка сообщения), а не служебное поле вроде канала.`;
+        continue;
       }
       const error = test.ok ? `Скрипт ничего не нашёл, хотя при сборке было видно записей: ${a.expected}. Скорее всего, не подходит правило разбора ответа.` : (test.error ?? 'Скрипт не выполнился');
       last = { spec: a.spec, error };
       feedback = error;
     }
-    b.view = fallback(b, last!);
+    b.view = kept ? ready(kept) : fallback(b, last!);
   }
 
   /** Разобрать без модели не вышло: тот же источник без скрипта — каждая проверка через модель. */
