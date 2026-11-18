@@ -68,9 +68,8 @@ test('пауза открыта, пока идущий запуск стоит �
   assert.deepEqual(reportFeed('r1', r).map((x) => x.open), [false, false]);
 });
 
-test('конец запуска: только с finishedAt и не у идущего, с ошибкой и стоимостью', () => {
+test('конец запуска: с finishedAt и не у идущего, с ошибкой и стоимостью', () => {
   assert.deepEqual(reportFeed('r1', report({ status: 'running' })), []);
-  assert.deepEqual(reportFeed('r1', report({ status: 'interrupted' })), []);
   const [end] = reportFeed('r1', report({ status: 'failed', finishedAt: '2026-10-07T10:30:00.000Z', error: 'упал\nэтап review' }));
   assert.deepEqual(end, { runId: 'r1', flow: 'demo', id: 'r1:end', kind: 'end', at: '2026-10-07T10:30:00.000Z', status: 'failed', costUsd: 1.25, text: 'упал этап review' });
 });
@@ -83,4 +82,22 @@ test('лента: от новых к старым по всем запускам
   const item = (id: string, at: string): FeedItem => ({ id, kind: 'end', at, runId: id, flow: 'f' });
   const merged = mergeFeed([item('a', '2026-10-07T10:00:00.000Z'), item('c', '2026-10-07T12:00:00.000Z'), item('b', '2026-10-07T11:00:00.000Z')], 2);
   assert.deepEqual(merged.map((x) => x.id), ['c', 'b']);
+});
+
+test('прерванный запуск без finishedAt даёт строку конца со статусом interrupted', () => {
+  const items = reportFeed('r1', report({ status: 'interrupted', error: 'Запуск прервался', questions: [question('q1', '2026-10-07T10:05:00.000Z')] }));
+  const end = items.find((i) => i.kind === 'end');
+  assert.ok(end);
+  assert.equal(end.status, 'interrupted');
+  assert.equal(end.at, '2026-10-07T10:05:00.000Z');
+  assert.equal(end.text, 'Запуск прервался');
+});
+
+test('прерванный запуск без вопросов и пауз кончается в момент старта', () => {
+  const end = reportFeed('r1', report({ status: 'interrupted' })).find((i) => i.kind === 'end');
+  assert.equal(end?.at, '2026-10-07T10:00:00.000Z');
+});
+
+test('идущий запуск строки конца не имеет', () => {
+  assert.equal(reportFeed('r1', report({ status: 'running' })).some((i) => i.kind === 'end'), false);
 });

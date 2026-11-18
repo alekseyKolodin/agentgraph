@@ -1,4 +1,4 @@
-// Slack: сообщения в каналах. Live — Socket Mode через ws (если задан SLACK_APP_TOKEN), иначе опрос conversations.history.
+// Slack: сообщения в каналах, личках и групповых личках. Live — Socket Mode через ws (если задан SLACK_APP_TOKEN), иначе опрос conversations.history.
 // Базовый адрес API — AGENTGRAPH_SLACK_API (фейковый сервер в e2e). Токены в ошибки и журнал не попадают.
 import { WebSocket } from 'ws';
 import { BASE_MATCH, type SourceCtx, type SourceKind } from '../kind.js';
@@ -11,6 +11,8 @@ const MIN_POLL_MS = 30_000;
 const FIRST_LIMIT = 20;
 const PAGE_LIMIT = 50;
 const CHANNELS_TTL_MS = 10 * 60_000;
+/** Каналы, лички (im) и групповые лички (mpim). */
+const CONV_TYPES = 'public_channel,private_channel,im,mpim';
 
 type Channel = { id: string; name: string };
 type Identity = { userId?: string; botId?: string; url?: string };
@@ -118,16 +120,23 @@ async function channelsOf(ctx: SourceCtx): Promise<Channel[]> {
   if (cached && Date.now() - cached.at < CHANNELS_TTL_MS) return cached.list;
   let list: Channel[] = [];
   if (!wanted.length) {
-    const r = await api(ctx, 'users.conversations', { query: { types: 'public_channel,private_channel', exclude_archived: 'true', limit: '200' } });
-    list = (Array.isArray(r.channels) ? r.channels : []).flatMap((c: { id?: string; name?: string }) => (c.id ? [{ id: c.id, name: c.name ?? c.id }] : []));
+    const r = await api(ctx, 'users.conversations', { query: { types: CONV_TYPES, exclude_archived: 'true', limit: '200' } });
+    list = await namedConversations(ctx, r.channels);
   } else {
     const byName = wanted.filter((w) => !ID_RE.test(w));
-    const all = byName.length ? await listAllChannels(ctx) : [];
+    const all = byName.length ? await listAllChannels(ctx, 'public_channel,private_channel') : [];
+    let dms: Channel[] | undefined;
     for (const w of wanted) {
       if (ID_RE.test(w)) list.push({ id: w, name: await nameOfChannel(ctx, w) });
       else {
-        const hit = all.find((c) => c.name === w);
-        if (!hit) throw new Error(`Канал #${w} не найден — проверьте название и что бот добавлен в канал`);
+        let hit = all.find((c) => c.name === w);
+        if (!hit) {
+          // не канал — возможно, личка: имя собеседника, с @ или без (лички и их имена запрашиваем только при нужде)
+          dms ??= await listAllChannels(ctx, 'im,mpim');
+          const who = w.replace(/^@/, '').toLowerCase();
+          hit = dms.find((c) => c.name.toLowerCase() === who);
+        }
+        if (!hit) throw new Error(`Канал или личка «${w}» не найдены — проверьте название и что бот добавлен в канал или есть переписка с этим человеком`);
         list.push(hit);
       }
     }
@@ -137,12 +146,24 @@ async function channelsOf(ctx: SourceCtx): Promise<Channel[]> {
   return list;
 }
 
-async function listAllChannels(ctx: SourceCtx): Promise<Channel[]> {
+type RawConv = { id?: string; name?: string; user?: string; is_im?: boolean };
+
+/** Ответ Slack со списком бесед → {id, name}: у лички имя — имя собеседника (в ответе у неё только id пользователя). */
+async function namedConversations(ctx: SourceCtx, raw: unknown): Promise<Channel[]> {
+  const out: Channel[] = [];
+  for (const c of (Array.isArray(raw) ? raw : []) as RawConv[]) {
+    if (!c.id) continue;
+    out.push({ id: c.id, name: c.user && (c.is_im || !c.name) ? await nameOfUser(ctx, c.user) : c.name ?? c.id });
+  }
+  return out;
+}
+
+async function listAllChannels(ctx: SourceCtx, types = CONV_TYPES): Promise<Channel[]> {
   const out: Channel[] = [];
   let cursor = '';
   for (let page = 0; page < 5; page++) {
-    const r = await api(ctx, 'conversations.list', { query: { types: 'public_channel,private_channel', exclude_archived: 'true', limit: '1000', ...(cursor ? { cursor } : {}) } });
-    for (const c of (Array.isArray(r.channels) ? r.channels : []) as Array<{ id?: string; name?: string }>) if (c.id && c.name) out.push({ id: c.id, name: c.name });
+    const r = await api(ctx, 'conversations.list', { query: { types, exclude_archived: 'true', limit: '1000', ...(cursor ? { cursor } : {}) } });
+    out.push(...(await namedConversations(ctx, r.channels)));
     cursor = str((r.response_metadata as { next_cursor?: string } | undefined)?.next_cursor) ?? '';
     if (!cursor) break;
   }
@@ -154,7 +175,8 @@ async function nameOfChannel(ctx: SourceCtx, id: string): Promise<string> {
   if (known) return known;
   try {
     const r = await api(ctx, 'conversations.info', { query: { channel: id } });
-    const name = str((r.channel as { name?: string } | undefined)?.name) ?? id;
+    const c = r.channel as RawConv | undefined;
+    const name = c?.user && (c.is_im || !c.name) ? await nameOfUser(ctx, c.user) : str(c?.name) ?? id;
     channelNames.set(id, name);
     return name;
   } catch {
@@ -354,13 +376,13 @@ async function reply(ctx: SourceCtx, target: Record<string, unknown> | undefined
 export const slackKind: SourceKind = {
   kind: 'slack',
   title: 'Slack',
-  summary: 'Новые сообщения в каналах Slack',
+  summary: 'Новые сообщения в каналах и личках Slack',
   delivery: 'live',
   minEveryMs: MIN_POLL_MS,
   setup: [
-    { key: 'SLACK_TOKEN', label: 'Токен Slack', placeholder: 'xoxb-… или xoxp-…', secret: true, hint: 'Нужны права: channels:history, groups:history, channels:read, groups:read, users:read, chat:write.' },
+    { key: 'SLACK_TOKEN', label: 'Токен Slack', placeholder: 'xoxb-… или xoxp-…', secret: true, hint: 'Нужны права: channels:history, groups:history, channels:read, groups:read, users:read, chat:write. Для личек и групповых личек добавьте im:history, mpim:history, im:read, mpim:read.' },
     { key: 'SLACK_APP_TOKEN', label: 'Токен приложения для мгновенных сообщений', placeholder: 'xapp-…', secret: true, optional: true, hint: 'Включите Socket Mode в приложении и создайте токен с правом connections:write. Без него сообщения проверяются раз в 30 секунд, а ответы в тредах видны только у тредов, начатых после прошлой проверки.' },
-    { key: 'channels', label: 'Каналы', placeholder: 'bugs, alerts', optional: true, hint: 'Названия или id через запятую. Пусто — все каналы, где состоит бот.' },
+    { key: 'channels', label: 'Каналы и лички', placeholder: 'bugs, alerts, @Анна', optional: true, hint: 'Названия каналов, имя собеседника (для лички, можно с @) или id через запятую. Пусто — все каналы, лички и групповые лички, где участвует бот.' },
   ],
   match: [
     ...BASE_MATCH,
@@ -381,7 +403,7 @@ export const slackKind: SourceKind = {
   },
   describe: (spec) => {
     const channels = cfgList(spec, 'channels');
-    const where = channels.length ? channels.map((c) => `#${c.replace(/^#/, '')}`).join(', ') : 'всех каналах, где состоит бот';
+    const where = channels.length ? channels.map((c) => (c.startsWith('@') ? c : `#${c.replace(/^#/, '')}`)).join(', ') : 'всех каналах и личках, где участвует бот';
     return `Slack: новые сообщения в ${where}. Соединение Socket Mode (если задан SLACK_APP_TOKEN) или опрос conversations.history раз в 30 секунд. Только чтение; ответ — chat.postMessage в тред.`;
   },
 };

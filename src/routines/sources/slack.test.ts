@@ -105,7 +105,7 @@ test('опрос без списка каналов берёт все канал
 
 test('канал, которого нет, — понятная ошибка', async () => {
   const { fetch } = slackApi({});
-  await assert.rejects(() => slackKind.poll!(makeCtx({ config: { channels: 'nope' }, secrets, fetch })), /Канал #nope не найден/);
+  await assert.rejects(() => slackKind.poll!(makeCtx({ config: { channels: 'nope' }, secrets, fetch })), /«nope» не найдены/);
 });
 
 test('ошибка API Slack: текст понятный, токена в нём нет', async () => {
@@ -306,4 +306,75 @@ test('Socket Mode: disconnect от Slack — тихое переподключе
   wss.close();
   assert.equal(connections, 2);
   assert.deepEqual(got, ['после обновления']);
+});
+
+/** Фейковый Slack с личкой D1 (собеседник U2 — Борис) и групповой личкой G1; типы беседы смотрим по запросу. */
+function dmApi(history: Record<string, unknown[]>, wsPort?: number) {
+  return fakeFetch(({ url, body }) => {
+    const m = url.pathname.replace('/api/', '');
+    const types = url.searchParams.get('types') ?? '';
+    const boris = url.searchParams.get('user') === 'U2';
+    if (m === 'apps.connections.open') return { ok: true, url: `ws://127.0.0.1:${wsPort}` };
+    if (m === 'auth.test') return { ok: true, user_id: 'UBOT', bot_id: 'BBOT', url: 'https://acme.slack.com/' };
+    if (m === 'users.conversations') {
+      return { ok: true, channels: [...(types.includes('public_channel') ? [{ id: 'C1', name: 'bugs' }] : []), ...(types.includes('im') ? [{ id: 'D1', is_im: true, user: 'U2' }] : []), ...(types.includes('mpim') ? [{ id: 'G1', name: 'mpdm-a--b-1', is_mpim: true }] : [])] };
+    }
+    if (m === 'conversations.list') return { ok: true, channels: types.includes('im') ? [{ id: 'D1', is_im: true, user: 'U2' }] : [{ id: 'C1', name: 'bugs' }] };
+    if (m === 'conversations.info') return { ok: true, channel: url.searchParams.get('channel') === 'D1' ? { id: 'D1', is_im: true, user: 'U2' } : { id: 'C1', name: 'bugs' } };
+    if (m === 'users.info') return { ok: true, user: { name: boris ? 'boris' : 'ann', profile: { display_name: boris ? 'Борис' : 'Анна' } } };
+    if (m === 'conversations.history') return { ok: true, messages: [...(history[url.searchParams.get('channel')!] ?? [])].reverse() };
+    if (m === 'chat.postMessage') return { ok: true, ts: '1700000009.000100', channel: (body as { channel: string }).channel };
+    return { ok: false, error: 'unknown_method' };
+  });
+}
+
+test('опрос без списка запрашивает и лички: имя лички — имя собеседника', async () => {
+  const { fetch, calls } = dmApi({ D1: [{ ts: '1700000001.000000', user: 'U2', text: 'привет, глянь баг' }] });
+  const ctx = makeCtx({ slug: 's', config: {}, secrets, fetch });
+  const events = await slackKind.poll!(ctx);
+  assert.equal(calls.find((c) => c.url.pathname.endsWith('users.conversations'))?.url.searchParams.get('types'), 'public_channel,private_channel,im,mpim');
+  const dm = events.find((e) => e.fields.channel_id === 'D1')!;
+  assert.equal(dm.fields.channel, 'Борис');
+  assert.equal(dm.link, 'https://acme.slack.com/archives/D1/p1700000001000000');
+  assert.deepEqual(dm.replyTo, { channel: 'D1', thread_ts: '1700000001.000000' });
+  assert.ok('G1' in (ctx.cursorValue() as { ts: Record<string, string> }).ts); // групповая личка опрашивается
+});
+
+test('опрос: личка указывается именем собеседника (с @ и без) или id', async () => {
+  const history = { D1: [{ ts: '1700000001.000000', user: 'U2', text: 'привет' }] };
+  for (const channels of ['@Борис', 'борис', 'D1']) {
+    resetSlackState();
+    const { fetch } = dmApi(history);
+    const events = await slackKind.poll!(makeCtx({ slug: 's', config: { channels }, secrets, fetch }));
+    assert.deepEqual(events.map((e) => [e.fields.channel, e.title]), [['Борис', 'привет']], channels);
+  }
+});
+
+test('reply в личку: chat.postMessage в D-канал, как в обычный', async () => {
+  const { fetch, calls } = dmApi({});
+  const r = await slackKind.reply!(makeCtx({ config: {}, secrets, fetch }), { channel: 'D1', thread_ts: '1700000001.000000' }, 'ок');
+  assert.deepEqual(calls.find((c) => c.url.pathname.endsWith('chat.postMessage'))?.body, { channel: 'D1', text: 'ок', thread_ts: '1700000001.000000' });
+  assert.equal(r.link, 'https://acme.slack.com/archives/D1/p1700000009000100');
+});
+
+test('hint токена называет права для личек, а настройки — что можно указать личку', () => {
+  const hint = slackKind.setup!.find((f) => f.key === 'SLACK_TOKEN')!.hint!;
+  for (const scope of ['im:history', 'mpim:history', 'im:read', 'mpim:read']) assert.ok(hint.includes(scope), scope);
+  assert.match(slackKind.setup!.find((f) => f.key === 'channels')!.hint!, /собеседника/);
+});
+
+test('Socket Mode: сообщение в личке приходит событием с именем собеседника', async () => {
+  const { wss, port } = await startWss();
+  wss.on('connection', (ws) => ws.send(JSON.stringify({ type: 'events_api', envelope_id: 'e1', payload: { event: { type: 'message', channel_type: 'im', channel: 'D1', ts: '1700000001.000000', user: 'U2', text: 'привет' } } })));
+  const { fetch } = dmApi({}, port);
+  const ctx = makeCtx({ slug: 's', config: {}, secrets: { ...secrets, SLACK_APP_TOKEN: 'xapp-x' }, fetch });
+  const got: RoutineEvent[] = [];
+  await slackKind.listen!(ctx, (events) => {
+    got.push(...events);
+    ctx.abort.abort();
+  });
+  for (const c of wss.clients) c.terminate();
+  wss.close();
+  assert.equal(got[0].fields.channel, 'Борис');
+  assert.equal(got[0].fields.channel_id, 'D1');
 });
