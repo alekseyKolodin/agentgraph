@@ -2,6 +2,7 @@
 // Базовый адрес API — AGENTGRAPH_SLACK_API (фейковый сервер в e2e). Токены в ошибки и журнал не попадают.
 import { WebSocket } from 'ws';
 import { BASE_MATCH, type SourceCtx, type SourceKind } from '../kind.js';
+import { loadProfile } from '../../settings.js';
 import type { RoutineEvent } from '../types.js';
 import { cfgList, firstLine, isoOfSlackTs, parseEvery, redact, sleep } from './util.js';
 
@@ -206,8 +207,19 @@ export function isUserMessage(m: SlackMessage): boolean {
   return Boolean(m.text?.trim() || m.files?.length);
 }
 
+/** Обращено ко мне: упомянут <@id> или это личка (id канала на D), если автор не я сам. me — id пользователя из профиля или владельца токена. */
+function toMe(ch: Channel, m: SlackMessage, me?: string): boolean {
+  if (!me || m.user === me) return false;
+  return Boolean(m.text?.includes(`<@${me}>`)) || ch.id.startsWith('D');
+}
+
+/** Кто я для Slack: id из профиля, если задан (с токеном бота владелец токена — бот, не человек), иначе владелец токена. */
+function myUserId(ident: Identity): string | undefined {
+  return loadProfile().slackUserId || ident.userId;
+}
+
 /** Сообщение Slack → событие. author — имя автора, link — адрес рабочего пространства (https://acme.slack.com/). */
-export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { author?: string; url?: string } = {}): RoutineEvent {
+export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { author?: string; url?: string; me?: string } = {}): RoutineEvent {
   const text = m.text ?? '';
   const files = (m.files ?? []).map((f) => f.name || f.title || 'файл');
   const bot = Boolean(m.bot_id) || m.subtype === 'bot_message';
@@ -221,14 +233,14 @@ export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { 
     text,
     link: extra.url ? `${extra.url}archives/${ch.id}/p${m.ts.replace('.', '')}` : undefined,
     author: author || undefined,
-    fields: { channel: ch.name, channel_id: ch.id, thread, author, user: m.user ?? '', bot, bot_id: m.bot_id ?? '', files, ts: m.ts, thread_ts: m.thread_ts ?? '', subtype: m.subtype ?? '' },
+    fields: { channel: ch.name, channel_id: ch.id, thread, author, user: m.user ?? '', bot, bot_id: m.bot_id ?? '', files, ts: m.ts, thread_ts: m.thread_ts ?? '', subtype: m.subtype ?? '', to_me: toMe(ch, m, extra.me) },
     replyTo: { channel: ch.id, thread_ts: m.thread_ts ?? m.ts },
   };
 }
 
 async function toEvent(ctx: SourceCtx, ch: Channel, m: SlackMessage, ident: Identity): Promise<RoutineEvent> {
   const author = m.user ? await nameOfUser(ctx, m.user) : undefined;
-  return slackEvent(ctx.slug, ch, m, { author, url: ident.url });
+  return slackEvent(ctx.slug, ch, m, { author, url: ident.url, me: myUserId(ident) });
 }
 
 type Cursor = { ts?: Record<string, string> };
@@ -388,6 +400,7 @@ export const slackKind: SourceKind = {
     ...BASE_MATCH,
     { key: 'channel', label: 'Канал', type: 'text' },
     { key: 'thread', label: 'Ответ в треде', type: 'bool' },
+    { key: 'to_me', label: 'Обращено ко мне (упомянут или личка)', type: 'bool' },
     { key: 'bot', label: 'Написал бот', type: 'bool' },
     { key: 'files', label: 'Имена прикреплённых файлов', type: 'text' },
   ],
@@ -399,7 +412,8 @@ export const slackKind: SourceKind = {
     const ident = tok ? identities.get(tok) : undefined;
     const user = typeof e.fields.user === 'string' ? e.fields.user : '';
     const botId = typeof e.fields.bot_id === 'string' ? e.fields.bot_id : '';
-    return Boolean((ident?.userId && user === ident.userId) || (ident?.botId && botId === ident.botId));
+    const mine = loadProfile().slackUserId;
+    return Boolean((mine && user === mine) || (ident?.userId && user === ident.userId) || (ident?.botId && botId === ident.botId));
   },
   describe: (spec) => {
     const channels = cfgList(spec, 'channels');

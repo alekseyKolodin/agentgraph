@@ -300,3 +300,17 @@ test('connector без скрипта: стоимость опроса моде�
   await assert.rejects(() => failed.poll!(ctx), /долго/);
   assert.deepEqual(spent, [0.01, 0.01, 0.03]);
 });
+
+test('isSelf коннектора: автор совпал с профилем (имя, почта, id Slack) — не событие', () => {
+  const profile = { names: ['Алексей Колодин'], emails: ['me@corp.test'], slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({ records: [] }), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', author, fields });
+  assert.equal(k.isSelf!(ctx, ev('алексей колодин')), true);
+  assert.equal(k.isSelf!(ctx, ev('Алекс <ME@corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('', { user: 'UME' })), true);
+  assert.equal(k.isSelf!(ctx, ev('Анна')), false);
+  assert.equal(k.isSelf!(ctx, ev('Анна, Алексей Колодин')), false, 'участники встречи — не моя реплика');
+  const empty = connectorKind({ session: async () => ok({}), profile: () => ({ names: [], emails: [] }) });
+  assert.equal(empty.isSelf!(ctx, ev('')), false, 'пустой профиль никого не считает своим');
+});

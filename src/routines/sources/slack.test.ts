@@ -1,16 +1,26 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type { RoutineEvent } from '../types.js';
 import { isUserMessage, resetSlackState, slackEvent, slackKind } from './slack.js';
+import { writeProfile } from '../../settings.js';
 import { fakeFetch, makeCtx } from './testkit.js';
 
+let cfgDir = '';
 beforeEach(() => {
+  // профиль читается из настроек: тест не должен видеть настоящий ~/.agentgraph
+  cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-slack-'));
+  process.env.AGENTGRAPH_CONFIG_DIR = cfgDir;
   resetSlackState();
   process.env.AGENTGRAPH_SLACK_API = 'http://slack.test/api';
 });
 afterEach(() => {
+  delete process.env.AGENTGRAPH_CONFIG_DIR;
+  fs.rmSync(cfgDir, { recursive: true, force: true });
   delete process.env.AGENTGRAPH_SLACK_API;
 });
 
@@ -377,4 +387,24 @@ test('Socket Mode: сообщение в личке приходит событ�
   wss.close();
   assert.equal(got[0].fields.channel, 'Борис');
   assert.equal(got[0].fields.channel_id, 'D1');
+});
+
+test('isSelf: при токене бота «я» — slackUserId из профиля, бот тоже свой', async () => {
+  const { fetch } = slackApi({ C1: [{ ts: '1700000001.000000', user: 'UME', text: 'моё' }, { ts: '1700000002.000000', user: 'UBOT', text: 'бот' }, { ts: '1700000003.000000', user: 'UOTHER', text: 'чужое' }] });
+  const ctx = makeCtx({ config: { channels: 'C1' }, secrets, fetch });
+  writeProfile({ slackUserId: 'UME' });
+  const events = await slackKind.poll!(makeCtx({ config: { channels: 'C1' }, secrets, fetch, cursor: { ts: { C1: '1700000000.000000' } } }));
+  assert.deepEqual(events.map((e) => slackKind.isSelf!(ctx, e)), [true, true, false]);
+});
+
+test('to_me: упоминание id из профиля и личка — обращено ко мне, своё сообщение — нет', async () => {
+  writeProfile({ slackUserId: 'UME' });
+  const ch = { id: 'C1', name: 'bugs' };
+  const me = 'UME';
+  const f = (c: { id: string; name: string }, m: { user?: string; text: string }) => slackEvent('s', c, { ts: '1700000000.000100', ...m }, { me }).fields.to_me;
+  assert.equal(f(ch, { user: 'U1', text: 'глянь <@UME>' }), true);
+  assert.equal(f(ch, { user: 'U1', text: 'глянь <@UOTHER>' }), false);
+  assert.equal(f({ id: 'D9', name: 'Анна' }, { user: 'U1', text: 'привет' }), true);
+  assert.equal(f(ch, { user: 'UME', text: 'я же <@UME>' }), false);
+  assert.equal(slackEvent('s', ch, { ts: '1700000000.000100', user: 'U1', text: '<@UME>' }).fields.to_me, false, 'без id профиля и токена сказать нечего');
 });

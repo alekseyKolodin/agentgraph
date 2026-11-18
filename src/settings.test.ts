@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { configDir, loadSettings, readJiraToken, saveSettings, updateSettings, worktreesDir, writeJiraToken } from './settings.js';
+import { configDir, guessProfile, loadProfile, readProfile, writeProfile, loadSettings, readJiraToken, saveSettings, updateSettings, worktreesDir, writeJiraToken } from './settings.js';
 import { addProject, autodetectProjects, removeProject } from './projects.js';
 
 function withConfigDir(fn: (dir: string) => Promise<void> | void) {
@@ -61,3 +61,59 @@ test(
     assert.equal(loadSettings().projects.length, 1);
   }),
 );
+
+// ---------- профиль «кто я»
+
+function withCfg(fn: () => Promise<void>) {
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-profile-'));
+    const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+    process.env.AGENTGRAPH_CONFIG_DIR = dir;
+    try {
+      await fn();
+    } finally {
+      if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+      else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+}
+const fakeExec = (answers: Record<string, string | Error>) => async (cmd: string, args: string[]) => {
+  const a = answers[`${cmd} ${args.join(' ')}`];
+  if (a === undefined || a instanceof Error) throw a ?? new Error('нет команды');
+  return a;
+};
+const FULL = { 'glab api user': '{"username":"akol"}', 'gh api user': '{"login":"akol-gh"}', 'git config --global user.name': 'Алексей К.\n', 'git config --global user.email': 'git@me.test\n' };
+
+test('профиль: пустые поля заполняются из glab, gh, git config и Jira и помечаются auto', withCfg(async () => {
+  saveSettings({ projects: [], jira: { baseUrl: 'https://j.test', email: 'jira@me.test' } });
+  const r = await readProfile(fakeExec(FULL));
+  assert.deepEqual(r.profile, { names: ['Алексей К.'], emails: ['git@me.test', 'jira@me.test'], gitlab: 'akol', github: 'akol-gh', jiraEmail: 'jira@me.test' });
+  assert.deepEqual(r.auto.sort(), ['emails', 'github', 'gitlab', 'jiraEmail', 'names']);
+  assert.deepEqual(loadProfile(), r.profile, 'найденное сохранено');
+}));
+
+test('профиль: автозаполнение не перетирает введённое руками, а упавшая команда не мешает остальным', withCfg(async () => {
+  writeProfile({ names: ['Лёша'], gitlab: 'mine' });
+  const r = await readProfile(fakeExec({ ...FULL, 'gh api user': new Error('gh не установлен') }));
+  assert.deepEqual(r.profile.names, ['Лёша']);
+  assert.equal(r.profile.gitlab, 'mine');
+  assert.equal(r.profile.github, undefined);
+  assert.equal(r.profile.emails[0], 'git@me.test');
+  assert.deepEqual(r.auto.sort(), ['emails']);
+}));
+
+test('профиль: правка автозаполненного поля снимает пометку, остальные остаются', withCfg(async () => {
+  await readProfile(fakeExec(FULL));
+  const r = writeProfile({ ...loadProfile(), gitlab: 'другой', slackUserId: ' U1 ' });
+  assert.equal(r.profile.slackUserId, 'U1');
+  assert.ok(!r.auto.includes('gitlab'));
+  assert.ok(r.auto.includes('github'));
+  assert.equal((await readProfile(fakeExec({}))).profile.gitlab, 'другой');
+}));
+
+test('профиль: имена и почты из строки — без пустых и повторов', withCfg(async () => {
+  const r = writeProfile({ names: 'Анна, анна;  Борис\n', emails: ['a@b.test', 'A@B.test', ''] });
+  assert.deepEqual(r.profile, { names: ['Анна', 'Борис'], emails: ['a@b.test'] });
+  assert.deepEqual(await guessProfile(undefined, fakeExec({})), {});
+}));
