@@ -1,18 +1,19 @@
 // Срабатывания рутины (/routines/:slug/log, docs/routines/design/Log.dc.html): событие одной строкой — время, исход,
-// заголовок, действие; клик по заголовку раскрывает детали (почему, что ушло наружу, сколько потрачено). Сверху —
+// заголовок, действие; клик по заголовку раскрывает «почему сработало и как исправить» (LogWhy). Сверху —
 // фильтры-чипы по исходу со счётчиками и «за 7 дней · $».
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { LogEntry, RoutineWait } from '@server/routines/types';
+import type { LogEntry, RoutineSpec, RoutineWait } from '@server/routines/types';
 import { errorText } from '../../api';
 import { answerWait, routineKeys, runRoutine, sendFeedback, useRoutine, useRoutineLog, useRoutines } from '../../api/routines';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { clock, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
-import { chipCounts, chipLabel, chipOf, feedbackLabel, feedbackNote, feedbackOptions, feedbackTitle, logAction, logDetail, logTime, verdict, weekCost, type LogChip, type RunStatuses, type Verdict, waitButtons } from '../../lib/routines/view';
+import { chipCounts, chipLabel, chipOf, feedbackLabel, feedbackNote, feedbackOptions, feedbackTitle, logAction, logTime, verdict, weekCost, type LogChip, type RunStatuses, type Verdict, waitButtons } from '../../lib/routines/view';
 import { NotAvailable, useRunStatuses } from './RoutinesList';
+import { LogWhy } from './LogWhy';
 import { cx, RoutineHead } from './parts';
 import styles from './Routines.module.css';
 
@@ -54,7 +55,7 @@ export function RoutineLog() {
           </div>
           <div>
             {rows.map((e) => (
-              <Row key={e.id} e={e} slug={slug} runs={runs} open={open.has(e.id)} onToggle={() => toggle(e.id)} now={new Date(now)} wait={waits.find((w) => w.routine === slug && w.event.id === e.event.id)} />
+              <Row key={e.id} e={e} slug={slug} spec={one.data?.spec} runs={runs} open={open.has(e.id)} onToggle={() => toggle(e.id)} now={new Date(now)} wait={waits.find((w) => w.routine === slug && w.event.id === e.event.id)} />
             ))}
             {!rows.length && <p className="muted">{entries.length ? t('За 7 дней таких событий не было.') : t('Срабатываний пока не было.')}</p>}
           </div>
@@ -64,7 +65,7 @@ export function RoutineLog() {
   );
 }
 
-function Row({ e, slug, runs, open, onToggle, now, wait }: { e: LogEntry; slug: string; runs: RunStatuses; open: boolean; onToggle: () => void; now: Date; wait?: RoutineWait }) {
+function Row({ e, slug, spec, runs, open, onToggle, now, wait }: { e: LogEntry; slug: string; spec?: RoutineSpec; runs: RunStatuses; open: boolean; onToggle: () => void; now: Date; wait?: RoutineWait }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
@@ -123,8 +124,9 @@ function Row({ e, slug, runs, open, onToggle, now, wait }: { e: LogEntry; slug: 
         {e.event.title || e.event.id}
       </button>
       <span className={styles.lgActs}>
-        {e.feedback && <span className={styles.fbNote}>{feedbackNote(e.feedback)}</span>}
-        {feedbackOptions(e).map((v) => (
+        {/* раскрытая строка показывает их в «Исправить» */}
+        {!open && e.feedback && <span className={styles.fbNote}>{feedbackNote(e.feedback)}</span>}
+        {!open && feedbackOptions(e).map((v) => (
           <button key={v} type="button" className="btn small ghost" disabled={busy} title={feedbackTitle(v)} onClick={() => void feedback(v)}>
             {feedbackLabel(v)}
           </button>
@@ -135,23 +137,7 @@ function Row({ e, slug, runs, open, onToggle, now, wait }: { e: LogEntry; slug: 
           </button>
         )}
       </span>
-      {open && (
-        <span className={styles.lgDetail}>
-          {logDetail(e)}
-          {e.event.link && (
-            <>
-              {' '}
-              <a href={e.event.link} target="_blank" rel="noreferrer">{t('Открыть в источнике')}</a>
-            </>
-          )}
-          {e.replied?.link && (
-            <>
-              {' · '}
-              <a href={e.replied.link} target="_blank" rel="noreferrer">{t('Ответ')}</a>
-            </>
-          )}
-        </span>
-      )}
+      {open && <LogWhy e={e} slug={slug} spec={spec} busy={busy} onFeedback={(v) => void feedback(v)} />}
     </div>
   );
 }

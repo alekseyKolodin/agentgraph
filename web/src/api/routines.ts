@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ConnectorBuildView, DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ConnectorBuildView, DraftView, Feedback, HistoryCheck, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import { api } from './client';
@@ -44,6 +44,9 @@ export const saveRoutine = (slug: string, body: { spec: RoutineSpec } | { yaml: 
 export const deleteRoutine = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/${enc(slug)}`);
 export const setRoutineEnabled = (slug: string, enabled: boolean) => api<RoutineView>('POST', `${BASE}/${enc(slug)}/enabled`, { enabled });
 /** «Проверить на истории»: можно для несохранённого spec. */
+/** Почему сработала строка журнала; recheck — проверка словами на этом событии заново (check — исправленное «Если» до сохранения). */
+export const explainLog = (slug: string, id: string) => api<LogExplain>('GET', `${BASE}/${enc(slug)}/log/${enc(id)}/explain`);
+export const recheckLog = (slug: string, id: string, check: string) => api<LogRecheck>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/recheck`, { check });
 export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryCheck>('POST', `${BASE}/${enc(slug)}/history`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
 /** Ручной запуск: по событию журнала или (расписание) сейчас. */
 export const runRoutine = (slug: string, eventId?: string) => api<{ runId?: string; wait?: RoutineWait }>('POST', `${BASE}/${enc(slug)}/run`, eventId ? { eventId } : {});

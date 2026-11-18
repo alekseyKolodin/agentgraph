@@ -257,3 +257,11 @@ select.inp { height: 34px; }
 /* проверка на истории: что получит flow на настоящем событии */
 .preview > summary { cursor: pointer; font-size: var(--fs-meta); color: var(--ink-3); }
 .preview-text { margin: 8px 0 0; padding: 8px 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
+
+/* раскрытая строка «Срабатываний»: событие, почему сработало, исправить */
+.why { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 4px; }
+.why section { display: flex; flex-direction: column; gap: 6px; }
+.why p { margin: 0; }
+.why-event { color: var(--ink); }
+.why-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.why-conds { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }

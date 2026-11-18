@@ -28,12 +28,14 @@ test('фильтры по исходу и детали строки', async ({ p
   await expect(page.getByRole('button', { name: 'Обед в 13:00? [nomatch]' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Сборка упала' })).toBeVisible();
 
-  // детали: почему пропущено (условие на поле — без модели, проверка словами — её ответ)
+  // детали: почему пропущено (условия на поля с тем, что было в событии; проверка словами — её ответ)
   await page.getByRole('button', { name: 'Сборка упала' }).click();
   await expect(page.getByRole('button', { name: 'Сборка упала' })).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByText(/bot/i).first()).toBeVisible();
   await page.getByRole('button', { name: 'Обед в 13:00? [nomatch]' }).click();
-  await expect(page.getByText('Это не баг.')).toBeVisible();
+  await expect(page.getByText(/Ответ проверки: Это не баг/)).toBeVisible();
+  // исправить: «Если» правила уже в поле — можно поправить и проверить на этом событии
+  await expect(page.getByLabel('Если', { exact: true }).last()).not.toHaveValue('');
 
   await chips.getByRole('button', { name: /запущено/ }).click();
   await expect(page.getByRole('button', { name: 'Падает оплата картой' })).toBeVisible();

@@ -463,6 +463,32 @@ test('ручной запуск источника: последнее собы�
   }
 });
 
+test('журнал: почему сработало — событие целиком, условия по полям, «Если» и ответ; проверка заново по новому тексту', async () => {
+  const t = setup({ check: (i) => ({ match: !i.condition.includes('только оплата'), duplicate: false, reason: i.condition.includes('только оплата') ? 'не про оплату' : 'похоже на баг', costUsd: 0.001 }) });
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', match: { channel: 'bugs', 'title~': 'баг' }, check: 'настоящий баг' } });
+    await t.push(t.event('1'));
+    const entry = t.engine.logOf('r', {}).find((e) => e.outcome === 'started')!;
+    const x = t.engine.explain('r', entry.id);
+    assert.equal(x.event?.text, 'текст 1');
+    assert.equal(x.schedule, false);
+    assert.deepEqual(x.conditions, [
+      { key: 'channel', op: '=', want: 'bugs', got: 'bugs', ok: true },
+      { key: 'title', op: 'содержит', want: 'баг', got: 'Баг 1', ok: true },
+    ]);
+    assert.equal(x.check, 'настоящий баг');
+    assert.equal(x.answer, 'похоже на баг');
+    // исправленное «Если» — до сохранения: событие больше не подошло бы
+    const r = await t.engine.recheck('r', entry.id, { check: 'только оплата' });
+    assert.deepEqual([r.match, r.reason], [false, 'не про оплату']);
+    await assert.rejects(t.engine.recheck('r', entry.id, { check: '  ' }), (e: Error & { status?: number }) => e.status === 400);
+    assert.throws(() => t.engine.explain('r', 'nope'), (e: Error & { status?: number }) => e.status === 404);
+  } finally {
+    t.done();
+  }
+});
+
 test('проверка на истории: несохранённое правило по журналу источника, расхождения с «Это не баг»', async () => {
   const t = setup({ check: (i) => ({ match: !i.event.title.includes('3'), duplicate: false, reason: 'ок', costUsd: 0 }) });
   try {

@@ -191,6 +191,17 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
     }
 
     // --- рутины
+    if ((m = p.match(/^\/api\/routines\/([^/]+)\/log\/([A-Za-z0-9_-]+)\/(explain|recheck)$/))) {
+      if (RESERVED.has(m[1])) return undefined;
+      try {
+        assertSlug(m[1]);
+      } catch (err) {
+        return bad((err as Error).message);
+      }
+      if (m[3] === 'explain' && method === 'GET') return ok(engine.explain(m[1], m[2]));
+      if (m[3] === 'recheck' && method === 'POST') return ok(await engine.recheck(m[1], m[2], obj(await readBody())));
+      return undefined;
+    }
     if ((m = p.match(/^\/api\/routines\/([^/]+)(\/enabled|\/history|\/run|\/log|\/feedback)?$/))) {
       const slug = m[1];
       // имена разделов API — не слаги рутин

@@ -76,6 +76,21 @@ export function matchOne(e: RoutineEvent, rawKey: string, want: MatchRule[string
   return { ok, reason: `${key}: ${shown} ${what} ${wants.map((w) => `«${show(w)}»`).join(' / ')}` };
 }
 
+/** Каждое условие правила по отдельности: поле, что хотели, что было в событии, прошло ли — «почему сработало» в журнале. */
+export function explainMatch(rule: MatchRule | undefined, e: RoutineEvent): Array<{ key: string; op: string; want: string; got: string; ok: boolean }> {
+  return Object.entries(rule ?? {}).map(([raw, want]) => {
+    const { key, op } = parseKey(raw);
+    const got = fieldValue(e, key);
+    return {
+      key,
+      op: { '=': '=', '~': 'содержит', '!': '≠', '>': '>', '<': '<' }[op],
+      want: (Array.isArray(want) ? want : [want]).map((w) => show(w)).join(' / '),
+      got: got === undefined ? '' : show(got),
+      ok: matchOne(e, raw, want).ok,
+    };
+  });
+}
+
 /** Все условия правила (И): первое не прошедшее — в reason. Пустое правило — проходит. */
 export function matchRule(rule: MatchRule | undefined, e: RoutineEvent): { ok: boolean; reason?: string } {
   for (const [k, v] of Object.entries(rule ?? {})) {

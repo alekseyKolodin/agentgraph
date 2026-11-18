@@ -10,7 +10,7 @@ import { checkEvent, eventText, type CheckInput, type CheckResult } from './chec
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
 import { acquireEngineLock, type EngineOwner, type LockDeps } from './lock.js';
-import { matchRule } from './match.js';
+import { explainMatch, matchRule } from './match.js';
 import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
@@ -21,6 +21,8 @@ import type {
   CatchUp,
   Feedback,
   HistoryCheck,
+  LogExplain,
+  LogRecheck,
   LogEntry,
   LogOutcome,
   RoutineEvent,
@@ -1216,6 +1218,38 @@ export class RoutineEngine {
   }
 
   /** Событие рутины по id: запущенные и отклонённые, история источника, ожидания, «догнать». */
+  /** Почему сработала строка журнала: событие целиком, условия по текущему правилу, «Если» и ответ проверки. */
+  explain(slug: string, logId: string): LogExplain {
+    const f = this.store.routine(slug);
+    if (!f) throw new HttpishError(404, 'Рутина не найдена');
+    const entry = this.withFeedback(slug, this.store.logAll(slug)).find((x) => x.id === logId);
+    if (!entry) throw new HttpishError(404, 'Срабатывание не найдено');
+    const spec = f.spec;
+    const event = spec ? this.findEvent(slug, spec, entry.event.id) : undefined;
+    const schedule = Boolean(spec && isSchedule(spec.when));
+    const when = spec && !isSchedule(spec.when) ? spec.when : undefined;
+    const answer = entry.why?.trim() || (entry.outcome === 'check_no' || entry.outcome === 'duplicate' ? entry.reason?.trim() : undefined);
+    return {
+      entry,
+      ...(event ? { event } : {}),
+      schedule,
+      conditions: when && event ? explainMatch(when.match, event) : [],
+      ...(when?.check?.trim() ? { check: when.check.trim() } : {}),
+      ...(answer ? { answer } : {}),
+    };
+  }
+
+  /** Проверка словами на событии строки журнала заново: текст из body (исправленное «Если» до сохранения) или правила. */
+  async recheck(slug: string, logId: string, body: { check?: unknown }): Promise<LogRecheck> {
+    const x = this.explain(slug, logId);
+    if (!x.event) throw new HttpishError(404, 'Событие уже не хранится: проверить не на чем');
+    const condition = (typeof body.check === 'string' ? body.check : x.check ?? '').trim().slice(0, 4000);
+    if (!condition) throw new HttpishError(400, 'Напиши, какие события запускать');
+    const ex = this.examples(slug, x.event.id);
+    const c = await this.checkFn({ condition, event: x.event, recent: ex.recent, rejected: ex.rejected, positive: ex.positive, notDuplicate: ex.notDuplicate });
+    return { match: c.match, duplicate: Boolean(c.duplicate), reason: c.reason, costUsd: c.costUsd };
+  }
+
   private findEvent(slug: string, spec: RoutineSpec, eventId: string): RoutineEvent | undefined {
     const ev = this.store.events(slug);
     const pools: RoutineEvent[][] = [

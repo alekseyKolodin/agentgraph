@@ -240,6 +240,26 @@ export type LogEntry = {
   feedback?: Feedback['verdict'];
 };
 
+/**
+ * GET /api/routines/:slug/log/:id/explain — почему сработало: событие целиком, условия на поля по текущему правилу,
+ * проверка словами и её ответ. POST …/recheck { check? } — та же проверка словами на этом событии заново (по тексту
+ * из body или правила): исправленное «Если» видно сразу, до сохранения.
+ */
+export type LogExplain = {
+  entry: LogEntry;
+  /** Событие целиком (журнал событий рутины, ожидания, история источника); нет — только строка журнала. */
+  event?: RoutineEvent;
+  schedule: boolean;
+  /** Условия на поля по текущему правилу: got — что было в событии ('' — поля нет). */
+  conditions: Array<{ key: string; op: string; want: string; got: string; ok: boolean }>;
+  /** «Если» текущего правила; нет — запускается всё, что прошло условия. */
+  check?: string;
+  /** Ответ проверки словами при срабатывании (why или reason строки). */
+  answer?: string;
+};
+
+export type LogRecheck = { match: boolean; duplicate: boolean; reason: string; costUsd: number };
+
 /** Карточка ожидания на главной. */
 export type RoutineWait = {
   id: string;
