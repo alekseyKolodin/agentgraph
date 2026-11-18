@@ -1,16 +1,26 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { AddressInfo } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type { RoutineEvent } from '../types.js';
 import { isUserMessage, resetSlackState, slackEvent, slackKind } from './slack.js';
+import { writeProfile } from '../../settings.js';
 import { fakeFetch, makeCtx } from './testkit.js';
 
+let cfgDir = '';
 beforeEach(() => {
+  // профиль читается из настроек: тест не должен видеть настоящий ~/.agentgraph
+  cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-slack-'));
+  process.env.AGENTGRAPH_CONFIG_DIR = cfgDir;
   resetSlackState();
   process.env.AGENTGRAPH_SLACK_API = 'http://slack.test/api';
 });
 afterEach(() => {
+  delete process.env.AGENTGRAPH_CONFIG_DIR;
+  fs.rmSync(cfgDir, { recursive: true, force: true });
   delete process.env.AGENTGRAPH_SLACK_API;
 });
 
@@ -328,9 +338,9 @@ function dmApi(history: Record<string, unknown[]>, wsPort?: number) {
   });
 }
 
-test('опрос без списка запрашивает и лички: имя лички — имя собеседника', async () => {
+test('опрос с «Лички: да» и пустым списком запрашивает и лички: имя лички — имя собеседника', async () => {
   const { fetch, calls } = dmApi({ D1: [{ ts: '1700000001.000000', user: 'U2', text: 'привет, глянь баг' }] });
-  const ctx = makeCtx({ slug: 's', config: {}, secrets, fetch });
+  const ctx = makeCtx({ slug: 's', config: { dms: 'да' }, secrets, fetch });
   const events = await slackKind.poll!(ctx);
   assert.equal(calls.find((c) => c.url.pathname.endsWith('users.conversations'))?.url.searchParams.get('types'), 'public_channel,private_channel,im,mpim');
   const dm = events.find((e) => e.fields.channel_id === 'D1')!;
@@ -367,7 +377,7 @@ test('Socket Mode: сообщение в личке приходит событ�
   const { wss, port } = await startWss();
   wss.on('connection', (ws) => ws.send(JSON.stringify({ type: 'events_api', envelope_id: 'e1', payload: { event: { type: 'message', channel_type: 'im', channel: 'D1', ts: '1700000001.000000', user: 'U2', text: 'привет' } } })));
   const { fetch } = dmApi({}, port);
-  const ctx = makeCtx({ slug: 's', config: {}, secrets: { ...secrets, SLACK_APP_TOKEN: 'xapp-x' }, fetch });
+  const ctx = makeCtx({ slug: 's', config: { dms: 'да' }, secrets: { ...secrets, SLACK_APP_TOKEN: 'xapp-x' }, fetch });
   const got: RoutineEvent[] = [];
   await slackKind.listen!(ctx, (events) => {
     got.push(...events);
@@ -377,4 +387,94 @@ test('Socket Mode: сообщение в личке приходит событ�
   wss.close();
   assert.equal(got[0].fields.channel, 'Борис');
   assert.equal(got[0].fields.channel_id, 'D1');
+});
+
+test('isSelf: при токене бота «я» — slackUserId из профиля, бот тоже свой', async () => {
+  const { fetch } = slackApi({ C1: [{ ts: '1700000001.000000', user: 'UME', text: 'моё' }, { ts: '1700000002.000000', user: 'UBOT', text: 'бот' }, { ts: '1700000003.000000', user: 'UOTHER', text: 'чужое' }] });
+  const ctx = makeCtx({ config: { channels: 'C1' }, secrets, fetch });
+  writeProfile({ slackUserId: 'UME' });
+  const events = await slackKind.poll!(makeCtx({ config: { channels: 'C1' }, secrets, fetch, cursor: { ts: { C1: '1700000000.000000' } } }));
+  assert.deepEqual(events.map((e) => slackKind.isSelf!(ctx, e)), [true, true, false]);
+});
+
+test('to_me: упоминание id из профиля и личка — обращено ко мне, своё сообщение — нет', async () => {
+  writeProfile({ slackUserId: 'UME' });
+  const ch = { id: 'C1', name: 'bugs' };
+  const me = 'UME';
+  const f = (c: { id: string; name: string }, m: { user?: string; text: string; parent_user_id?: string; thread_ts?: string }) => slackEvent('s', c, { ts: '1700000000.000100', ...m }, { me }).fields.to_me;
+  assert.equal(f(ch, { user: 'U1', text: 'глянь <@UME>' }), true);
+  assert.equal(f(ch, { user: 'U1', text: 'глянь <@UOTHER>' }), false);
+  assert.equal(f({ id: 'D9', name: 'Анна' }, { user: 'U1', text: 'привет' }), true);
+  assert.equal(f(ch, { user: 'UME', text: 'я же <@UME>' }), false);
+  assert.equal(slackEvent('s', ch, { ts: '1700000000.000100', user: 'U1', text: '<@UME>' }).fields.to_me, false, 'без id профиля и токена сказать нечего');
+});
+
+test('опрос без «Лички: да» и с пустым списком читает только каналы', async () => {
+  const { fetch, calls } = dmApi({ D1: [{ ts: '1700000001.000000', user: 'U2', text: 'личное' }] });
+  const events = await slackKind.poll!(makeCtx({ slug: 's', config: {}, secrets, fetch }));
+  assert.equal(calls.find((c) => c.url.pathname.endsWith('users.conversations'))?.url.searchParams.get('types'), 'public_channel,private_channel');
+  assert.ok(!events.some((e) => e.fields.channel_id === 'D1'));
+});
+
+test('«Лички: да», но у токена нет im:read (missing_scope): повтор только по каналам, источник не ломается', async () => {
+  const types: string[] = [];
+  const { fetch } = fakeFetch(({ url }) => {
+    const m = url.pathname.replace('/api/', '');
+    if (m === 'auth.test') return { ok: true, user_id: 'UBOT', bot_id: 'BBOT', url: 'https://acme.slack.com/' };
+    if (m === 'users.conversations') {
+      types.push(url.searchParams.get('types') ?? '');
+      return url.searchParams.get('types')!.includes('im') ? { ok: false, error: 'missing_scope' } : { ok: true, channels: [{ id: 'C1', name: 'bugs' }] };
+    }
+    if (m === 'conversations.history') return { ok: true, messages: [{ ts: '1700000001.000000', user: 'U1', text: 'привет' }] };
+    if (m === 'users.info') return { ok: true, user: { name: 'ann', profile: { display_name: 'Анна' } } };
+    return { ok: false, error: 'unknown_method' };
+  });
+  const ctx = makeCtx({ slug: 's', config: { dms: 'да' }, secrets, fetch });
+  const events = await slackKind.poll!(ctx);
+  assert.deepEqual(types, ['public_channel,private_channel,im,mpim', 'public_channel,private_channel']);
+  assert.equal(events.length, 1);
+  assert.ok(ctx.logs.some((l) => /im:read/.test(l)));
+});
+
+test('to_me: упоминание с именем, ответ в моём треде, личка только при моём токене', () => {
+  const ch = { id: 'C1', name: 'bugs' };
+  const ev = (c: { id: string; name: string }, m: object, extra: object = { me: 'UME' }) => slackEvent('s', c, { ts: '1700000005.000100', thread_ts: '1700000000.000200', user: 'U1', text: 'ок', ...m }, extra).fields.to_me;
+  assert.equal(ev(ch, { text: 'глянь <@UME|алексей>' }), true);
+  assert.equal(ev(ch, { parent_user_id: 'UME' }), true, 'ответ в моём треде');
+  assert.equal(ev(ch, { parent_user_id: 'UOTHER' }), false, 'чужой тред без упоминания');
+  assert.equal(ev(ch, { user: 'UME', parent_user_id: 'UME' }), false, 'я сам в своём треде');
+  assert.equal(ev({ id: 'D1', name: 'Борис' }, {}), true, 'личка с моим токеном');
+  assert.equal(ev({ id: 'D1', name: 'Борис' }, {}, { me: 'UME', ownToken: false }), false, 'личка с ботом — не моя');
+  assert.equal(ev({ id: 'D1', name: 'Борис' }, { text: '<@UME> глянь' }, { me: 'UME', ownToken: false }), true, 'но упоминание — моё');
+});
+
+test('to_me при токене бота: me — id из профиля, лички бота мне не адресованы', async () => {
+  writeProfile({ slackUserId: 'UME' });
+  const { fetch } = dmApi({ C1: [{ ts: '1700000001.000000', user: 'U1', text: 'эй <@UME>' }], D1: [{ ts: '1700000002.000000', user: 'U2', text: 'привет' }] });
+  const events = await slackKind.poll!(makeCtx({ slug: 's', config: { dms: 'да' }, secrets, fetch, cursor: { ts: { C1: '1700000000.000000', D1: '1700000000.000000', G1: '1700000000.000000' } } }));
+  assert.deepEqual(events.map((e) => [e.fields.channel_id, e.fields.to_me]), [['C1', true], ['D1', false]]);
+});
+
+test('Socket Mode: без списка каналов и без «Лички: да» события личек отбрасываются, с «да» — приходят', async () => {
+  for (const dms of [undefined, 'да']) {
+    const { wss, port } = await startWss();
+    wss.on('connection', (ws) => {
+      ws.send(JSON.stringify({ type: 'hello' }));
+      const msg = (id: string, channel: string, channel_type: string) => ws.send(JSON.stringify({ type: 'events_api', envelope_id: id, payload: { event: { type: 'message', channel, channel_type, ts: `17000000${id}.000000`, user: 'U2', text: `в ${channel}` } } }));
+      msg('01', 'D1', 'im');
+      msg('02', 'G1', 'mpim');
+      msg('03', 'C1', 'channel');
+    });
+    const { fetch } = dmApi({}, port);
+    const ctx = makeCtx({ slug: 's', config: { ...(dms ? { dms } : {}) }, secrets: { ...secrets, SLACK_APP_TOKEN: 'xapp-1' }, fetch });
+    const got: string[] = [];
+    const done = slackKind.listen!(ctx, (events) => {
+      got.push(...events.map((e) => String(e.fields.channel_id)));
+      if (got.length >= (dms ? 3 : 1)) ctx.abort.abort();
+    });
+    await done.catch(() => {});
+    for (const c of wss.clients) c.terminate();
+    wss.close();
+    assert.deepEqual([...got].sort(), dms ? ['C1', 'D1', 'G1'] : ['C1'], `dms=${dms}`);
+  }
 });

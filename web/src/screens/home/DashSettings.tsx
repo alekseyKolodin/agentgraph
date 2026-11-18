@@ -11,6 +11,7 @@ import { PathLink } from '../../components/PathLink';
 import { PickDirButton } from '../../components/PickDirButton';
 import { t } from '../../lib/i18n';
 import { useIntegrations } from './Dash';
+import { ProfileForm } from './ProfileForm';
 import styles from './Dash.module.css';
 
 type Msg = { text: string; tone: '' | 'ok' | 'err' };
@@ -27,7 +28,7 @@ const TYPES: { id: TypeId; title: string; sub: string }[] = [
   { id: 'repo', title: t('Git-репозиторий'), sub: t('MR через glab (GitLab), PR через gh (GitHub) и ветки проекта') },
 ];
 
-type View = { at: 'list' } | { at: 'pick' } | { at: 'add'; type: TypeId } | { at: 'jira' } | { at: 'repo'; path: string };
+type View = { at: 'list' } | { at: 'pick' } | { at: 'add'; type: TypeId } | { at: 'jira' } | { at: 'me' } | { at: 'repo'; path: string };
 
 type Row = { key: string; type: TypeId; title: string; sub: string; status: Msg; open: View };
 
@@ -86,6 +87,7 @@ export function DashSettings({ open, onClose }: { open: boolean; onClose: () => 
   if (view.at === 'pick') title = t('Новое подключение');
   else if (view.at === 'add') title = typeTitle(view.type);
   else if (view.at === 'jira') title = 'Jira Cloud';
+  else if (view.at === 'me') title = t('Кто я');
   else if (view.at === 'repo') title = project?.name ?? t('Репозиторий');
 
   return (
@@ -101,6 +103,8 @@ export function DashSettings({ open, onClose }: { open: boolean; onClose: () => 
       </header>
 
       {view.at === 'list' && <ConnList info={info} onOpen={setView} onAdd={() => setView({ at: 'pick' })} />}
+
+      {view.at === 'me' && <ProfileForm />}
 
       {view.at === 'pick' && (
         <ul className={styles.connList}>
@@ -150,6 +154,13 @@ function ConnList({ info, onOpen, onAdd }: { info: IntegrationsInfo; onOpen: (v:
   const list = rows(info);
   return (
     <div className="form">
+      <button className={styles.connRow} onClick={() => onOpen({ at: 'me' })} title={t('Имена, почты и логины: по ним отличают «обращено ко мне» и свои сообщения')}>
+        <span className={styles.connType}>{t('Я')}</span>
+        <span className={styles.connMain}>
+          <b>{t('Кто я')}</b>
+          <span className="muted small">{t('Имена, почты, логины GitLab и GitHub, id в Slack')}</span>
+        </span>
+      </button>
       {list.length ? (
         <ul className={styles.connList}>
           {list.map((r) => (

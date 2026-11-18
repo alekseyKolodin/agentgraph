@@ -8,6 +8,8 @@ import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult } from '../../agent.js';
 import { wrapData } from '../../intake.js';
 import { openMcp, type McpCaller, type McpCallResult } from '../../mcp-call.js';
+import type { Profile } from '../../api-types.js';
+import { loadProfile } from '../../settings.js';
 import { mapItems } from '../command.js';
 import { BASE_MATCH, stampAt, type SourceCtx, type SourceKind } from '../kind.js';
 import type { ConnectorBuildView, ConnectorScript, ConnectorStep, FieldMap, McpServiceView, RoutineEvent, SourceSpec, SourceTestResult, TextRule } from '../types.js';
@@ -74,6 +76,8 @@ export type ConnectorDeps = {
   session: (req: SessionRequest) => Promise<SessionResult>;
   /** Вызовы инструментов без модели; в тестах подменяется. */
   mcp?: (signal: AbortSignal) => McpCaller;
+  /** Профиль «кто я» для isSelf; по умолчанию — сохранённый в настройках. */
+  profile?: () => Profile;
 };
 
 const defaultDeps: ConnectorDeps = {
@@ -365,6 +369,20 @@ function describe(spec: SourceSpec): string {
   return `Сервис через Claude: сессия haiku вызывает ${tools.length ? tools.map(short).join(', ') : '(инструменты не выбраны)'} — «${cfgStr(spec, 'request') ?? 'последние записи'}» — и возвращает список записей. Только чтение; тратит лимит, не чаще раза в 30 минут.`;
 }
 
+/** Для сравнения: регистр, пробелы, ведущая «@» (логин в упоминании) не важны. */
+const norm = (v: string): string => v.normalize('NFC').trim().replace(/^@+/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Автор записи — я: имя, почта, логин или id Slack целиком совпали с профилем. Подстрока не годится: у встречи автор — список участников. */
+export function isMyRecord(p: Profile, e: RoutineEvent): boolean {
+  const mine = new Set([...p.names, ...p.emails, p.gitlab, p.github, p.slackUserId, p.jiraEmail].filter((v): v is string => Boolean(v)).map(norm).filter(Boolean));
+  if (!mine.size) return false;
+  const a = typeof e.author === 'string' ? e.author : '';
+  const email = /<([^<>]+)>/.exec(a)?.[1];
+  const bare = a.replace(/<[^<>]*>/g, '').replace(/^["'\s]+|["'\s]+$/g, '');
+  const uid = typeof e.fields?.user === 'string' ? e.fields.user : typeof e.fields?.user_id === 'string' ? e.fields.user_id : '';
+  return [a, email, bare, uid].some((v) => v && mine.has(norm(v)));
+}
+
 export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
   return {
     kind: 'connector',
@@ -395,6 +413,7 @@ export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
     ],
     match: [...BASE_MATCH],
     poll: (ctx) => poll(ctx, deps),
+    isSelf: (_ctx, e) => isMyRecord((deps.profile ?? loadProfile)(), e),
     describe,
   };
 }

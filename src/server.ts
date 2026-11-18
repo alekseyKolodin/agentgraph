@@ -55,7 +55,7 @@ import type { RunSource } from './intake.js';
 import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
-import { configDir, loadSettings, updateSettings, type Settings } from './settings.js';
+import { configDir, loadSettings, profileRoute, updateSettings, type Settings } from './settings.js';
 import { requestProblem } from './server-guard.js';
 import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
@@ -495,6 +495,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       throw (err as { code?: string }).code === 'ENOENT' ? new HttpError(404, 'Файл не найден') : err;
     }
     return sendJson(res, 200, { path: abs });
+  }
+
+  // --- профиль «Кто я»: GET с автозаполнением, PUT
+  if (p === '/api/settings/profile') {
+    const r = await profileRoute(method, p, () => readJson(req));
+    if (r) return sendJson(res, r.status, r.body);
   }
 
   // --- Jira, проекты GitLab, мои MR с причинами, вход из задачи/MR/ветки, worktree

@@ -308,3 +308,32 @@ test('connector без скрипта: сессия бросила исключ�
   await assert.rejects(() => boom.poll!(ctx), /соединение оборвалось/);
   assert.deepEqual(spent, [0.04]);
 });
+
+test('isSelf коннектора: автор совпал с профилем (имя, почта, id Slack) — не событие', () => {
+  const profile = { names: ['Иван Петров'], emails: ['me@corp.test'], slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({ records: [] }), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', author, fields });
+  assert.equal(k.isSelf!(ctx, ev('алексей колодин')), true);
+  assert.equal(k.isSelf!(ctx, ev('Алекс <ME@corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('', { user: 'UME' })), true);
+  assert.equal(k.isSelf!(ctx, ev('Анна')), false);
+  assert.equal(k.isSelf!(ctx, ev('Анна, Иван Петров')), false, 'участники встречи — не моя реплика');
+  const empty = connectorKind({ session: async () => ok({}), profile: () => ({ names: [], emails: [] }) });
+  assert.equal(empty.isSelf!(ctx, ev('')), false, 'пустой профиль никого не считает своим');
+});
+
+test('isSelf коннектора: без автора, регистр, «@логин», «Имя <почта>» и скобки', () => {
+  const profile = { names: ['Иван  Петров'], emails: ['me@corp.test'], gitlab: 'ipet', slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({}), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author?: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', ...(author === undefined ? {} : { author }), fields });
+  assert.equal(k.isSelf!(ctx, ev()), false, 'без автора — не свой');
+  assert.equal(k.isSelf!(ctx, ev(undefined, { user: 'U-other' })), false);
+  assert.equal(k.isSelf!(ctx, ev('@AKol')), true);
+  assert.equal(k.isSelf!(ctx, ev('  алексей колодин ')), true);
+  assert.equal(k.isSelf!(ctx, ev('"Петров А." <Me@Corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('Петров А. <other@corp.test>')), false);
+  assert.equal(k.isSelf!(ctx, ev('@anna')), false);
+  assert.equal(k.isSelf!(ctx, ev('Иван')), false, 'часть имени — не совпадение');
+});

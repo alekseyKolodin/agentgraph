@@ -2009,3 +2009,9 @@ export type TeamTaskIntake = {
 
 /** POST …/tasks/:id/worktree { repo? }: worktree репо кода на ветке задачи (spec §8.8 п. 2); ветка и репо записаны в задачу. */
 export type TeamTaskWorktree = WorktreeResult & { branch: string; repo: TeamRepoRef; task: TeamTask };
+
+/** Кто я (SPEC 3.3): по профилю отличают «обращено ко мне», «мои обещания», «моя реплика» и свои сообщения в источниках. */
+export type Profile = { names: string[]; emails: string[]; gitlab?: string; github?: string; slackUserId?: string; jiraEmail?: string };
+
+/** GET/PUT /api/settings/profile: профиль и поля, которые заполнены автоматически (glab, gh, git config, Jira). */
+export type ProfileResponse = { profile: Profile; auto: (keyof Profile)[] };
