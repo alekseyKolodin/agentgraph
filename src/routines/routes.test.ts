@@ -168,3 +168,25 @@ test('mcp-tools: сервисы для «Сервис через Claude» без
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('connector-build: проверка тела, старт и опрос сборки', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
+  try {
+    const engine = new RoutineEngine({ store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
+    const started: unknown[] = [];
+    const builds = {
+      start: (req: unknown) => (started.push(req), { id: 'b1', state: 'working' as const, step: '…' }),
+      get: (id: string) => (id === 'b1' ? { id, state: 'error' as const, error: 'нет' } : undefined),
+    };
+    const call = (method: string, url: string, body?: unknown) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null, builds });
+    assert.equal((await call('POST', '/api/routines/sources/connector-build', { tools: [], request: 'x' }))?.status, 400);
+    assert.equal((await call('POST', '/api/routines/sources/connector-build', { tools: ['mcp__a__list'], request: ' ' }))?.status, 400);
+    const r = await call('POST', '/api/routines/sources/connector-build', { tools: ['mcp__a__list', 5], request: 'баги', note: 'только мои', from: 'b0' });
+    assert.equal(r?.status, 201);
+    assert.deepEqual(started, [{ tools: ['mcp__a__list'], request: 'баги', title: undefined, note: 'только мои', from: 'b0' }]);
+    assert.equal((await call('GET', '/api/routines/sources/connector-build/b1'))?.status, 200);
+    assert.equal((await call('GET', '/api/routines/sources/connector-build/zz'))?.status, 404);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

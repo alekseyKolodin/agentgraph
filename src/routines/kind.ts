@@ -26,6 +26,8 @@ export type SourceKind = {
   delivery: SourceKindView['delivery'];
   /** Минимальный интервал опроса, мс. */
   minEveryMs: number;
+  /** Свой минимум для конкретного источника (у «Сервиса через Claude» скрипт без модели можно проверять чаще). */
+  minEveryFor?: (spec: SourceSpec) => number;
   setup: KindField[];
   match: MatchField[];
   /** Опрос: свежие записи (движок сам отсеет виденные id). Первый вызов после подключения задаёт «уже видено». */

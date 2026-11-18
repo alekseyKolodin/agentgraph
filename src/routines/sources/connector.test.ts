@@ -2,13 +2,35 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
 import type { SessionRequest, SessionResult } from '../../agent.js';
-import { CONNECTOR_MODEL, checkToolName, connectorKind, mcpServices } from './connector.js';
+import type { McpCaller, McpCallResult } from '../../mcp-call.js';
+import { toResult } from '../../mcp-call.js';
+import type { SourceSpec, SourceTestResult } from '../types.js';
+import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, scriptOf, textItems } from './connector.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
+const SEARCH = 'mcp__claude_ai_Slack__slack_search_public';
+const READ = 'mcp__claude_ai_Slack__slack_read_channel';
 const ok = (structured: unknown): SessionResult => ({ ok: true, subtype: 'success', text: '', structured, costUsd: 0.01, turns: 2, durationMs: 1, errors: [] });
 
-test('connector: сессия haiku с одним разрешённым read-only инструментом, записи → события', async () => {
+/** Подменённые вызовы MCP: ответ по имени инструмента, все вызовы в calls. */
+function fakeMcp(answers: Record<string, unknown | ((args: Record<string, unknown>) => unknown)>) {
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  let closed = 0;
+  const mcp = (): McpCaller => ({
+    call: async (tool, args): Promise<McpCallResult> => {
+      calls.push({ tool, args });
+      const a = answers[tool];
+      const raw = typeof a === 'function' ? (a as (x: Record<string, unknown>) => unknown)(args) : a;
+      return toResult(raw);
+    },
+    close: () => void closed++,
+  });
+  return { mcp, calls, closed: () => closed };
+}
+const textOf = (v: unknown) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }] });
+
+test('connector без скрипта (источник до скриптов): сессия haiku с одним разрешённым инструментом, записи → события', async () => {
   const reqs: SessionRequest[] = [];
   const kind = connectorKind({
     session: async (req) => {
@@ -24,15 +46,19 @@ test('connector: сессия haiku с одним разрешённым read-on
   assert.match(r.prompt, /<source-data>\nВстречи за сутки\n<\/source-data>/);
   // хук пропускает только свой инструмент
   assert.equal(r.guard!(TOOL, {}, { cwd: '/' }), undefined);
-  assert.match(r.guard!('Bash', {}, { cwd: '/' })!, /Разрешён только/);
-  assert.match(r.guard!('mcp__claude_ai_Fireflies__delete_meeting', {}, { cwd: '/' })!, /Разрешён только/);
+  assert.match(r.guard!('Bash', {}, { cwd: '/' })!, /Разрешены только/);
+  assert.match(r.guard!('mcp__claude_ai_Fireflies__delete_meeting', {}, { cwd: '/' })!, /Разрешены только/);
 });
 
-test('connector: интервал не меньше 30 минут, delivery model, подписи есть', () => {
+test('connector: со скриптом — раз в минуту и без модели, без скрипта — раз в 30 минут', () => {
   const k = connectorKind();
-  assert.equal(k.minEveryMs, 30 * 60_000);
-  assert.equal(k.delivery, 'model');
+  const withScript: SourceSpec = { title: 's', kind: 'connector', config: { tools: [READ], script: { steps: [{ tool: READ, args: {}, say: 'Читает', json: { id: 'ts' } }] } } };
+  const legacy: SourceSpec = { title: 's', kind: 'connector', config: { tool: TOOL } };
+  assert.equal(k.minEveryFor!(withScript), 60_000);
+  assert.equal(k.minEveryFor!(legacy), 30 * 60_000);
+  assert.equal(k.delivery, 'poll');
   assert.ok(k.setup.every((f) => /[а-я]/i.test(f.label)));
+  assert.equal(k.setup.find((f) => f.key === 'tools')!.pick, 'mcp-tool');
 });
 
 test('connector: инструмент записи не принимается, пустое имя и чужой формат — тоже', () => {
@@ -68,7 +94,7 @@ test('connector: обработчик на сигнале опроса сним�
   assert.equal(aborted, true);
 });
 
-test('connector: в выбор попадают только читающие инструменты, похожий на список — первым', () => {
+test('connector: в выбор попадают только читающие инструменты, описание и порядок сервера', () => {
   const tool = (t: string, o: { readOnly?: boolean; annotated?: boolean; description?: string } = {}) => ({
     name: `mcp__claude_ai_Slack__${t}`, tool: t, readOnly: o.readOnly ?? false, annotated: o.annotated ?? false, ...(o.description ? { description: o.description } : {}),
   });
@@ -76,26 +102,134 @@ test('connector: в выбор попадают только читающие и
     {
       server: 'claude.ai Slack', name: 'mcp__claude_ai_Slack', status: 'connected', scope: 'claudeai',
       tools: [
-        tool('slack_read_user_profile'),
+        tool('slack_read_channel', { readOnly: true, annotated: true }),
         tool('slack_send_message'),
-        tool('slack_read_thread', { readOnly: true, annotated: true }),
         tool('slack_search_public', { readOnly: true, annotated: true, description: 'Search messages in public channels' }),
         // сервер разметил: не только чтение — прячем, хоть имя и безобидное
-        tool('slack_schedule_message_later', { readOnly: false, annotated: true }),
+        tool('slack_fetch_later', { readOnly: false, annotated: true }),
       ],
     },
     { server: 'jira', name: 'mcp__jira', status: 'connected', scope: 'user', tools: [{ name: 'mcp__jira__list_issues', tool: 'list_issues', readOnly: false, annotated: false }] },
   ]);
-  assert.equal(slack.title, 'Slack');
-  assert.equal(slack.origin, 'claudeai');
-  assert.deepEqual(slack.tools.map((x) => x.tool), ['slack_search_public', 'slack_read_thread', 'slack_read_user_profile']);
-  assert.equal(slack.tools[0].description, 'Search messages in public channels');
-  assert.equal(slack.hidden, 2);
+  assert.deepEqual([slack.title, slack.origin, slack.hidden], ['Slack', 'claudeai', 2]);
+  assert.deepEqual(slack.tools.map((x) => x.tool), ['slack_read_channel', 'slack_search_public']);
+  assert.equal(slack.tools[1].description, 'Search messages in public channels');
   assert.deepEqual([local.title, local.origin, local.tools.map((x) => x.name)], ['jira', 'claude-code', ['mcp__jira__list_issues']]);
 });
 
-test('connector: поле выбирается из списка, а не вводится', () => {
-  const f = connectorKind().setup.find((x) => x.key === 'tool')!;
-  assert.equal(f.pick, 'mcp-tool');
-  assert.match(f.hint!, /MCP/);
+// ---------------------------------------------------------------- скрипт без модели
+
+const scriptSpec = (steps: unknown[], tools = [SEARCH, READ]): SourceSpec => ({ title: 'Slack', kind: 'connector', config: { tools, request: 'баги', script: { steps } } });
+
+test('скрипт: JSON-ответ по полям, {{since}} — время прошлой проверки, модель не нужна', async () => {
+  const f = fakeMcp({ [SEARCH]: textOf({ messages: [{ ts: '1731920000.1', text: 'Не грузится профиль\nпосле релиза', permalink: 'https://slack.test/p1', user: 'anna' }, { text: 'без ts' }] }) });
+  const kind = connectorKind({ session: async () => assert.fail('модель не нужна'), mcp: f.mcp });
+  const ctx = makeCtx({ slug: 'sl', config: scriptSpec([{ tool: SEARCH, args: { query: 'in:#bugs after:{{since_date}}', limit: 20 }, say: 'Ищет в #bugs', json: { items: 'messages', id: 'ts', title: 'text', text: 'text', link: 'permalink', author: 'user' } }]).config, cursor: '2026-11-17T10:00:00.000Z' });
+  const events = await kind.poll!(ctx);
+  assert.deepEqual(events.map((e) => [e.id, e.title, e.link, e.author]), [['1731920000.1', 'Не грузится профиль', 'https://slack.test/p1', 'anna']]);
+  assert.deepEqual(f.calls, [{ tool: SEARCH, args: { query: 'in:#bugs after:2026-11-17', limit: 20 } }]);
+  assert.equal(f.closed(), 1);
+  // следующая проверка — от этой, с минутой внахлёст
+  assert.ok(Date.now() - Date.parse(String(ctx.cursorValue())) < 2 * 60_000);
+});
+
+test('скрипт: текстовый ответ разбирается регулярками, без id — по ссылке', () => {
+  const text = '### Anna (2026-11-18 09:00)\nНе грузится профиль\nhttps://slack.test/p1\n### Boris (2026-11-18 09:05)\nПадает оплата\nhttps://slack.test/p2';
+  const events = textItems(text, { split: '^### ', author: '^(\\S+)', at: '\\((.+?)\\)', title: '\\n(.+)', link: '(https://\\S+)' }, 'sl');
+  assert.deepEqual(events.map((e) => [e.id, e.title, e.author]), [['https://slack.test/p1', 'Не грузится профиль', 'Anna'], ['https://slack.test/p2', 'Падает оплата', 'Boris']]);
+});
+
+test('скрипт: несколько шагов — записи вместе, повторы id один раз; ошибка инструмента — понятная', async () => {
+  const f = fakeMcp({ [SEARCH]: textOf([{ id: 'a' }, { id: 'b' }]), [READ]: textOf([{ id: 'b' }, { id: 'c' }]) });
+  const kind = connectorKind({ session: async () => assert.fail(), mcp: f.mcp });
+  const steps = [{ tool: SEARCH, args: {}, say: '1', json: { id: 'id' } }, { tool: READ, args: {}, say: '2', json: { id: 'id' } }];
+  const events = await kind.poll!(makeCtx({ config: scriptSpec(steps).config }));
+  assert.deepEqual(events.map((e) => e.id), ['a', 'b', 'c']);
+  const broken = connectorKind({ session: async () => assert.fail(), mcp: fakeMcp({ [SEARCH]: { content: [{ type: 'text', text: 'channel_not_found' }], isError: true } }).mcp });
+  await assert.rejects(() => broken.poll!(makeCtx({ config: scriptSpec([steps[0]]).config })), /slack_search_public: channel_not_found/);
+});
+
+test('скрипт: неотмеченный или пишущий инструмент, шаг без правила разбора, битая регулярка — не выполняются', () => {
+  assert.throws(() => scriptOf(scriptSpec([{ tool: READ, args: {}, say: '', json: { id: 'id' } }], [SEARCH])), /не отмечен/);
+  assert.throws(() => scriptOf(scriptSpec([{ tool: 'mcp__claude_ai_Slack__slack_send_message', args: {}, say: '', json: { id: 'id' } }])), /похож на запись/);
+  assert.throws(() => scriptOf(scriptSpec([{ tool: READ, args: {}, say: '' }])), /как достать записи/);
+  assert.throws(() => scriptOf(scriptSpec([{ tool: READ, args: {}, say: '', text: { split: '\\n', id: '([' } }])), /не разбирается/);
+  assert.deepEqual(fillArgs({ a: ['{{since_unix}}', 5] }, new Date('2026-11-18T00:00:00Z')), { a: ['1794960000', 5] });
+});
+
+// ---------------------------------------------------------------- сборка скрипта
+
+const step = { tool: SEARCH, args_json: '{"query":"in:#bugs"}', say: 'Ищет сообщения в #bugs', format: 'json', map_items: 'messages', map_id: 'ts', map_title: 'text' };
+const found = (total: number): SourceTestResult => ({ ok: true, request: 'r', sample: [], total });
+
+async function settle(b: ReturnType<typeof createConnectorBuilds>, id: string) {
+  for (let i = 0; i < 100; i++) {
+    const v = b.get(id)!;
+    if (v.state !== 'working') return v;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  throw new Error('сборка не закончилась');
+}
+
+test('сборка: модель собирает скрипт по отмеченным инструментам, прогон без модели — источник готов', async () => {
+  const reqs: SessionRequest[] = [];
+  const tested: SourceSpec[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (reqs.push(req), ok({ ok: true, title: 'Slack · #bugs', expected: 2, steps: [step] })),
+    testSource: async (spec) => (tested.push(spec), found(2)),
+    newId: () => 'b1',
+  });
+  const v = await settle(b, b.start({ tools: [SEARCH, READ], request: 'новые сообщения в #bugs' }).id);
+  assert.equal(v.state, 'ready');
+  if (v.state !== 'ready') return;
+  assert.equal(v.mode, 'script');
+  assert.deepEqual(v.spec.config, { tools: [SEARCH, READ], request: 'новые сообщения в #bugs', script: { steps: [{ tool: SEARCH, args: { query: 'in:#bugs' }, say: 'Ищет сообщения в #bugs', json: { items: 'messages', id: 'ts', title: 'text' } }] } });
+  assert.equal(v.spec.title, 'Slack · #bugs');
+  assert.equal(tested.length, 1);
+  const r = reqs[0];
+  assert.equal(r.model, BUILD_MODEL);
+  assert.deepEqual(r.allow, [SEARCH, READ]);
+  assert.match(r.guard!('mcp__claude_ai_Slack__slack_read_thread', {}, { cwd: '/' })!, /Разрешены только/);
+  assert.match(r.prompt, /<source-data>\nновые сообщения в #bugs/);
+});
+
+test('сборка: прогон не удался — модель правит по ошибке; не вышло и со второй — проверка через модель с объяснением', async () => {
+  const prompts: string[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (prompts.push(req.prompt), ok({ ok: true, expected: 3, steps: [step] })),
+    testSource: async () => found(0),
+    newId: () => 'b2',
+  });
+  const v = await settle(b, b.start({ tools: [SEARCH], request: 'баги' }).id);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /ничего не нашёл, хотя при сборке было видно записей: 3/);
+  assert.equal(v.state, 'ready');
+  if (v.state !== 'ready') return;
+  assert.equal(v.mode, 'model');
+  assert.match(v.problem!, /ничего не нашёл/);
+  assert.equal(v.spec.every, '30m');
+  assert.equal('script' in v.spec.config, false);
+});
+
+test('сборка: сервис не подходит — ошибка словами модели; поправка словами помнит прошлый скрипт', async () => {
+  let n = 0;
+  const prompts: string[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (prompts.push(req.prompt), n++ === 0 ? ok({ ok: true, expected: 1, steps: [step] }) : ok({ ok: false, reason: 'В Slack нет такого канала' })),
+    testSource: async () => found(1),
+    newId: () => `b${n}`,
+  });
+  const first = await settle(b, b.start({ tools: [SEARCH], request: 'баги' }).id);
+  const second = await settle(b, b.start({ tools: [SEARCH], request: 'баги', note: 'только #bugs-prod', from: first.id }).id);
+  assert.deepEqual(second, { id: second.id, state: 'error', error: 'В Slack нет такого канала' });
+  assert.match(prompts[1], /только #bugs-prod/);
+  assert.match(prompts[1], /Предыдущий вариант скрипта/);
+  assert.throws(() => b.start({ tools: ['mcp__claude_ai_Slack__slack_send_message'], request: 'x' }), /похож на запись/);
+});
+
+test('сборка: ответ модели → spec; битые аргументы — пустой объект, текстовый формат — регулярки', () => {
+  const a = buildSpecOf({ ok: true, steps: [{ tool: READ, args_json: 'не json', say: 'Читает', format: 'text', split: '^---', map_id: 'id: (\\S+)' }] }, { tools: [READ], request: 'r' });
+  assert.equal(a.ok, true);
+  if (a.ok) assert.deepEqual((a.spec.config.script as { steps: unknown[] }).steps, [{ tool: READ, args: {}, say: 'Читает', text: { split: '^---', id: 'id: (\\S+)' } }]);
+  assert.deepEqual(buildSpecOf({ ok: true, steps: [] }, { tools: [READ], request: 'r' }), { ok: false, error: 'Сессия не вернула шагов скрипта', retry: true });
 });

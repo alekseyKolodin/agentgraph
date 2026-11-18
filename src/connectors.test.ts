@@ -90,3 +90,10 @@ test('MCP-серверы для рутин: и коннекторы, и серв
   assert.deepEqual(c.connectors.map((x) => x.server), ['claude.ai Atlassian Rovo']);
   assert.equal('annotated' in c.connectors[0].tools[0], false);
 });
+
+test('описание инструмента: первая непустая строка без markdown, до 200 знаков', async () => {
+  const { describeTool } = await import('./connectors.js');
+  assert.equal(describeTool('\n\n## Search messages\nlong'), 'Search messages');
+  assert.equal(describeTool(undefined), '');
+  assert.equal(describeTool('x'.repeat(300)).length, 200);
+});

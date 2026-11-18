@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ConnectorBuildView, DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import { api } from './client';
@@ -23,6 +23,7 @@ export const routineKeys = {
   recipes: ['routines', 'recipes'] as const,
   draft: (id: string) => ['routines', 'draft', id] as const,
   mcp: ['routines', 'mcp-tools'] as const,
+  build: (id: string) => ['routines', 'connector-build', id] as const,
 };
 
 /** Тексты видов источников приходят с сервера по-русски: переводим на границе API (словарь i18n/en/kinds.ts). */
@@ -91,6 +92,17 @@ export function useRecipes(enabled = true) {
 export const fetchMcpTools = (force = false) => api<McpServicesView>('GET', `${BASE}/mcp-tools${force ? '?force=1' : ''}`);
 export function useMcpTools(enabled = true) {
   return useQuery({ queryKey: routineKeys.mcp, queryFn: () => fetchMcpTools(false), enabled, staleTime: 5 * 60_000 });
+}
+
+/** Сборка скрипта «Сервиса через Claude»: модель один раз, потом прогон без модели. note и from — поправка прошлой сборки. */
+export const startConnectorBuild = (body: { tools: string[]; request: string; title?: string; note?: string; from?: string }) => api<ConnectorBuildView>('POST', `${BASE}/sources/connector-build`, body);
+export function useConnectorBuild(id: string | null) {
+  return useQuery({
+    queryKey: routineKeys.build(id ?? ''),
+    queryFn: () => api<ConnectorBuildView>('GET', `${BASE}/sources/connector-build/${enc(id!)}`),
+    enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data?.state === 'working' ? 1500 : false),
+  });
 }
 
 /** Черновик подключения словами: пока агент работает, опрос раз в 1.5 с. */

@@ -223,7 +223,7 @@ export class RoutineEngine {
       const kind = this.kind(src.spec.kind);
       if (!kind || kind.listen || !kind.poll) continue;
       if (this.missingSecrets(src.spec).length) continue;
-      const every = Math.max(kind.minEveryMs, parseEvery(src.spec.every) ?? DEFAULT_EVERY_MS);
+      const every = Math.max(kind.minEveryFor?.(src.spec) ?? kind.minEveryMs, parseEvery(src.spec.every) ?? DEFAULT_EVERY_MS);
       const last = this.lastPoll.get(slug);
       if (last !== undefined && now.getTime() - last < every) continue;
       due.push(this.pollSource(slug));

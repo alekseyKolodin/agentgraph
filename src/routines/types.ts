@@ -68,6 +68,32 @@ export type McpToolView = { name: string; tool: string; description?: string };
 export type McpServiceView = { server: string; title: string; origin: 'claudeai' | 'claude-code'; status: string; tools: McpToolView[]; hidden: number };
 export type McpServicesView = { services: McpServiceView[]; at: string };
 
+/** Разбор текстового ответа инструмента: split — регулярка-разделитель записей, поля — регулярки с одной группой. */
+export type TextRule = { split: string; id?: string; title?: string; text?: string; link?: string; at?: string; author?: string };
+/**
+ * Шаг скрипта «Сервис через Claude»: вызов читающего инструмента с готовыми аргументами. В строках аргументов
+ * {{since}} (ISO), {{since_unix}} (секунды), {{since_date}} (ГГГГ-ММ-ДД) — время прошлой проверки (в первый раз — сутки назад).
+ * Записи из ответа: json — по полям, как у своей команды; text — регулярками.
+ */
+export type ConnectorStep = { tool: string; args: Record<string, unknown>; say: string; json?: FieldMap; text?: TextRule };
+/** Скрипт, который модель собрала один раз: дальше проверка ходит по нему без модели. */
+export type ConnectorScript = { steps: ConnectorStep[] };
+
+/** Сборка скрипта: модель смотрит сервисы, agentgraph прогоняет скрипт без модели и показывает, что нашлось. */
+export type ConnectorBuildView =
+  | { id: string; state: 'working'; step: string }
+  | {
+      id: string;
+      state: 'ready';
+      spec: SourceSpec;
+      /** Прогон скрипта без модели; у mode: 'model' его нет. */
+      test?: SourceTestResult;
+      /** script — проверка без модели; model — разобрать ответ без модели не вышло, каждая проверка через модель. */
+      mode: 'script' | 'model';
+      problem?: string;
+    }
+  | { id: string; state: 'error'; error: string };
+
 /** Поле события, на которое можно поставить условие в редакторе. */
 export type MatchField = { key: string; label: string; type: 'text' | 'number' | 'bool' | 'enum'; options?: string[] };
 

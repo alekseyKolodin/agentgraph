@@ -4,7 +4,7 @@ import type { DraftRoutes, Recipe } from './kind.js';
 import { RoutineError, type RoutineEngine } from './engine.js';
 import { assertSlug, freeSlug, parseSourceYaml, SLUG_RE } from './schema.js';
 import { getMcpServers, type McpServer } from '../connectors.js';
-import { mcpServices } from './sources/connector.js';
+import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
 import type { LogOutcome, McpServicesView, WaitAction } from './types.js';
 
@@ -24,7 +24,20 @@ export type RoutinesRouteDeps = {
   drafts?: DraftRoutes | null;
   /** MCP-серверы для источника «Сервис через Claude»; по умолчанию getMcpServers (процесс Claude Code без модели). */
   mcpServers?: (force: boolean) => Promise<{ servers: McpServer[]; at: string }>;
+  /** Сборка скрипта «Сервиса через Claude»; по умолчанию — сессия модели и проверка источника движком. */
+  builds?: ConnectorBuilds;
 };
+
+const buildCache = new WeakMap<RoutineEngine, ConnectorBuilds>();
+function builds(deps: RoutinesRouteDeps): ConnectorBuilds {
+  if (deps.builds) return deps.builds;
+  let b = buildCache.get(deps.engine);
+  if (!b) {
+    b = createConnectorBuilds({ testSource: (spec) => deps.engine.testSource(spec) });
+    buildCache.set(deps.engine, b);
+  }
+  return b;
+}
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
@@ -77,6 +90,22 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       const b = obj(await readBody());
       return ok(await engine.testSource(b.spec, secretsOf(b.secrets)));
     }
+
+    // --- «Сервис через Claude»: модель один раз собирает скрипт, agentgraph прогоняет его без модели
+    if (p === '/api/routines/sources/connector-build' && method === 'POST') {
+      const b = obj(await readBody());
+      const tools = Array.isArray(b.tools) ? b.tools.filter((x): x is string => typeof x === 'string') : [];
+      const request = typeof b.request === 'string' ? b.request.trim().slice(0, 4000) : '';
+      if (!tools.length) return bad('Выбери хотя бы один сервис');
+      if (!request) return bad('Напиши словами, что нужно');
+      const str = (v: unknown) => (typeof v === 'string' ? v.slice(0, 4000) : undefined);
+      try {
+        return ok(builds(deps).start({ tools, request, title: str(b.title), note: str(b.note), from: str(b.from) }), 201);
+      } catch (e) {
+        return bad((e as Error).message);
+      }
+    }
+    if ((m = p.match(/^\/api\/routines\/sources\/connector-build\/([A-Za-z0-9_-]+)$/)) && method === 'GET') return found(builds(deps).get(m[1]), 'Сборка не найдена');
 
     // --- подключение словами
     if (p === '/api/routines/sources/draft' || p.startsWith('/api/routines/sources/draft/')) {

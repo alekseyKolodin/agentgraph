@@ -77,6 +77,12 @@ async function* noPrompt(): AsyncGenerator<never> {
   await new Promise(() => {});
 }
 
+/** Описание инструмента для списка: первая непустая строка без markdown-заголовка, до 200 знаков. */
+export function describeTool(d: string | undefined): string {
+  const line = (d ?? '').split('\n').map((l) => l.replace(/^[#>*\-\s]+/, '').trim()).find(Boolean) ?? '';
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const isConnector = (s: McpServerStatus) => s.scope === 'claudeai';
@@ -120,7 +126,7 @@ async function listServers(deps: ConnectorsDeps, cwd: string, keep: (s: McpServe
         tools: (s.tools ?? []).map((t) => ({
           name: connectorToolName(s.name, t.name),
           tool: t.name,
-          ...(t.description ? { description: t.description.split('\n')[0].slice(0, 200) } : {}),
+          ...(describeTool(t.description) ? { description: describeTool(t.description) } : {}),
           readOnly: t.annotations?.readOnly === true,
           // разметка есть и readOnly не true — сервер сам сказал «меняет данные»; разметки нет — решает имя инструмента
           annotated: t.annotations?.readOnly !== undefined,

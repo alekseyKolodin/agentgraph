@@ -84,12 +84,12 @@ export const kinds: Record<string, string> = {
   // сервис через Claude
   'Сервис через Claude': 'Service connected to Claude',
   'Записи из сервиса, подключённого к Claude: коннекторы claude.ai и MCP-серверы (Slack, Fireflies, Notion, Linear…)': 'Records from a service connected to Claude: claude.ai connectors and MCP servers (Slack, Fireflies, Notion, Linear…)',
-  'Сервис': 'Service',
+  'Сервисы': 'Services',
   'Сервисы, подключённые к Claude: коннекторы claude.ai и MCP-серверы Claude Code. Источник только читает: инструменты, которые меняют данные, здесь не показаны.':
     'Services connected to Claude: claude.ai connectors and Claude Code MCP servers. The source only reads: tools that change data are not shown here.',
-  'Что запросить': 'What to ask for',
-  'Например: новые сообщения в #bugs': 'For example: new messages in #bugs',
-  'Словами: какие записи нужны. Проверка идёт через модель и тратит лимит — не чаще раза в 30 минут.': 'In words: which records you need. The check goes through a model and spends your limit — at most once every 30 minutes.',
+  'Что нужно': 'What you need',
+  'Например: новые сообщения в #bugs, где упоминают меня': 'For example: new messages in #bugs that mention me',
+  'Словами. Модель один раз соберёт по этому скрипт, дальше проверка идёт без модели.': 'In words. A model builds a script from it once; after that, checks run without a model.',
   // рецепты
   'Задачи Linear, назначенные на вас': 'Linear issues assigned to you',
   'Новые уведомления GitHub (ревью, упоминания, CI)': 'New GitHub notifications (reviews, mentions, CI)',

@@ -193,9 +193,9 @@ export class E2E {
 
   // ------------------------------------------------------------ фейковый claude
 
-  /** mcpServers — что фейковый claude отдаст на mcp_status (коннекторы claude.ai, MCP-серверы). */
-  scenario(rules: ClaudeRule[], mcpServers?: unknown[]): void {
-    fs.writeFileSync(this.scenarioFile, JSON.stringify({ rules, ...(mcpServers ? { mcpServers } : {}) }));
+  /** mcp.servers — ответ фейкового claude на mcp_status (коннекторы claude.ai, MCP-серверы); mcp.calls — на mcp_call по имени инструмента. */
+  scenario(rules: ClaudeRule[], mcp: { servers?: unknown[]; calls?: Record<string, unknown> } = {}): void {
+    fs.writeFileSync(this.scenarioFile, JSON.stringify({ rules, ...(mcp.servers ? { mcpServers: mcp.servers } : {}), ...(mcp.calls ? { mcpCalls: mcp.calls } : {}) }));
   }
 
   claudeCalls(): ClaudeCall[] {

@@ -73,7 +73,8 @@ test('builtinKinds: все виды-сервисы на месте, у кажд�
   const by = Object.fromEntries(kinds.map((k) => [k.kind, k]));
   for (const k of ['slack', 'telegram', 'gitlab', 'github', 'jira']) assert.ok(by[k].reply, `${k} умеет отвечать`);
   for (const k of ['rss', 'folder', 'email', 'connector']) assert.equal(by[k].reply, undefined);
-  assert.equal(by.connector.delivery, 'model');
+  // скрипт без модели — обычный опрос; без скрипта минимум 30 минут даёт minEveryFor
+  assert.equal(by.connector.delivery, 'poll');
   assert.equal(by.slack.delivery, 'live');
   assert.equal(by.telegram.delivery, 'live');
 });

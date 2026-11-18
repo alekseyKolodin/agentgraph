@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { FieldMap, KindField, McpServiceView, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult } from '@server/routines/types';
+import type { ConnectorScript, FieldMap, KindField, McpServiceView, McpToolView, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult } from '@server/routines/types';
 import { errorText } from '../../api';
-import { cancelDraft, draftSecret, fetchMcpTools, importRecipe, refineDraft, routineKeys, saveSource, startDraft, testSource, useDraft, useMcpTools, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
+import { cancelDraft, draftSecret, fetchMcpTools, importRecipe, refineDraft, routineKeys, saveSource, startConnectorBuild, startDraft, testSource, useConnectorBuild, useDraft, useMcpTools, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
 import { slugify } from '../../lib/routines/spec';
@@ -315,7 +315,7 @@ function Ready({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) 
         {!kinds.length && !recipes.data?.length && <span className={styles.hint}>{recipes.isPending ? t('Загрузка…') : t('Готовых источников пока нет: подключи словами или своей командой.')}</span>}
       </div>
       <span className={styles.hint}>{t('Каждый источник — небольшой файл. Свой можно сохранить и отдать коллеге, он появится здесь.')}</span>
-      {picked && <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />}
+      {picked && ('kind' in picked && picked.kind.kind === 'connector' ? <ConnectorForm key={key(picked)} data={data} fromNew={fromNew} /> : <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />)}
       <div>
         <button type="button" className="btn small ghost" aria-expanded={importOpen} onClick={() => setImportOpen(!importOpen)}>
           {importOpen ? '▾' : '▸'} {t('Добавить файл источника')}
@@ -342,7 +342,6 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
   const setup: KindField[] = recipe ? (recipe.spec.secrets ?? []).map((name) => ({ key: name, label: name, secret: true })) : (kind?.setup ?? []);
   const [values, setValues] = useState<Record<string, string>>({});
   const [title, setTitle] = useState(recipe?.spec.title ?? kind?.title ?? '');
-  const [autoTitle, setAutoTitle] = useState('');
   const [every, setEvery] = useState(recipe?.spec.every ?? kind?.minEvery ?? '5m');
   const [test, setTest] = useState<SourceTestResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -387,23 +386,7 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
         <span className={styles.lbl}>{t('Название')}</span>
         <input className={styles.inp} value={title} onChange={(e) => setTitle(e.target.value)} />
       </label>
-      {setup.map((f) =>
-        f.pick === 'mcp-tool' ? (
-          <McpToolPick
-            key={f.key}
-            field={f}
-            value={values[f.key] ?? ''}
-            onChange={(name, service) => {
-              setValues({ ...values, [f.key]: name });
-              setTest(null);
-              // название по сервису, пока человек его не правил
-              if (service && (title === kind?.title || title === autoTitle)) {
-                setTitle(service.title);
-                setAutoTitle(service.title);
-              }
-            }}
-          />
-        ) : (
+      {setup.map((f) => (
           <label key={f.key} className={styles.field}>
             <span className={styles.lbl}>
               {f.label}
@@ -422,8 +405,7 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
             />
             {(f.hint || f.secret) && <span className={styles.hint}>{[f.hint, f.secret ? t('Хранится в ~/.agentgraph, в запуски и логи не попадает.') : ''].filter(Boolean).join(' ')}</span>}
           </label>
-        ),
-      )}
+      ))}
       <div className="row">
         <button type="button" className="btn" disabled={busy || missing.length > 0} title={missing.length ? t('Заполни: {list}', { list: missing.map((f) => f.label).join(', ') }) : t('Проверить без модели и показать, что нашлось')} onClick={() => void act(async () => setTest(await testSource(build().spec, build().secrets)))}>
           {t('Проверить')}
@@ -443,23 +425,67 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
   );
 }
 
+/** Имя инструмента по-человечески, когда сервер не дал описания: slack_read_channel → «Read channel». */
+function toolLabel(x: McpToolView, service: string): string {
+  if (x.description) return x.description;
+  const prefix = service.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const name = x.tool.replace(new RegExp(`^${prefix}[_-]`, 'i'), '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+}
+
+const notReady = (s: McpServiceView): string =>
+  s.status === 'needs-auth' ? t('нужен вход') : s.status === 'connected' ? t('нечего читать') : s.status === 'failed' ? t('не подключился') : s.status === 'pending' ? t('подключается') : t('выключен');
+
 /**
- * Выбор сервиса и его инструмента для «Сервис через Claude»: имя mcp__сервер__инструмент человек не знает и не вводит.
- * Сервисы — коннекторы claude.ai и MCP-серверы Claude Code; инструменты только читающие, похожий на список выбран сразу.
+ * «Сервис через Claude»: сервисы из подключённых к Claude (несколько), их читающие инструменты (все отмечены, можно снять),
+ * словами — что нужно. Модель один раз собирает скрипт, agentgraph прогоняет его без модели и показывает, что нашлось
+ * и что будет выполняться; дальше проверка идёт по скрипту без модели.
  */
-function McpToolPick({ field, value, onChange }: { field: KindField; value: string; onChange: (name: string, service?: McpServiceView) => void }) {
+function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
   const qc = useQueryClient();
   const q = useMcpTools();
-  const [server, setServer] = useState('');
-  const [manual, setManual] = useState(false);
+  const [servers, setServers] = useState<string[]>([]);
+  const [off, setOff] = useState<Set<string>>(new Set());
+  const [open, setOpen] = useState('');
+  const [request, setRequest] = useState('');
+  const [buildId, setBuildId] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [title, setTitle] = useState('');
+  const [every, setEvery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const build = useConnectorBuild(buildId);
+  const save = useSaveSource(data, fromNew);
+  const box = useRef<HTMLElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, []);
+
   const services = q.data?.services ?? [];
   const ready = services.filter((s) => s.status === 'connected' && s.tools.length);
   const others = services.filter((s) => !ready.includes(s));
-  const current = services.find((s) => s.server === server);
-  const pickService = (s: McpServiceView) => {
-    setServer(s.server);
-    onChange(s.tools[0]?.name ?? '', s);
+  const chosen = ready.filter((s) => servers.includes(s.server));
+  const tools = chosen.flatMap((s) => s.tools.map((x) => x.name)).filter((n) => !off.has(n));
+  const v = build.data;
+  const result = v?.state === 'ready' ? v : undefined;
+  const working = busy || v?.state === 'working';
+
+  // поменяли сервисы, галочки или просьбу — собранный скрипт уже не про то
+  const reset = () => {
+    setBuildId(null);
+    setError('');
+  };
+  const toggleService = (s: McpServiceView) => {
+    setServers(servers.includes(s.server) ? servers.filter((x) => x !== s.server) : [...servers, s.server]);
+    reset();
+  };
+  const toggleTool = (name: string) => {
+    const next = new Set(off);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setOff(next);
+    reset();
   };
   const refresh = async () => {
     setRefreshing(true);
@@ -471,65 +497,167 @@ function McpToolPick({ field, value, onChange }: { field: KindField; value: stri
       setRefreshing(false);
     }
   };
+  const start = async (withNote?: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await startConnectorBuild({ tools, request: request.trim(), ...(withNote ? { note: withNote, from: buildId ?? undefined } : {}) });
+      setBuildId(r.id);
+      setNote('');
+      setTitle('');
+      setEvery('');
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const doSave = async () => {
+    if (!result) return;
+    setBusy(true);
+    setError('');
+    try {
+      await save({ ...result.spec, title: title.trim() || result.spec.title, every: every || result.spec.every });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
   const loading = q.isPending || refreshing;
+  const script = result?.spec.config.script as ConnectorScript | undefined;
+
   return (
-    <div className={styles.field} role="group" aria-label={field.label}>
-      <span className={styles.lbl}>{field.label}</span>
-      {manual ? (
-        <input className={cx(styles.inp, styles.mono)} autoComplete="off" aria-label={t('Имя инструмента')} placeholder={field.placeholder} value={value} onChange={(e) => onChange(e.target.value.trim())} />
-      ) : (
+    <section ref={box} className={styles.ready} aria-label={t('Сервис через Claude')}>
+      <div className={styles.readyHead}>
+        <h2>{t('Сервис через Claude')}</h2>
+        <button type="button" className="btn small ghost" disabled={loading} onClick={() => void refresh()}>↻ {t('Обновить список')}</button>
+      </div>
+
+      <div className={styles.field} role="group" aria-label={t('Сервисы')}>
+        <span className={styles.lbl}>{t('Сервисы')}</span>
+        {loading && <span className="muted small">{t('Смотрю, что подключено к Claude… (несколько секунд)')}</span>}
+        {!loading && q.isError && <span className={styles.err}>{t('Список сервисов не загрузился: {error}', { error: errorText(q.error) })}</span>}
+        {!loading && q.data && !ready.length && (
+          <span className={styles.hint}>{t('К Claude пока не подключено ни одного сервиса, из которого можно читать. Подключи его на claude.ai в Settings → Connectors или командой claude mcp add, затем обнови список.')}</span>
+        )}
+        {!loading && ready.length > 0 && (
+          <div className={styles.chipsInline}>
+            {ready.map((s) => (
+              <button key={s.server} type="button" className={styles.chip} aria-pressed={servers.includes(s.server)} title={s.origin === 'claudeai' ? t('Коннектор claude.ai') : t('MCP-сервер Claude Code')} onClick={() => toggleService(s)}>
+                {s.title}
+                {s.origin === 'claude-code' && <span className={styles.mono}>MCP</span>}
+              </button>
+            ))}
+          </div>
+        )}
+        {!loading && others.length > 0 && (
+          <details className={styles.notReady}>
+            <summary>{t('Ещё {n} не готовы', { n: others.length })}</summary>
+            <span className={styles.hint}>{others.map((s) => `${s.title} — ${notReady(s)}`).join(' · ')}</span>
+          </details>
+        )}
+        {!ready.length || <span className={styles.hint}>{t('Можно выбрать несколько. Источник только читает: инструменты, которые меняют данные, сюда не попадают.')}</span>}
+      </div>
+
+      {chosen.map((s) => {
+        const on = s.tools.filter((x) => !off.has(x.name)).length;
+        const expanded = open === s.server;
+        return (
+          <div key={s.server} className={styles.svc}>
+            <div className={styles.svcHead}>
+              <b>{s.title}</b>
+              <span className={styles.hint}>{on === s.tools.length ? t('отмечены все: {n}', { n: s.tools.length }) : t('отмечено {on} из {n}', { on, n: s.tools.length })}</span>
+              <button type="button" className="btn small ghost" aria-expanded={expanded} onClick={() => setOpen(expanded ? '' : s.server)}>
+                {expanded ? t('Свернуть') : t('Что умеет')}
+              </button>
+            </div>
+            {expanded && (
+              <div className={styles.toolList} role="group" aria-label={t('Что умеет {service}', { service: s.title })}>
+                {s.tools.map((x) => (
+                  <label key={x.name} className={styles.toolRow}>
+                    <input type="checkbox" checked={!off.has(x.name)} onChange={() => toggleTool(x.name)} />
+                    <span>
+                      <span>{toolLabel(x, s.title)}</span>
+                      <span className={styles.mono}>{x.tool}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <label className={styles.field}>
+        <span className={styles.lbl}>{t('Что нужно')}</span>
+        <textarea
+          className={styles.inp}
+          rows={2}
+          value={request}
+          placeholder={t('Например: новые сообщения в #bugs, где упоминают меня')}
+          onChange={(e) => {
+            setRequest(e.target.value);
+            reset();
+          }}
+        />
+        <span className={styles.hint}>{t('Модель один раз посмотрит сервис и соберёт скрипт — на это уйдёт немного лимита. Дальше проверка ходит по скрипту без модели.')}</span>
+      </label>
+
+      <div className="row">
+        <button type="button" className={cx('btn', !result && 'primary')} disabled={working || !tools.length || !request.trim()} title={!tools.length ? t('Выбери сервис') : !request.trim() ? t('Напиши, что нужно') : ''} onClick={() => void start()}>
+          {result ? t('Собрать заново') : t('Собрать')}
+        </button>
+        {v?.state === 'working' && <span className="muted small">{t(v.step)}</span>}
+        {v?.state === 'error' && <span className={styles.err}>{v.error}</span>}
+      </div>
+
+      {result && (
         <>
-          {loading && <span className="muted small">{t('Смотрю, что подключено к Claude… (несколько секунд)')}</span>}
-          {!loading && q.isError && <span className={styles.err}>{t('Список сервисов не загрузился: {error}', { error: errorText(q.error) })}</span>}
-          {!loading && q.data && !ready.length && (
-            <span className={styles.hint}>
-              {t('К Claude пока не подключено ни одного сервиса, из которого можно читать. Подключи его на claude.ai в Settings → Connectors или командой claude mcp add, затем обнови список.')}
+          {result.mode === 'script' && result.test && (
+            <>
+              <span className="ok small">{t('Скрипт работает без модели')} · {foundText(result.test.total)}</span>
+              <Found test={result.test} />
+            </>
+          )}
+          {result.mode === 'model' && (
+            <span className={styles.warn}>
+              {t('Разобрать ответ сервиса без модели не вышло: {problem} Проверка будет идти через модель и тратить лимит — не чаще раза в 30 минут.', { problem: result.problem ?? '' })}
             </span>
           )}
-          {!loading && ready.length > 0 && (
-            <div className={styles.chipsInline}>
-              {ready.map((s) => (
-                <button key={s.server} type="button" className={styles.chip} aria-pressed={s.server === server} title={s.origin === 'claudeai' ? t('Коннектор claude.ai') : t('MCP-сервер Claude Code')} onClick={() => pickService(s)}>
-                  {s.title}
-                  {s.origin === 'claude-code' && <span className={styles.mono}>MCP</span>}
-                </button>
-              ))}
+          {script && (
+            <div className={styles.toolList} aria-label={t('Что будет выполняться')}>
+              <span className={styles.lbl}>{t('Что будет выполняться')}</span>
+              <ol className={styles.steps}>
+                {script.steps.map((st, i) => (
+                  <li key={i}>
+                    <span>{st.say}</span>
+                    <span className={styles.mono}>
+                      {st.tool.split('__').slice(2).join('__')} {JSON.stringify(st.args)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </div>
           )}
-          {!loading && others.length > 0 && (
-            <span className={styles.hint}>
-              {t('Не готовы: {list}', { list: others.map((s) => `${s.title} — ${s.status === 'needs-auth' ? t('нужен вход') : s.status === 'connected' ? t('нечего читать') : s.status === 'failed' ? t('не подключился') : s.status === 'pending' ? t('подключается') : t('выключен')}`).join(', ') })}
-            </span>
-          )}
-          {current && current.tools.length > 0 && (
-            <div className={styles.toolList} role="radiogroup" aria-label={t('Что читать в {service}', { service: current.title })}>
-              <span className={styles.lbl}>{t('Что читать в {service}', { service: current.title })}</span>
-              {current.tools.map((x) => (
-                <label key={x.name} className={styles.toolRow}>
-                  <input type="radio" name="mcp-tool" checked={value === x.name} onChange={() => onChange(x.name)} />
-                  <span>
-                    <b className={styles.mono}>{x.tool}</b>
-                    {x.description && <span className={styles.hint}>{x.description}</span>}
-                  </span>
-                </label>
-              ))}
-              {current.hidden > 0 && <span className={styles.hint}>{t('Ещё {n} — меняют данные, источнику они не нужны.', { n: current.hidden })}</span>}
-            </div>
-          )}
+          <div className={styles.refine}>
+            <input className={styles.inp} value={note} placeholder={t('Не то? Поправь словами: «только мои сообщения»')} aria-label={t('Поправка словами')} onChange={(e) => setNote(e.target.value)} />
+            <button type="button" className="btn" disabled={working || !note.trim()} onClick={() => void start(note.trim())}>{t('Поправить')}</button>
+          </div>
+          <div className={styles.readyHead}>
+            <label className={cx(styles.field, styles.grow)}>
+              <span className={styles.lbl}>{t('Название')}</span>
+              <input className={styles.inp} value={title || result.spec.title} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <EverySelect value={every || result.spec.every || '5m'} min={result.mode === 'script' ? '1m' : '30m'} onChange={setEvery} />
+          </div>
+          <div className="row">
+            <button type="button" className="btn primary" disabled={working} onClick={() => void doSave()}>{t('Сохранить источник')}</button>
+          </div>
         </>
       )}
-      <span className={styles.hint}>{field.hint}</span>
-      <div className="row">
-        {!manual && (
-          <button type="button" className="btn small ghost" disabled={loading} onClick={() => void refresh()}>
-            ↻ {t('Обновить список')}
-          </button>
-        )}
-        <button type="button" className="btn small ghost" aria-pressed={manual} onClick={() => setManual(!manual)}>
-          {manual ? t('Выбрать из списка') : t('Ввести имя вручную')}
-        </button>
-      </div>
-    </div>
+      {error && <span className={styles.err}>{error}</span>}
+    </section>
   );
 }
 
