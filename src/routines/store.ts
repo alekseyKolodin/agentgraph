@@ -36,7 +36,17 @@ export class LogReadError extends Error {}
  * Итог проверок источника на диске: последняя проверка, когда приходило новое (для «пусто дольше обычного»), расход
  * опроса моделью по дням (ключ — ГГГГ-ММ-ДД по местному времени) и о какой поломке уже ушло уведомление.
  */
-export type SourceChecks = { last?: CheckResult; arrivals: string[]; spent: Record<string, number>; alerted?: 'error' | 'empty' };
+export type SourceChecks = {
+  last?: CheckResult;
+  arrivals: string[];
+  spent: Record<string, number>;
+  alerted?: 'error' | 'empty';
+  /** С какой проверки и сколько проверок подряд источник не отвечает: уведомляет только устойчивая поломка. */
+  failingSince?: string;
+  failures?: number;
+  /** С какого времени статус снова ok: отметка поломки снимается после устойчивого ok. */
+  okSince?: string;
+};
 
 export type FileEntry<T> = { slug: string; yaml: string } & Parsed<T>;
 
@@ -266,8 +276,7 @@ export class RoutineStore {
   appendLog(entry: LogEntry): void {
     const file = this.logFile(entry.routine);
     this.ensure(path.dirname(file));
-    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
-    const size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+    const size = appendLogLine(file, JSON.stringify(entry) + '\n');
     if (size > LOG_TRIM_BYTES) this.writeLog(entry.routine, this.logAll(entry.routine));
   }
 
@@ -290,16 +299,24 @@ export class RoutineStore {
     const lines = all.map((e) => JSON.stringify(e));
     const keep = new Array<boolean>(all.length).fill(false);
     let bytes = 0;
+    // хвост — подряд, без дыр: первая строка, которая не влезла, заканчивает его
+    let tail = true;
+    let extra = 0;
     for (let i = all.length - 1, n = 0; i >= 0; i--) {
       const size = Buffer.byteLength(lines[i]) + 1;
-      if (n < LOG_KEEP && bytes + size <= LOG_TRIM_BYTES / 2) {
+      if (tail && n < LOG_KEEP && bytes + size <= LOG_TRIM_BYTES / 2) {
         keep[i] = true;
         bytes += size;
         n++;
         continue;
       }
+      tail = false;
+      // свежие запуски старше хвоста — тоже, но не больше LOG_TRIM_BYTES / 2: иначе обрезка шла бы на каждой записи
       const started = all[i].startedAt ?? (all[i].outcome === 'started' ? all[i].at : undefined);
-      if (started && now - Date.parse(started) < LOG_KEEP_STARTED_MS) keep[i] = true;
+      if (started && now - Date.parse(started) < LOG_KEEP_STARTED_MS && extra + size <= LOG_TRIM_BYTES / 2) {
+        keep[i] = true;
+        extra += size;
+      }
     }
     this.ensure(path.dirname(this.logFile(routine)));
     writeAtomic(this.logFile(routine), lines.filter((_, i) => keep[i]).map((l) => l + '\n').join(''));
@@ -309,7 +326,11 @@ export class RoutineStore {
 
   checks(source: string): SourceChecks {
     const r = this.readJson<Partial<SourceChecks>>(this.keyed('checks', source), {});
-    return { ...(r.last ? { last: r.last } : {}), arrivals: Array.isArray(r.arrivals) ? r.arrivals : [], spent: r.spent && typeof r.spent === 'object' ? r.spent : {}, ...(r.alerted ? { alerted: r.alerted } : {}) };
+    return {
+      ...r,
+      arrivals: Array.isArray(r.arrivals) ? r.arrivals : [],
+      spent: r.spent && typeof r.spent === 'object' && !Array.isArray(r.spent) ? r.spent : {},
+    };
   }
 
   setChecks(source: string, c: SourceChecks): void {
@@ -365,7 +386,8 @@ function readLogText(file: string): string | undefined {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
-    throw fail(code === 'ELOOP' ? 'это ссылка' : err instanceof Error ? err.message : String(err));
+    // только код ошибки: сообщение fs несёт абсолютный путь, а текст уходит в problems ответа API
+    throw fail(code === 'ELOOP' ? 'это ссылка' : (code ?? 'ошибка чтения'));
   }
   try {
     const st = fs.fstatSync(fd);
@@ -381,6 +403,28 @@ function readLogText(file: string): string | undefined {
     const text = buf.subarray(0, off).toString('utf8');
     // хвост большого файла начинается с обрезанной строки — её пропускаем
     return st.size > len ? text.slice(text.indexOf('\n') + 1) : text;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Строка в конец журнала — как читается: без ожидания на FIFO (O_NONBLOCK: FIFO без читателя — ENXIO, а не зависший
+ * сервер), без перехода по ссылке, только обычный файл (0600). Возвращает размер файла после записи.
+ */
+function appendLogLine(file: string, line: string): number {
+  const fail = (why: string) => new LogReadError(`журнал ${path.basename(file)} не пишется: ${why}`);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    throw fail(code === 'ELOOP' ? 'это ссылка' : code === 'ENXIO' ? 'не обычный файл' : (code ?? 'ошибка записи'));
+  }
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw fail('не обычный файл');
+    fs.writeSync(fd, line);
+    return fs.fstatSync(fd).size;
   } finally {
     fs.closeSync(fd);
   }

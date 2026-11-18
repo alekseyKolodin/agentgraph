@@ -24,7 +24,6 @@ import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait
 import { LogReadError, RoutineStore } from './store.js';
 import type {
   CatchUp,
-  CheckResult as SourceCheck,
   Feedback,
   HistoryCheck,
   LogAsk,
@@ -109,8 +108,14 @@ const CATCHUP_ITEMS_MAX = 100;
 const DAY_MS = 86_400_000;
 /** live-соединение без ошибки дольше этого — проверка «соединение живо». */
 const LIVE_ALIVE_MS = 60_000;
-/** «Пусто дольше обычного»: обычный разрыв между новыми записями × 3, но не меньше суток. */
-const EMPTY_MIN_MS = DAY_MS;
+/** Ошибка источника уведомляет, когда держится столько проверок подряд… */
+const ALERT_FAILURES = 3;
+/** …или столько времени. */
+const ALERT_FAILING_MS = 15 * 60_000;
+/** Столько устойчивого ok — и отметка поломки снята: следующая поломка уведомит снова. */
+const ALERT_CLEAR_MS = 30 * 60_000;
+/** «Пусто дольше обычного»: самый долгий недавний разрыв между новыми записями × 1.5, но не меньше трёх суток (выходные). */
+const EMPTY_MIN_MS = 3 * DAY_MS;
 /** Истории ещё мало (меньше трёх приходов нового) — пусто дольше недели. */
 const EMPTY_DEFAULT_MS = 7 * DAY_MS;
 
@@ -352,28 +357,44 @@ export class RoutineEngine {
    * не видено; нет новых — emptySince держит, с какого времени (последний приход нового или первая пустая проверка).
    */
   private recordCheck(slug: string, r: { ok: boolean; total: number; fresh: number; error?: string }): void {
-    const at = this.now().toISOString();
-    const c = this.store.checks(slug);
-    const prev = c.last;
-    // текст ошибки сервиса бывает с ключом в адресе (?api_key=…): на диск и наружу — только замаскированным
-    const error = r.error ? redact(r.error, this.store.secrets()) : undefined;
-    const fresh = r.ok ? r.fresh : 0;
-    if (fresh > 0) c.arrivals.push(at);
-    const emptySince = fresh > 0 ? undefined : (prev?.emptySince ?? c.arrivals[c.arrivals.length - 1] ?? at);
-    c.last = { at, ok: r.ok, total: r.ok ? r.total : 0, fresh, ...(error ? { error } : {}), ...(emptySince ? { emptySince } : {}) };
-    this.store.setChecks(slug, c);
-    if (!prev || prev.ok !== c.last.ok || prev.error !== c.last.error || Boolean(prev.emptySince) !== Boolean(emptySince)) this.changed();
-    this.alert(slug);
+    // учёт проверок не должен сорвать сам опрос и путь события (диск, права): сбой — в лог сервера
+    try {
+      const at = this.now().toISOString();
+      const c = this.store.checks(slug);
+      const prev = c.last;
+      // текст ошибки сервиса бывает с ключом в адресе (?api_key=…): на диск и наружу — только замаскированным
+      const error = r.error ? redact(r.error, this.store.secrets()) : undefined;
+      const fresh = r.ok ? r.fresh : 0;
+      if (fresh > 0) c.arrivals.push(at);
+      const emptySince = fresh > 0 ? undefined : (prev?.emptySince ?? c.arrivals[c.arrivals.length - 1] ?? at);
+      c.last = { at, ok: r.ok, total: r.ok ? r.total : 0, fresh, ...(error ? { error } : {}), ...(emptySince ? { emptySince } : {}) };
+      if (r.ok) {
+        delete c.failingSince;
+        delete c.failures;
+      } else {
+        c.failingSince ??= at;
+        c.failures = (c.failures ?? 0) + 1;
+      }
+      this.store.setChecks(slug, c);
+      if (!prev || prev.ok !== c.last.ok || prev.error !== c.last.error || Boolean(prev.emptySince) !== Boolean(emptySince)) this.changed();
+      this.alert(slug);
+    } catch (err) {
+      this.say(`[${slug}] итог проверки не записан: ${msg(err)}`);
+    }
   }
 
   /** Расход опроса моделью (connector без скрипта) — в итог проверок источника, по дням. */
   private addSpent(slug: string, usd: number): void {
     if (!(usd > 0)) return;
-    const c = this.store.checks(slug);
-    const day = dayKey(this.now());
-    c.spent[day] = round((c.spent[day] ?? 0) + usd);
-    this.store.setChecks(slug, c);
-    this.changed();
+    try {
+      const c = this.store.checks(slug);
+      const day = dayKey(this.now());
+      c.spent[day] = round((c.spent[day] ?? 0) + usd);
+      this.store.setChecks(slug, c);
+      this.changed();
+    } catch (err) {
+      this.say(`[${slug}] расход опроса не записан: ${msg(err)}`);
+    }
   }
 
   /** Сколько записей ещё не видено (повторы id внутри ответа — одна запись). */
@@ -383,21 +404,26 @@ export class RoutineEngine {
   }
 
   /**
-   * Поломка источника — одно уведомление: сломался (error) или замолчал дольше обычного (empty). Повторные проверки той же
-   * поломки (и перезапуск) не уведомляют снова; ok снимает отметку — следующая поломка уведомит.
+   * Поломка источника — одно уведомление: сломался (error) или замолчал дольше обычного (empty). Ошибка уведомляет, только
+   * когда держится: ALERT_FAILURES проверок подряд или ALERT_FAILING_MS — разовый сбой после сна ноутбука или 429 через раз
+   * не шумят (статус error виден сразу). Повторные проверки той же поломки и перезапуск не уведомляют; отметка снимается
+   * после ALERT_CLEAR_MS устойчивого ok — тогда следующая поломка уведомит снова.
    */
   private alert(slug: string): void {
     const src = this.store.source(slug);
     if (!src?.spec || !this.usedSources().has(slug)) return;
     const c = this.store.checks(slug);
     const st = this.statusOf(slug, src.spec, c, true);
-    const kind = st.status === 'error' ? 'error' : st.status === 'empty' ? 'empty' : undefined;
-    if (kind === c.alerted) return;
-    if (!kind) {
-      if (st.status === 'ok' && c.alerted) {
-        delete c.alerted;
-        this.store.setChecks(slug, c);
-      }
+    const now = this.now().getTime();
+    const lasting = (c.failures ?? 0) >= ALERT_FAILURES || (c.failingSince !== undefined && now - Date.parse(c.failingSince) >= ALERT_FAILING_MS);
+    const kind = st.status === 'error' && lasting ? 'error' : st.status === 'empty' ? 'empty' : undefined;
+    let dirty = false;
+    if (st.status === 'ok') {
+      if (!c.okSince) (c.okSince = new Date(now).toISOString()), (dirty = true);
+      if (c.alerted && now - Date.parse(c.okSince) >= ALERT_CLEAR_MS) delete c.alerted, (dirty = true);
+    } else if (c.okSince) delete c.okSince, (dirty = true);
+    if (!kind || kind === c.alerted) {
+      if (dirty) this.store.setChecks(slug, c);
       return;
     }
     c.alerted = kind;
@@ -407,7 +433,7 @@ export class RoutineEngine {
     const since = c.last?.emptySince ? new Date(c.last.emptySince).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
     this.notice(
       kind === 'error'
-        ? { title: `Источник «${title}» не отвечает`, body: `${st.error ?? 'проверка не прошла'} · рутины его не видят`, path: '/routines', group: `source:${slug}`, sound: true }
+        ? { title: `Источник «${title}» не отвечает`, body: `${clip(st.error ?? 'проверка не прошла', 300)} · рутины его не видят`, path: '/routines', group: `source:${slug}`, sound: true }
         : { title: `Источник «${title}» молчит`, body: `Новых записей нет${since ? ` с ${since}` : ''} — дольше обычного. Проверь ключ и условия источника`, path: '/routines', group: `source:${slug}` },
     );
   }
@@ -449,8 +475,13 @@ export class RoutineEngine {
       }
       const at = this.now().toISOString();
       this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
-      await this.ingest(slug, events);
-      this.store.setLastCheck(slug, at);
+      try {
+        await this.ingest(slug, events);
+        this.store.setLastCheck(slug, at);
+      } catch (err) {
+        // сбой обработки — не поломка источника, и он не должен сорвать тик (очередь, другие источники)
+        this.say(`[${slug}] события не обработаны: ${msg(err)}`);
+      }
     } finally {
       this.polling.delete(slug);
     }
@@ -559,14 +590,19 @@ export class RoutineEngine {
       for (const e of now) {
         for (const r of this.store.routines()) {
           if (!r.spec || r.spec.enabled === false || isSchedule(r.spec.when) || r.spec.when.source !== source) continue;
-          await this.process(r.slug, r.spec, e);
+          try {
+            await this.process(r.slug, r.spec, e);
+          } catch (err) {
+            // журнал одной рутины не пишется (ссылка, права) — остальные рутины и события пачки идут дальше
+            this.failed(r.slug, e, err);
+          }
         }
       }
     });
   }
 
   /** Полный путь события для рутины: условия → проверка словами → ожидание или запуск. */
-  async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
+  async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; /** «Догнать»: человек только что нажал — уведомлять о каждом предложении незачем. */ quiet?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
     let why: string | undefined;
     let checkCost: number | undefined;
     if (!isSchedule(spec.when)) {
@@ -604,7 +640,7 @@ export class RoutineEngine {
       this.store.setWaits([...this.store.waits(), { ...wait, logId: entry.id }]);
       this.changed();
       // предложения одной рутины заменяют друг друга в центре уведомлений: шумная рутина не засыпает экран
-      this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
+      if (!o.quiet) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
       return { outcome: 'waiting', wait };
     }
     return this.launch(slug, spec, e, { human: o.human, why, checkCost });
@@ -698,7 +734,23 @@ export class RoutineEngine {
     this.store.setQueue(rest);
     for (const item of taken) {
       const r = this.store.routine(item.routine);
-      if (r?.spec) await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human });
+      if (!r?.spec) continue;
+      try {
+        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human });
+      } catch (err) {
+        this.failed(item.routine, item.event, err);
+      }
+    }
+  }
+
+  /** Событие не прошло путь из-за сбоя движка (журнал не пишется, диск): строка error, если журнал жив, и всегда — лог сервера. */
+  private failed(slug: string, e: RoutineEvent, err: unknown): void {
+    this.say(`[${slug}] событие «${e.title}» не обработано: ${msg(err)}`);
+    try {
+      this.log(slug, e, 'error', { reason: `не обработано: ${msg(err)}` });
+      this.changed();
+    } catch {
+      /* журнал и есть то, что сломано: остаётся строка в логе сервера */
     }
   }
 
@@ -880,7 +932,8 @@ export class RoutineEngine {
       if (o.replyWaits) this.notice({ title: `${a.event.title} — ${label}`, body: `${routine}: ответ ждёт твоей проверки`, path: '/', group: runId, sound: true });
       return;
     }
-    const body = [routine, `$${ev.costUsd.toFixed(2)}`, ev.error?.trim()].filter(Boolean).join(' · ');
+    const error = ev.error?.trim() ? clip(redact(ev.error.trim(), this.store.secrets()), 300) : undefined;
+    const body = [routine, `$${ev.costUsd.toFixed(2)}`, error].filter(Boolean).join(' · ');
     this.notice({ title: `${a.event.title} — ${label}`, body, path: `/run/${runId}`, group: runId, sound: true });
   }
 
@@ -954,8 +1007,9 @@ export class RoutineEngine {
         row.items.push(e);
         if (matchRule(match, e).ok) row.matchingIds.push(e.id);
       }
-      // «догнать» держит последние CATCHUP_ITEMS_MAX: что не вошло — в журнал строкой missed, а не молча
-      for (const e of row.items.slice(0, -CATCHUP_ITEMS_MAX)) this.log(r.slug, e, 'missed', { reason: `пришло, пока приложение было закрыто; в «Догнать» не вошло — там последние ${CATCHUP_ITEMS_MAX}` });
+      // «догнать» держит последние CATCHUP_ITEMS_MAX: подходящее под условия, что не вошло, — в журнал строкой missed, а не
+      // молча (неподходящее рутина и так не запустила бы — им журнал не забиваем)
+      for (const e of row.items.slice(0, -CATCHUP_ITEMS_MAX)) if (row.matchingIds.includes(e.id)) this.log(r.slug, e, 'missed', { reason: `пришло, пока приложение было закрыто; в «Догнать» не вошло — там последние ${CATCHUP_ITEMS_MAX}` });
       row.items = row.items.slice(-CATCHUP_ITEMS_MAX);
       row.events = row.items.length;
       row.matchingIds = row.matchingIds.filter((id) => row!.items.some((x) => x.id === id));
@@ -984,7 +1038,11 @@ export class RoutineEngine {
           this.log(row.routine, e, 'missed', { reason: 'пришло, пока приложение было закрыто' });
           continue;
         }
-        await this.process(row.routine, spec, e);
+        try {
+          await this.process(row.routine, spec, e, { quiet: true });
+        } catch (err) {
+          this.failed(row.routine, e, err);
+        }
       }
     });
     this.changed();
@@ -1654,17 +1712,20 @@ function spentOf(c: SourceChecks, now: Date): { today: number; week: number } | 
 }
 
 /**
- * Новых записей нет дольше обычного: обычный разрыв — медиана между последними приходами нового, предел — втрое больше,
- * но не меньше суток; приходов меньше трёх — неделя. Только у последней проверки без ошибки (ошибка — свой статус).
+ * Новых записей нет дольше обычного: обычное — самый долгий разрыв между последними приходами нового, предел — в полтора
+ * раза больше, но не меньше трёх суток (выходные рабочего источника — не поломка); приходов меньше трёх — неделя. Только у
+ * последней проверки без ошибки (ошибка — свой статус).
  */
 export function emptyTooLong(c: Pick<SourceChecks, 'last' | 'arrivals'>, now: number): boolean {
   const since = c.last?.ok ? c.last.emptySince : undefined;
   if (!since) return false;
   const times = c.arrivals.map((x) => Date.parse(x)).filter(Number.isFinite).sort((a, b) => a - b);
-  const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
-  const limit = gaps.length >= 2 ? Math.max(3 * gaps[Math.floor(gaps.length / 2)], EMPTY_MIN_MS) : EMPTY_DEFAULT_MS;
+  const gaps = times.slice(1).map((t, i) => t - times[i]);
+  const limit = gaps.length >= 2 ? Math.max(1.5 * Math.max(...gaps), EMPTY_MIN_MS) : EMPTY_DEFAULT_MS;
   return now - Date.parse(since) > limit;
 }
+
+const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
 function strip<T extends Record<string, unknown>>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;

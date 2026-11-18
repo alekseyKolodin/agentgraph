@@ -28,26 +28,29 @@ const hasTerminalNotifier = () => (terminalNotifier ??= spawnSync('which', ['ter
 export function osNotify(n: Notice, origin: string): void {
   if (mode() === 'off') return;
   const url = origin + n.path;
-  const body = n.body.length > BODY_MAX ? n.body.slice(0, BODY_MAX - 1) + '…' : n.body;
+  // заголовок бывает текстом события из внешнего сервиса: ведущий «-» terminal-notifier и notify-send приняли бы за ключ
+  const arg = (v: string) => (v.startsWith('-') ? `\u200b${v}` : v);
+  const title = arg(n.title);
+  const body = arg(n.body.length > BODY_MAX ? n.body.slice(0, BODY_MAX - 1) + '…' : n.body);
   if (mode() === 'log') {
-    console.log(`[notify] ${n.title} — ${body} → ${url}`);
+    console.log(`[notify] ${title} — ${body} → ${url}`);
     return;
   }
   let cmd: string;
   let args: string[];
   if (process.platform === 'darwin' && hasTerminalNotifier()) {
     cmd = 'terminal-notifier';
-    args = ['-title', n.title, '-message', body];
+    args = ['-title', title, '-message', body];
     args.push('-open', url);
     if (n.group) args.push('-group', n.group);
     if (n.sound) args.push('-sound', 'default');
   } else if (process.platform === 'darwin') {
     // текст идёт аргументами, а не внутрь скрипта: кавычки и переводы строк в вопросе не ломают AppleScript
     cmd = 'osascript';
-    args = ['-e', 'on run argv', '-e', `display notification (item 2 of argv) with title (item 1 of argv)${n.sound ? ' sound name "Glass"' : ''}`, '-e', 'end run', n.title, body];
+    args = ['-e', 'on run argv', '-e', `display notification (item 2 of argv) with title (item 1 of argv)${n.sound ? ' sound name "Glass"' : ''}`, '-e', 'end run', title, body];
   } else if (process.platform === 'linux') {
     cmd = 'notify-send';
-    args = [n.title, body];
+    args = [title, body];
   } else {
     return;
   }

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { ARRIVALS_MAX, LOG_TRIM_BYTES, LogReadError, RoutineStore, SEEN_MAX } from './store.js';
 import type { LogEntry, RoutineEvent } from './types.js';
 
@@ -198,6 +199,33 @@ test('итоги проверок источника: последняя про�
     assert.equal(Object.keys(c.spent).length, 60);
     store.deleteChecks('src');
     assert.deepEqual(store.checks('src'), { arrivals: [], spent: {} });
+  } finally {
+    done();
+  }
+});
+
+test('журнал — FIFO: запись не вешает сервер, а даёт LogReadError', () => {
+  const { store, root, done } = tmp();
+  try {
+    const dir = path.join(root, 'routines-state', 'log');
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('mkfifo', [path.join(dir, 'r.json')]);
+    assert.throws(() => store.appendLog(line('a')), (e) => e instanceof LogReadError && /не пишется: не обычный файл/.test(e.message));
+    assert.throws(() => store.logAll('r'), LogReadError);
+  } finally {
+    done();
+  }
+});
+
+test('журнал: обрезка — хвост подряд, длинная строка не оставляет дыру из старых коротких', () => {
+  const { store, done } = tmp();
+  try {
+    for (let i = 0; i < 10; i++) store.appendLog(line(`old${i}`));
+    store.appendLog(line('huge', { reason: 'h'.repeat(LOG_TRIM_BYTES / 2) }));
+    for (let i = 0; i < 10; i++) store.appendLog(line(`new${i}`));
+    store.updateLog('r', 'new9', { reason: 'правка' });
+    const ids = store.logAll('r').map((e) => e.id);
+    assert.deepEqual(ids, Array.from({ length: 10 }, (_, i) => `new${i}`));
   } finally {
     done();
   }

@@ -109,7 +109,7 @@ test('сломанный источник после перезапуска ос
   }
 });
 
-test('поломка источника — одно уведомление: повторные ошибки и перезапуск молчат, после починки новая поломка уведомит', async () => {
+test('поломка источника — одно уведомление, когда держится (3 проверки подряд): повторы и перезапуск молчат, после устойчивой починки новая поломка уведомит', async () => {
   const t = setup();
   try {
     t.routine('r');
@@ -120,17 +120,57 @@ test('поломка источника — одно уведомление: п�
     };
     await t.engine.pollSource('src');
     await t.engine.pollSource('src');
+    // статус виден сразу, уведомление — только у устойчивой поломки
+    assert.equal(t.view().status, 'error');
+    assert.equal(t.notices.length, 0);
     await t.mk().pollSource('src');
     assert.equal(t.notices.length, 1);
     assert.match(t.notices[0].title, /Источник «Чат» не отвечает/);
     assert.match(t.notices[0].body, /токен отозван/);
     assert.equal(t.notices[0].group, 'source:src');
+    await t.mk().pollSource('src');
+    assert.equal(t.notices.length, 1);
     fail = false;
     await t.engine.pollSource('src');
     assert.equal(t.view().status, 'ok');
+    // починили ненадолго и снова сломалось — та же поломка
+    fail = true;
+    for (let i = 0; i < 3; i++) await t.engine.pollSource('src');
+    assert.equal(t.notices.length, 1);
+    // ok держался полчаса — следующая поломка уведомит
+    fail = false;
+    await t.engine.pollSource('src');
+    t.later(31 * 60_000);
+    await t.engine.tick();
+    fail = true;
+    for (let i = 0; i < 3; i++) await t.engine.pollSource('src');
+    assert.equal(t.notices.length, 2);
+  } finally {
+    t.done();
+  }
+});
+
+test('разовые сбои через раз (сон ноутбука, 429) не уведомляют; ошибка дольше 15 минут — уведомляет', async () => {
+  const t = setup();
+  try {
+    t.routine('r');
+    let fail = false;
+    t.poller.fn = async () => {
+      if (fail) throw new Error('429 Too Many Requests');
+      return [];
+    };
+    for (let i = 0; i < 10; i++) {
+      fail = i % 2 === 0;
+      await t.engine.pollSource('src');
+      t.later(5 * 60_000);
+    }
+    assert.equal(t.notices.length, 0);
+    // редкий опрос: вторая неудачная проверка через час — уже устойчивая поломка
     fail = true;
     await t.engine.pollSource('src');
-    assert.equal(t.notices.length, 2);
+    t.later(60 * 60_000);
+    await t.engine.pollSource('src');
+    assert.equal(t.notices.length, 1);
   } finally {
     t.done();
   }
@@ -143,7 +183,7 @@ test('источник, который не нужен включённым ру
     t.poller.fn = async () => {
       throw new Error('нет сети');
     };
-    await t.engine.pollSource('src');
+    for (let i = 0; i < 3; i++) await t.engine.pollSource('src');
     assert.equal(t.notices.length, 0);
     assert.equal(t.view().status, 'idle');
   } finally {
@@ -151,17 +191,17 @@ test('источник, который не нужен включённым ру
   }
 });
 
-test('пусто дольше обычного: по разрывам между приходами нового, но не меньше суток; мало истории — неделя', () => {
+test('пусто дольше обычного: самый долгий разрыв × 1.5, но не меньше трёх суток (выходные); мало истории — неделя', () => {
   const at = (h: number) => new Date(Date.UTC(2026, 10, 1) + h * HOUR).toISOString();
   const last = (emptySince: string) => ({ at: emptySince, ok: true, total: 3, fresh: 0, emptySince });
-  // новое приходило раз в 2 часа: обычное — 2 ч, но предел не меньше суток
-  const hourly = { arrivals: [at(0), at(2), at(4), at(6)], last: last(at(6)) };
-  assert.equal(emptyTooLong(hourly, Date.parse(at(6)) + 20 * HOUR), false);
-  assert.equal(emptyTooLong(hourly, Date.parse(at(6)) + 25 * HOUR), true);
-  // раз в 2 дня — пусто после 6 дней
-  const rare = { arrivals: [at(0), at(48), at(96)], last: last(at(96)) };
-  assert.equal(emptyTooLong(rare, Date.parse(at(96)) + 5 * DAY), false);
-  assert.equal(emptyTooLong(rare, Date.parse(at(96)) + 7 * DAY), true);
+  // рабочий источник: новое раз в 2 часа по будням — выходные (2.5 суток) ещё не «молчит»
+  const busy = { arrivals: [at(0), at(2), at(4), at(6)], last: last(at(6)) };
+  assert.equal(emptyTooLong(busy, Date.parse(at(6)) + 62 * HOUR), false);
+  assert.equal(emptyTooLong(busy, Date.parse(at(6)) + 73 * HOUR), true);
+  // раз в 2–4 дня — пусто после 6 дней (4 × 1.5)
+  const rare = { arrivals: [at(0), at(48), at(144)], last: last(at(144)) };
+  assert.equal(emptyTooLong(rare, Date.parse(at(144)) + 5 * DAY), false);
+  assert.equal(emptyTooLong(rare, Date.parse(at(144)) + 7 * DAY), true);
   // истории нет — неделя
   assert.equal(emptyTooLong({ arrivals: [], last: last(at(0)) }, Date.parse(at(0)) + 6 * DAY), false);
   assert.equal(emptyTooLong({ arrivals: [], last: last(at(0)) }, Date.parse(at(0)) + 8 * DAY), true);
@@ -183,6 +223,8 @@ test('сервис отвечает пустым дольше обычного �
     // протух токен: сервис отвечает пустым списком без ошибки
     t.poller.fn = async () => [];
     await t.engine.pollSource('src');
+    assert.equal(t.view().status, 'ok');
+    t.later(2 * DAY);
     assert.equal(t.view().status, 'ok');
     t.later(DAY + HOUR);
     assert.equal(t.view().status, 'empty');
@@ -230,6 +272,17 @@ test('«Догнать» держит последние 100: отброшенн
     assert.equal(missed.length, 30);
     assert.deepEqual(new Set(missed.map((e) => e.event.id)), new Set(old.slice(0, 30).map((e) => e.id)));
     assert.match(missed[0].reason!, /не вошло.*последние 100/);
+    // рутина с условием: неподходящее, что не вошло, журнал не забивает — его и так не запустили бы
+    t.routine('q', { when: { source: 'src', match: { 'title~': '!o13' } } });
+    // новый процесс: его первая пачка — снова простой
+    const again = t.mk();
+    t.items.push(...Array.from({ length: 130 }, (_, i) => t.event(`p${String(i).padStart(3, '0')}`, { at: new Date(Date.parse('2026-11-17T08:30:00Z') + i * 1000).toISOString(), title: `Ревью !${i % 2 ? 'o13' : 'x'}` })));
+    await again.pollSource('src');
+    await again.idle();
+    const q = again.logOf('q', { outcomes: ['missed'] });
+    // из 30 не вошедших подходят нечётные — 15
+    assert.equal(q.length, 15);
+    assert.ok(q.every((e) => e.event.title === 'Ревью !o13'));
   } finally {
     t.done();
   }
@@ -359,6 +412,93 @@ test('уведомления ожиданий рутины: suggest и пауз�
     assert.equal(t.notices.length, 2);
     assert.equal(t.notices[1].title, 'Ревью !2 — ждёт решения');
     assert.match(t.notices[1].body, /перед «analyze»/);
+  } finally {
+    t.done();
+  }
+});
+
+test('журнал одной рутины не пишется — остальные рутины и события пачки обрабатываются, сбой виден в лог и problems', async () => {
+  const logs: string[] = [];
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('a');
+    t.routine('b');
+    // журнал рутины a — ссылка: ни читать, ни писать его нельзя
+    const dir = path.join(t.root, 'routines-state', 'log');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(t.root, 'elsewhere'), '');
+    fs.symlinkSync(path.join(t.root, 'elsewhere'), path.join(dir, 'a.json'));
+    const e = t.mk();
+    (e as unknown as { deps: { log: (m: string) => void } }).deps.log = (m) => void logs.push(m);
+    t.items.push(t.event('1'), t.event('2'));
+    await e.pollSource('src');
+    await e.idle();
+    assert.deepEqual(e.logOf('b', {}).map((x) => x.event.id).sort(), ['1', '2']);
+    assert.ok(logs.some((m) => /\[a\].*не обработано/.test(m)), logs.join('\n'));
+    assert.equal(fs.readFileSync(path.join(t.root, 'elsewhere'), 'utf8'), '');
+    assert.ok(e.routineView('a')!.problems.some((p) => /журнал a\.json не читается: это ссылка/.test(p)));
+  } finally {
+    t.done();
+  }
+});
+
+test('live-источник: соединение, которое падает сразу, «живым» не считается и не уведомляет по кругу; живое минуту — ok', async () => {
+  let calls = 0;
+  let mode: 'fail' | 'hold' = 'fail';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-live-'));
+  const store = new RoutineStore(root);
+  const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
+  const notices: Notice[] = [];
+  const kind: SourceKind = {
+    kind: 'live', title: 'Live', summary: '', delivery: 'live', minEveryMs: 0, setup: [], match: [], describe: () => '',
+    listen: async (ctx) => {
+      calls++;
+      if (mode === 'fail') throw new Error('соединение закрыто');
+      await new Promise<void>((resolve) => ctx.signal.addEventListener('abort', () => resolve()));
+    },
+  };
+  const engine = new RoutineEngine({
+    store, kinds: () => [kind], startRun: async () => 'x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => [], now: () => clock.now,
+    timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
+    notify: (n) => void notices.push(n), reconnectMs: 1, lock: { who: 'test', deps: { alive: () => false } },
+  });
+  try {
+    store.writeSource('ls', { title: 'Чат', kind: 'live', config: {} });
+    engine.saveRoutine('r', { spec: { title: 'r', when: { source: 'ls' }, run: { flow: 'demo' }, mode: 'auto' } });
+    engine.start();
+    await new Promise((r) => setTimeout(r, 30));
+    await engine.tick();
+    const view = () => engine.sourceViews().find((s) => s.slug === 'ls')!;
+    assert.ok(calls >= 3);
+    assert.equal(view().status, 'error');
+    assert.equal(notices.length, 1);
+    mode = 'hold';
+    await new Promise((r) => setTimeout(r, 30));
+    await engine.tick();
+    // соединение открыто, но ещё не минуту — проверкой «живо» не считается
+    assert.equal(view().status, 'error');
+    clock.now = new Date(clock.now.getTime() + 61_000);
+    await engine.tick();
+    assert.equal(view().status, 'ok');
+    assert.equal(notices.length, 1);
+  } finally {
+    engine.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('оценка на истории берёт стоимость запуска без проверки словами', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', check: 'ревью' } });
+    await t.push(t.event('1'));
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 1 });
+    t.later(DAY);
+    const h = await t.engine.history('r', {});
+    // одно подходящее событие за сутки истории → 7 в неделю по $1 (без $0.002 проверки)
+    assert.deepEqual(h.estimate, { runsPerWeek: 7, usdPerWeek: 7 });
   } finally {
     t.done();
   }
