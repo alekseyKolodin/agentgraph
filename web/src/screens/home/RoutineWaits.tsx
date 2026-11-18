@@ -2,30 +2,35 @@
 // где стоит запуск, черновик ответа наружу с галочкой (уходит вместе с решением), «Чинить / Не сейчас / Это не баг».
 // Над кнопками — что агент уже сделал (context: тикет, критерии, причина). Решение уходит через 5 секунд: до этого строка
 // решения и всплывашка с «Отменить» (routineDecisions.ts). Строка «догнать»: что пришло, пока приложение было закрыто.
+// Над карточками — сломанные источники рутин (не отвечает, молчит дольше обычного, нет ключа): рутины их не видят.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CatchUp, RoutineWait } from '@server/routines/types';
+import type { CatchUp, RoutineWait, SourceView } from '@server/routines/types';
 import { errorText } from '../../api';
 import { answerCatchUp, routineKeys } from '../../api/routines';
 import { MdText } from '../../components/MdText';
 import { useToast } from '../../components/Toast';
 import { ago, clock, excerpt } from '../../lib/format';
-import { t } from '../../lib/i18n';
-import { catchUpLine, catchUpRunLabel, catchUpText, decisionText, replySent, waitButtons } from '../../lib/routines/view';
+import { plural, t } from '../../lib/i18n';
+import { brokenSources, catchUpLine, catchUpRunLabel, catchUpText, decisionText, replySent, waitButtons, type BrokenSource } from '../../lib/routines/view';
 import { bindDecisions, decide, dismiss, isSent, undo, useDecisions } from './routineDecisions';
 import styles from './RoutineWaits.module.css';
 
-export function RoutineHome({ waits, catchUp, now }: { waits: RoutineWait[]; catchUp: CatchUp[]; now: number }) {
+export function RoutineHome({ waits, catchUp, sources = [], now }: { waits: RoutineWait[]; catchUp: CatchUp[]; sources?: SourceView[]; now: number }) {
   const qc = useQueryClient();
   const toast = useToast();
   useEffect(() => bindDecisions(qc, toast), [qc, toast]);
   const { lines, hidden } = useDecisions();
   // решённые карточки прячем сразу: решение ждёт 5 секунд или уже ушло
   const shown = waits.filter((w) => !hidden.has(w.id));
-  if (!shown.length && !lines.length && !catchUp.length) return null;
+  const broken = brokenSources(sources, new Date(now));
+  if (!shown.length && !lines.length && !catchUp.length && !broken.length) return null;
   return (
     <div className={styles.routines}>
+      {broken.map((b) => (
+        <BrokenRow key={b.slug} b={b} />
+      ))}
       {shown.map((w) => (
         <WaitCard key={w.id} w={w} now={now} />
       ))}
@@ -42,6 +47,24 @@ export function RoutineHome({ waits, catchUp, now }: { waits: RoutineWait[]; cat
         </div>
       ))}
       {catchUp.length > 0 && <CatchUpRow list={catchUp} />}
+    </div>
+  );
+}
+
+/** Источник рутин сломан: строка с причиной и переходом к источникам — пока он не починен, рутины его событий не видят. */
+function BrokenRow({ b }: { b: BrokenSource }) {
+  const fail = b.tone === 'fail';
+  return (
+    <div className={`${styles.broken} ${fail ? styles.brokenFail : ''}`} role="status">
+      <span className={`${styles.dot} ${fail ? styles.fail : styles.wait}`} aria-hidden="true" />
+      <span className={styles.brokenText}>
+        <span className={styles.brokenName}>{b.text}</span>
+        {b.detail && <span className={styles.brokenDetail}> · {b.detail}</span>}
+      </span>
+      <span className={styles.brokenMeta} title={t('Рутины на этом источнике не получают событий, пока его не починить')}>
+        {b.routines} {plural(b.routines, 'рутина', 'рутины', 'рутин')}
+      </span>
+      <Link className="btn small ghost" to="/routines" title={t('Открыть рутины и источники')}>{t('Источники')}</Link>
     </div>
   );
 }

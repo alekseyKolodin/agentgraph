@@ -286,6 +286,8 @@ function routines(srv: ServerOptions): RoutineEngine {
       return flowBlocks(loadFlow(name)).map((b) => b.name);
     },
     onChange: () => homeBroadcast({ type: 'routines', runId: '', flow: '' }),
+    // поломка источника, ожидание рутины, неудачный конец её запуска: вкладка такие сама не показывает — системное всегда
+    notify: (n) => sendNotice(srv, n, false),
     log: extra.log ?? ((m) => console.error(`[рутины] ${m}`)),
     // приложение и agentgraph ui на одной ~/.agentgraph: фон рутин ведёт только один из них
     lock: extra.lock ?? { who: process.versions.electron ? 'desktop' : 'ui' },
@@ -1417,9 +1419,12 @@ function launchRun(
         costUsd: e.type === 'end' ? e.report.totalCostUsd : e.type === 'title' || e.type === 'digest' ? e.totalCostUsd : undefined,
         title: e.type === 'title' ? e.title : undefined,
         parent: e.type === 'end' ? e.report.parent : undefined,
+        // конец запуска рутины объявляет движок рутин (по событию, и только не «готово»): вкладка его пропускает
+        routine: e.type === 'end' && !parent && routineRuns.has(id) ? (opts.source?.key ?? 'routine') : undefined,
       });
-      // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя
-      if (e.type === 'question' || (e.type === 'end' && !parent)) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
+      // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя; конец запуска рутины —
+      // движок рутин (routines → notify): заголовком событие, успешный конец молчит
+      if (e.type === 'question' || (e.type === 'end' && !parent && !routineRuns.has(id))) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
     // рутины: пауза перед блоком (pauseBefore) — карточка ожидания, конец — журнал, ответ и очередь
@@ -1432,7 +1437,7 @@ function launchRun(
       } else if (e.type === 'end') {
         routineRuns.delete(id);
         const context = routineContext(e.report);
-        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}) });
+        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}), ...(e.report.error ? { error: e.report.error } : {}) });
       }
     }
     if (e.type === 'end') {

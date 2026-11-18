@@ -1,0 +1,23 @@
+// Состояние источников рутин: не отвечает, молчит дольше обычного, не проверялся; строка на главной; расход опроса.
+export const sources: Record<string, string> = {
+  'Источник не отвечает': 'Source is not responding',
+  'Источник молчит дольше обычного': 'Source has been quiet longer than usual',
+  'Источник ещё не проверялся': 'Source not checked yet',
+  'источник ещё не проверялся': 'source not checked yet',
+  'нет новых записей с {when} — дольше обычного': 'nothing new since {when} — longer than usual',
+  'нет новых записей дольше обычного': 'nothing new for longer than usual',
+  'Не отвечает': 'Not responding',
+  'Молчит дольше обычного': 'Quiet longer than usual',
+  'Ещё не проверялся': 'Not checked yet',
+  'ещё не проверялся': 'not checked yet',
+  'Не используется': 'Not in use',
+  'Отвечает': 'Responding',
+  'опрос моделью: сегодня {today} · 7 дней {week}': 'model polling: today {today} · 7 days {week}',
+  'Источник «{name}» не отвечает': 'Source “{name}” is not responding',
+  'Источнику «{name}» не хватает ключа': 'Source “{name}” is missing a key',
+  'проверка не прошла': 'check failed',
+  'Источник «{name}» молчит': 'Source “{name}” has gone quiet',
+  'Рутины на этом источнике не получают событий, пока его не починить': 'Routines on this source get no events until it is fixed',
+  'рутина|рутины|рутин': 'routine|routines',
+  'Открыть рутины и источники': 'Open routines and sources',
+};
