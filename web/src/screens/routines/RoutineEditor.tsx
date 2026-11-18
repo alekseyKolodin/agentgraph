@@ -83,7 +83,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
       const next = await saveRoutine(r.slug, { spec: enabled ? { ...rest, enabled } : spec });
       qc.setQueryData(routineKeys.one(r.slug), next);
       done();
-      if (enabled && !r.spec.enabled) void navigate('/routines');
+      if (enabled && !r.spec.enabled) void navigate(`/routines/${encodeURIComponent(r.slug)}/log`);
     } catch (e) {
       const list = e instanceof ApiError ? (e.data as { problems?: string[] } | undefined)?.problems : undefined;
       setProblems(list?.length ? list : [errorText(e)]);
