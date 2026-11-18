@@ -145,6 +145,8 @@ export class RoutineStore {
   // ------------------------------------------------------------ состояние
 
   private stateFile = (...p: string[]) => this.dir('routines-state', ...p);
+  /** Замок «один движок рутин на папку настроек» (lock.ts). */
+  lockFile = (): string => this.stateFile('engine.lock');
 
   private readJson<T>(file: string, fallback: T): T {
     try {

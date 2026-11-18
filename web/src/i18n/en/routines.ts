@@ -399,4 +399,11 @@ export const routines: Record<string, string> = {
   'Исправляю скрипт по результату прогона…': 'Fixing the script after the test run…',
   'Прогоняю скрипт без модели…': 'Running the script without a model…',
   'Папка проекта для рутины': 'Project folder for the routine',
+  'К задаче flow получит событие: заголовок, автора, ссылку, текст и поля. Передавать их отдельно не нужно: что именно придёт — «Что получит flow» в проверке справа.':
+    'Along with the task, the flow gets the event: title, author, link, text and fields. No need to pass them separately: see exactly what arrives under “What the flow gets” in the check on the right.',
+  'Что получит flow — на событии «{title}»': 'What the flow gets — for the event “{title}”',
+  '(задача из input flow)': '(task from the flow input)',
+  'Процесс {who}, pid {pid}. «Запустить сейчас» и «Проверить на истории» работают и здесь.': 'Process: {who}, pid {pid}. “Run now” and “Check on history” work here too.',
+  'приложения': 'the app',
+  'Рутины сейчас ведёт другой процесс agentgraph (приложение или agentgraph ui)': 'Routines are currently run by another agentgraph process (the app or agentgraph ui)',
 };

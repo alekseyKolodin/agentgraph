@@ -472,6 +472,13 @@ test('проверка на истории: несохранённое прав�
     const byId = Object.fromEntries(h.events.map((e) => [e.event.id, e.outcome]));
     assert.deepEqual(byId, { '1': 'started', '2': 'filtered', '3': 'check_no' });
     assert.equal(h.disagreements, 1);
+    // что получит flow — на событии, которое запустило бы рутину; без run.input задача из input flow
+    assert.equal(h.preview?.eventId, '1');
+    assert.equal('task' in h.preview!, false);
+    assert.ok(h.preview!.event.startsWith('Событие:\n<source-data>'));
+    assert.match(h.preview!.event, /Заголовок: /);
+    const withTask = await t.engine.history('r', { spec: { title: 'x', when: { source: 'src', match: { channel: 'bugs' }, check: 'баг' }, run: { flow: 'demo', input: ' Проверь MR ' }, mode: 'auto' } });
+    assert.equal(withTask.preview?.task, 'Проверь MR');
     await assert.rejects(t.engine.history('r', { spec: { title: 'x' } }), (e: Error & { status?: number }) => e.status === 400);
   } finally {
     t.done();

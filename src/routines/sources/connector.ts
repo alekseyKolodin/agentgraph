@@ -402,7 +402,8 @@ const BUILD_SYSTEM = `Ты собираешь «источник» для agentg
 3. Для каждого шага скажи, как достать записи из ответа:
    - format "json", если ответ — JSON: map_items — путь к массиву через точку (пусто, если ответ сам массив), map_id — поле стабильного id записи (обязательно), map_title, map_text, map_link, map_at, map_author — пути к полям внутри записи;
    - format "text", если ответ — текст: split — регулярка JavaScript, которая разделяет записи; map_id, map_title, map_text, map_link, map_at, map_author — регулярки с одной группой захвата, применяются к куску одной записи. id — то, что не меняется у записи (ссылка, ts, номер). Так же, если ответ — JSON-обёртка вокруг текста вроде {"results": "…"}: правила пишутся по самому тексту, обёртку agentgraph снимет сам.
-   title — то, по чему человек узнает запись (тема, название задачи или MR, первая строка сообщения), а не служебное поле вроде канала; text — сам текст записи.
+   title — то, по чему человек узнает запись в списке (тема, название задачи или MR, первая строка сообщения), а не служебное поле, одинаковое у всех записей (канал, тип); text — сам текст записи.
+   Проверь, что в ответе выбранного инструмента у записей есть содержимое (текст, ссылки, о которых просит пользователь), а не только метаданные. Поиск часто отдаёт пустой текст у сообщений ботов и вложений — тогда бери инструмент, который читает записи целиком (чтение канала, ленты, задачи).
 4. say — по-русски, коротко и по-человечески, что делает шаг: «Ищет сообщения в #bugs с упоминанием @anna».
 5. expected — сколько записей по твоему скрипту нашлось бы сейчас (по ответам, которые ты видел).
 Если сделать нельзя (нет нужного инструмента, сервис не отвечает) — ok: false и в reason объясни по-русски почему.
@@ -479,11 +480,20 @@ export function buildSpecOf(raw: unknown, req: BuildRequest): Answer {
   return { ok: true, spec, expected: typeof a.expected === 'number' ? a.expected : 0 };
 }
 
-/** Заголовок, одинаковый у всех записей (их хотя бы две), — значит, title взят из служебного поля. */
-export function sameTitle(sample: RoutineEvent[]): string | undefined {
-  if (sample.length < 2) return undefined;
-  const t = sample[0].title;
-  return sample.every((e) => e.title === t) ? t : undefined;
+const SAMPLE_HINT =
+  'Возьми для title то, по чему человек узнает запись: тему, название задачи или MR, первую строку текста сообщения; для text — сам текст записи. Если в ответе этого инструмента у записей нет содержимого (так бывает у сообщений ботов в поиске), возьми инструмент, который читает записи целиком.';
+
+/** Записи нашлись, но без смысла: заголовок — это id или один на всех (служебное поле). Замечание для модели. */
+export function sampleProblem(sample: RoutineEvent[]): string | undefined {
+  if (!sample.length) return undefined;
+  const first = sample[0].title;
+  if (sample.every((e) => e.title === e.id)) {
+    return `Заголовок у найденных записей — это их id («${first}»): правило title не нашло в записи ничего осмысленного. ${SAMPLE_HINT}`;
+  }
+  if (sample.length >= 2 && sample.every((e) => e.title === first)) {
+    return `У всех найденных записей одинаковый заголовок: «${first}». Правило title берёт служебное поле (канал, тип), а не суть записи. ${SAMPLE_HINT}`;
+  }
+  return undefined;
 }
 
 type Build = { id: string; req: BuildRequest; notes: string[]; spec?: SourceSpec; view: ConnectorBuildView; at: number };
@@ -531,7 +541,7 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
   async function drive(b: Build): Promise<void> {
     let feedback: string | undefined;
     let last: { spec: SourceSpec; error: string } | undefined;
-    // рабочий скрипт с одинаковыми заголовками: если исправленный вариант сломается, остаётся он
+    // рабочий скрипт с бессмысленными заголовками: если исправленный вариант сломается, остаётся он
     let kept: { spec: SourceSpec; test: SourceTestResult } | undefined;
     const ready = (k: { spec: SourceSpec; test: SourceTestResult }): ConnectorBuildView => {
       b.spec = k.spec;
@@ -552,14 +562,14 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
       b.view = { id: b.id, state: 'working', step: 'Прогоняю скрипт без модели…' };
       const test = await deps.testSource(a.spec).catch((e: Error): SourceTestResult => ({ ok: false, request: '', sample: [], total: 0, error: e.message }));
       if (test.ok && !(test.total === 0 && a.expected > 0)) {
-        const same = sameTitle(test.sample);
-        // попыток больше нет — скрипт работает, заголовки не главное: принимаем как есть
-        if (same === undefined || run === MAX_RETRIES) {
+        const problem = sampleProblem(test.sample);
+        // попыток больше нет — скрипт работает, это вопрос качества, а не поломка: принимаем как есть
+        if (problem === undefined || run === MAX_RETRIES) {
           b.view = ready({ spec: a.spec, test });
           return;
         }
         kept = { spec: a.spec, test };
-        feedback = `У всех найденных записей одинаковый заголовок: «${same}». Возьми для title то, по чему человек узнает запись (тема, название задачи или MR, первая строка сообщения), а не служебное поле вроде канала.`;
+        feedback = problem;
         continue;
       }
       const error = test.ok ? `Скрипт ничего не нашёл, хотя при сборке было видно записей: ${a.expected}. Скорее всего, не подходит правило разбора ответа.` : (test.error ?? 'Скрипт не выполнился');

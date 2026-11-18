@@ -299,6 +299,8 @@ export type RoutinesOverview = {
   catchUp: CatchUp[];
   /** Имена уже сохранённых ключей (без значений): формы не требуют ввести их заново. */
   secretNames?: string[];
+  /** Рутины в фоне ведёт другой процесс agentgraph на той же папке настроек (ui — agentgraph ui, desktop — приложение). */
+  engineOwner?: { pid: number; who: string };
 };
 
 /** Проверка правила на истории: что из последних событий источника запустилось бы. */
@@ -316,6 +318,8 @@ export type HistoryCheck = {
   /** Оценка по истории: сколько запусков в неделю и во сколько обойдётся (средняя стоимость прошлых запусков рутины или flow). */
   /** usdPerWeek нет — стоимость неизвестна: ни у рутины, ни у flow ещё не было запусков с расходом. */
   estimate?: { runsPerWeek: number; usdPerWeek?: number };
+  /** Что получит flow на одном настоящем событии (первом, которое запустило бы рутину, иначе самом свежем). task нет — задача возьмётся из input flow. */
+  preview?: { eventId: string; task?: string; event: string };
 };
 
 /**

@@ -273,6 +273,11 @@ function RunClause({ d, set }: ClauseProps) {
           )}
         </div>
         <textarea className={styles.inp} rows={2} aria-label={t('Задача flow')} placeholder={t('Задача flow; событие дописывается к ней как данные')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
+        {!isSchedule(d) && (
+          <span className={styles.hint}>
+            {t('К задаче flow получит событие: заголовок, автора, ссылку, текст и поля. Передавать их отдельно не нужно: что именно придёт — «Что получит flow» в проверке справа.')}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -488,6 +493,12 @@ function History({ slug, spec, sourceTitle }: { slug: string; spec: ReturnType<t
             <button type="button" className={cx('btn small ghost', styles.selfStart)} aria-expanded={skips} onClick={() => setSkips(!skips)}>
               {skips ? t('Скрыть пропущенные') : t('Показать {n} пропущенных', { n: hidden.length })}
             </button>
+          )}
+          {res.preview && (
+            <details className={styles.preview}>
+              <summary>{t('Что получит flow — на событии «{title}»', { title: events.find((e) => e.event.id === res.preview!.eventId)?.event.title ?? res.preview.eventId })}</summary>
+              <pre className={styles.previewText}>{[res.preview.task ?? t('(задача из input flow)'), res.preview.event].join('\n\n')}</pre>
+            </details>
           )}
         </>
       )}

@@ -9,6 +9,7 @@ import type { RunStatus } from '../api-types.js';
 import { checkEvent, eventText, type CheckInput, type CheckResult } from './check.js';
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
+import { acquireEngineLock, type EngineOwner, type LockDeps } from './lock.js';
 import { matchRule } from './match.js';
 import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
@@ -85,6 +86,8 @@ export type EngineDeps = {
   tickMs?: number;
   /** Пауза перед переподключением live-источника после ошибки; по умолчанию 30 с. */
   reconnectMs?: number;
+  /** Замок «один движок на папку настроек» (src/routines/lock.ts): who — ui или desktop; deps — подмена в тестах. */
+  lock?: { who: string; deps?: Partial<LockDeps> };
 };
 
 const DEFAULT_EVERY_MS = 5 * 60_000;
@@ -129,6 +132,12 @@ export class RoutineEngine {
   private running = false;
   /** Цепочка обработки событий: по одному, чтобы лимиты и виденные id не гонялись. */
   private chain: Promise<unknown> = Promise.resolve();
+  /** Замок взят: снять при stop(). */
+  private unlock?: () => void;
+  /** Рутины ведёт другой процесс: фон не работает, «Запустить сейчас» и «Проверить на истории» — работают. */
+  private owner?: EngineOwner;
+  /** Повтор попытки взять замок, пока его держит другой процесс. */
+  private lockRetry: unknown;
 
   constructor(private readonly deps: EngineDeps) {
     this.store = deps.store ?? new RoutineStore();
@@ -156,6 +165,30 @@ export class RoutineEngine {
   /** Старт фоновой работы: пропущенное расписание, live-соединения, тик опроса. */
   start(): void {
     if (this.running) return;
+    let lock: ReturnType<typeof acquireEngineLock>;
+    try {
+      lock = acquireEngineLock(this.store.lockFile(), this.deps.lock?.who ?? 'agentgraph', this.deps.lock?.deps);
+    } catch (err) {
+      // замок не записать (права, диск) — работаем как без него, чем не вести рутины вовсе
+      this.say(`замок движка не взят: ${msg(err)}`);
+      lock = { ok: true, release: () => {} };
+    }
+    if (!lock.ok) {
+      const was = this.owner;
+      this.owner = lock.owner;
+      // владелец закроется — замок перейдёт сюда на следующей попытке
+      this.lockRetry ??= this.timers.setInterval(() => this.start(), this.deps.tickMs ?? 30_000);
+      if (!was) {
+        this.say(`рутины ведёт другой процесс (${lock.owner.who || '?'}, pid ${lock.owner.pid}): здесь фон не работает`);
+        this.changed();
+      }
+      return;
+    }
+    if (this.lockRetry !== undefined) this.timers.clearInterval(this.lockRetry);
+    this.lockRetry = undefined;
+    const followed = this.owner !== undefined;
+    this.owner = undefined;
+    this.unlock = lock.release;
     this.running = true;
     this.startedAt = this.now();
     // запуски прошлого процесса уже не идут: их паузы ждать нечего
@@ -166,10 +199,15 @@ export class RoutineEngine {
     this.stopped = false;
     this.tickHandle = this.timers.setInterval(() => this.safe(this.tick()), this.deps.tickMs ?? 30_000);
     this.safe(this.tick());
+    if (followed) this.changed();
   }
 
   stop(): void {
     this.stopped = true;
+    if (this.lockRetry !== undefined) this.timers.clearInterval(this.lockRetry);
+    this.lockRetry = undefined;
+    this.unlock?.();
+    this.unlock = undefined;
     if (!this.running) return;
     this.running = false;
     if (this.tickHandle !== undefined) this.timers.clearInterval(this.tickHandle);
@@ -471,7 +509,7 @@ export class RoutineEngine {
     // слот занят до await: worktree с git fetch идёт долго, и второй запуск в это время не должен пройти лимиты
     this.starting.set(slug, (this.starting.get(slug) ?? 0) + 1);
     try {
-      runId = await this.deps.startRun({ routine: slug, spec, event: e, eventBlock: `Событие:\n${wrapData(eventText(e))}`, pauseBefore });
+      runId = await this.deps.startRun({ routine: slug, spec, event: e, eventBlock: eventBlock(e), pauseBefore });
     } catch (err) {
       return this.record(slug, e, 'error', { reason: `запуск не начался: ${msg(err)}`, logId: o.logId });
     } finally {
@@ -977,6 +1015,7 @@ export class RoutineEngine {
       catchUp: this.catchUps(),
       // только имена: значения ключей наружу не уходят
       secretNames: Object.keys(this.store.secrets()).sort(),
+      ...(this.owner ? { engineOwner: { pid: this.owner.pid, who: this.owner.who } } : {}),
     };
   }
 
@@ -1112,7 +1151,10 @@ export class RoutineEngine {
       out.push({ event: e, outcome, ...(reason ? { reason } : {}), ...(was ? { past: was, disagrees } : {}) });
     }
     const estimate = this.estimate(slug, spec, out);
-    return { events: out, disagreements, ...(estimate ? { estimate } : {}) };
+    const shown = out.find((x) => x.outcome === 'started' || x.outcome === 'waiting') ?? out[0];
+    const task = spec.run.input?.trim();
+    const preview = shown && { eventId: shown.event.id, ...(task ? { task } : {}), event: eventBlock(shown.event) };
+    return { events: out, disagreements, ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}) };
   }
 
   /** Сколько запусков в неделю дала бы эта частота подходящих событий и во что обойдётся (средняя прошлых запусков). */
@@ -1291,6 +1333,11 @@ export function clipContext(text: string, max = 1500): string {
 }
 
 /** Ответ человека расходится с тем, что решило бы правило сейчас. */
+/** Что сервер дописывает к задаче flow при запуске рутины; предпросмотр в проверке на истории — тем же текстом. */
+export function eventBlock(e: RoutineEvent): string {
+  return `Событие:\n${wrapData(eventText(e))}`;
+}
+
 function disagree(past: Feedback['verdict'], outcome: HistoryCheck['events'][number]['outcome']): boolean {
   if (past === 'no_match') return outcome === 'started' || outcome === 'waiting';
   if (past === 'match') return outcome === 'filtered' || outcome === 'check_no';

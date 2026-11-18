@@ -16,7 +16,7 @@ import { t } from '../../lib/i18n';
 import { describeSchedule } from '../../lib/routines/schedule';
 import { everyLabel, foundText } from '../../lib/routines/source';
 import { activeWaits, overviewMeta, routineState, routineSub, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
-import { cx, Dot, Strip, Switch } from './parts';
+import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
 import styles from './Routines.module.css';
 
 /** Шаблоны пустого списка: ключ уходит в /routines/new?tpl=…, там выбирается подходящий источник. */
@@ -62,6 +62,7 @@ export function RoutinesList() {
           </div>
         )}
       </header>
+      <EngineOwnerNote />
       {q.isPending && <p className="muted">{t('Загрузка…')}</p>}
       {q.isError && <NotAvailable error={q.error} />}
       {data && (

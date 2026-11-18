@@ -287,6 +287,8 @@ function routines(srv: ServerOptions): RoutineEngine {
     },
     onChange: () => homeBroadcast({ type: 'routines', runId: '', flow: '' }),
     log: extra.log ?? ((m) => console.error(`[рутины] ${m}`)),
+    // приложение и agentgraph ui на одной ~/.agentgraph: фон рутин ведёт только один из них
+    lock: extra.lock ?? { who: process.versions.electron ? 'desktop' : 'ui' },
   });
   return routineEngine;
 }

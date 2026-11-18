@@ -5,7 +5,7 @@ import type { SessionRequest, SessionResult } from '../../agent.js';
 import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { SourceSpec, SourceTestResult } from '../types.js';
-import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, plainText, sameTitle, scriptOf, textItems } from './connector.js';
+import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, plainText, sampleProblem, scriptOf, textItems } from './connector.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
@@ -224,19 +224,43 @@ test('сборка: прогон не удался — модель правит
   assert.equal('script' in v.spec.config, false);
 });
 
-test('сборка: у всех записей один заголовок — модель пересобирает с замечанием; на последней попытке скрипт как есть', async () => {
-  const same = (n: number): SourceTestResult => ({ ok: true, request: 'r', total: n, sample: Array.from({ length: n }, (_, i) => ({ source: 's', id: `m${i}`, at: '', title: 'Channel: #android-code-review (ID: C1)', text: '', fields: {} })) });
-  assert.equal(sameTitle(same(2).sample), 'Channel: #android-code-review (ID: C1)');
-  assert.equal(sameTitle(same(1).sample), undefined);
+const sampleOf = (titles: Array<string | undefined>): SourceTestResult => ({
+  ok: true,
+  request: 'r',
+  total: titles.length,
+  sample: titles.map((title, i) => ({ source: 's', id: `1763456400.${i}`, at: '', title: title ?? `1763456400.${i}`, text: '', fields: {} })),
+});
+
+test('сборка: заголовок записи — её id — модель пересобирает с замечанием, итог готов', async () => {
+  assert.match(sampleProblem(sampleOf([undefined]).sample)!, /^Заголовок у найденных записей — это их id \(«1763456400\.0»\)/);
+  assert.equal(sampleProblem(sampleOf(['MR !12 Авторизация']).sample), undefined);
+  assert.equal(sampleProblem([]), undefined);
   const prompts: string[] = [];
   const b = createConnectorBuilds({
-    session: async (req) => (prompts.push(req.prompt), ok({ ok: true, expected: 2, steps: [step] })),
-    testSource: async () => same(2),
+    session: async (req) => (prompts.push(req.prompt), ok({ ok: true, expected: 1, steps: [step] })),
+    testSource: async () => sampleOf([undefined]),
     newId: () => 'b3',
   });
   const v = await settle(b, b.start({ tools: [SEARCH], request: 'ревью' }).id);
   assert.equal(prompts.length, 2);
-  assert.match(prompts[1], /У всех найденных записей одинаковый заголовок: «Channel: #android-code-review \(ID: C1\)»/);
+  assert.match(prompts[1], /Заголовок у найденных записей — это их id/);
+  assert.match(prompts[1], /инструмент, который читает записи целиком/);
+  assert.equal(v.state, 'ready');
+});
+
+test('сборка: у всех записей один заголовок — модель пересобирает с замечанием; на последней попытке скрипт как есть', async () => {
+  const same = sampleOf(['Channel: #android-code-review (ID: C1)', 'Channel: #android-code-review (ID: C1)']);
+  assert.match(sampleProblem(same.sample)!, /одинаковый заголовок: «Channel: #android-code-review \(ID: C1\)»/);
+  assert.equal(sampleProblem(sampleOf(['Channel: #android-code-review (ID: C1)']).sample), undefined);
+  const prompts: string[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (prompts.push(req.prompt), ok({ ok: true, expected: 2, steps: [step] })),
+    testSource: async () => same,
+    newId: () => 'b4',
+  });
+  const v = await settle(b, b.start({ tools: [SEARCH], request: 'ревью' }).id);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /одинаковый заголовок/);
   assert.equal(v.state, 'ready');
   if (v.state !== 'ready') return;
   assert.equal(v.mode, 'script');

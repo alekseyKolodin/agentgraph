@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, NavLink } from 'react-router';
 import type { MatchField, RoutineMode, RoutineView } from '@server/routines/types';
 import { useFlows } from '../../api';
+import { useRoutines } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { conditionReady, conditionText, opLabel, opsFor, type Condition } from '../../lib/routines/match';
 import { pillLabel, isDraft, stripTitle, type Tick, type Tone } from '../../lib/routines/view';
@@ -194,6 +195,17 @@ export function WaitClause({ mode, blocks, pauseBefore, onChange }: { mode: Rout
 }
 
 /** Шапка рутины: «‹ Рутины», название, пилюля состояния, вкладки «Правило · Срабатывания», справа — действия. */
+/** Фон рутин ведёт другой процесс agentgraph на той же папке настроек: здесь события не ловятся, ручные кнопки работают. */
+export function EngineOwnerNote() {
+  const owner = useRoutines().data?.engineOwner;
+  if (!owner) return null;
+  return (
+    <p className={styles.warn} title={t('Процесс {who}, pid {pid}. «Запустить сейчас» и «Проверить на истории» работают и здесь.', { who: owner.who === 'desktop' ? t('приложения') : owner.who === 'ui' ? 'agentgraph ui' : owner.who || '?', pid: owner.pid })}>
+      {t('Рутины сейчас ведёт другой процесс agentgraph (приложение или agentgraph ui)')}
+    </p>
+  );
+}
+
 export function RoutineHead({ r, slug, title, actions }: { r?: RoutineView; slug: string; title: string; actions?: ReactNode }) {
   const pill = r ? pillLabel(r) : t('черновик');
   const tone = r && !isDraft(r) ? (r.spec.enabled === false ? styles.paused : styles.on) : '';
@@ -207,6 +219,7 @@ export function RoutineHead({ r, slug, title, actions }: { r?: RoutineView; slug
         </div>
         {actions && <div className="row">{actions}</div>}
       </header>
+      <EngineOwnerNote />
       <nav className="tabs page-tabs" aria-label={t('Рутина')}>
         <NavLink to={`/routines/${encodeURIComponent(slug)}`} end className={({ isActive }) => cx('tab', styles.tabLink, isActive && 'active')}>
           {t('Правило')}
