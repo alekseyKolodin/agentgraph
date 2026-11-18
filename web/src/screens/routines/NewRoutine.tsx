@@ -315,7 +315,7 @@ function FlowStep({ d, set }: StepProps) {
       {!isSchedule(d) && (
         <div className={styles.field}>
           <span className={styles.lbl}>{t('Задача для flow')}</span>
-          <textarea className={styles.inp} rows={2} aria-label={t('Задача flow')} placeholder={t('Задача flow; событие дописывается к ней как данные')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
+          <textarea className={styles.inp} rows={2} aria-label={t('Задача для flow')} placeholder={t('Задача flow; событие дописывается к ней как данные')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
           <span className={styles.hint}>{t('К задаче flow получит событие: заголовок, автора, ссылку, текст и поля. Передавать их отдельно не нужно: что именно придёт — «Что получит flow» в проверке справа.')}</span>
         </div>
       )}

@@ -108,9 +108,12 @@ export function pollCostText(s: Pick<SourceView, 'pollCostUsd'>): string {
  */
 export type BrokenSource = { slug: string; tone: Tone; text: string; detail: string; routines: number };
 
-export function brokenSources(sources: SourceView[], now: Date = new Date()): BrokenSource[] {
+export function brokenSources(sources: SourceView[], now: Date = new Date(), routines?: Array<Pick<RoutineView, 'slug' | 'spec'>>): BrokenSource[] {
   const out: BrokenSource[] = [];
-  for (const s of sources) {
+  // рутина на паузе или черновик источник не читает: из-за неё на главной ничего не горит
+  const off = new Set((routines ?? []).filter((r) => r.spec.enabled === false).map((r) => r.slug));
+  for (const src of sources) {
+    const s = off.size ? { ...src, usedBy: src.usedBy.filter((slug) => !off.has(slug)) } : src;
     if (!s.usedBy.length) continue;
     const name = s.spec.title || s.slug;
     if (s.status === 'error') out.push({ slug: s.slug, tone: 'fail', text: t('Источник «{name}» не отвечает', { name }), detail: s.error || t('проверка не прошла'), routines: s.usedBy.length });

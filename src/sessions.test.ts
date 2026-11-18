@@ -72,8 +72,8 @@ test('sessionArgs: новый разговор — --session-id, названи�
   // PreToolUse — на инструменты agentgraph, которые пишут, на запись файлов и на Bash (сверка в bypassPermissions):
   // остальные инструменты хук не задерживает
   assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), [...ASK_FULL, 'Edit|Write|MultiEdit|NotebookEdit', 'Bash']);
-  // PostToolUse — только запись файлов: проверка записанного и событие для UI
-  assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher: string }) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
+  // PostToolUse — на любой инструмент: снять «ждёт разрешения»; запись файлов — ещё и проверка записанного и событие для UI
+  assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher), [undefined]);
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
@@ -636,8 +636,8 @@ test('хуки: PermissionRequest, который решает человек, �
   const d = { ...deps(), now: () => at };
   const req = (tool: string, input: Record<string, unknown>) => handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input }, d);
   const bash = req('Bash', { command: 'npm test', description: 'тесты' });
-  assert.deepEqual([bash.reply, bash.patch], [{}, { status: 'waiting', ask: { kind: 'permission', text: 'Bash: npm test', at } }]);
-  assert.deepEqual(req('AskUserQuestion', { questions: [{ question: 'Какую базу берём?', options: [] }, { question: 'Нужны миграции?' }] }).patch.ask, { kind: 'question', text: 'Какую базу берём? · Нужны миграции?', at });
+  assert.deepEqual([bash.reply, bash.patch], [{}, { status: 'waiting', ask: { kind: 'permission', text: 'Bash: npm test', at, tool: 'Bash' } }]);
+  assert.deepEqual(req('AskUserQuestion', { questions: [{ question: 'Какую базу берём?', options: [] }, { question: 'Нужны миграции?' }] }).patch.ask, { kind: 'question', text: 'Какую базу берём? · Нужны миграции?', at, tool: 'AskUserQuestion' });
   assert.equal(req('WebFetch', {}).patch.ask?.text, 'WebFetch');
 });
 
@@ -645,13 +645,29 @@ test('хуки: разрешения просит сабагент — шаги 
   const at = '2026-11-18T10:00:00.000Z';
   const d = { ...deps(), now: () => at };
   const req = handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', agent_id: 'a', tool_name: 'Bash', tool_input: { command: 'make' } }, d).patch;
-  assert.deepEqual(req.ask, { kind: 'permission', text: 'Bash: make', at, agent: 'a' });
+  assert.deepEqual(req.ask, { kind: 'permission', text: 'Bash: make', at, agent: 'a', tool: 'Bash' });
   const asked = state({ status: 'waiting', injected: { tags: [] }, ask: req.ask! });
   assert.deepEqual(handleHook(asked, { hook_event_name: 'PostToolBatch', agent_id: 'b' }, d).patch, {});
   assert.deepEqual(handleHook(asked, { hook_event_name: 'PostToolBatch', agent_id: 'a' }, d).patch, { ask: null, status: 'working' });
   // вопрос основного разговора сабагент тоже не снимает
   const main = state({ status: 'waiting', ask: { kind: 'permission', text: 'Bash: ls', at } });
   assert.deepEqual(handleHook(main, { hook_event_name: 'PostToolBatch', agent_id: 'b' }, d).patch, {});
+});
+
+test('хуки: PostToolUse разрешённого инструмента снимает «ждёт разрешения» — по вызову, а чужой вызов не снимает', () => {
+  const at = '2026-11-18T10:00:00.000Z';
+  const d = { ...deps(), now: () => at };
+  const asked = handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'sleep 90' }, tool_use_id: 'tu-1' }, d).patch;
+  assert.equal(asked.ask?.toolUseId, 'tu-1');
+  const waiting = state({ status: 'waiting', ask: asked.ask! });
+  // параллельный вызов другого инструмента закончился — разрешения всё ещё ждёт Bash
+  assert.deepEqual(handleHook(waiting, { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'tu-2' }, d).patch, {});
+  assert.deepEqual(handleHook(waiting, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }, d).patch, { ask: null, status: 'working' });
+  // хук без id вызова: совпадение по инструменту
+  const noId = state({ status: 'waiting', ask: { kind: 'permission', text: 'Bash: ls', at, tool: 'Bash' } });
+  assert.deepEqual(handleHook(noId, { hook_event_name: 'PostToolUse', tool_name: 'Bash' }, d).patch, { ask: null, status: 'working' });
+  // вопрос сабагента снимает только его шаг
+  assert.deepEqual(handleHook(state({ status: 'waiting', ask: { ...noId.ask!, agent: 'a' } }), { hook_event_name: 'PostToolUse', tool_name: 'Bash' }, d).patch, {});
 });
 
 test(

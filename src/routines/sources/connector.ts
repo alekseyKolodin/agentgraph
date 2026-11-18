@@ -304,6 +304,11 @@ async function modelPoll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEv
       persist: false,
       abort: link.controller,
     });
+  } catch (err) {
+    // сессия упала на полпути: что она уже потратила, в расход источника — как и при обычном исходе
+    const spent = (err as { costUsd?: unknown } | null)?.costUsd;
+    if (typeof spent === 'number') ctx.cost?.(spent);
+    throw err;
   } finally {
     link.release();
   }

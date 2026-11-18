@@ -116,3 +116,11 @@ test('конец запуска рутины: заголовком событи�
   assert.equal(mine[0].path, `/run/${runId}`);
   assert.match(mine[0].body, /Ночная сверка · \$0\.00 · поддельный раннер/);
 });
+
+test('уведомление о сессии: вопрос — «Спрашивает: …», разрешение — «Просит разрешения: …», без вопроса — закончила ход', async () => {
+  const { sessionNoticeBody } = await import('./server.js');
+  assert.equal(sessionNoticeBody({}, { kind: 'question', text: 'Какую  базу\nберём?' }), 'Спрашивает: Какую базу берём?');
+  assert.equal(sessionNoticeBody({ space: 'cart' }, { kind: 'permission', text: 'Bash: npm test' }), 'Просит разрешения: Bash: npm test · ◇ cart');
+  assert.equal(sessionNoticeBody({ space: 'cart' }), '◇ cart');
+  assert.equal(sessionNoticeBody({}), 'Claude закончил ход');
+});

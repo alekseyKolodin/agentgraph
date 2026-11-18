@@ -356,6 +356,14 @@ test('главная: сломанные источники рутин — сн�
   assert.equal(list[1]!.text, 'Источник «Почта» молчит');
 });
 
+test('главная: источник, который читают только рутины на паузе, не горит; хоть одна включённая — горит', () => {
+  const sources = [src({ slug: 'b', status: 'error', error: 'нет сети', usedBy: ['p', 'q'] })];
+  const r = (slug: string, enabled: boolean) => view({ slug, spec: { ...view().spec, enabled } });
+  assert.deepEqual(brokenSources(sources, new Date(), [r('p', false), r('q', false)]), []);
+  const one = brokenSources(sources, new Date(), [r('p', false), r('q', true)]);
+  assert.deepEqual(one.map((b) => [b.slug, b.routines]), [['b', 1]]);
+});
+
 test('шапка списка: расход опроса источников за сегодня входит в деньги дня', () => {
   const meta = overviewMeta([view({ stats: { today: 1, started: 1, waiting: 0, costUsd: 1 }, recent: [entry({ outcome: 'started', at: new Date().toISOString(), costUsd: 1 })] })], new Date(), [src({ pollCostUsd: { today: 0.5, week: 2 } })]);
   assert.equal(meta, 'сегодня 1 запуск · $1.50');

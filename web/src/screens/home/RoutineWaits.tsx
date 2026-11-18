@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CatchUp, RoutineWait, SourceView } from '@server/routines/types';
+import type { CatchUp, RoutineView, RoutineWait, SourceView } from '@server/routines/types';
 import { errorText } from '../../api';
 import { answerCatchUp, routineKeys } from '../../api/routines';
 import { MdText } from '../../components/MdText';
@@ -17,14 +17,14 @@ import { brokenSources, catchUpLine, catchUpRunLabel, catchUpText, decisionText,
 import { bindDecisions, decide, dismiss, isSent, undo, useDecisions } from './routineDecisions';
 import styles from './RoutineWaits.module.css';
 
-export function RoutineHome({ waits, catchUp, sources = [], now }: { waits: RoutineWait[]; catchUp: CatchUp[]; sources?: SourceView[]; now: number }) {
+export function RoutineHome({ waits, catchUp, sources = [], routines = [], now }: { waits: RoutineWait[]; catchUp: CatchUp[]; sources?: SourceView[]; routines?: RoutineView[]; now: number }) {
   const qc = useQueryClient();
   const toast = useToast();
   useEffect(() => bindDecisions(qc, toast), [qc, toast]);
   const { lines, hidden } = useDecisions();
   // решённые карточки прячем сразу: решение ждёт 5 секунд или уже ушло
   const shown = waits.filter((w) => !hidden.has(w.id));
-  const broken = brokenSources(sources, new Date(now));
+  const broken = brokenSources(sources, new Date(now), routines);
   if (!shown.length && !lines.length && !catchUp.length && !broken.length) return null;
   return (
     <div className={styles.routines}>

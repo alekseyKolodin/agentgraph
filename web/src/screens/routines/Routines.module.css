@@ -55,6 +55,7 @@
 .rsub { font-size: var(--fs-small); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rsub .bad { color: var(--st-fail); }
 .rsub .ask { color: var(--st-wait); }
+.rsub .mute { color: var(--ink-3); }
 .racts { position: relative; z-index: 1; }
 .sec { margin-top: 26px; }
 .sec-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 8px; }

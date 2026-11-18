@@ -1697,7 +1697,7 @@ function askOf(raw: unknown): SessionAsk | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const a = raw as Record<string, unknown>;
   if (!ASK_KINDS.includes(a.kind as SessionAsk['kind']) || typeof a.text !== 'string' || typeof a.at !== 'string') return undefined;
-  return { kind: a.kind as SessionAsk['kind'], text: askText(a.text), at: a.at, ...(typeof a.agent === 'string' ? { agent: a.agent } : {}) };
+  return { kind: a.kind as SessionAsk['kind'], text: askText(a.text), at: a.at, ...(typeof a.agent === 'string' ? { agent: a.agent } : {}), ...(typeof a.tool === 'string' ? { tool: a.tool } : {}), ...(typeof a.toolUseId === 'string' ? { toolUseId: a.toolUseId } : {}) };
 }
 
 /** Итог саммари старой сессии как итог состояния её пространства (тег задачи с тем же слагом). */
