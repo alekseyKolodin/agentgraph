@@ -28,10 +28,18 @@ export function reportFeed(runId: string, r: RunReport, live?: FeedLive): FeedIt
     const open = Boolean(live && r.pauseReason?.at === pz.at);
     out.push({ ...run, id: `${runId}:pause:${pz.at}`, kind: 'pause', at: pz.at, title: pz.phase, text: truncate(pz.text, TEXT_MAX), doneAt: pz.resumedAt, open });
   }
-  if (r.finishedAt && r.status !== 'running') {
-    out.push({ ...run, id: `${runId}:end`, kind: 'end', at: r.finishedAt, status: r.status, costUsd: r.totalCostUsd, text: r.error ? truncate(r.error, TEXT_MAX) : undefined });
+  // прерванный запуск (running без процесса) finishedAt не имеет: концом считаем его последнее известное время
+  const endAt = r.finishedAt ?? (r.status === 'interrupted' ? lastKnownAt(r) : undefined);
+  if (endAt && r.status !== 'running') {
+    out.push({ ...run, id: `${runId}:end`, kind: 'end', at: endAt, status: r.status, costUsd: r.totalCostUsd, text: r.error ? truncate(r.error, TEXT_MAX) : undefined });
   }
   return out;
+}
+
+/** Последнее время, которое отчёт знает о запуске: вопросы, паузы, старт. Стабильно между вызовами, лента не прыгает. */
+function lastKnownAt(r: RunReport): string {
+  const times = [r.startedAt, ...(r.questions ?? []).flatMap((q) => [q.askedAt, q.answeredAt]), ...(r.pauses ?? []).flatMap((p) => [p.at, p.resumedAt])];
+  return times.filter((t): t is string => Boolean(t)).sort().pop() ?? r.startedAt;
 }
 
 /** От новых к старым, не больше max. */
