@@ -1,8 +1,9 @@
 // Список коннекторов claude.ai для конструктора: ждём подключения, имена инструментов как в сессии этапа.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import os from 'node:os';
 import type { McpServerStatus, Options } from '@anthropic-ai/claude-agent-sdk';
-import { connectorName, connectorToolName, getConnectors, resetConnectorsState, type ConnectorsDeps } from './connectors.js';
+import { connectorName, connectorToolName, getConnectors, getMcpServers, resetConnectorsState, type ConnectorsDeps } from './connectors.js';
 
 /** Фейковый query: каждый опрос отдаёт следующий снимок серверов, последний — дальше. */
 function fake(snapshots: McpServerStatus[][]) {
@@ -73,4 +74,19 @@ test('коннекторы: не дождались — отдаёт что ес
   const empty = fake([[figma]]);
   assert.deepEqual((await getConnectors(true, { ...empty.deps, waitMs: 20 })).connectors, []);
   resetConnectorsState();
+});
+
+test('MCP-серверы для рутин: и коннекторы, и серверы Claude Code, в нейтральной папке; разметка инструментов видна', async () => {
+  resetConnectorsState();
+  const f = fake([[figma, rovo('connected')]]);
+  const v = await getMcpServers(true, f.deps);
+  assert.equal(f.calls[0].cwd, os.tmpdir());
+  assert.deepEqual(v.servers.map((s) => [s.server, s.scope]), [['claude.ai Atlassian Rovo', 'claudeai'], ['figma-desktop', 'user']]);
+  assert.deepEqual(v.servers[0].tools.map((x) => [x.tool, x.readOnly, x.annotated]), [['getJiraIssue', true, true], ['createJiraIssue', false, false]]);
+  assert.equal(v.servers[1].tools[0].name, 'mcp__figma-desktop__get_metadata');
+  // флоу-конструктор по-прежнему видит только коннекторы и без служебного поля
+  resetConnectorsState();
+  const c = await getConnectors(true, fake([[figma, rovo('connected')]]).deps);
+  assert.deepEqual(c.connectors.map((x) => x.server), ['claude.ai Atlassian Rovo']);
+  assert.equal('annotated' in c.connectors[0].tools[0], false);
 });

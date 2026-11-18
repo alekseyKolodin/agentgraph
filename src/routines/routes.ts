@@ -3,8 +3,10 @@
 import type { DraftRoutes, Recipe } from './kind.js';
 import { RoutineError, type RoutineEngine } from './engine.js';
 import { assertSlug, freeSlug, parseSourceYaml, SLUG_RE } from './schema.js';
+import { getMcpServers, type McpServer } from '../connectors.js';
+import { mcpServices } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
-import type { LogOutcome, WaitAction } from './types.js';
+import type { LogOutcome, McpServicesView, WaitAction } from './types.js';
 
 export type Reply = { status: number; body: unknown };
 
@@ -12,7 +14,7 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
-export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup']);
+export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools']);
 
 const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
 
@@ -20,6 +22,8 @@ export type RoutinesRouteDeps = {
   engine: RoutineEngine;
   /** Подключение словами; по умолчанию draftRoutes() видов. null (или draftRoutes вернул undefined) — 501. */
   drafts?: DraftRoutes | null;
+  /** MCP-серверы для источника «Сервис через Claude»; по умолчанию getMcpServers (процесс Claude Code без модели). */
+  mcpServers?: (force: boolean) => Promise<{ servers: McpServer[]; at: string }>;
 };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
@@ -121,6 +125,12 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
         return ok({ ok: true });
       }
       return undefined;
+    }
+
+    // --- сервисы MCP для источника «Сервис через Claude»: к модели не обращается, список держится 5 минут
+    if (p === '/api/routines/mcp-tools' && method === 'GET') {
+      const v = await (deps.mcpServers ?? getMcpServers)(url.searchParams.get('force') === '1');
+      return ok({ services: mcpServices(v.servers), at: v.at } satisfies McpServicesView);
     }
 
     // --- рецепты

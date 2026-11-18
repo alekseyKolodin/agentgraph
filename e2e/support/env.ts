@@ -193,8 +193,9 @@ export class E2E {
 
   // ------------------------------------------------------------ фейковый claude
 
-  scenario(rules: ClaudeRule[]): void {
-    fs.writeFileSync(this.scenarioFile, JSON.stringify({ rules }));
+  /** mcpServers — что фейковый claude отдаст на mcp_status (коннекторы claude.ai, MCP-серверы). */
+  scenario(rules: ClaudeRule[], mcpServers?: unknown[]): void {
+    fs.writeFileSync(this.scenarioFile, JSON.stringify({ rules, ...(mcpServers ? { mcpServers } : {}) }));
   }
 
   claudeCalls(): ClaudeCall[] {

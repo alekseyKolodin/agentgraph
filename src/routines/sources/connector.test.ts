@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
 import type { SessionRequest, SessionResult } from '../../agent.js';
-import { CONNECTOR_MODEL, checkToolName, connectorKind } from './connector.js';
+import { CONNECTOR_MODEL, checkToolName, connectorKind, mcpServices } from './connector.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
@@ -41,8 +41,10 @@ test('connector: инструмент записи не принимается, 
   assert.equal(checkToolName('mcp__claude_ai_X__list_assets'), 'mcp__claude_ai_X__list_assets');
   assert.throws(() => checkToolName('mcp__claude_ai_Slack__slack_send_message'), /похож на запись/);
   assert.throws(() => checkToolName('mcp__claude_ai_Notion__createPage'), /похож на запись/);
-  assert.throws(() => checkToolName('Bash'), /mcp__/);
-  assert.throws(() => checkToolName(undefined), /mcp__/);
+  assert.throws(() => checkToolName('mcp__claude_ai_Claude_Docs__batch'), /похож на запись/);
+  assert.throws(() => checkToolName('mcp__claude_ai_Slack__slack_schedule_message'), /похож на запись/);
+  assert.throws(() => checkToolName('Bash'), /Выберите сервис/);
+  assert.throws(() => checkToolName(undefined), /Выберите сервис/);
 });
 
 test('connector: сессия упала или ответ не список — понятная ошибка', async () => {
@@ -64,4 +66,36 @@ test('connector: обработчик на сигнале опроса сним�
   const slow = connectorKind({ session: async (req) => { ctx.abort.abort(); aborted = req.abort!.signal.aborted; return ok({ records: [] }); } });
   await slow.poll!(ctx);
   assert.equal(aborted, true);
+});
+
+test('connector: в выбор попадают только читающие инструменты, похожий на список — первым', () => {
+  const tool = (t: string, o: { readOnly?: boolean; annotated?: boolean; description?: string } = {}) => ({
+    name: `mcp__claude_ai_Slack__${t}`, tool: t, readOnly: o.readOnly ?? false, annotated: o.annotated ?? false, ...(o.description ? { description: o.description } : {}),
+  });
+  const [slack, local] = mcpServices([
+    {
+      server: 'claude.ai Slack', name: 'mcp__claude_ai_Slack', status: 'connected', scope: 'claudeai',
+      tools: [
+        tool('slack_read_user_profile'),
+        tool('slack_send_message'),
+        tool('slack_read_thread', { readOnly: true, annotated: true }),
+        tool('slack_search_public', { readOnly: true, annotated: true, description: 'Search messages in public channels' }),
+        // сервер разметил: не только чтение — прячем, хоть имя и безобидное
+        tool('slack_schedule_message_later', { readOnly: false, annotated: true }),
+      ],
+    },
+    { server: 'jira', name: 'mcp__jira', status: 'connected', scope: 'user', tools: [{ name: 'mcp__jira__list_issues', tool: 'list_issues', readOnly: false, annotated: false }] },
+  ]);
+  assert.equal(slack.title, 'Slack');
+  assert.equal(slack.origin, 'claudeai');
+  assert.deepEqual(slack.tools.map((x) => x.tool), ['slack_search_public', 'slack_read_thread', 'slack_read_user_profile']);
+  assert.equal(slack.tools[0].description, 'Search messages in public channels');
+  assert.equal(slack.hidden, 2);
+  assert.deepEqual([local.title, local.origin, local.tools.map((x) => x.name)], ['jira', 'claude-code', ['mcp__jira__list_issues']]);
+});
+
+test('connector: поле выбирается из списка, а не вводится', () => {
+  const f = connectorKind().setup.find((x) => x.key === 'tool')!;
+  assert.equal(f.pick, 'mcp-tool');
+  assert.match(f.hint!, /MCP/);
 });

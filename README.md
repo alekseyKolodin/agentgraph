@@ -6,9 +6,13 @@
 
 <p align="center"><img src="docs/assets/loop.gif" width="900" alt="Left: with Claude Code alone you re-run the tests and paste failures back five times. Right: with agentgraph the acceptance check sends failures back to the agent until it passes, with zero interruptions"></p>
 
+**And stop starting it by hand.** A **routine** is a rule: a bug report lands in Slack, a merge request waits for your review, a meeting ends, it's 9:30 on a weekday — and the right flow starts by itself, stops where you told it to wait for you, and reports back where the event came from.
+
 Runs locally on your Claude Code subscription or API key: in the browser, as a macOS app, or from the CLI.
 
 <p align="center">
+  <a href="#whats-inside">What's inside</a> ·
+  <a href="#routines-when-something-happens-run-a-flow">Routines</a> ·
   <a href="#use-cases">Use cases</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -24,10 +28,92 @@ Runs locally on your Claude Code subscription or API key: in the browser, as a m
 | juggle three terminals with three agents | One **Home** page: every run, every agent question, the PRs that need you; each run in its own git worktree |
 | find out the agent burned $15 going in circles | Budget, turn and iteration limits per run and per phase, and a "stuck" warning when iterations fail the same way |
 | can't reproduce the one great session you had | The process is a YAML file in git, and `/session-to-flow` turns a past session into one |
+| copy a bug from Slack into the agent, then paste the answer back into the thread | A **routine** does it on every new message: checks it is a bug, files the ticket, waits for your "Fix", replies in the thread |
+| open the tracker, the MRs and the meeting notes every morning to see what needs you | Routines on a schedule and on any service you can describe in words; what needs a decision waits as a card on **Home** |
+
+## What's inside
+
+| | |
+|---|---|
+| **Flows and runs** | A flow is a YAML file: phases, loops and an acceptance check (a shell command, a judge with your rubric, a marker). A run keeps iterating until the check passes, within budget and iteration limits. [Use cases ↓](#use-cases) |
+| **Routines** · new in 0.5 | "When → do" rules that start flows on events: Slack, Telegram, GitLab, GitHub, Jira, RSS, email, a folder, a schedule, your own command — or any service you describe in words. [Routines ↓](#routines-when-something-happens-run-a-flow) |
+| **Home** | Everything that waits for you in one place: agents' questions, paused runs, routine cards, your MRs with failed CI or unanswered threads, sessions you left unfinished. |
+| **Spaces** | A folder per feature or project: a `CLAUDE.md` map, docs, pinned folders, knowledge tags and a "where we are now" state that every run and session in it starts from. |
+| **Sessions** | The regular Claude Code TUI in a terminal inside agentgraph, in the space you pick. **+** on the rail or ⌘N opens one in a keystroke from a pinned folder set. |
+| **Teamwork** | A team's PRD, architecture, tasks, backlog, sprints and board as files in a shared git repo. Agents draft, you accept edits one by one, **Start work ▸** sends a task to a flow or a session. |
+| **Code** | Your Jira sprint, MRs/PRs and branches; **Run…** puts the ticket or MR into the task and prepares a worktree. |
+| **Desktop app** | The same interface as `AgentGraph.app` in the Dock; notifications open the run or session they are about. |
+
+## Routines: when something happens, run a flow
+
+A routine connects a **source** to a **flow**. A source is anything that returns a list of records — messages, merge requests, meetings, alerts, files. agentgraph fetches them itself while the app is open, remembers what it has already seen, and turns every new record into an event with the same fields (title, text, link, author, the service's own fields). That is why one rule format works for Slack, Fireflies and a cron schedule alike.
+
+<p align="center"><img src="docs/assets/routines.gif" width="900" alt="Animated scheme: a Slack message becomes an event, passes field conditions and a check in words, starts the bug-to-fix flow, stops before the fix block and waits for one click, then the reply goes back to the Slack thread. A second event from Fireflies runs meeting-to-tasks without stops and reports to Telegram"></p>
+
+The path of an event goes from cheap steps to expensive ones:
+
+1. **Conditions** on fields — channel, author, label, "duration > 10 min" — with no model and no cost. Most events stop here.
+2. **Check in words**, optional: a small model reads the event against your sentence ("a bug report: something is broken; questions are not bugs") and filters out repeats of what already ran. About $0.002 per event.
+3. **Run**: an ordinary run of your flow with its space, worktree and budget. The event text reaches the agent marked as data, not instructions.
+4. **Wait for me**: the run stops before the blocks you chose and shows a card on Home with what the agent has done so far. Or it asks before starting, or doesn't stop at all.
+5. **Reply**: to the Slack thread, the Telegram chat, the MR or the Jira issue the event came from, or to another chat — after your review, right away, or not at all.
+
+The three recordings below show the actual interface on a demo setup: the server and UI are real, while Slack, the meetings service and the agents' answers are stand-ins from the [e2e harness](e2e/), so nothing in them cost a token. The captions, the cursor and the Slack panel are drawn by the [recording script](e2e/readme/).
+
+### A bug in Slack → ticket → your "Fix" → reply in the thread
+
+A message lands in `#bugs`. The routine checks it is a bug report, runs the triage block, files the ticket and stops before `fix`. The card on **Home** shows the ticket, the cause and the acceptance criteria, with the draft of the reply. **Fix** resumes the run and sends the reply; **Not now** keeps it waiting; **Not it** stops the run and teaches the check. When the fix is done, the summary waits for **Send**.
+
+<p align="center"><img src="docs/assets/case-routine.gif" width="900" alt="A Slack message about failing checkout appears; on Home a card asks Fix with the ticket and acceptance criteria; after the click the reply appears in the Slack thread, the run finishes and the summary is sent to the same thread"></p>
+
+<details>
+<summary><b>routine.yaml</b>: the whole rule</summary>
+
+```yaml
+# ~/.agentgraph/routines/bug-in-bugs.yaml
+title: Bug in #bugs → ticket and fix
+when:
+  source: slack-bugs            # a connected source
+  match: { bot: false }         # field conditions, no model
+  check: |                      # optional, in your own words
+    A bug report: something in the product is broken. Questions are not bugs.
+run:
+  flow: bug-to-fix
+  space: billing
+  worktree: new
+  pause_before: [fix]           # wait for me before this block
+mode: until_pause               # suggest | until_pause | auto
+reply: { to: source, on: [pause, end], draft: true }   # after my review
+limits: { usd: 3, per_day: 5, parallel: 1 }
+```
+
+The flow itself doesn't change: the stop before `fix` is set by the routine, so the same flow runs straight through when you start it by hand. Rules live in `~/.agentgraph/routines`, outside the repo — your channels and budgets are yours.
+
+</details>
+
+### A new routine in four steps
+
+What triggers it, when it matches, what to run and where to wait, how to report. The panel on the right reads the rule back as one sentence. A new routine is saved as a draft, and the editor shows what it **would have done** on the source's recent events — which would run, which would be skipped and why, and how many runs a week that is — before you turn it on.
+
+<p align="center"><img src="docs/assets/routine-new.gif" width="900" alt="The New routine screen: pick the Slack source, add a check in words, pick the bug-to-fix flow, choose to wait before a block and to reply after review; the editor then shows that two of the last three messages would run"></p>
+
+### Any service, described in words
+
+Slack, Telegram, GitLab, GitHub, Jira, RSS, email, a folder and any service connected to Claude (claude.ai connectors and Claude Code MCP servers, picked from a list) are ready-made, with recipes for Fireflies, Sentry, Linear and GitHub notifications. For everything else, say what should trigger the routine. An agent finds the service's API, asks for the key, builds the check and shows what it found and what exactly will run. After that the check is a plain command that runs without a model; the key is stored separately and never ends up in the source file, so the file can be shared with a teammate.
+
+<p align="center"><img src="docs/assets/routine-connect.gif" width="900" alt="Connect a service: the phrase a new meeting recording in Fireflies is typed, the agent builds the check, asks for an API key, the service responds with three meetings, and the saved source appears in the list"></p>
+
+More about routines:
+
+- **Schedule** is a source too: `"30 9 * * 1-5"` runs a digest flow every weekday morning. A run missed while the laptop was closed is offered once on Home instead of silently skipped.
+- **Nothing runs behind your back after downtime.** Events that arrived while the app was closed show up on Home as one line — how many arrived and how many match — and run only if you say so.
+- **It learns from your answers.** "Not it" on a card and "It's a bug" / "Not a bug" / "Not a repeat" in the trigger log become examples for the check in words.
+- **Limits** per routine: runs a day, runs in parallel (the rest queue up) and a budget per run. A routine never triggers on its own bot's messages.
+- **Your own command** works as a source when you'd rather write it yourself: anything that prints a JSON list — `curl`, `gh`, a script.
 
 ## Use cases
 
-Every recording below is a real run of the flow next to it on a small billing service (`acme-billing`, Node, `node:test`). The recorded flows also set `model: sonnet` and phase titles. Long stretches are sped up, and the badge in the corner shows how much. Captions, zoom and the cursor in cuts between tabs were added in editing; everything inside the window is the actual UI.
+Every recording below is a real run of the flow next to it on a small billing service (`acme-billing`, Node, `node:test`). The recorded flows also set `model: sonnet` and phase titles. Long stretches are sped up, and the badge in the corner shows how much. Captions, zoom and the cursor in cuts between tabs were added in editing; everything inside the window is the actual UI. They were recorded before the left menu became a rail of section icons, so the sidebar in them looks different from today's; the run pages are the same.
 
 ### 1. Get CI green
 
@@ -213,6 +299,8 @@ When an agent needs a decision only you can make, it asks with `AskUserQuestion`
 - **Codebase-wide migrations.** Put the finish line into the check: `! grep -rn "from 'moment'" src && npx tsc --noEmit && npm test`. While old imports remain, `grep` prints them, and that list is the next iteration's feedback. `max_budget_usd` stops a migration that goes sideways.
 - **One feature over many runs.** Implementation, then QA bugs, then review comments, then a rebase: run them in the same **space** (`--space loyalty-card`). Its `CLAUDE.md` map reaches every phase as memory, like a repository's `CLAUDE.md`, its docs are read on demand, and after every successful run a cheap model rewrites its state (where the code is, key decisions, what's left), so the next run starts from it.
 - **Interactive sessions with the same context.** The **Sessions** tab runs the regular Claude Code TUI in a terminal inside agentgraph (desktop app or browser) in the space you pick: its map loads as memory, its state, docs and knowledge tags arrive through hooks, a space or tag changed mid-session reaches the model on its next step, the state is rewritten when claude exits, **Continue** reopens the conversation with `--resume`, and claude can write to the space's docs or open another session next to it when you ask. See [Sessions](docs/REFERENCE.md#sessions-claude-code-in-a-terminal-with-a-space).
+- **A session in a keystroke.** **+** on the rail or ⌘N: pinned folder sets, spaces, folders of past sessions. Enter opens the terminal right away, ⌘Enter the full form. A space keeps its folder set and knowledge tags, and the session and run forms fill them in.
+- **"Unfinished" on Home.** A model goes through your recent sessions and says, for each, what is left and where to continue. It shows the price first and runs only when you click.
 - **Your team's process, in git.** Flows are YAML files that get reviewed like code. `/session-to-flow` turns a good Claude Code session into a flow, keeping the commands that worked and the pitfalls you hit. **Knowledge tags** give phases your team's rules: the prompt gets a one-line description of each, and the agent reads the full text only when the task touches that area.
 - **Plan a feature as a team (Teamwork).** The PRD, architecture, design, tasks with dependencies and sprints live as files in a shared git repo that every member connects by its link. Agents draft the documents and split the PRD into tasks, you accept their edits one by one, and **Start work ▸** sends a task to a flow or a Claude Code session in its own worktree; its status follows the run and the PR. See [Teamwork](docs/REFERENCE.md#teamwork-a-teams-projects-in-a-shared-git-repo).
 - **Measure, don't guess.** **Analyze flow** on a finished run says which phases to merge or split, based on peak context, repeating feedback and unused permissions. `agentgraph eval` runs a task set through two variants of a flow and shows which tasks flipped.
@@ -254,6 +342,8 @@ npm run agentgraph -- eval fix-tests --compare fix-tests-solo --tasks evals/task
 
 To get the same interface as a macOS app you can launch by its icon and keep in the Dock, run `npm run desktop:install` (or `npm run desktop:dev` for a window straight from the terminal). Integrations (Jira, `gh`, `glab`) are set up in **Connections** on Home; see the [guide](docs/GETTING_STARTED.md#run-from-a-jira-issue-mr-or-branch).
 
+For your first routine, open **Routines** (the lightning icon on the rail), pick one of the four templates or **New routine**, and connect a source on the way: a ready-made one, or **Another service…** to describe it in words. The routine is saved as a draft; turn it on after the history check. Routines work while agentgraph is open, so for always-on ones keep the desktop app running.
+
 ## How it works
 
 <p align="center"><img src="docs/assets/builder-blocks.png" width="900" alt="Builder: the feature-spec-first flow as a graph of three blocks with their conditions and artifacts"></p>
@@ -264,6 +354,7 @@ To get the same interface as a macOS app you can launch by its icon and keep in 
 - **Parallel groups**: phases of a block with a shared `group` run at the same time.
 - **Calls and branching**: a block can also call another flow (`flow: <name>`), which runs as a child run with its own page and passes its result on, and `next` rules (`marker`, `command` or `judge`) jump forward to a later block or end the run. See [Calling another flow and branching](docs/REFERENCE.md#calling-another-flow-and-branching).
 - **Artifacts**: run files with explicit read and write permissions per phase. You can edit them between steps.
+- **Routines**: rules outside the flow that start it on an event. A **source** is a check that returns a list of records; a routine adds conditions, an optional check in words, the blocks to stop before and where to reply. The flow doesn't know it was started by a routine.
 - **Spaces and knowledge tags**: context from outside the flow. A **space** carries a feature or project across sessions and runs (a map, docs, a state), and **knowledge tags** give phases your team's rules on demand. See [Spaces](docs/REFERENCE.md#spaces-a-feature-or-project) and [Knowledge tags](docs/REFERENCE.md#knowledge-tags).
 
 You can write a flow by hand, build it in the visual builder, generate it from a description, or edit it in words ("add a read-only review phase with a judge"). Every field of `flow.yaml` is in the [reference](docs/REFERENCE.md#flowyaml-format).
@@ -275,6 +366,8 @@ You can write a flow by hand, build it in the visual builder, generate it from a
 - Artifact permissions (`reads`, `writes`) are enforced by a hook before every tool call, including in subagents.
 - Text from agents and external systems (tickets, PR descriptions) is shown as text and passed to agents marked as data, not instructions.
 - Settings and integration tokens are stored in `~/.agentgraph`, outside the repository and outside run logs.
+- Routines fetch events themselves, by polling or over an outgoing connection: nothing has to reach your machine from outside, and there are no webhooks to expose. Source keys live in `~/.agentgraph/secrets.json` (mode 0600), are never returned by the API and are masked in errors and in "What will run". The text of an event goes to the agent marked as data.
+- A source built from your description is a command you can read before saving it. Before the first trial run the command is checked: only `curl` piped to `jq`, no reading or writing local files, and only the keys you entered in that dialog.
 - The run chat does safe things (pause, resume, the iteration limit) right away, but stops a run, writes artifacts, saves a flow or continues a run only after you click its button and confirm. The Sessions terminal's WebSocket accepts only the page's own `Origin`, and hooks and MCP calls from its `claude` need a random per-session token. That token also lets the session's `claude` open another session (`session_new`): claude asks you first even in `auto` mode, and the new session gets the current permission mode, never a wider one.
 
 ## Technologies
@@ -287,29 +380,33 @@ You can write a flow by hand, build it in the visual builder, generate it from a
 | Web interface | React 19, TypeScript, Vite, React Router, TanStack Query, React Flow (`@xyflow/react`), CodeMirror 6 |
 | Desktop | Electron: the same server and the same interface in a native macOS window |
 | Terminal (Sessions tab) | `node-pty` (optional native dependency) on the server, xterm.js in the UI, connected over a WebSocket (`ws`); `@xterm/headless` keeps the screen for a reloaded page |
-| Tests and CI | `node:test`, server and UI typecheck, UI build in CI |
+| Tests and CI | `node:test` unit tests, Playwright end-to-end tests of routines (`npm run e2e`), server and UI typecheck, UI build in CI |
 
 <details>
 <summary><b>Project structure and development</b></summary>
 
 ```
 src/            core: flow schema, runner, Agent SDK sessions, API server, integrations (Jira, GitLab, GitHub, git)
+src/routines/   routines: rules, the event path, limits, replies; sources/ — the service kinds and "connect in words"
 src/desktop/    Electron main process
 web/            React web interface
 flows/example/  example flows: blocks, agent questions, pause, parallel groups, flow calls and branching
+templates/      source recipes for routines (Fireflies, Sentry, Linear, GitHub notifications)
+e2e/            Playwright end-to-end tests of routines; e2e/readme/ records the routine clips in this README
 docs/           guide and reference
 scripts/        UI build, zip archive, releases, SDK hook check
 .claude/        /agentgraph and /session-to-flow skills, development rules (agentgraph-core, -web, -tests, flow-author skills), code-reviewer subagent
 ```
 
-The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`, terminal sessions to `sessions/<id>/`; spaces are stored in `~/.agentgraph/spaces/`, knowledge tags in `~/.agentgraph/tags/`.
+The log of every run (prompts, transcripts, outputs, cost) is written to `runs/<date>-<flow>/`, terminal sessions to `sessions/<id>/`; spaces are stored in `~/.agentgraph/spaces/`, knowledge tags in `~/.agentgraph/tags/`, routines in `~/.agentgraph/routines/` and their sources in `~/.agentgraph/sources/`.
 
 | Command | What it does |
 |---|---|
 | `npm run ui` | Server and built UI at http://127.0.0.1:4747 |
 | `npm run dev:web` | UI with hot reload (needs `npm run ui` running) |
 | `npm run typecheck` | Type check of the server and UI |
-| `npm test` | Tests |
+| `npm test` | Unit tests |
+| `npm run e2e` | End-to-end tests of routines (Playwright; `npx playwright install chromium` once) |
 | `npm run build:web` | UI build into `dist/web` |
 | `npm run desktop:install` | Put `AgentGraph.app` (runs this checkout) into Applications |
 | `npm run desktop:build` | Build `.app` and `.dmg` into `release/desktop/` |
@@ -326,7 +423,9 @@ CI runs on GitHub Actions: typecheck, tests and the UI build on every pull reque
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — installation, first run, day-to-day work, integrations, how the code is organized.
 - [docs/REFERENCE.md](docs/REFERENCE.md) — every `flow.yaml` field, interface screens, artifacts, spaces, knowledge tags, cost, limitations.
+- [docs/routines/SPEC.md](docs/routines/SPEC.md) — routines in detail: the event path, file formats, the API, source kinds (in Russian).
 - [flows/example/](flows/example/) — ready-made example flows.
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each version.
 
 ## License
 

@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { FieldMap, KindField, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult } from '@server/routines/types';
+import type { FieldMap, KindField, McpServiceView, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult } from '@server/routines/types';
 import { errorText } from '../../api';
-import { cancelDraft, draftSecret, importRecipe, refineDraft, routineKeys, saveSource, startDraft, testSource, useDraft, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
+import { cancelDraft, draftSecret, fetchMcpTools, importRecipe, refineDraft, routineKeys, saveSource, startDraft, testSource, useDraft, useMcpTools, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
 import { slugify } from '../../lib/routines/spec';
@@ -342,6 +342,7 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
   const setup: KindField[] = recipe ? (recipe.spec.secrets ?? []).map((name) => ({ key: name, label: name, secret: true })) : (kind?.setup ?? []);
   const [values, setValues] = useState<Record<string, string>>({});
   const [title, setTitle] = useState(recipe?.spec.title ?? kind?.title ?? '');
+  const [autoTitle, setAutoTitle] = useState('');
   const [every, setEvery] = useState(recipe?.spec.every ?? kind?.minEvery ?? '5m');
   const [test, setTest] = useState<SourceTestResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -381,31 +382,48 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
         <h2>{title || kind?.title}</h2>
         {poll && <EverySelect value={every} min={kind?.minEvery} onChange={setEvery} />}
       </div>
-      {kind?.delivery === 'model' && <span className={styles.warn}>{t('Проверка идёт через сессию модели и тратит лимит, поэтому не чаще раза в {every}.', { every: kind.minEvery })}</span>}
+      {kind?.delivery === 'model' && <span className={styles.warn}>{t('Проверка идёт через сессию модели и тратит лимит. Самый частый интервал — {every}.', { every: everyLabel(kind.minEvery) })}</span>}
       <label className={styles.field}>
         <span className={styles.lbl}>{t('Название')}</span>
         <input className={styles.inp} value={title} onChange={(e) => setTitle(e.target.value)} />
       </label>
-      {setup.map((f) => (
-        <label key={f.key} className={styles.field}>
-          <span className={styles.lbl}>
-            {f.label}
-            {f.optional ? ` · ${t('необязательно')}` : ''}
-          </span>
-          <input
-            className={cx(styles.inp, f.secret && styles.mono)}
-            type={f.secret ? 'password' : 'text'}
-            autoComplete="off"
-            placeholder={f.placeholder ?? (f.secret ? t('Вставь ключ') : '')}
+      {setup.map((f) =>
+        f.pick === 'mcp-tool' ? (
+          <McpToolPick
+            key={f.key}
+            field={f}
             value={values[f.key] ?? ''}
-            onChange={(e) => {
-              setValues({ ...values, [f.key]: e.target.value });
+            onChange={(name, service) => {
+              setValues({ ...values, [f.key]: name });
               setTest(null);
+              // название по сервису, пока человек его не правил
+              if (service && (title === kind?.title || title === autoTitle)) {
+                setTitle(service.title);
+                setAutoTitle(service.title);
+              }
             }}
           />
-          {(f.hint || f.secret) && <span className={styles.hint}>{[f.hint, f.secret ? t('Хранится в ~/.agentgraph, в запуски и логи не попадает.') : ''].filter(Boolean).join(' ')}</span>}
-        </label>
-      ))}
+        ) : (
+          <label key={f.key} className={styles.field}>
+            <span className={styles.lbl}>
+              {f.label}
+              {f.optional ? ` · ${t('необязательно')}` : ''}
+            </span>
+            <input
+              className={cx(styles.inp, f.secret && styles.mono)}
+              type={f.secret ? 'password' : 'text'}
+              autoComplete="off"
+              placeholder={f.placeholder ?? (f.secret ? t('Вставь ключ') : '')}
+              value={values[f.key] ?? ''}
+              onChange={(e) => {
+                setValues({ ...values, [f.key]: e.target.value });
+                setTest(null);
+              }}
+            />
+            {(f.hint || f.secret) && <span className={styles.hint}>{[f.hint, f.secret ? t('Хранится в ~/.agentgraph, в запуски и логи не попадает.') : ''].filter(Boolean).join(' ')}</span>}
+          </label>
+        ),
+      )}
       <div className="row">
         <button type="button" className="btn" disabled={busy || missing.length > 0} title={missing.length ? t('Заполни: {list}', { list: missing.map((f) => f.label).join(', ') }) : t('Проверить без модели и показать, что нашлось')} onClick={() => void act(async () => setTest(await testSource(build().spec, build().secrets)))}>
           {t('Проверить')}
@@ -422,6 +440,96 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
       )}
       {error && <span className={styles.err}>{error}</span>}
     </section>
+  );
+}
+
+/**
+ * Выбор сервиса и его инструмента для «Сервис через Claude»: имя mcp__сервер__инструмент человек не знает и не вводит.
+ * Сервисы — коннекторы claude.ai и MCP-серверы Claude Code; инструменты только читающие, похожий на список выбран сразу.
+ */
+function McpToolPick({ field, value, onChange }: { field: KindField; value: string; onChange: (name: string, service?: McpServiceView) => void }) {
+  const qc = useQueryClient();
+  const q = useMcpTools();
+  const [server, setServer] = useState('');
+  const [manual, setManual] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const services = q.data?.services ?? [];
+  const ready = services.filter((s) => s.status === 'connected' && s.tools.length);
+  const others = services.filter((s) => !ready.includes(s));
+  const current = services.find((s) => s.server === server);
+  const pickService = (s: McpServiceView) => {
+    setServer(s.server);
+    onChange(s.tools[0]?.name ?? '', s);
+  };
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      qc.setQueryData(routineKeys.mcp, await fetchMcpTools(true));
+    } catch {
+      void q.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  const loading = q.isPending || refreshing;
+  return (
+    <div className={styles.field} role="group" aria-label={field.label}>
+      <span className={styles.lbl}>{field.label}</span>
+      {manual ? (
+        <input className={cx(styles.inp, styles.mono)} autoComplete="off" aria-label={t('Имя инструмента')} placeholder={field.placeholder} value={value} onChange={(e) => onChange(e.target.value.trim())} />
+      ) : (
+        <>
+          {loading && <span className="muted small">{t('Смотрю, что подключено к Claude… (несколько секунд)')}</span>}
+          {!loading && q.isError && <span className={styles.err}>{t('Список сервисов не загрузился: {error}', { error: errorText(q.error) })}</span>}
+          {!loading && q.data && !ready.length && (
+            <span className={styles.hint}>
+              {t('К Claude пока не подключено ни одного сервиса, из которого можно читать. Подключи его на claude.ai в Settings → Connectors или командой claude mcp add, затем обнови список.')}
+            </span>
+          )}
+          {!loading && ready.length > 0 && (
+            <div className={styles.chipsInline}>
+              {ready.map((s) => (
+                <button key={s.server} type="button" className={styles.chip} aria-pressed={s.server === server} title={s.origin === 'claudeai' ? t('Коннектор claude.ai') : t('MCP-сервер Claude Code')} onClick={() => pickService(s)}>
+                  {s.title}
+                  {s.origin === 'claude-code' && <span className={styles.mono}>MCP</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {!loading && others.length > 0 && (
+            <span className={styles.hint}>
+              {t('Не готовы: {list}', { list: others.map((s) => `${s.title} — ${s.status === 'needs-auth' ? t('нужен вход') : s.status === 'connected' ? t('нечего читать') : s.status === 'failed' ? t('не подключился') : s.status === 'pending' ? t('подключается') : t('выключен')}`).join(', ') })}
+            </span>
+          )}
+          {current && current.tools.length > 0 && (
+            <div className={styles.toolList} role="radiogroup" aria-label={t('Что читать в {service}', { service: current.title })}>
+              <span className={styles.lbl}>{t('Что читать в {service}', { service: current.title })}</span>
+              {current.tools.map((x) => (
+                <label key={x.name} className={styles.toolRow}>
+                  <input type="radio" name="mcp-tool" checked={value === x.name} onChange={() => onChange(x.name)} />
+                  <span>
+                    <b className={styles.mono}>{x.tool}</b>
+                    {x.description && <span className={styles.hint}>{x.description}</span>}
+                  </span>
+                </label>
+              ))}
+              {current.hidden > 0 && <span className={styles.hint}>{t('Ещё {n} — меняют данные, источнику они не нужны.', { n: current.hidden })}</span>}
+            </div>
+          )}
+        </>
+      )}
+      <span className={styles.hint}>{field.hint}</span>
+      <div className="row">
+        {!manual && (
+          <button type="button" className="btn small ghost" disabled={loading} onClick={() => void refresh()}>
+            ↻ {t('Обновить список')}
+          </button>
+        )}
+        <button type="button" className="btn small ghost" aria-pressed={manual} onClick={() => setManual(!manual)}>
+          {manual ? t('Выбрать из списка') : t('Ввести имя вручную')}
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -1,0 +1,98 @@
+// Английский словарь: kinds — тексты видов источников рутин (название, описание, поля настройки и условий) и рецептов.
+// Эти тексты приходят с сервера по-русски (src/routines/command.ts, src/routines/sources/*, templates/sources/*.yaml);
+// интерфейс переводит их на границе API (web/src/api/routines.ts).
+export const kinds: Record<string, string> = {
+  // общие поля события
+  'Заголовок': 'Title',
+  'Текст': 'Text',
+  'Автор': 'Author',
+  // своя команда
+  'Своя команда': 'Your own command',
+  'Любая команда, которая печатает JSON: каждая новая запись — событие': 'Any command that prints JSON: every new record is an event',
+  'Команда': 'Command',
+  'Печатает JSON. Ключи — как $ИМЯ: значения подставятся переменными окружения': 'Prints JSON. Keys go in as $NAME: their values are passed as environment variables',
+  'Папка': 'Folder',
+  // Slack
+  'Новые сообщения в каналах Slack': 'New messages in Slack channels',
+  'Токен Slack': 'Slack token',
+  'xoxb-… или xoxp-…': 'xoxb-… or xoxp-…',
+  'Нужны права: channels:history, groups:history, channels:read, groups:read, users:read, chat:write.': 'Scopes needed: channels:history, groups:history, channels:read, groups:read, users:read, chat:write.',
+  'Токен приложения для мгновенных сообщений': 'App token for instant messages',
+  'Включите Socket Mode в приложении и создайте токен с правом connections:write. Без него сообщения проверяются раз в 30 секунд, а ответы в тредах видны только у тредов, начатых после прошлой проверки.':
+    'Turn on Socket Mode in the app and create a token with the connections:write scope. Without it messages are checked every 30 seconds, and thread replies are seen only in threads started after the previous check.',
+  'Каналы': 'Channels',
+  'Названия или id через запятую. Пусто — все каналы, где состоит бот.': 'Names or ids, comma-separated. Empty means every channel the bot is in.',
+  'Канал': 'Channel',
+  'Ответ в треде': 'Thread reply',
+  'Написал бот': 'Written by a bot',
+  'Имена прикреплённых файлов': 'Attached file names',
+  // Telegram
+  'Сообщения боту и в чатах, где он состоит': 'Messages to the bot and in chats it is in',
+  'Токен бота': 'Bot token',
+  'Создайте бота у @BotFather и скопируйте токен. Напишите боту /start — этот чат станет чатом по умолчанию для ответов.':
+    'Create a bot with @BotFather and copy its token. Send the bot /start — that chat becomes the default chat for replies.',
+  'Чат по умолчанию для ответов': 'Default chat for replies',
+  'Необязательно: без него ответы идут в чат, откуда написали /start.': 'Optional: without it replies go to the chat that sent /start.',
+  'Чат': 'Chat',
+  'Это команда (/…)': 'Is a command (/…)',
+  // GitLab и GitHub
+  'MR на ревью у вас, упоминания и новые комментарии к вашим MR': 'MRs waiting for your review, mentions and new comments on your MRs',
+  'Адрес сервера': 'Server address',
+  'gitlab.com или gitlab.company.com': 'gitlab.com or gitlab.company.com',
+  'Нужен установленный и авторизованный glab (glab auth login).': 'Needs glab installed and signed in (glab auth login).',
+  'Проект': 'Project',
+  'группа/проект': 'group/project',
+  'Пусто — все проекты.': 'Empty means all projects.',
+  'Что произошло': 'What happened',
+  'Черновик (MR)': 'Draft (MR)',
+  'PR на ревью у вас, упоминания и новые комментарии к вашим PR': 'PRs waiting for your review, mentions and new comments on your PRs',
+  'Нужен установленный и авторизованный gh (gh auth login).': 'Needs gh installed and signed in (gh auth login).',
+  'владелец/репозиторий': 'owner/repository',
+  'Черновик (PR)': 'Draft (PR)',
+  // Jira
+  'Новые и обновлённые задачи по запросу JQL': 'New and updated issues matching a JQL query',
+  'Запрос JQL': 'JQL query',
+  'Адрес, email и токен Jira берутся из «Подключений». Пусто — ваши незакрытые задачи.': 'The Jira address, email and token come from “Connections”. Empty means your open issues.',
+  'Статус': 'Status',
+  'Тип задачи': 'Issue type',
+  'Приоритет': 'Priority',
+  'Ключ задачи': 'Issue key',
+  // RSS
+  'Новые записи в ленте RSS или Atom': 'New entries in an RSS or Atom feed',
+  'Адрес ленты': 'Feed address',
+  'Ссылка на RSS или Atom. Раз в несколько минут проверяются новые записи.': 'A link to an RSS or Atom feed. New entries are checked every few minutes.',
+  'Название ленты': 'Feed title',
+  'Теги записи': 'Entry tags',
+  // папка
+  'Папка на диске': 'Folder on disk',
+  'Новые файлы в папке': 'New files in a folder',
+  'Смотрим файлы прямо в этой папке, без вложенных.': 'Only files directly in this folder, not in subfolders.',
+  'Расширения': 'Extensions',
+  'Пусто — любые файлы.': 'Empty means any file.',
+  'Расширение': 'Extension',
+  'Размер, байт': 'Size, bytes',
+  // почта
+  'Почта': 'Email',
+  'Новые письма в папке почтового ящика (IMAP)': 'New emails in a mailbox folder (IMAP)',
+  'Сервер IMAP': 'IMAP server',
+  'Логин': 'Login',
+  'Пароль': 'Password',
+  'Для Gmail и Яндекса нужен пароль приложения, а не пароль от аккаунта.': 'Gmail and Yandex need an app password, not the account password.',
+  'Только от адреса': 'Only from address',
+  'Адрес отправителя': 'Sender address',
+  'Тема': 'Subject',
+  // сервис через Claude
+  'Сервис через Claude': 'Service connected to Claude',
+  'Записи из сервиса, подключённого к Claude: коннекторы claude.ai и MCP-серверы (Slack, Fireflies, Notion, Linear…)': 'Records from a service connected to Claude: claude.ai connectors and MCP servers (Slack, Fireflies, Notion, Linear…)',
+  'Сервис': 'Service',
+  'Сервисы, подключённые к Claude: коннекторы claude.ai и MCP-серверы Claude Code. Источник только читает: инструменты, которые меняют данные, здесь не показаны.':
+    'Services connected to Claude: claude.ai connectors and Claude Code MCP servers. The source only reads: tools that change data are not shown here.',
+  'Что запросить': 'What to ask for',
+  'Например: новые сообщения в #bugs': 'For example: new messages in #bugs',
+  'Словами: какие записи нужны. Проверка идёт через модель и тратит лимит — не чаще раза в 30 минут.': 'In words: which records you need. The check goes through a model and spends your limit — at most once every 30 minutes.',
+  // рецепты
+  'Задачи Linear, назначенные на вас': 'Linear issues assigned to you',
+  'Новые уведомления GitHub (ревью, упоминания, CI)': 'New GitHub notifications (reviews, mentions, CI)',
+  'Новые записи встреч в Fireflies.ai': 'New meeting recordings in Fireflies.ai',
+  'Новые необработанные ошибки (issues) в Sentry': 'New unresolved issues in Sentry',
+};

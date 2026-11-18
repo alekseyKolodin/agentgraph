@@ -9,6 +9,8 @@ import { claudeExecutable } from './agent.js';
 export type ConnectorTool = { name: string; tool: string; description?: string; readOnly: boolean };
 /** name — запись для tools этапа, которая разрешает весь коннектор: mcp__claude_ai_<Коннектор>. */
 export type Connector = { server: string; name: string; status: McpServerStatus['status']; tools: ConnectorTool[] };
+/** MCP-сервер любой области (коннектор claude.ai, user-сервер Claude Code, плагин): scope — откуда он пришёл. */
+export type McpServer = Omit<Connector, 'tools'> & { scope: string; tools: Array<ConnectorTool & { annotated: boolean }> };
 export type ConnectorsView = { connectors: Connector[]; at: string };
 
 export type ConnectorsDeps = {
@@ -29,6 +31,8 @@ const TTL_MS = 5 * 60_000;
 
 let cache: ConnectorsView | undefined;
 let inflight: Promise<ConnectorsView> | undefined;
+let serversCache: { servers: McpServer[]; at: string } | undefined;
+let serversInflight: Promise<{ servers: McpServer[]; at: string }> | undefined;
 
 /** Имя инструмента коннектора в сессии: «claude.ai Atlassian Rovo» + getJiraIssue → mcp__claude_ai_Atlassian_Rovo__getJiraIssue. */
 export function connectorToolName(server: string, tool: string): string {
@@ -48,10 +52,24 @@ export function getConnectors(force = false, deps: ConnectorsDeps = { query }): 
   return inflight;
 }
 
+/**
+ * Все MCP-серверы, которые получит сессия в нейтральной папке (os.tmpdir(), как у источника «Подключение»): коннекторы
+ * claude.ai и серверы Claude Code уровня пользователя. Серверы проекта сюда не попадают — их не будет и при проверке.
+ */
+export function getMcpServers(force = false, deps: ConnectorsDeps = { query }): Promise<{ servers: McpServer[]; at: string }> {
+  if (!force && serversCache && Date.now() - new Date(serversCache.at).getTime() < TTL_MS) return Promise.resolve(serversCache);
+  serversInflight ??= listServers(deps, os.tmpdir(), (s) => s.scope !== 'sdk')
+    .then((servers) => (serversCache = { servers, at: new Date().toISOString() }))
+    .finally(() => (serversInflight = undefined));
+  return serversInflight;
+}
+
 /** Сброс кэша — для тестов. */
 export function resetConnectorsState(): void {
   cache = undefined;
   inflight = undefined;
+  serversCache = undefined;
+  serversInflight = undefined;
 }
 
 async function* noPrompt(): AsyncGenerator<never> {
@@ -85,23 +103,30 @@ export async function waitForConnectors(
 
 async function fetchConnectors(deps: ConnectorsDeps): Promise<ConnectorsView> {
   // cwd — домашняя директория: серверы проекта сюда не нужны, коннекторы приходят из аккаунта
-  const q = deps.query({ prompt: noPrompt(), options: { ...claudeExecutable(), cwd: os.homedir(), persistSession: false, tools: [] } });
+  const servers = await listServers(deps, os.homedir(), isConnector);
+  return { connectors: servers.map(({ server, name, status, tools }) => ({ server, name, status, tools: tools.map(({ annotated: _, ...t }) => t) })), at: new Date().toISOString() };
+}
+
+async function listServers(deps: ConnectorsDeps, cwd: string, keep: (s: McpServerStatus) => boolean): Promise<McpServer[]> {
+  const q = deps.query({ prompt: noPrompt(), options: { ...claudeExecutable(), cwd, persistSession: false, tools: [] } });
   try {
-    const ai = (await waitForConnectors(() => q.mcpServerStatus(), { waitMs: deps.waitMs ?? WAIT_MS, pollMs: deps.pollMs })).filter(isConnector);
-    const connectors = ai
+    const all = (await waitForConnectors(() => q.mcpServerStatus(), { waitMs: deps.waitMs ?? WAIT_MS, pollMs: deps.pollMs })).filter(keep);
+    return all
       .map((s) => ({
         server: s.name,
         name: connectorName(s.name),
         status: s.status,
+        scope: s.scope ?? '',
         tools: (s.tools ?? []).map((t) => ({
           name: connectorToolName(s.name, t.name),
           tool: t.name,
           ...(t.description ? { description: t.description.split('\n')[0].slice(0, 200) } : {}),
           readOnly: t.annotations?.readOnly === true,
+          // разметка есть и readOnly не true — сервер сам сказал «меняет данные»; разметки нет — решает имя инструмента
+          annotated: t.annotations?.readOnly !== undefined,
         })),
       }))
       .sort((a, b) => Number(b.status === 'connected') - Number(a.status === 'connected') || a.server.localeCompare(b.server));
-    return { connectors, at: new Date().toISOString() };
   } finally {
     q.close();
   }

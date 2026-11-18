@@ -3,10 +3,11 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  DraftView, Feedback, HistoryCheck, LogEntry, LogOutcome, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import { api } from './client';
+import { t } from '../lib/i18n';
 
 const enc = encodeURIComponent;
 const BASE = '/api/routines';
@@ -21,9 +22,21 @@ export const routineKeys = {
   log: (slug: string, outcomes: string) => ['routines', 'log', slug, outcomes] as const,
   recipes: ['routines', 'recipes'] as const,
   draft: (id: string) => ['routines', 'draft', id] as const,
+  mcp: ['routines', 'mcp-tools'] as const,
 };
 
-export const fetchOverview = () => api<RoutinesOverview>('GET', BASE);
+/** Тексты видов источников приходят с сервера по-русски: переводим на границе API (словарь i18n/en/kinds.ts). */
+const trKind = (k: SourceKindView): SourceKindView => ({
+  ...k,
+  title: t(k.title),
+  summary: t(k.summary),
+  setup: k.setup.map((f) => ({ ...f, label: t(f.label), ...(f.placeholder ? { placeholder: t(f.placeholder) } : {}), ...(f.hint ? { hint: t(f.hint) } : {}) })),
+  match: k.match.map((m) => ({ ...m, label: t(m.label) })),
+});
+export const fetchOverview = async () => {
+  const o = await api<RoutinesOverview>('GET', BASE);
+  return { ...o, kinds: o.kinds.map(trKind) };
+};
 export const fetchRoutine = (slug: string) => api<RoutineView>('GET', `${BASE}/${enc(slug)}`);
 /** spec или yaml (YAML вручную); ошибка схемы — 400 с problems в теле (ApiError.data). */
 export const saveRoutine = (slug: string, body: { spec: RoutineSpec } | { yaml: string }) => api<RoutineView>('PUT', `${BASE}/${enc(slug)}`, body);
@@ -53,7 +66,7 @@ export const draftSecret = (id: string, name: string, value: string) => api<Draf
 export const refineDraft = (id: string, note: string) => api<DraftView>('POST', `${BASE}/sources/draft/${enc(id)}/refine`, { note });
 export const cancelDraft = (id: string) => api<{ ok: true }>('DELETE', `${BASE}/sources/draft/${enc(id)}`);
 
-export const fetchRecipes = () => api<RecipeView[]>('GET', `${BASE}/recipes`);
+export const fetchRecipes = async () => (await api<RecipeView[]>('GET', `${BASE}/recipes`)).map((r) => ({ ...r, summary: t(r.summary) }));
 export const importRecipe = (yaml: string) => api<RecipeView>('POST', `${BASE}/recipes/import`, { yaml });
 
 /** GET /api/routines: список, источники, виды, ожидания и «догнать» — для списка, создания, редактора и главной. */
@@ -72,6 +85,12 @@ export function useRoutineLog(slug: string | undefined) {
 
 export function useRecipes(enabled = true) {
   return useQuery({ queryKey: routineKeys.recipes, queryFn: fetchRecipes, enabled, staleTime: 60_000 });
+}
+
+/** Сервисы MCP для «Сервис через Claude»: сервер поднимает Claude Code без модели (несколько секунд) и держит список 5 минут. */
+export const fetchMcpTools = (force = false) => api<McpServicesView>('GET', `${BASE}/mcp-tools${force ? '?force=1' : ''}`);
+export function useMcpTools(enabled = true) {
+  return useQuery({ queryKey: routineKeys.mcp, queryFn: () => fetchMcpTools(false), enabled, staleTime: 5 * 60_000 });
 }
 
 /** Черновик подключения словами: пока агент работает, опрос раз в 1.5 с. */

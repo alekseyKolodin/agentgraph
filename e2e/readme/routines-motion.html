@@ -1,0 +1,261 @@
+<!doctype html>
+<!-- Анимированная схема рутин для README (docs/assets/routines.gif). Снимается e2e/readme/motion.ts в реальном времени:
+     шаги — по таймеру, движение — CSS-переходы. Один цикл ~15.5 с, конец совпадает с началом. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0c0d19; --panel: #161821; --raised: #1d2030; --line: rgba(255,255,255,.09); --line2: rgba(255,255,255,.16);
+    --ink: #eceef5; --ink2: #a3a8b8; --ink3: #6c7286; --live: #7da2ff; --ok: #4ade80; --wait: #f5b83d; --fail: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1200px; height: 600px; overflow: hidden; background: radial-gradient(1100px 460px at 50% -10%, #1d2244 0%, #121429 48%, var(--bg) 100%); color: var(--ink);
+    font-family: -apple-system, "SF Pro Text", Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+  h1 { position: absolute; left: 40px; top: 30px; margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.02em; }
+  h1 em { font-style: normal; color: var(--live); }
+  .sub { position: absolute; left: 40px; top: 68px; color: var(--ink2); font-size: 14.5px; }
+  .lbl { position: absolute; font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--ink3); }
+
+  /* источники */
+  .src { position: absolute; left: 40px; width: 196px; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--line); font-size: 13.5px; color: var(--ink2); transition: border-color .35s, color .35s, background .35s, box-shadow .35s; }
+  .src i { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; color: #fff; }
+  .src.any { border-style: dashed; background: transparent; color: var(--ink3); }
+  .src.on { border-color: var(--live); color: var(--ink); background: #1b2140; box-shadow: 0 0 0 4px rgba(125,162,255,.13); }
+  .src small { margin-left: auto; font-size: 10.5px; color: var(--ink3); }
+
+  /* узлы пути */
+  .node { position: absolute; top: 132px; height: 132px; padding: 13px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line);
+    transition: border-color .35s, box-shadow .35s, opacity .35s; }
+  .node.on { border-color: var(--line2); box-shadow: 0 0 0 1px rgba(125,162,255,.35), 0 12px 34px rgba(0,0,0,.4); }
+  .node.skip { opacity: .45; }
+  .node b { display: block; font-size: 14px; font-weight: 600; }
+  .node .hint { margin-top: 2px; font-size: 11.5px; color: var(--ink3); }
+  .node .out { margin-top: 12px; font-size: 12.5px; line-height: 1.4; color: var(--ink2); opacity: 0; transform: translateY(5px); transition: opacity .35s, transform .35s; }
+  .node .out.show { opacity: 1; transform: none; }
+  .node .out .v { color: var(--ink); }
+  .ok { color: var(--ok); } .wait { color: var(--wait); } .dim { color: var(--ink3); }
+  .cost { position: absolute; right: 12px; bottom: 10px; font-size: 11px; color: var(--ink3); opacity: 0; transition: opacity .3s; }
+  .cost.show { opacity: 1; }
+  .arrow { position: absolute; top: 197px; height: 2px; background: var(--line2); }
+  .arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left-color: var(--line2); border-right: 0; }
+
+  /* мини-граф запуска */
+  .graph { margin-top: 12px; display: flex; align-items: center; gap: 0; opacity: 0; transition: opacity .35s; }
+  .graph.show { opacity: 1; }
+  .pill { height: 30px; padding: 0 11px; display: flex; align-items: center; gap: 7px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line2); font-size: 12.5px; color: var(--ink2);
+    transition: border-color .3s, color .3s, background .3s; }
+  .pill .st { width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); transition: background .3s; }
+  .pill.run { border-color: var(--live); color: var(--ink); } .pill.run .st { background: var(--live); animation: blink .7s ease-in-out infinite alternate; }
+  .pill.done { border-color: rgba(74,222,128,.55); color: var(--ink); } .pill.done .st { background: var(--ok); }
+  .pill.held { border-color: var(--wait); color: var(--ink); } .pill.held .st { background: var(--wait); }
+  @keyframes blink { from { opacity: .35; } to { opacity: 1; } }
+  .wire { width: 34px; height: 2px; background: var(--line2); position: relative; }
+  .gate { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 5px; background: var(--wait); color: #1a1405; font-size: 9px; font-weight: 800;
+    display: grid; place-items: center; opacity: 0; scale: .5; transition: opacity .3s, scale .3s; }
+  .gate.show { opacity: 1; scale: 1; }
+
+  /* событие-точка */
+  #dot { position: absolute; left: 0; top: 0; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--live);
+    box-shadow: 0 0 0 5px rgba(125,162,255,.2), 0 0 22px 4px rgba(125,162,255,.55); opacity: 0; transition: transform .7s cubic-bezier(.45,.05,.25,1), opacity .3s, background .3s, box-shadow .3s; }
+  #dot.back { background: var(--ok); box-shadow: 0 0 0 5px rgba(74,222,128,.18), 0 0 22px 4px rgba(74,222,128,.5); }
+
+  /* карточка на главной */
+  .card { position: absolute; left: 640px; top: 318px; width: 520px; padding: 16px 18px 17px; border-radius: 14px; background: #1f1c14; border: 1px solid rgba(245,184,61,.55);
+    box-shadow: 0 22px 60px rgba(0,0,0,.5); opacity: 0; transform: translateY(16px) scale(.985); transition: opacity .45s, transform .45s cubic-bezier(.2,.8,.2,1), border-color .4s, background .4s; }
+  .card.show { opacity: 1; transform: none; }
+  .card.done { border-color: rgba(74,222,128,.5); background: #141d18; }
+  .card .top { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--wait); transition: color .3s; }
+  .card.done .top { color: var(--ok); }
+  .card .top span { margin-left: auto; color: var(--ink3); }
+  .card h3 { margin: 9px 0 6px; font-size: 17px; font-weight: 620; letter-spacing: -.01em; }
+  .card p { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink2); }
+  .card .reply { margin-top: 11px; padding: 8px 10px; border-radius: 8px; background: rgba(0,0,0,.32); font-size: 12px; color: var(--ink2); display: flex; gap: 8px; align-items: flex-start; }
+  .box { flex: none; width: 14px; height: 14px; margin-top: 1px; border-radius: 4px; background: var(--ink); color: #111; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+  .btns { margin-top: 13px; display: flex; gap: 8px; }
+  .btn { height: 32px; padding: 0 14px; border-radius: 8px; display: flex; align-items: center; font-size: 13px; font-weight: 550; border: 1px solid var(--line2); color: var(--ink2); transition: transform .12s, background .2s; }
+  .btn.pri { background: var(--ink); color: #14151b; border-color: transparent; }
+  .btn.press { transform: scale(.93); background: #c9ccd8; }
+  .card .btns { transition: opacity .4s; }
+  .card.done .btns { opacity: .35; }
+  #cur { position: absolute; left: 0; top: 0; width: 22px; height: 22px; opacity: 0; transform: translate(980px, 600px); transition: transform .75s cubic-bezier(.3,.7,.2,1), opacity .3s; filter: drop-shadow(0 2px 3px rgba(0,0,0,.6)); z-index: 5; }
+
+  /* ответ наружу */
+  .thread { position: absolute; left: 284px; top: 318px; width: 336px; min-height: 196px; padding: 11px 14px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+  .thread .who { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--ink3); }
+  .line { margin-top: 8px; display: flex; gap: 9px; font-size: 12.5px; line-height: 1.4; color: var(--ink2); opacity: 0; transform: translateY(6px); transition: opacity .4s, transform .4s; }
+  .line.show { opacity: 1; transform: none; }
+  .line i { flex: none; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-style: normal; font-size: 11px; font-weight: 700; color: #fff; }
+  .line b { color: var(--ink); font-weight: 600; margin-right: 6px; }
+  .line.re { margin-left: 16px; padding-left: 10px; border-left: 2px solid var(--line2); }
+
+  .foot { position: absolute; left: 284px; right: 40px; top: 548px; display: flex; justify-content: space-between; font-size: 13px; color: var(--ink2); border-top: 1px solid var(--line); padding-top: 11px; }
+  .foot b { color: var(--ok); font-size: 15px; }
+  .fade { transition: opacity .5s; }
+</style>
+</head>
+<body>
+  <h1>Routines: <em>when</em> something happens → <em>run</em> a flow</h1>
+  <div class="sub">Any source turns into the same kind of event. The rule decides what runs — and where it waits for you.</div>
+
+  <div class="lbl" style="left:40px;top:108px">Sources</div>
+  <div class="src" id="s0" style="top:132px"><i style="background:#c2410c">#</i>Slack · #bugs<small>live</small></div>
+  <div class="src" id="s1" style="top:182px"><i style="background:#0e87c9">T</i>Telegram bot<small>live</small></div>
+  <div class="src" id="s2" style="top:232px"><i style="background:#e2622c">G</i>GitLab · MRs</div>
+  <div class="src" id="s3" style="top:282px"><i style="background:#7c3aed">F</i>Fireflies · meetings</div>
+  <div class="src" id="s4" style="top:332px"><i style="background:#3b5bdb">◷</i>Schedule · 9:30</div>
+  <div class="src any" style="top:382px"><i style="background:#3a3f52">+</i>any service, in words</div>
+
+  <div class="lbl" style="left:284px;top:108px">One rule</div>
+  <div class="node" id="nEvent" style="left:284px;width:206px"><b>Event</b><div class="hint">same fields for every source</div>
+    <div class="out" id="oEvent"></div></div>
+  <div class="arrow" style="left:490px;width:20px"></div>
+  <div class="node" id="nCond" style="left:512px;width:176px"><b>Conditions</b><div class="hint">on fields, no model</div>
+    <div class="out" id="oCond"></div><div class="cost mono" id="cCond">$0</div></div>
+  <div class="arrow" style="left:688px;width:20px"></div>
+  <div class="node" id="nCheck" style="left:710px;width:176px"><b>Check in words</b><div class="hint">optional, a small model</div>
+    <div class="out" id="oCheck"></div><div class="cost mono" id="cCheck">≈ $0.002</div></div>
+  <div class="arrow" style="left:886px;width:20px"></div>
+  <div class="node" id="nRun" style="left:908px;width:252px"><b>Run <span class="mono" id="flowName" style="font-weight:500;font-size:12.5px;color:var(--ink2)"></span></b><div class="hint" id="runHint">an ordinary flow run</div>
+    <div class="graph" id="graph"><div class="pill" id="p1"><span class="st"></span><span id="p1t">triage</span></div><div class="wire"><div class="gate" id="gate">II</div></div><div class="pill" id="p2"><span class="st"></span><span id="p2t">fix</span></div></div></div>
+
+  <div class="thread fade" id="thread">
+    <div class="who" id="thWho">Slack · #bugs</div>
+    <div class="line" id="l1"><i id="l1i" style="background:#c2410c">A</i><div><b id="l1b">Anna</b><span id="l1t"></span></div></div>
+    <div class="line re" id="l2"><i style="background:#3b5bdb">↯</i><div><b>agentgraph</b><span id="l2t"></span></div></div>
+    <div class="line re" id="l3"><i style="background:#3b5bdb">↯</i><div><b>agentgraph</b><span id="l3t"></span></div></div>
+  </div>
+
+  <div class="card" id="card">
+    <div class="top"><b id="cardTop">↯ Waiting for you</b><span id="cardWhere">stopped before “fix”</span></div>
+    <h3 id="cardQ">Fix: Checkout returns 500 for EU cards?</h3>
+    <p id="cardP">ACME-447 filed. Cause: <span class="mono">formatMoney</span> throws on the new EUR table. 3 acceptance criteria.</p>
+    <div class="reply"><span class="box">✓</span><span>Reply in the thread: “On it. Waiting for a go-ahead before the fix”</span></div>
+    <div class="btns"><div class="btn pri" id="bFix">Fix</div><div class="btn">Not now</div><div class="btn">Not it</div></div>
+  </div>
+  <div class="foot fade" id="foot"><span>your part in this run</span><b id="clicks">—</b></div>
+
+  <div id="dot"></div>
+  <svg id="cur" viewBox="0 0 22 22"><path d="M3 2l15 8.2-6.6 1.5L8.6 18z" fill="#fff" stroke="#111" stroke-width="1.2" stroke-linejoin="round"/></svg>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const dot = $('dot');
+  const at = (x, y) => (dot.style.transform = `translate(${x}px,${y}px)`);
+  const NODE_Y = 198;
+  const X = { src: 236, event: 387, cond: 600, check: 798, run: 1034 };
+  const show = (id, html) => { const el = $(id); if (html !== undefined) el.innerHTML = html; el.classList.add('show'); };
+  const on = (id) => $(id).classList.add('on');
+  const off = (id) => $(id).classList.remove('on');
+
+  function reset() {
+    for (const el of document.querySelectorAll('.show')) el.classList.remove('show');
+    for (const el of document.querySelectorAll('.on,.skip,.run,.done,.held,.press,.back')) el.classList.remove('on', 'skip', 'run', 'done', 'held', 'press', 'back');
+    dot.style.opacity = 0;
+    $('cur').style.opacity = 0;
+    $('cur').style.transform = 'translate(980px,600px)';
+    $('clicks').textContent = '—';
+  }
+
+  /** Событие едет от источника через узлы. */
+  async function travel(srcId, srcY, ev, cond, check) {
+    on(srcId);
+    dot.style.transitionDuration = '0s, .3s, .3s, .3s';
+    at(X.src, srcY);
+    await wait(60);
+    dot.style.opacity = 1;
+    dot.style.transitionDuration = '';
+    await wait(350);
+    at(X.event, NODE_Y); on('nEvent');
+    await wait(650); show('oEvent', ev);
+    await wait(850);
+    at(X.cond, NODE_Y); off('nEvent'); on('nCond');
+    await wait(650); show('oCond', cond); show('cCond');
+    await wait(800);
+    at(X.check, NODE_Y); off('nCond');
+    if (check) { on('nCheck'); await wait(650); show('oCheck', check); show('cCheck'); await wait(850); }
+    else { $('nCheck').classList.add('skip'); await wait(450); }
+    at(X.run, NODE_Y); off('nCheck'); on('nRun');
+    await wait(650);
+    dot.style.opacity = 0;
+  }
+
+  async function loop() {
+    reset();
+    await wait(500);
+
+    // ---------- 1. баг из Slack: до остановки, решение человека, ответ в тред
+    $('thWho').textContent = 'Slack · #bugs'; $('l1i').textContent = 'A'; $('l1i').style.background = '#c2410c'; $('l1b').textContent = 'Anna';
+    $('flowName').textContent = 'bug-to-fix'; $('p1t').textContent = 'triage'; $('p2t').textContent = 'fix'; $('runHint').textContent = 'stops before “fix”';
+    $('cardTop').textContent = '↯ Waiting for you'; $('cardWhere').textContent = 'stopped before “fix”';
+    show('l1', undefined); $('l1t').textContent = 'Checkout returns 500 for EU cards since yesterday’s release';
+    await wait(700);
+    await travel('s0', 153, '<span class="v">Checkout returns 500 for EU cards</span><br><span class="dim mono">slack · anna · #bugs</span>',
+      '<span class="ok">✓</span> channel = bugs<br><span class="ok">✓</span> not a bot', '<span class="ok">✓</span> “a bug report:<br>something is broken”');
+    show('graph'); $('p1').classList.add('run');
+    await wait(1100);
+    $('p1').classList.replace('run', 'done'); show('gate'); $('p2').classList.add('held');
+    await wait(350);
+    show('card'); $('clicks').textContent = '0 clicks so far';
+    $('cur').style.opacity = 1;
+    await wait(900);
+    $('cur').style.transform = 'translate(672px,501px)';
+    await wait(1250);
+    $('bFix').classList.add('press'); await wait(160); $('bFix').classList.remove('press');
+    $('clicks').textContent = '1 click';
+    show('l2', undefined); $('l2t').textContent = 'On it. Waiting for a go-ahead before the fix';
+    $('gate').classList.remove('show'); $('p2').classList.replace('held', 'run');
+    $('cardTop').textContent = '↯ Running “fix”'; $('cardWhere').textContent = '';
+    await wait(1700);
+    $('p2').classList.replace('run', 'done'); $('card').classList.add('done'); $('cardTop').textContent = '✓ Done · $0.41';
+    $('cur').style.opacity = 0;
+    dot.classList.add('back'); dot.style.transitionDuration = '0s, .3s, .3s, .3s'; at(X.run, NODE_Y + 70); await wait(60);
+    dot.style.opacity = 1; dot.style.transitionDuration = '1s, .3s, .3s, .3s';
+    at(452, 452);
+    await wait(1000);
+    dot.style.opacity = 0;
+    show('l3', undefined); $('l3t').textContent = 'Fixed in fix/acme-447, regression test added';
+    await wait(2100);
+
+    // ---------- 2. встреча из Fireflies: без остановок, ответ в Telegram
+    $('card').classList.remove('show');
+    $('thread').style.opacity = 0; $('foot').style.opacity = 0;
+    for (const id of ['oEvent', 'oCond', 'oCheck', 'cCond', 'cCheck', 'graph']) $(id).classList.remove('show');
+    off('s0'); off('nRun'); dot.classList.remove('back'); dot.style.transitionDuration = '';
+    await wait(550);
+    for (const id of ['l1', 'l2', 'l3']) $(id).classList.remove('show');
+    $('p1').classList.remove('done'); $('p2').classList.remove('done'); $('card').classList.remove('done');
+    $('thWho').textContent = 'Telegram · you'; $('l1i').textContent = '↯'; $('l1i').style.background = '#3b5bdb'; $('l1b').textContent = 'agentgraph';
+    $('flowName').textContent = 'meeting-to-tasks'; $('p1t').textContent = 'extract'; $('p2t').textContent = 'file tasks'; $('runHint').textContent = 'no stops: runs to the end';
+    $('thread').style.opacity = 1; $('foot').style.opacity = 1; $('clicks').textContent = '—';
+    await travel('s3', 303, '<span class="v">Billing planning · Q1 roadmap</span><br><span class="dim mono">fireflies · 42 min</span>',
+      '<span class="ok">✓</span> duration &gt; 10 min', null);
+    show('graph'); $('p1').classList.add('run');
+    await wait(800);
+    $('p1').classList.replace('run', 'done'); $('p2').classList.add('run');
+    await wait(900);
+    $('p2').classList.replace('run', 'done'); $('clicks').textContent = '0 clicks';
+    dot.classList.add('back'); dot.style.transitionDuration = '0s, .3s, .3s, .3s'; at(X.run, NODE_Y + 70); await wait(60);
+    dot.style.opacity = 1; dot.style.transitionDuration = '1s, .3s, .3s, .3s';
+    at(452, 392);
+    await wait(1000);
+    dot.style.opacity = 0;
+    show('l1', undefined); $('l1t').textContent = '4 tasks filed from “Billing planning · Q1 roadmap”';
+    await wait(2300);
+    $('thread').style.opacity = 0; $('foot').style.opacity = 0;
+    for (const id of ['oEvent', 'oCond', 'graph', 'cCond']) $(id).classList.remove('show');
+    off('s3'); off('nRun'); $('nCheck').classList.remove('skip');
+    await wait(550);
+    // конец цикла совпадает с началом: пустая переписка Slack, узел запуска без имени flow
+    $('l1').classList.remove('show'); $('thWho').textContent = 'Slack · #bugs'; $('flowName').textContent = ''; $('runHint').textContent = 'an ordinary flow run'; $('clicks').textContent = '—';
+    $('thread').style.opacity = 1; $('foot').style.opacity = 1;
+    await wait(600);
+    window.__done = true;
+  }
+  window.play = loop;
+</script>
+</body>
+</html>

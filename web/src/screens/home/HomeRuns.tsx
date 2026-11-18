@@ -78,7 +78,7 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
                 <span className={styles.hrunTitle}>{v.title}</span>
                 {tw && <Link to={tw.to} className={styles.hrunTask} title={tw.title} onClick={(e) => e.stopPropagation()}>{tw.label}</Link>}
                 {rt && (
-                  <Link to={`/routines/${encodeURIComponent(rt.slug)}/log`} className={styles.hrunTask} title={t('Запущено рутиной «{name}» по событию: {event}', { name: rt.title, event: rt.event })} onClick={(e) => e.stopPropagation()}>
+                  <Link to={`/routines/${encodeURIComponent(rt.slug)}/log`} className={`${styles.hrunTask} ${styles.hrunRt}`} title={t('Запущено рутиной «{name}» по событию: {event}', { name: rt.title, event: rt.event })} onClick={(e) => e.stopPropagation()}>
                     ↯ {rt.title}
                   </Link>
                 )}

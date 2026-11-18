@@ -32,6 +32,9 @@
 /* номер задачи Teamwork у запуска по задаче: данные моно, ссылка без цвета — цвет у статуса, не у связи */
 .hrun-task { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; text-decoration: none; flex: none; }
 .hrun-task:hover { color: var(--ink); text-decoration: underline; }
+/* метка рутины — её название, оно длинное: сжимается с многоточием и не наезжает на соседей; имя запуска не схлопывается */
+.hrun-task.hrun-rt { flex: 0 2 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; }
+.hrun-top:has(.hrun-rt) .hrun-title { min-width: 8ch; }
 .hrun-meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 0; }
 .hrun-sum { font-size: var(--fs-small); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hrun.wait .hrun-sum { color: var(--st-wait); }

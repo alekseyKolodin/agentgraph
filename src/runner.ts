@@ -996,7 +996,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       // Рутина ждёт человека перед этим блоком (pauseBefore): пауза с причиной до первой итерации, дальше — как обычно
       if (iter === 1 && opts.pauseBefore?.includes(blocks[bi].name) && opts.control?.requestPause && !aborted()) {
         const name = blocks[bi].name;
-        const reason: PauseReason = { block: name, iteration: 1, phase: blocks[bi].phases[0]?.name ?? '', text: `Рутина ждёт подтверждения перед блоком «${name}»`, output: '', at: new Date().toISOString(), before: true };
+        const reason: PauseReason = { block: name, iteration: 1, phase: blocks[bi].phases[0]?.name ?? '', text: taskLang(ctx.input) === 'en' ? `The routine waits for a go-ahead before block “${name}”` : `Рутина ждёт подтверждения перед блоком «${name}»`, output: '', at: new Date().toISOString(), before: true };
         report.pauseReason = reason;
         const record: PauseReason = { ...reason };
         (report.pauses ??= []).push(record);

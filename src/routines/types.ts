@@ -55,7 +55,18 @@ export type SourceSpec = {
 };
 
 /** Поле формы настройки вида (шаг «Готовые» и «Своя команда»). */
-export type KindField = { key: string; label: string; placeholder?: string; secret?: boolean; optional?: boolean; hint?: string };
+/** pick: 'mcp-tool' — не поле ввода, а выбор сервиса и его инструмента из MCP аккаунта (GET /api/routines/mcp-tools). */
+export type KindField = { key: string; label: string; placeholder?: string; secret?: boolean; optional?: boolean; hint?: string; pick?: 'mcp-tool' };
+
+/** Инструмент, который источник «Подключение» может вызывать: только чтение. name — полное имя mcp__сервер__инструмент. */
+export type McpToolView = { name: string; tool: string; description?: string };
+/**
+ * Сервис MCP для источника «Подключение»: title — имя без «claude.ai», origin — коннектор аккаунта claude.ai или сервер,
+ * добавленный в Claude Code (claude mcp add). tools — подходящие инструменты, самые похожие на список — первыми; hidden —
+ * сколько инструментов спрятано, потому что они меняют данные.
+ */
+export type McpServiceView = { server: string; title: string; origin: 'claudeai' | 'claude-code'; status: string; tools: McpToolView[]; hidden: number };
+export type McpServicesView = { services: McpServiceView[]; at: string };
 
 /** Поле события, на которое можно поставить условие в редакторе. */
 export type MatchField = { key: string; label: string; type: 'text' | 'number' | 'bool' | 'enum'; options?: string[] };

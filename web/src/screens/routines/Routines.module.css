@@ -184,6 +184,14 @@ select.inp { height: 34px; }
 .inline-sel { width: auto; display: inline-block; }
 .tab-link { text-decoration: none; }
 .chips-inline { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+/* «Сервис через Claude»: инструменты выбранного сервиса */
+.tool-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.tool-list > .lbl { margin-bottom: 2px; }
+.tool-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: var(--r-sm); cursor: pointer; }
+.tool-row:hover { background: var(--raised); }
+.tool-row:has(input:checked) { background: var(--raised); }
+.tool-row > span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tool-row b.mono { color: var(--ink); font-weight: 500; }
 
 /* ---------- журнал срабатываний */
 .filters { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }

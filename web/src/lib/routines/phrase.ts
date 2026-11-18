@@ -83,7 +83,7 @@ export function sentence(d: RoutineDraft, source: { title: string; kind: string 
     d.mode === 'suggest'
       ? t(' Перед запуском спросит тебя.')
       : d.mode === 'until_pause' && d.pauseBefore.length
-        ? t(' Остановится перед {blocks}.', { blocks: d.pauseBefore.map((b) => `«${b}»`).join(', ') })
+        ? t(' Остановится перед {blocks}.', { blocks: d.pauseBefore.map((b) => t('«{block}»', { block: b })).join(', ') })
         : '';
   const reply = { draft: t(' Ответ уходит после твоей проверки.'), auto: t(' О результате пишет сама.'), off: '' }[d.reply];
   return `${when}${run}${space}.${wait}${reply}`;

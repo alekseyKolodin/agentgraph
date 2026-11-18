@@ -11,6 +11,7 @@ import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
 import { matchRule } from './match.js';
 import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
+import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
 import { builtinKinds } from './sources/index.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, StoredWait } from './store.js';
@@ -437,7 +438,7 @@ export class RoutineEngine {
         routineTitle: spec.title,
         event: e,
         kind: 'suggest',
-        question: `Запустить «${spec.title}»: ${e.title}?`,
+        question: routineTexts(e).suggest(spec.title, e.title),
         at: this.now().toISOString(),
       };
       this.store.setWaits([...this.store.waits(), { ...wait, logId: entry.id }]);
@@ -492,7 +493,7 @@ export class RoutineEngine {
     this.changed();
     // при draft «Взял в работу» не уходит: черновик ждёт решения человека (на паузе или в конце)
     if (spec.reply && spec.reply.to !== 'none' && !spec.reply.draft && (spec.reply.on ?? ['start']).includes('start')) {
-      await this.reply(slug, spec, e, `Взял в работу: ${e.title}`, entry.id);
+      await this.reply(slug, spec, e, routineTexts(e).taken(e.title), entry.id);
     }
     const early = this.early.get(runId);
     this.early.delete(runId);
@@ -584,7 +585,7 @@ export class RoutineEngine {
     if (!src?.spec) throw new Error(`источник ${slug} не подключён`);
     const kind = this.kind(src.spec.kind);
     if (!kind?.reply) throw new Error(`источник «${src.spec.title}» не умеет отвечать`);
-    return { slug, src: src.spec, kind, target: to === 'source' ? e.replyTo : undefined, where: to === 'source' ? `в «${src.spec.title}» (туда, откуда событие)` : `в «${src.spec.title}»` };
+    return { slug, src: src.spec, kind, target: to === 'source' ? e.replyTo : undefined, where: to === 'source' ? routineTexts(e).whereSource(src.spec.title) : routineTexts(e).where(src.spec.title) };
   }
 
   private replyWhere(spec: RoutineSpec, e: RoutineEvent): string {
@@ -643,14 +644,14 @@ export class RoutineEngine {
       if (a.paused.has(ev.block)) return;
       a.paused.add(ev.block);
       const reply = spec?.reply && spec.reply.to !== 'none' && (spec.reply.on ?? ['start']).includes('pause') ? spec.reply : undefined;
-      const text = `Взял в работу: ${a.event.title}. Жду подтверждения перед «${ev.block}»`;
+      const text = routineTexts(a.event).takenWaiting(a.event.title, ev.block);
       const wait: RoutineWait = {
         id: newId(),
         routine: a.routine,
         routineTitle: spec?.title ?? a.routine,
         event: a.event,
         kind: 'pause',
-        question: `Чинить: ${a.event.title}?`,
+        question: routineTexts(a.event).fix(a.event.title),
         runId,
         block: ev.block,
         at: this.now().toISOString(),
@@ -673,7 +674,7 @@ export class RoutineEngine {
     // остановлен человеком («Это не баг») — отвечать нечего
     const rejected = this.store.logAll(a.routine).find((x) => x.id === a.logId)?.outcome === 'rejected';
     if (reply && spec && !rejected) {
-      const text = ev.summary?.trim() || `${a.event.title}: ${STATUS_LABEL[ev.status as RunStatus] ?? ev.status}`;
+      const text = ev.summary?.trim() || `${a.event.title}: ${eventLang(a.event) === 'en' ? ev.status : (STATUS_LABEL[ev.status as RunStatus] ?? ev.status)}`;
       if (reply.draft) {
         this.store.setWaits([
           ...this.store.waits(),
@@ -683,7 +684,7 @@ export class RoutineEngine {
             routineTitle: spec.title,
             event: a.event,
             kind: 'reply',
-            question: `Ответ готов: ${a.event.title}`,
+            question: routineTexts(a.event).replyReady(a.event.title),
             runId,
             replyDraft: { text, where: this.replyWhere(spec, a.event) },
             ...(ev.context?.trim() ? { context: clipContext(ev.context) } : {}),

@@ -2,7 +2,8 @@
 // Фейковый CLI Claude Code для e2e: говорит протоколом stream-json, как настоящий (`--input-format stream-json
 // --output-format stream-json`), но ответы берёт из сценария, а не из модели. Agent SDK запускает его по
 // AGENTGRAPH_CLAUDE_EXECUTABLE. Сценарий — JSON-файл FAKE_CLAUDE_SCENARIO (тест переписывает его между шагами):
-//   { "rules": [{ "when": "подстрока промпта или системного промпта", "text"?: "...", "structured"?: {...}, "delayMs"?: n }] }
+//   { "rules": [{ "when": "подстрока промпта или системного промпта", "text"?: "...", "structured"?: {...}, "delayMs"?: n }],
+//     "mcpServers"?: [McpServerStatus…] }  — ответ на mcp_status (список MCP-серверов и коннекторов claude.ai)
 // Первое совпавшее правило отвечает; нет совпадений — ответ по умолчанию (см. defaultAnswer). Каждый вызов
 // дописывается строкой в FAKE_CLAUDE_LOG — тест проверяет, какие сессии были и что в них ушло.
 import fs from 'node:fs';
@@ -179,7 +180,9 @@ rl.on('line', (line) => {
     }
     const response = req.subtype === 'initialize'
       ? { commands: [], agents: [], output_style: 'default', available_output_styles: ['default'], models: [], account: {} }
-      : {};
+      : req.subtype === 'mcp_status'
+        ? { mcpServers: scenario().mcpServers ?? [] }
+        : {};
     out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response } });
     return;
   }

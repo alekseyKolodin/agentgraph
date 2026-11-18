@@ -74,7 +74,7 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
         <h2 className={styles.q}>{w.question}</h2>
         {said && (
           <p className={styles.said}>
-            {[e.author, clock(e.at, new Date(now))].filter(Boolean).join(', ')}: «{said}»
+            {[e.author, clock(e.at, new Date(now))].filter(Boolean).join(', ')}: {t('«{text}»', { text: said })}
             {e.link && (
               <>
                 {' '}
@@ -106,7 +106,7 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
             {w.kind !== 'reply' && <input type="checkbox" checked={reply} onChange={() => setReply(!reply)} />}
             <span>
               <span className={styles.replyLbl}>{t('Ответить {where}:', { where: w.replyDraft.where })}</span>{' '}
-              {!editing && <span className={styles.replyText}>«{draft}»</span>}
+              {!editing && <span className={styles.replyText}>{t('«{text}»', { text: draft })}</span>}
             </span>
           </label>
           {/* правка не схлопывается по blur: иначе кнопки под ней уезжают между mousedown и mouseup, и клик «Чинить» теряется */}
