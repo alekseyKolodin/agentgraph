@@ -128,6 +128,8 @@ export type RunSummary = {
   /** Связь с Teamwork: задача или черновик документа проекта (run.json → teamwork). */
   teamwork?: RunTeamworkLink;
   worktree?: RunWorktree;
+  /** Запуск в worktree: основной checkout проекта — список группирует по нему, а не по папке worktree. */
+  project?: string;
   /** Доп. директории запуска: из них и из cwd собираются недавние пути формы запуска. */
   addDirs?: string[];
   /** Разовый запуск: пометка в списке, вместо «Открыть flow» — «Сохранить как flow». */

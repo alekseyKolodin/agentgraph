@@ -19,7 +19,7 @@ test('проверка на истории: по последним событи
   await expect(history).toContainText('Запустилось бы 1 из 3');
   // оценка по частоте подходящих событий: история короче суток считается как сутки
   await expect(history).toContainText('≈ 7 запусков в неделю');
-  await expect(history.getByText('Падает оплата')).toBeVisible();
+  await expect(history.getByText('Падает оплата', { exact: true })).toBeVisible();
   await history.getByRole('button', { name: 'Показать 2 пропущенных' }).click();
   await expect(history.getByText('Привет всем [nomatch]')).toBeVisible();
   // исходные события не запускались и в журнал не попали

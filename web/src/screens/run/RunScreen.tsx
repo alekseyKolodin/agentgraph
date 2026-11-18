@@ -16,6 +16,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { InlineRename } from '../../components/InlineRename';
 import { MdText } from '../../components/MdText';
 import { PathLink } from '../../components/PathLink';
+import { RoutineOrigin } from './RoutineOrigin';
 import { QuestionCard } from '../../components/question/QuestionCard';
 import { setDocRunTitle } from '../../components/shell/docTitle';
 import { useToast } from '../../components/Toast';
@@ -348,7 +349,8 @@ function RunPage({ id }: { id: string }) {
     ) : null,
     // только в новом UI: откуда запуск — задача Jira, MR (GitLab, !N) или PR (GitHub, #N), ветка, задача Teamwork (ссылка на
     // её панель поверх доски); и его worktree
-    r.source ? (
+    // запуск рутины — отдельной плашкой ниже (RoutineOrigin): рутина, событие со ссылкой, почему подошло
+    r.source && r.source.type !== 'routine' ? (
       <span key="src">
         {`${sourceLabel(r.source)}: `}
         {r.source.url ? (
@@ -409,6 +411,7 @@ function RunPage({ id }: { id: string }) {
           <p title={`${t('Стоимость: оценка по прайсу API; с подписки не списывается')}\n${t('«идёт» — токены идущих этапов, включая сабагентов: их стоимость станет известна, когда этапы закончатся')}`}>{runMeta(r, st.statePending, st.pending.values())}</p>
           <p className={cx('muted small', styles.runSub)}>{sub.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}</p>
           {extras.length > 0 && <p className={cx('muted small', styles.runExtras)}>{extras.flatMap((x, i) => (i ? [<span key={`e${i}`}>·</span>, x] : [x]))}</p>}
+          {r.source?.type === 'routine' && <RoutineOrigin runId={id} source={r.source} />}
           {edits && <p className="muted small" title={edits.title}>{edits.text}</p>}
           {!multi && limitEditable(r, blocks[0]!) && <p className={cx('muted', styles.runLimit)}>{t('Лимит итераций:')} <LimitCtl block={blocks[0]!} /></p>}
         </div>

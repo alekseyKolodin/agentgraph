@@ -1,5 +1,5 @@
 // Журнал срабатываний (SPEC §6 «журнал и фильтры»): исходы, чипы-фильтры со счётчиками, детали строки, обратная связь
-// «Это баг» / «Не повтор» и её путь в проверку словами, запуск по пропущенному событию.
+// «Надо было запустить» / «Не повтор» и её путь в проверку словами, запуск по пропущенному событию.
 import { expect, test } from '../support/env.js';
 
 test.beforeEach(async ({ e2e }) => {
@@ -40,12 +40,12 @@ test('фильтры по исходу и детали строки', async ({ p
   await expect(page.getByRole('button', { name: 'Обед в 13:00? [nomatch]' })).toHaveCount(0);
 });
 
-test('«Это баг» и «Не повтор»: отметка в журнале и примеры в следующей проверке словами', async ({ page, e2e }) => {
+test('«Надо было запустить» и «Не повтор»: отметка в журнале и примеры в следующей проверке словами', async ({ page, e2e }) => {
   await page.goto('/routines/bug/log');
   const row = (title: string) => page.locator('div').filter({ has: page.getByRole('button', { name: title, exact: true }) }).last();
 
-  await row('Обед в 13:00? [nomatch]').getByRole('button', { name: 'Это баг' }).click();
-  await expect(row('Обед в 13:00? [nomatch]')).toContainText('ты отметил: это баг');
+  await row('Обед в 13:00? [nomatch]').getByRole('button', { name: 'Надо было запустить' }).click();
+  await expect(row('Обед в 13:00? [nomatch]')).toContainText('ты отметил: надо было запустить');
   await row('Снова падает оплата [dup]').getByRole('button', { name: 'Не повтор' }).click();
   await expect(row('Снова падает оплата [dup]')).toContainText('ты отметил: не повтор');
 
@@ -65,7 +65,7 @@ test('«Это баг» и «Не повтор»: отметка в журнал
 test('«Запустить» у пропущенного события: ручной запуск по eventId и страница запуска', async ({ page, e2e }) => {
   await page.goto('/routines/bug/log');
   const row = page.locator('div').filter({ has: page.getByRole('button', { name: 'Обед в 13:00? [nomatch]', exact: true }) }).last();
-  await row.getByRole('button', { name: 'Запустить' }).click();
+  await row.getByRole('button', { name: 'Запустить', exact: true }).click();
   await expect(page).toHaveURL(/\/run\/[^/]+$/);
   const runId = new URL(page.url()).pathname.split('/').pop()!;
   const entry = await e2e.until(async () => (await e2e.log('bug')).find((e) => e.runId === runId));

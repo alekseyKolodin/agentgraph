@@ -165,6 +165,8 @@ export function logAction(e: LogEntry, runs: RunStatuses = new Map()): LogAction
 export function logDetail(e: LogEntry): string {
   const parts: string[] = [];
   if (e.reason) parts.push(e.reason.trim().replace(/([^.!?…])$/, '$1.'));
+  // почему подошло (ответ проверки словами) — у запуска и ожидания, где своей причины нет
+  else if (e.why) parts.push(e.why.trim().replace(/([^.!?…])$/, '$1.'));
   if (e.replied) parts.push(t('Ответ ушёл: «{text}».', { text: e.replied.text }));
   if (e.costUsd) parts.push(t('Потрачено {usd}.', { usd: usd(e.costUsd) }));
   if (!parts.length) parts.push(e.outcome === 'started' ? t('Запуск начат.') : t('Подробностей нет.'));
@@ -266,9 +268,9 @@ export function catchUpLine(c: CatchUp, clockOf: (iso: string) => string): strin
 
 export type Verdict = Feedback['verdict'];
 
-/** Кнопка обратной связи: «Это баг» (match), «Не баг» (no_match), «Не повтор» (not_duplicate). */
+/** Кнопка обратной связи: «Надо было запустить» (match), «Зря запустилась» (no_match), «Не повтор» (not_duplicate). */
 export function feedbackLabel(v: Verdict): string {
-  return { match: t('Это баг'), no_match: t('Не баг'), not_duplicate: t('Не повтор') }[v];
+  return { match: t('Надо было запустить'), no_match: t('Зря запустилась'), not_duplicate: t('Не повтор') }[v];
 }
 
 /** Подсказка кнопки: что рутина сделает с ответом. */
@@ -289,9 +291,9 @@ export function feedbackOptions(e: Pick<LogEntry, 'outcome' | 'feedback'>): Verd
   return [];
 }
 
-/** Отметка у строки: «ты отметил: это баг». */
+/** Отметка у строки: «ты отметил: зря запустилась». */
 export function feedbackNote(v: Verdict): string {
-  return { match: t('ты отметил: это баг'), no_match: t('ты отметил: не баг'), not_duplicate: t('ты отметил: не повтор') }[v];
+  return { match: t('ты отметил: надо было запустить'), no_match: t('ты отметил: зря запустилась'), not_duplicate: t('ты отметил: не повтор') }[v];
 }
 
 /** «≈ 4 запуска в неделю · $9.80»; нет оценки — ''. */

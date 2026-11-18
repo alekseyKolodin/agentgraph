@@ -452,6 +452,7 @@ export class RoutineEngine {
 
   /** Полный путь события для рутины: условия → проверка словами → ожидание или запуск. */
   async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
+    let why: string | undefined;
     if (!isSchedule(spec.when)) {
       const m = matchRule(spec.when.match, e);
       if (!m.ok) return this.record(slug, e, 'filtered', { reason: m.reason });
@@ -466,10 +467,11 @@ export class RoutineEngine {
         if (!c.match) return this.record(slug, e, 'check_no', { reason: c.reason, costUsd: c.costUsd });
         // «Не повтор» от человека сильнее ответа модели
         if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') return this.record(slug, e, 'duplicate', { reason: c.reason, costUsd: c.costUsd });
+        why = c.reason?.trim() || undefined;
       }
     }
     if (spec.mode === 'suggest' && !o.human) {
-      const entry = this.log(slug, e, 'waiting');
+      const entry = this.log(slug, e, 'waiting', why ? { why } : {});
       const wait: RoutineWait = {
         id: newId(),
         routine: slug,
@@ -483,23 +485,25 @@ export class RoutineEngine {
       this.changed();
       return { outcome: 'waiting', wait };
     }
-    return this.launch(slug, spec, e, { human: o.human });
+    return this.launch(slug, spec, e, { human: o.human, why });
   }
 
   /** Запуск с лимитами: per_day (кроме решения человека), parallel — в очередь, usd — бюджет запуска. */
-  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
+  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; why?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
     const lim = spec.limits ?? {};
+    // строка ожидания или очереди уже хранит why — патч его не трогает
+    const w = o.why ? { why: o.why } : {};
     // сервер останавливается: запуск не начинаем, событие ждёт в очереди следующего старта (виденным оно уже стало)
     if (this.stopped) {
-      const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId });
+      const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId, ...w });
       this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}) }]);
       return { outcome: 'limit', reason: entry.reason };
     }
     if (!o.human && lim.per_day && this.startedToday(slug) >= lim.per_day) {
-      return this.record(slug, e, 'limit', { reason: `за сегодня уже ${lim.per_day} запуск(ов) из ${lim.per_day}`, logId: o.logId });
+      return this.record(slug, e, 'limit', { reason: `за сегодня уже ${lim.per_day} запуск(ов) из ${lim.per_day}`, logId: o.logId, ...w });
     }
     if (lim.parallel && this.activeOf(slug) >= lim.parallel) {
-      const entry = this.upsertLog(slug, e, 'limit', { reason: `в очереди: идут ${lim.parallel} из ${lim.parallel}`, logId: o.logId });
+      const entry = this.upsertLog(slug, e, 'limit', { reason: `в очереди: идут ${lim.parallel} из ${lim.parallel}`, logId: o.logId, ...w });
       this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}) }]);
       this.changed();
       return { outcome: 'limit', reason: entry.reason };
@@ -525,7 +529,7 @@ export class RoutineEngine {
         /* уже кончился */
       }
     }
-    const entry = this.upsertLog(slug, e, 'started', { runId, logId: o.logId, reason: undefined, startedAt: this.now().toISOString() });
+    const entry = this.upsertLog(slug, e, 'started', { runId, logId: o.logId, reason: undefined, startedAt: this.now().toISOString(), ...w });
     this.active.set(runId, { routine: slug, event: e, logId: entry.id, paused: new Set() });
     this.store.addEvent(slug, 'started', e);
     this.changed();

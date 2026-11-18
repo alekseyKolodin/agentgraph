@@ -325,3 +325,9 @@
 .insp-goto { align-self: flex-start; color: var(--ink-3); }
 .insp-goto:hover { color: var(--ink); }
 @media (max-width: 1100px) { .run-graph-split.with-insp { grid-template-columns: minmax(0, 1fr); } .run-inspector { position: static; max-height: none; } }
+
+/* запуск начат рутиной: рутина, событие со ссылкой, почему подошло, «Зря запустилась» */
+.routine-origin { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); font-size: var(--fs-small); color: var(--ink-2); }
+.routine-origin a { color: var(--live); }
+.origin-event { min-width: 0; overflow-wrap: anywhere; }
+.origin-why { flex-basis: 100%; color: var(--ink-3); }

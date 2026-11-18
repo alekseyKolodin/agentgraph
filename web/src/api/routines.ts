@@ -49,7 +49,7 @@ export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) =
 export const runRoutine = (slug: string, eventId?: string) => api<{ runId?: string; wait?: RoutineWait }>('POST', `${BASE}/${enc(slug)}/run`, eventId ? { eventId } : {});
 export const fetchLog = (slug: string, outcomes?: LogOutcome[], limit = 200) =>
   api<LogEntry[]>('GET', `${BASE}/${enc(slug)}/log?${new URLSearchParams({ ...(outcomes?.length ? { outcome: outcomes.join(',') } : {}), limit: String(limit) })}`);
-/** Обратная связь на событие: «Это баг» / «Не баг» / «Не повтор»; «Учесть» в проверке на истории — verdict = прошлый ответ. */
+/** Обратная связь на событие: «Надо было запустить» / «Зря запустилась» / «Не повтор»; «Учесть» в проверке на истории — verdict = прошлый ответ. */
 export const sendFeedback = (slug: string, eventId: string, verdict: Feedback['verdict']) => api<{ ok: true }>('POST', `${BASE}/${enc(slug)}/feedback`, { eventId, verdict });
 /** keepalive — отправка при закрытии вкладки: запрос не обрывается вместе со страницей. */
 export const answerWait = (id: string, action: WaitAction, keepalive = false) => api<{ ok: true; runId?: string }>('POST', `${BASE}/waits/${enc(id)}`, action, undefined, keepalive);

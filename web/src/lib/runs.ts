@@ -82,7 +82,8 @@ export function runListView(all: RunSummary[], o: RunListOpts, grouped: boolean,
   // запуски отсортированы от новых, поэтому и проекты идут по свежести последнего запуска
   const byProject = new Map<string, RunSummary[]>();
   for (const r of runs) {
-    const k = r.cwd || '';
+    // запуск в worktree — в группе своего проекта, а не отдельной папкой на каждую ветку
+    const k = r.project || r.cwd || '';
     if (!byProject.has(k)) byProject.set(k, []);
     byProject.get(k)!.push(r);
   }

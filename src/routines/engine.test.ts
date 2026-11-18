@@ -102,6 +102,8 @@ test('событие: условия → проверка словами → з�
     assert.deepEqual(log.map((e) => e.outcome).sort(), ['filtered', 'started']);
     assert.match(log.find((e) => e.outcome === 'filtered')!.reason!, /channel: «random»/);
     assert.equal(log.find((e) => e.outcome === 'started')!.runId, 'run-1');
+    // почему подошло — ответ проверки словами остаётся у строки запуска (страница запуска показывает его)
+    assert.equal(log.find((e) => e.outcome === 'started')!.why, 'да');
     // тот же id ещё раз — не событие
     await t.push(t.event('1'));
     assert.equal(t.started.length, 1);

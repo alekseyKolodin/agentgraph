@@ -89,3 +89,13 @@ test('дочерние запуски — под родителем в поря�
   assert.deepEqual(runListView(list, opts(), false, new Set()).runs.map((r) => r.id), ['p1', 'k1', 'g1', 'k2', 'lost', 'p0']);
   assert.match(runRowTitle(list[0]!), /вызван блоком b запуска p1/);
 });
+
+test('список запусков: запуск в worktree — в группе своего проекта, а не отдельной папкой', () => {
+  const runs = [
+    run('a', { cwd: '/w/worktrees/android/routine-review-1', worktree: { path: '/w/worktrees/android/routine-review-1', branch: 'routine/review-1' }, project: '/code/android' }),
+    run('b', { cwd: '/code/android' }),
+    run('c', { cwd: '/w/worktrees/android/old', worktree: { path: '/w/worktrees/android/old' } }),
+  ];
+  const groups = runListView(runs, opts(), true, new Set()).groups;
+  assert.deepEqual(groups.map((g) => [g.cwd, g.runs.map((r) => r.id)]), [['/code/android', ['a', 'b']], ['/w/worktrees/android/old', ['c']]]);
+});

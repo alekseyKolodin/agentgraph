@@ -310,6 +310,8 @@ async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promis
   const knowledge = rs.run.knowledge?.length ? knowledgeTags(runTagSlugs(rs.run.knowledge)).map((t) => t.slug) : [];
   if (knowledge.length) resolveKnowledge(spec, knowledge);
   let worktree: RunWorktree | undefined;
+  // основной checkout: запуск в worktree список покажет в группе проекта
+  let project: string | undefined;
   if (rs.run.worktree === 'new') {
     const root = await repoRoot(cwd);
     if (!root) throw new Error(`${cwd} — не git-репозиторий: новый worktree сделать не из чего`);
@@ -318,13 +320,14 @@ async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promis
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
     const wt = await ensureWorktree({ root, baseDir: worktreesDir(s), branch: `routine/${r.routine}-${stamp}-${event.id.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x'}`, base: cfg?.base, copyFiles: cfg?.copyFiles });
     cwd = wt.path;
+    project = root;
     worktree = { path: wt.path, ...(wt.branch ? { branch: wt.branch } : {}) };
   }
   return startRun(spec, {
     cwd,
     ...(rs.limits?.usd ? { maxBudgetUsd: rs.limits.usd } : {}),
     ...(rs.run.model ? { model: rs.run.model } : {}),
-    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}) },
+    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}), ...(project ? { project } : {}) },
     ...(worktree ? { worktree } : {}),
     ...(space ? { space: space.slug, saveState: true, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
     ...(knowledge.length ? { knowledge } : {}),
@@ -2299,6 +2302,25 @@ function feed(): FeedItem[] {
 }
 
 
+/** Основной checkout worktree: из привязки к источнику, иначе из файла .git worktree («gitdir: <repo>/.git/worktrees/<имя>»). */
+const worktreeRoots = new Map<string, string | null>();
+function worktreeProjectOf(r: Pick<RunReport, 'worktree' | 'source'>): string | undefined {
+  if (r.source?.project) return r.source.project;
+  const wt = r.worktree?.path;
+  if (!wt) return undefined;
+  if (!worktreeRoots.has(wt)) {
+    let root: string | null = null;
+    try {
+      const m = /^gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/][^\\/]+\s*$/m.exec(fs.readFileSync(path.join(wt, '.git'), 'utf8'));
+      if (m) root = m[1];
+    } catch {
+      /* worktree уже удалён — группа по его папке */
+    }
+    worktreeRoots.set(wt, root);
+  }
+  return worktreeRoots.get(wt) ?? undefined;
+}
+
 function listRuns(): RunSummary[] {
   if (!fs.existsSync(RUNS_DIR)) return [];
   const out: RunSummary[] = [];
@@ -2322,6 +2344,7 @@ function listRuns(): RunSummary[] {
       source: r.source,
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       worktree: r.worktree,
+      ...(r.worktree && worktreeProjectOf(r) ? { project: worktreeProjectOf(r) } : {}),
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
       ...(reportSpace(r) ? { space: reportSpace(r) } : {}),

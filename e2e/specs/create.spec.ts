@@ -104,7 +104,7 @@ test('подключение словами: агент находит API, пр
   const slug = await createRoutine(page, { source: src.spec.title, flow: 'digest', wait: 'перед запуском', title: 'Заявки из сервиса' }, { goto: false });
   // проверка на истории в редакторе — свежий опрос источника с ключом
   const history = page.getByRole('region', { name: 'Проверка на истории' });
-  await expect(history.getByText('Заявка из сервиса')).toBeVisible();
+  await expect(history.getByText('Заявка из сервиса', { exact: true })).toBeVisible();
   await expect(history).toContainText('Запустилось бы 1 из 1');
   expect((await e2e.routine(slug)).spec.mode).toBe('suggest');
 });
