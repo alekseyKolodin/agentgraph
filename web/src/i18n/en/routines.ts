@@ -111,6 +111,8 @@ export const routines: Record<string, string> = {
   'ссылка': 'link',
   'время': 'time',
   'автор': 'author',
+  'тред': 'thread',
+  'канал': 'channel',
   'каждые {n} {w}': 'every {n} {w}',
   'каждую минуту': 'every minute',
   'каждый час': 'every hour',

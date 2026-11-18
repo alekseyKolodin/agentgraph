@@ -23,6 +23,10 @@ export type RoutineEvent = {
   fields: Record<string, unknown>;
   /** Куда отвечать «в источник»: тред Slack, чат Telegram, MR. Заполняет вид источника, читает его reply(). */
   replyTo?: Record<string, unknown>;
+  /** Вещи, о которых это событие (разбор ссылок, src/things/resolve.ts): MR, задача Jira… Нет — событие ни о чём известном. */
+  things?: import('../things/types.js').Thing[];
+  /** Нить разговора (тред Slack, ветка письма): по ней «продолжение того же разговора». */
+  thread?: import('../things/types.js').ThreadRef;
 };
 
 // ---------------------------------------------------------------- источник (файл ~/.agentgraph/sources/<slug>.yaml)
@@ -37,6 +41,9 @@ export type FieldMap = {
   link?: string;
   at?: string;
   author?: string;
+  /** Нить разговора (ts треда Slack, id ветки письма) и канал — для чатов через коннектор. */
+  thread?: string;
+  channel?: string;
 };
 
 export type SourceSpec = {
