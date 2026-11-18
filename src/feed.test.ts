@@ -98,6 +98,21 @@ test('прерванный запуск без вопросов и пауз ко
   assert.equal(end?.at, '2026-10-07T10:00:00.000Z');
 });
 
+test('прерванный запуск: конец — по времени работы этапов, а не по старту; параллельная группа считается по самому долгому этапу', () => {
+  const ph = (iteration: number, durationMs: number, group?: string) => ({ block: 'main', iteration, phase: 'p', durationMs, ...(group ? { group } : {}) }) as RunReport['phases'][number];
+  const end = reportFeed('r1', report({ status: 'interrupted', phases: [ph(1, 60_000), ph(1, 30_000, 'g'), ph(1, 90_000, 'g')] })).find((i) => i.kind === 'end');
+  assert.equal(end?.at, '2026-10-07T10:02:30.000Z');
+  // вопрос позже работы этапов — берём его время
+  const later = reportFeed('r1', report({ status: 'interrupted', phases: [ph(1, 60_000)], questions: [question('q1', '2026-10-07T10:05:00.000Z')] })).find((i) => i.kind === 'end');
+  assert.equal(later?.at, '2026-10-07T10:05:00.000Z');
+});
+
+test('прерванный запуск: вместо адреса API в тексте конца — понятная фраза', () => {
+  const err = 'Запуск прервался: процесс раннера завершился. Продолжить с первого незавершённого блока: POST /api/runs/:id/continue.';
+  const end = reportFeed('r1', report({ status: 'interrupted', error: err })).find((i) => i.kind === 'end');
+  assert.equal(end?.text, 'прерван: приложение закрылось во время работы, можно продолжить');
+});
+
 test('идущий запуск строки конца не имеет', () => {
   assert.equal(reportFeed('r1', report({ status: 'running' })).some((i) => i.kind === 'end'), false);
 });

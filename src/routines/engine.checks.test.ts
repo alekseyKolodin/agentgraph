@@ -503,3 +503,39 @@ test('оценка на истории берёт стоимость запус�
     t.done();
   }
 });
+
+test('итог проверки: две пачки с теми же записями подряд — вторая не «свежая», свежесть считается в очереди', async () => {
+  const t = setup();
+  try {
+    t.routine('r');
+    t.connected();
+    const got: number[] = [];
+    const ev = t.event('1');
+    await Promise.all([t.engine.ingest('src', [ev], (n) => got.push(n)), t.engine.ingest('src', [ev], (n) => got.push(n))]);
+    assert.deepEqual(got, [1, 0]);
+  } finally {
+    t.done();
+  }
+});
+
+test('конец запуска при нечитаемом журнале не срывает остальное: уведомление и очередь идут, расход проверки — 0', async () => {
+  const t = setup();
+  const logs: string[] = [];
+  try {
+    t.connected();
+    t.routine('a', { mode: 'auto' });
+    await t.push(t.event('1'));
+    (t.engine as unknown as { deps: { log: (m: string) => void } }).deps.log = (m) => void logs.push(m);
+    // журнал стал ссылкой: ни читать, ни писать его нельзя
+    const file = path.join(t.root, 'routines-state', 'log', 'a.json');
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(path.join(t.root, 'elsewhere'), '');
+    fs.symlinkSync(path.join(t.root, 'elsewhere'), file);
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'failed', costUsd: 0.2, error: 'тесты упали' });
+    assert.ok(logs.some((m) => /\[a\].*не обработано/.test(m)), logs.join('\n'));
+    assert.equal(t.notices.length, 1, 'уведомление о сбое запуска ушло');
+    assert.equal(fs.readFileSync(path.join(t.root, 'elsewhere'), 'utf8'), '');
+  } finally {
+    t.done();
+  }
+});

@@ -376,7 +376,8 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
       // команду, когда сервер agentgraph недоступен
       PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }, { matcher: 'Bash', hooks: http[0].hooks }],
       // после записи: проверенный файл (space.json, карта, состояние, flow) — ещё раз на диске, UI — обновить
-      PostToolUse: [{ matcher: WRITE_MATCHER, hooks: http[0].hooks }],
+      // и после любого инструмента без матчера: разрешённый вызов снимает «Ждёт разрешения» (handleHook → PostToolUse)
+      PostToolUse: http,
     },
     // //путь — абсолютный путь в правилах разрешений; Edit закрывает все инструменты записи файлов, правило Write(путь)
     // claude 2.1.311 не применяет и предупреждает о нём при старте. Сама папка — отдельным правилом: /** её не ловит.
@@ -824,12 +825,18 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       // вопрос шаг того, кто спросил (agent — сабагент), сообщение пользователя или конец хода. Отказ в TUI (Esc) хода
       // не продолжает: вопрос держится до следующего сообщения, а у закрытой так сессии — «закончилась на запросе»
       if (Object.keys(reply).length) return { reply, patch };
-      const ask: SessionAsk = { ...permissionAsk(input), at: now(), ...(input.agent_id ? { agent: input.agent_id } : {}) };
+      const ask: SessionAsk = { ...permissionAsk(input), at: now(), ...(input.agent_id ? { agent: input.agent_id } : {}), ...(input.tool_name ? { tool: input.tool_name } : {}), ...(input.tool_use_id ? { toolUseId: input.tool_use_id } : {}) };
       return { reply, patch: { ...patch, status: 'waiting', ask } };
     }
     case 'PreToolUse':
       return { reply: preToolDecision(input, deps), patch };
     case 'PostToolUse': {
+      // разрешённый инструмент отработал — вопрос о нём снят, не дожидаясь конца пачки (долгая команда не «ждёт разрешения»)
+      const a = s.ask;
+      if (a?.kind === 'permission' && a.agent === input.agent_id && (a.toolUseId ? a.toolUseId === input.tool_use_id : a.tool === input.tool_name)) {
+        patch.ask = null;
+        patch.status = 'working';
+      }
       if (!WRITE_TOOLS.includes(input.tool_name ?? '') || !deps.afterWrite) return { reply: {}, patch };
       let note: string | undefined;
       try {

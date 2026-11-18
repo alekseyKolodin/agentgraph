@@ -65,6 +65,12 @@ export type StoredWait = RoutineWait & { logId?: string };
 export class RoutineStore {
   constructor(readonly root: string = configDir()) {}
 
+  private clock: () => number = Date.now;
+  /** Часы для отсчёта сроков в журнале: движок подставляет свои. */
+  setClock(f: () => number): void {
+    this.clock = f;
+  }
+
   private dir(...p: string[]): string {
     return path.join(this.root, ...p);
   }
@@ -295,7 +301,7 @@ export class RoutineStore {
    * всегда (по ним per_day и «сегодня»; тысяча отфильтрованных событий за день их не вытеснит).
    */
   private writeLog(routine: string, all: LogEntry[]): void {
-    const now = Date.now();
+    const now = this.clock();
     const lines = all.map((e) => JSON.stringify(e));
     const keep = new Array<boolean>(all.length).fill(false);
     let bytes = 0;

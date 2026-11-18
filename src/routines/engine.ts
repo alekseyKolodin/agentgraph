@@ -170,6 +170,8 @@ export class RoutineEngine {
 
   constructor(private readonly deps: EngineDeps) {
     this.store = deps.store ?? new RoutineStore();
+    // отсчёт «последние 48 часов» в журнале — по часам движка, а не по системным (в тестах и при сдвиге времени)
+    this.store.setClock(() => this.now().getTime());
     this.now = deps.now ?? (() => new Date());
     this.timers = deps.timers ?? {
       setInterval: (fn, ms) => {
@@ -474,11 +476,16 @@ export class RoutineEngine {
         return;
       }
       const at = this.now().toISOString();
-      this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
+      // итог проверки пишет сама очередь — после предыдущей пачки, когда виденное уже обновлено
+      let recorded = false;
       try {
-        await this.ingest(slug, events);
+        await this.ingest(slug, events, (fresh) => {
+          recorded = true;
+          this.recordCheck(slug, { ok: true, total: events.length, fresh });
+        });
         this.store.setLastCheck(slug, at);
       } catch (err) {
+        if (!recorded) this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
         // сбой обработки — не поломка источника, и он не должен сорвать тик (очередь, другие источники)
         this.say(`[${slug}] события не обработаны: ${msg(err)}`);
       }
@@ -515,8 +522,7 @@ export class RoutineEngine {
           try {
             this.liveSince.set(slug, this.now().getTime());
             await kind.listen!(this.ctx(slug, spec, l.abort.signal), (events) => {
-              this.recordCheck(slug, { ok: true, total: events.length, fresh: this.freshCount(slug, events) });
-              this.safe(this.ingest(slug, events));
+              this.safe(this.ingest(slug, events, (fresh) => this.recordCheck(slug, { ok: true, total: events.length, fresh })));
             });
             if (l.abort.signal.aborted) return;
           } catch (err) {
@@ -545,7 +551,7 @@ export class RoutineEngine {
   // ============================================================ путь события
 
   /** Записи источника: виденные отсеиваются, свои (isSelf) — не события, простой — в «догнать», остальное — по рутинам. */
-  ingest(source: string, events: RoutineEvent[]): Promise<void> {
+  ingest(source: string, events: RoutineEvent[], onFresh?: (fresh: number) => void): Promise<void> {
     return this.enqueue(async () => {
       const src = this.store.source(source);
       const kind = src?.spec && this.kind(src.spec.kind);
@@ -559,6 +565,8 @@ export class RoutineEngine {
         seen.add(e.id);
         fresh.push(e);
       }
+      // новые считаются здесь, в очереди: пачка, пришедшая следом с теми же записями, уже не «свежая»
+      onFresh?.(fresh.length);
       // и новые, и пришедшие снова: виденное освежается, долго открытая вещь не вытесняется и не придёт «новой»
       this.store.addSeen(source, events.map((e) => e.id));
       if (!fresh.length) return;
@@ -885,10 +893,17 @@ export class RoutineEngine {
     const waits = this.store.waits();
     const left = waits.filter((w) => !(w.runId === runId && w.kind === 'pause'));
     if (left.length !== waits.length) this.store.setWaits(left);
-    const line = this.store.logAll(a.routine).find((x) => x.id === a.logId);
-    // проверка словами уже стоила денег: запуск добавляется к ней, а не затирает
-    this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd) });
-    if (ev.status === 'budget_exceeded') this.log(a.routine, a.event, 'limit', { runId, reason: `бюджет запуска превышен${spec?.limits?.usd ? ` (limits.usd = ${spec.limits.usd})` : ''}` });
+    // журнал не читается или не пишется (ссылка, права) — это не должно срывать ответ наружу, уведомление и очередь
+    let line: LogEntry | undefined;
+    try {
+      line = this.store.logAll(a.routine).find((x) => x.id === a.logId);
+      // проверка словами уже стоила денег: запуск добавляется к ней, а не затирает
+      this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd) });
+      if (ev.status === 'budget_exceeded') this.log(a.routine, a.event, 'limit', { runId, reason: `бюджет запуска превышен${spec?.limits?.usd ? ` (limits.usd = ${spec.limits.usd})` : ''}` });
+    } catch (err) {
+      line = undefined;
+      this.failed(a.routine, a.event, err);
+    }
     const reply = spec?.reply && spec.reply.to !== 'none' && (spec.reply.on ?? ['start']).includes('end') ? spec.reply : undefined;
     // остановлен человеком («Это не баг») — отвечать нечего
     const rejected = line?.outcome === 'rejected';

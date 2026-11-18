@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { ARRIVALS_MAX, LOG_TRIM_BYTES, LogReadError, RoutineStore, SEEN_MAX } from './store.js';
+import { ARRIVALS_MAX, LOG_KEEP, LOG_TRIM_BYTES, LogReadError, RoutineStore, SEEN_MAX } from './store.js';
 import type { LogEntry, RoutineEvent } from './types.js';
 
 function tmp(): { store: RoutineStore; root: string; done: () => void } {
@@ -228,5 +228,22 @@ test('журнал: обрезка — хвост подряд, длинная �
     assert.deepEqual(ids, Array.from({ length: 10 }, (_, i) => `new${i}`));
   } finally {
     done();
+  }
+});
+
+test('журнал: срок «последние 48 часов» считается по часам, которые дал движок', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-store-clock-'));
+  try {
+    const store = new RoutineStore(root);
+    store.setClock(() => Date.parse('2020-01-01T00:00:00.000Z'));
+    const e = (id: string, at: string, outcome: LogEntry['outcome']): LogEntry => ({ id, at, routine: 'r', event: { source: 's', id, title: id, at }, outcome });
+    // запуск за сутки до «сейчас» движка, а за ним — больше строк, чем хранит хвост: уцелеть он может только как свежий запуск
+    const lines = [e('run', '2019-12-31T12:00:00.000Z', 'started'), ...Array.from({ length: LOG_KEEP + 5 }, (_, i) => e(`f${i}`, '2019-12-31T13:00:00.000Z', 'filtered'))];
+    fs.mkdirSync(path.join(root, 'routines-state', 'log'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'routines-state', 'log', 'r.json'), lines.map((l) => JSON.stringify(l) + '\n').join(''));
+    store.updateLog('r', 'f0', { reason: 'x' });
+    assert.ok(store.logAll('r').some((x) => x.id === 'run'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

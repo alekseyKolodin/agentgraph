@@ -52,7 +52,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { configDir, loadSettings, updateSettings, type Settings } from './settings.js';
@@ -364,7 +364,7 @@ export function startServer(opts: ServerOptions): Promise<string> {
   sessionWaits ??= onSessionWaiting((v) => {
     const session = { id: v.id, name: v.name, ...(v.space ? { space: v.space } : {}) };
     homeBroadcast({ type: 'session', runId: '', flow: '', session });
-    notifySession(opts, session);
+    notifySession(opts, session, v.ask);
   });
   // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
   if (!teamChanges) {
@@ -2208,13 +2208,21 @@ function notifyPause(srv: ServerOptions, id: string, flow: string, r: PauseReaso
   sendNotice(srv, { title: `${flow}: «${r.phase}» ждёт решения`, body, path: `/run/${id}`, group: id, sound: true }, tabNotifies());
 }
 
+/** Текст уведомления о сессии: что спрашивает (вопрос) или что просит разрешить; без вопроса — закончила ход. */
+export function sessionNoticeBody(s: Pick<HomeSessionWait, 'space'>, ask?: Pick<SessionAsk, 'kind' | 'text'>): string {
+  const text = ask?.text.replace(/\s+/g, ' ').trim();
+  const head = !text ? '' : ask!.kind === 'permission' ? `Просит разрешения: ${text}` : `Спрашивает: ${text}`;
+  const space = s.space ? `◇ ${s.space}` : '';
+  return [head, space].filter(Boolean).join(' · ') || 'Claude закончил ход';
+}
+
 /**
  * Сессия терминала закончила ход и ждёт тебя. Системное — строже, чем у вопроса: только когда UI не открыт вовсе. Открытая
  * вкладка сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода,
  * пока человек сидит в этом терминале.
  */
-function notifySession(srv: ServerOptions, s: HomeSessionWait): void {
-  sendNotice(srv, { title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', path: `/sessions/${encodeURIComponent(s.id)}`, group: `session:${s.id}` }, homeClients.size > 0);
+function notifySession(srv: ServerOptions, s: HomeSessionWait, ask?: SessionAsk): void {
+  sendNotice(srv, { title: `Сессия «${s.name}» ждёт тебя`, body: sessionNoticeBody(s, ask), path: `/sessions/${encodeURIComponent(s.id)}`, group: `session:${s.id}` }, homeClients.size > 0);
 }
 
 /** Общий поток без переигрывания: при (пере)подключении UI сам забирает состояние из /api/home и /api/runs. */

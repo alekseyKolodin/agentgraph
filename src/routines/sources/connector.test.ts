@@ -300,3 +300,11 @@ test('connector без скрипта: стоимость опроса моде�
   await assert.rejects(() => failed.poll!(ctx), /долго/);
   assert.deepEqual(spent, [0.01, 0.01, 0.03]);
 });
+
+test('connector без скрипта: сессия бросила исключение с расходом — он всё равно уходит в ctx.cost, ошибка не теряется', async () => {
+  const spent: number[] = [];
+  const ctx = { ...makeCtx({ config: { tool: TOOL } }), cost: (usd: number) => void spent.push(usd) };
+  const boom = connectorKind({ session: async () => { throw Object.assign(new Error('соединение оборвалось'), { costUsd: 0.04 }); } });
+  await assert.rejects(() => boom.poll!(ctx), /соединение оборвалось/);
+  assert.deepEqual(spent, [0.04]);
+});
