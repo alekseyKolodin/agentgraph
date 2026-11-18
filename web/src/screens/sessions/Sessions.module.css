@@ -80,3 +80,17 @@
 @container (max-width: 620px) {
   .col-when { display: none; }
 }
+
+/* ход закончен без вопроса: живая, без тревоги */
+.status.idle .dot { background: var(--ink-3); border-color: var(--ink-3); }
+/* что спросил Claude — строкой под именем; у завершённой — «закончилась на вопросе» */
+.ask { display: block; margin-top: 2px; font-size: var(--fs-meta); color: var(--st-wait); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ended .ask { color: var(--ink-2); }
+/* диалог предела живых сессий: кого завершить, чтобы продолжить эту */
+.limit-list { list-style: none; margin: 12px 0; padding: 0; border: 1px solid var(--line); border-radius: var(--r-md); }
+.limit-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.limit-row:first-child { border-top: 0; }
+.limit-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.limit-sub { grid-column: 1; font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.limit-sub.asks { color: var(--st-wait); }
+.limit-row :global(.btn) { grid-column: 2; grid-row: 1 / span 3; }

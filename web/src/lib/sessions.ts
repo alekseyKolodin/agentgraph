@@ -1,28 +1,38 @@
 // Логика экранов «Сессии» без React и DOM: подписи статуса, строка сессии в «Сейчас», чипы пространства и тегов знаний
 // на ходу, адрес WebSocket, путь перетащенного файла для командной строки claude, буфер обмена из OSC 52, состояние
 // пространства.
-import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
+import type { SessionAsk, SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
 import { ago, baseName, clock, feedTime, plural } from './format';
 import { t } from './i18n';
 
-/** Тон точки и подписи: live — работает, wait — ход за тобой, off — завершена или запускается, fail — не запустилась. */
-export type SessionTone = 'live' | 'wait' | 'off' | 'fail';
+/**
+ * Тон точки и подписи: live — работает, wait — ждёт ответа (вопрос, разрешение), idle — закончила ход и простаивает
+ * (без тревоги), off — завершена или запускается, fail — не запустилась.
+ */
+export type SessionTone = 'live' | 'wait' | 'idle' | 'off' | 'fail';
 
-export function sessionTone(s: Pick<SessionView, 'status' | 'outcome'>): SessionTone {
+/**
+ * Ждёт тебя: живая, ход за человеком, и последний ход кончился вопросом или запросом разрешения (ask). Просто закончившая
+ * ход — не ждёт: иначе каждая открытая сессия горела бы «ждёт тебя» без конца.
+ */
+export const asksNow = (s: Pick<SessionView, 'live' | 'status' | 'ask'>): boolean => s.live && s.status === 'waiting' && Boolean(s.ask);
+
+export function sessionTone(s: Pick<SessionView, 'status' | 'outcome' | 'ask'>): SessionTone {
   if (s.status === 'working') return 'live';
-  if (s.status === 'waiting') return 'wait';
+  if (s.status === 'waiting') return s.ask ? 'wait' : 'idle';
   return s.outcome ? 'fail' : 'off';
 }
 
 /** Подпись статуса для шапки и таблицы. Код выхода claude — не здесь, а в подсказке (sessionExitTitle). */
-export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome'>): string {
+export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome' | 'ask'>): string {
   switch (s.status) {
     case 'starting':
       return t('Запускается');
     case 'working':
       return t('Работает');
     case 'waiting':
-      return t('Ждёт тебя');
+      if (!s.ask) return t('Ход закончен');
+      return s.ask.kind === 'permission' ? t('Ждёт разрешения') : t('Ждёт ответа');
     default:
       if (s.outcome === 'untrusted') return t('Папка не доверена');
       if (s.outcome === 'failed') return t('Не запустилась');
@@ -36,6 +46,20 @@ export function sessionStatusLabel(s: Pick<SessionView, 'status' | 'outcome'>): 
  */
 export const noTranscriptWhy = (s: Pick<SessionView, 'turns'>): string =>
   s.turns > 0 ? t('транскрипт прошлого разговора удалён') : t('в прошлом не было ни одного сообщения');
+
+/**
+ * Что спросил Claude — строка под шапкой и в списке. Живая: «Спрашивает: …», «Просит разрешение: …», «Ждёт ответа в
+ * форме: …»; завершённая — «Закончилась на вопросе: …» (признак переживает закрытие приложения). Вопроса нет — пусто.
+ */
+export function askNote(s: Pick<SessionView, 'live'> & { ask?: Pick<SessionAsk, 'kind' | 'text'> }): string {
+  const a = s.ask;
+  if (!a) return '';
+  const text = a.text || '…';
+  if (!s.live) return a.kind === 'permission' ? t('Закончилась на запросе разрешения: {text}', { text }) : t('Закончилась на вопросе: {text}', { text });
+  if (a.kind === 'permission') return t('Просит разрешение: {text}', { text });
+  if (a.kind === 'elicitation') return t('Ждёт ответа в форме: {text}', { text });
+  return t('Спрашивает: {text}', { text });
+}
 
 /** Код выхода claude для подсказки у статуса завершённой сессии; неизвестен или сессия идёт — пусто. */
 export const sessionExitTitle = (s: Pick<SessionView, 'live' | 'exitCode'>): string =>
@@ -61,12 +85,13 @@ export function sessionEndText(s: Pick<SessionView, 'outcome' | 'exitCode' | 'en
 }
 
 /**
- * Сессии на главной: ждущие — в «Ждёт тебя» (дольше ждущие сверху), работающие и запускающиеся — в «Идут». Диалог
- * доверия к папке на экране — тоже ждёт тебя: без ответа claude не начнёт.
+ * Сессии на главной: с вопросом или запросом разрешения — в «Ждёт тебя» (дольше ждущие сверху), работающие и
+ * запускающиеся — в «Идут». Диалог доверия к папке на экране — тоже ждёт тебя: без ответа claude не начнёт. Закончившие
+ * ход без вопроса на главной не стоят: они в «Сейчас» боковой панели, без тревоги.
  */
-export function homeSessions<S extends Pick<SessionView, 'live' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt'>>(list: S[]): { waiting: S[]; live: S[] } {
-  const since = (s: S) => s.waitingSince ?? s.lastActivityAt;
-  const waits = (s: S) => s.status === 'waiting' || s.delivery === 'trust';
+export function homeSessions<S extends Pick<SessionView, 'live' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'ask'>>(list: S[]): { waiting: S[]; live: S[] } {
+  const since = (s: S) => s.ask?.at ?? s.waitingSince ?? s.lastActivityAt;
+  const waits = (s: S) => asksNow(s) || s.delivery === 'trust';
   return {
     waiting: list.filter((s) => s.live && waits(s)).sort((a, b) => since(a).localeCompare(since(b))),
     live: list.filter((s) => s.live && !waits(s) && (s.status === 'working' || s.status === 'starting')),
@@ -74,22 +99,36 @@ export function homeSessions<S extends Pick<SessionView, 'live' | 'status' | 'de
 }
 
 /** Подпись строки сессии на главной: «◇ press-alert · ждёт 5 мин» — пространство (без него — папка) и что с ней сейчас. */
-export function homeSessionMeta(s: Pick<SessionView, 'cwd' | 'space' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'turns'>, now: number = Date.now()): string {
+export function homeSessionMeta(s: Pick<SessionView, 'cwd' | 'space' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'turns' | 'ask'>, now: number = Date.now()): string {
   const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
   const state =
     s.delivery === 'trust'
       ? t('ждёт: доверие к папке')
+      : s.status === 'waiting' && s.ask
+      ? t('ждёт {time}', { time: ago(s.ask.at, now) })
       : s.status === 'waiting'
-      ? t('ждёт {time}', { time: ago(s.waitingSince ?? s.lastActivityAt, now) })
+      ? t('ход закончен')
       : s.status === 'working'
         ? t('работает')
         : t('запускается');
   return [where, state, ...(s.turns ? [`${s.turns} ${plural(s.turns, 'ход', 'хода', 'ходов')}`] : [])].join(' · ');
 }
 
+/**
+ * Кого предложить завершить, когда живых сессий уже предел: живые, у которых ход за человеком, — сначала простаивающие
+ * (дольше простаивающие сверху), потом ждущие ответа; работающие и сама продолжаемая — нет.
+ */
+export function endCandidates<S extends Pick<SessionView, 'id' | 'live' | 'status' | 'ask' | 'waitingSince' | 'lastActivityAt'>>(list: S[], except = ''): S[] {
+  const since = (s: S) => s.waitingSince ?? s.lastActivityAt;
+  return list
+    .filter((s) => s.live && s.status === 'waiting' && s.id !== except)
+    .sort((a, b) => Number(Boolean(a.ask)) - Number(Boolean(b.ask)) || since(a).localeCompare(since(b)));
+}
+
 /** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — пространство (без него — папка), статус, активность. */
-export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt'>>, now: Date = new Date()): string {
-  const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? t('ждёт тебя') : t('запускается');
+export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt' | 'ask'>>, now: Date = new Date()): string {
+  // простаивающая — «ход закончен», без тревоги; «ждёт тебя» — только с вопросом
+  const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? (s.ask ? t('ждёт тебя') : t('ход закончен')) : t('запускается');
   // чем сессии различаются: пространство (без него — папка), статус и когда была активность — а не повтор папки
   const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
   return [where, state, ...(s.lastActivityAt ? [feedTime(s.lastActivityAt, now)] : [])].join(' · ');

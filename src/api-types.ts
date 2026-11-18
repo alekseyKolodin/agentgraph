@@ -563,6 +563,20 @@ export type SessionTagChip = { slug: string; state: 'on' | 'pending' | 'removed'
 /** memory — карта этого пространства в памяти идущего claude (запущен с ним); выбранное на ходу — строкой «прочитай» до «Перезапустить». */
 export type SessionSpaceChip = { slug: string; state: 'on' | 'pending' | 'removed'; missing?: true; memory?: true };
 
+/**
+ * Сессия ждёт ответа, а не просто закончила ход: question — последний абзац ответа Claude кончается вопросом (или
+ * инструмент AskUserQuestion), permission — запрос разрешения, elicitation — форма MCP. text — сам вопрос (или что просят
+ * разрешить), at — когда спросили. Лежит в записи сессии и переживает закрытие приложения; снимается следующим
+ * сообщением пользователя или шагом модели.
+ */
+export type SessionAsk = {
+  kind: 'question' | 'permission' | 'elicitation';
+  text: string;
+  at: string;
+  /** Разрешения просит сабагент (agent_id хука): шаги других сабагентов вопрос не снимают. */
+  agent?: string;
+};
+
 /** Последнее обновление состояния пространства по сессии: когда, куда, ошибка, стоимость. */
 export type SessionStateUpdate = { at: string; space: string; ok: boolean; error?: string; costUsd: number };
 
@@ -611,8 +625,13 @@ export type SessionView = {
   statePending?: 'app-closed';
   /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
   resumable?: boolean;
-  /** Живая, статус waiting: с какого момента ждёт тебя (главная — «ждёт N мин»). */
+  /** Живая, статус waiting: с какого момента ход за человеком (главная — «ждёт N мин»). */
   waitingSince?: string;
+  /**
+   * Последний ход кончился вопросом или запросом разрешения: только такая сессия «ждёт тебя» (без ask статус waiting —
+   * просто закончила ход). У завершённой — «закончилась на вопросе».
+   */
+  ask?: SessionAsk;
   /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
   teamwork?: RunTeamworkLink;
 };

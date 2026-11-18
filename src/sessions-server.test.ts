@@ -9,7 +9,7 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { HomeEvent, SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager } from './sessions-server.js';
+import { LEGACY_RECORD_FILE, onSessionWaiting, SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, tagDir, updateTag } from './tags.js';
@@ -536,7 +536,7 @@ test('session_new: новая сессия из терминала — папк�
   for (const v of (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live)) await call('POST', `/api/sessions/${v.id}/end`);
 });
 
-test('сессия закончила ход: в общем потоке — событие session с именем и пространством, у сессии — с какого момента ждёт; запуск ходом не считается', async () => {
+test('сессия закончила ход вопросом: в общем потоке — событие session с именем и пространством, у сессии — с какого момента ждёт; простой конец хода и запуск не в счёт', async () => {
   const events: HomeEvent[] = [];
   const stream = new AbortController();
   const res = await fetch(`${base}/api/events`, { signal: stream.signal });
@@ -571,7 +571,11 @@ test('сессия закончила ход: в общем потоке — с�
     await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'почини', session_id: s.id });
     v = await view(s.id);
     assert.deepEqual([v.status, v.waitingSince], ['working', undefined]);
+    // просто закончил ход — ход за тобой, но без события: тревоги нет
     await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    assert.ok((await view(s.id)).waitingSince);
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'и коммит', session_id: s.id });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово, пушить?' });
     await until(() => sessionEvents().length > 0);
     assert.deepEqual(sessionEvents().map((e) => [e.runId, e.flow, e.session]), [['', '', { id: s.id, name: 'Корзина', space: 'wait-space' }]]);
     assert.ok((await view(s.id)).waitingSince);
@@ -582,7 +586,7 @@ test('сессия закончила ход: в общем потоке — с�
     await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'compact', session_id: s.id });
     await hook(s.id, token, { hook_event_name: 'PostToolBatch', session_id: s.id });
     assert.equal(sessionEvents().length, 1);
-    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово. Пушить?' });
     await until(() => sessionEvents().length === 2);
     // «Перезапустить» посреди хода: новый процесс начинает с SessionStart — события нет
     await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'ещё', session_id: s.id });
@@ -764,6 +768,96 @@ test('«Продолжить»: транскрипта нет — новый р�
   p.exit(0);
   await until(async () => !(await view(s.id)).live);
   assert.deepEqual([(await view(s.id)).exitCode, (await view(s.id)).endedBy], [0, undefined]);
+});
+
+test('«Продолжить» с первым сообщением: оно уходит в продолженный разговор последним аргументом; не строка — 400, сессия не запускается', async () => {
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+  let p = spawned.at(-1)!;
+  const tp = path.join(root, `${uuid(7)}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, tokenOf(p), { hook_event_name: 'SessionStart', session_id: uuid(7), transcript_path: tp });
+  p.exit(0);
+  await until(async () => (await view(s.id)).resumable === true);
+  const count = spawned.length;
+  const bad = await call<{ error: string }>('POST', `/api/sessions/${s.id}/continue`, { prompt: 42 });
+  assert.deepEqual([bad.status, spawned.length, (await view(s.id)).live], [400, count, false]);
+  assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, { prompt: '  да, коммить  ' })).status, 200);
+  p = spawned.at(-1)!;
+  assert.equal(p.args[0], `--resume=${uuid(7)}`);
+  assert.deepEqual(p.args.slice(-2), ['--', 'да, коммить']);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => !(await view(s.id)).live);
+  // разговор без транскрипта начинается заново: вопрос прошлого не переносится
+  const fresh = (await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') })).body;
+  await hook(fresh.id, tokenOf(spawned.at(-1)!), { hook_event_name: 'Stop', last_assistant_message: 'Так?' });
+  assert.equal((await view(fresh.id)).ask?.text, 'Так?');
+  spawned.at(-1)!.exit(0);
+  await until(async () => !(await view(fresh.id)).live);
+  await call('POST', `/api/sessions/${fresh.id}/continue`, {});
+  assert.equal((await view(fresh.id)).ask, undefined);
+  await call('POST', `/api/sessions/${fresh.id}/end`);
+  // пустое сообщение — как без него: claude ждёт пользователя
+  await call('POST', `/api/sessions/${s.id}/continue`, { prompt: '   ' });
+  assert.ok(!spawned.at(-1)!.args.includes('--'));
+  await call('POST', `/api/sessions/${s.id}/end`);
+});
+
+test('«ждёт ответа»: вопрос в ответе — в записи сессии и в ленте; простой конец хода — без вопроса и без события; ответ снимает вопрос', async () => {
+  const waits: string[] = [];
+  const off = onSessionWaiting((v) => waits.push(v.id));
+  try {
+    const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+    const token = tokenOf(spawned.at(-1)!);
+    const file = path.join(root, 'sessions', s.id, 'session.json');
+    await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: uuid(8) });
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'почини тест' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: uuid(8), last_assistant_message: 'Починил, тесты зелёные.' });
+    const idle = await view(s.id);
+    assert.deepEqual([idle.status, idle.ask, waits.length], ['waiting', undefined, 0]);
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'а теперь миграцию' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: uuid(8), last_assistant_message: 'Есть два пути.\n\nМигрировать сразу или по флагу?' });
+    const asked = await view(s.id);
+    assert.deepEqual([asked.status, asked.ask?.kind, asked.ask?.text, waits], ['waiting', 'question', 'Мигрировать сразу или по флагу?', [s.id]]);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).ask.text, 'Мигрировать сразу или по флагу?');
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'по флагу' });
+    assert.equal((await view(s.id)).ask, undefined);
+    assert.equal('ask' in JSON.parse(fs.readFileSync(file, 'utf8')), false);
+    // запрос разрешения посреди хода — тоже ждёт ответа
+    await hook(s.id, token, { hook_event_name: 'PermissionRequest', session_id: uuid(8), tool_name: 'Bash', tool_input: { command: 'rm -rf build' } });
+    const perm = await view(s.id);
+    assert.deepEqual([perm.status, perm.ask?.kind, perm.ask?.text, waits.length], ['waiting', 'permission', 'Bash: rm -rf build', 2]);
+    await call('POST', `/api/sessions/${s.id}/end`);
+    // завершённая — «закончилась на вопросе»: вопрос остаётся
+    await until(async () => !(await view(s.id)).live);
+    assert.equal((await view(s.id)).ask?.text, 'Bash: rm -rf build');
+  } finally {
+    off();
+  }
+});
+
+test('«ждёт ответа» переживает закрытие приложения: после перезапуска сервера завершённая сессия — с вопросом и временем; испорченный вопрос в файле отбрасывается', async () => {
+  const dir = path.join(root, 'sessions-ask');
+  const deps = { ...sessionManager().deps, dir };
+  const mgr = new SessionManager(deps);
+  await mgr.available();
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), saveState: false }, port, root);
+  const live = mgr.sessions.get(v.id)!;
+  const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
+  mgr.hook(live, { hook_event_name: 'SessionStart', session_id: uuid(9) }, res);
+  mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(9), prompt: 'сделай' }, res);
+  mgr.hook(live, { hook_event_name: 'Stop', session_id: uuid(9), last_assistant_message: 'Так делать или иначе?' }, res);
+  const at = mgr.view(live).ask?.at;
+  assert.ok(at);
+  await mgr.stopAll(1000);
+  const broken = uuid(10);
+  fs.mkdirSync(path.join(dir, broken));
+  fs.writeFileSync(path.join(dir, broken, 'session.json'), JSON.stringify({ id: broken, name: 'x', cwd: root, tags: [], saveState: false, claudeSessionIds: [], createdAt: at, lastActivityAt: at, endedAt: at, turns: 1, ask: { kind: 'boom', text: 1 } }));
+  const next = new SessionManager(deps);
+  await next.available();
+  const list = next.list().sessions;
+  const back = list.find((x) => x.id === v.id)!;
+  assert.deepEqual([back.live, back.status, back.endedBy, back.ask], [false, 'ended', 'app', { kind: 'question', text: 'Так делать или иначе?', at }]);
+  assert.equal(list.find((x) => x.id === broken)!.ask, undefined);
 });
 
 test('«Перезапустить»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками (пространство на ходу — в --add-dir), состояние не пишется', async () => {

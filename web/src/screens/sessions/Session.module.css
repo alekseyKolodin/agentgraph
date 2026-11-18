@@ -91,3 +91,11 @@ button.cwd:hover { color: var(--ink); background: var(--hover); }
 .loading { margin: 0; }
 /* «Сессия не найдена» / «не открылась»: действия по центру, как и текст .empty */
 .fail-acts { justify-content: center; }
+
+/* ход закончен без вопроса: точка залита серым — жива, но без тревоги («ждёт тебя» — только с вопросом) */
+.status.idle .dot { background: var(--ink-3); border-color: var(--ink-3); }
+/* карточка завершённой на вопросе: что спросил Claude и поле первого сообщения «Продолжить» */
+.ask { padding: 8px 12px; border-left: 2px solid var(--st-wait); background: color-mix(in srgb, var(--st-wait) 8%, transparent); border-radius: var(--r-xs); font-size: var(--fs-small); overflow-wrap: anywhere; }
+.ask-label { display: block; font-size: var(--fs-meta); color: var(--st-wait); margin-bottom: 2px; }
+.prompt { width: 100%; box-sizing: border-box; min-height: 64px; max-height: 200px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--well); color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.prompt:focus { outline: none; border-color: var(--live); }
