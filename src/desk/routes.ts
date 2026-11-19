@@ -4,11 +4,11 @@ import { randomBytes } from 'node:crypto';
 import { readSpaceMeta, spaceSlug } from '../spaces.js';
 import { settingsJiraHosts, thingLabel, thingOfUrl } from '../things/resolve.js';
 import { deskCheck } from './check.js';
-import { isColumn } from './rules.js';
+import { isColumn, RELINK_WHY } from './rules.js';
 import { canonicalKey, resolveThing } from './tools.js';
 import { DAYS_MAX, deskWeek, STALE_DAYS, WEEK_DAYS } from './week.js';
 import type { DeskStore } from './store.js';
-import type { DeskCheckReply, DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
+import type { DeskCheckReply, DeskColumn, DeskFilter, DeskItemReply, DeskListReply, DeskMove, DeskPatch } from './types.js';
 
 export type Reply = { status: number; body: unknown };
 
@@ -85,6 +85,27 @@ function patchOf(v: unknown): DeskPatch {
   return out;
 }
 
+/** Сколько движений отдаём в подробностях дела: журнал короче LOG_KEEP, но одно дело столько не наберёт. */
+const MOVES_MAX = 200;
+
+/** Движения дела: свои и своего дела, из которого оно переехало (RELINK_WHY → ключ), по цепочке; старые сверху. */
+export function movesOf(log: readonly DeskMove[], key: string): DeskMove[] {
+  const keys = new Set([key]);
+  // цепочка переездов: дело вещи ← своё дело; журнал идёт по времени, но обходим до неподвижной точки
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const m of log) {
+      if (!keys.has(m.key) || !m.why?.startsWith(RELINK_WHY)) continue;
+      const from = m.why.slice(RELINK_WHY.length).trim();
+      if (from && !keys.has(from)) {
+        keys.add(from);
+        grew = true;
+      }
+    }
+  }
+  return log.filter((m) => keys.has(m.key)).sort((a, b) => a.at.localeCompare(b.at)).slice(-MOVES_MAX);
+}
+
 function filterOf(q: URLSearchParams): DeskFilter {
   const f: DeskFilter = {};
   const cols = (q.get('column') ?? '').split(',').filter(isColumn) as DeskColumn[];
@@ -112,6 +133,13 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
       return Number.isInteger(v) && v >= 1 && v <= DAYS_MAX ? v : d;
     };
     return ok(deskWeek(await store.list({}), store.readLog(), (deps.now ?? (() => new Date()))(), { days: n('days', WEEK_DAYS), staleDays: n('stale', STALE_DAYS) }));
+  }
+  if (p === '/api/desk/item' && method === 'GET') {
+    const key = keyOf(url.searchParams.get('key'));
+    if (!key) return bad('key: ключ вещи вида тип:…');
+    const item = await store.get(key);
+    if (!item) return bad('Дела нет', 404);
+    return ok({ item, moves: movesOf(store.readLog(), key) } satisfies DeskItemReply);
   }
   if (p === '/api/desk/check' && method === 'GET') {
     return ok(deps.check ? deps.check() : deskCheck({ watcher: store.readCheck(), startedAt: PROCESS_STARTED }));

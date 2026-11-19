@@ -38,6 +38,7 @@ import { decide, isSent, undo, useDecisions } from '../routineDecisions';
 import { FlowPicker, pickerAt, type PickerState } from '../FlowPicker';
 import { DeskCard, type CardActions } from './DeskCard';
 import { DeskColumn } from './DeskColumn';
+import { DeskDetail } from './DeskDetail';
 import { DeskTop } from './DeskTop';
 import styles from './Desk.module.css';
 
@@ -47,6 +48,8 @@ function projectTone(slug: string): number {
   for (const ch of slug) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return (h % 8) + 1;
 }
+
+const cx = (...c: Array<string | false | undefined>) => c.filter(Boolean).join(' ');
 
 /** Точка подсказки пустой доски — цвет сверки (не проверялось — серая). */
 const QUIET_TONE: Record<CheckTone, string | undefined> = { ok: styles.toneOk, wait: styles.toneWait, fail: styles.toneFail, off: undefined };
@@ -92,6 +95,8 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   const [dragging, setDragging] = useState<string>();
   const [picker, setPicker] = useState<PickerState>(null);
   const [said, setSaid] = useState('');
+  /** Ключ дела, подробности которого открыты справа. */
+  const [openKey, setOpenKey] = useState<string>();
   const focusKey = useRef<string | null>(null);
   const follow = useRef<{ key: string; el: HTMLElement | null; until: number } | null>(null);
   const seq = useRef(0);
@@ -264,6 +269,21 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   };
 
   const byKey = new Map(all.map((i) => [i.key, i]));
+  const detailItem = openKey ? byKey.get(openKey) : undefined;
+  const detailCtx = {
+    routineTitle: (slug: string) => routines.data?.routines.find((r) => r.slug === slug)?.spec.title,
+    runTitle: (id: string) => {
+      const r = runs.find((x) => x.id === id);
+      return r ? r.title || r.flow : undefined;
+    },
+    sessionName: (id: string) => sessions.find((s) => s.id === id)?.name,
+    projectTitle: (slug: string) => spaceTitle.get(slug),
+  };
+  /** Закрыть подробности: фокус — на карточку (после перерисовки). */
+  const closeDetail = () => {
+    if (openKey) focusKey.current = openKey;
+    setOpenKey(undefined);
+  };
   // ни одного открытого дела, но рутины есть (ни дел, ни рутин — Главная ведёт к шаблонам сама, DeskEmpty): почему пусто —
   // словами сверки. Пока рутины грузятся — молчим, чтобы не мигать
   const quiet = !open.data.items.length && (!routinesOn || (routines.data !== undefined && routines.data.routines.length > 0)) ? quietBoard(check.data, new Date(now)) : undefined;
@@ -280,6 +300,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
           <Link className="btn small ghost" to="/routines">{t('Шаблоны рутин')}</Link>
         </section>
       )}
+      <div className={cx(styles.split, detailItem && styles.hasPanel)}>
       <div className={styles.scroll}>
         <div className={styles.cols}>
           {view.columns.map((col) => (
@@ -310,12 +331,27 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
                     decided={decidedKeys.has(i.key)}
                     act={actions(i)}
                     drag={{ dragging: dragging === i.key, start: () => setDragging(i.key), end: () => setDragging(undefined) }}
+                    selected={openKey === i.key}
+                    onOpen={() => setOpenKey(i.key)}
                   />
                 );
               })}
             </DeskColumn>
           ))}
         </div>
+      </div>
+      {detailItem && (
+        <DeskDetail
+          item={detailItem}
+          now={now}
+          ctx={detailCtx}
+          session={related.get(detailItem.key)?.sessions[0]}
+          wait={deskWaitOf(detailItem.key, waits)}
+          decided={decidedKeys.has(detailItem.key)}
+          act={actions(detailItem)}
+          onClose={closeDetail}
+        />
+      )}
       </div>
       <p className={styles.sr} aria-live="polite">{said}</p>
       <FlowPicker state={picker} onClose={() => setPicker(null)} />

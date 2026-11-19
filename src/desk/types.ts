@@ -139,6 +139,7 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  * HTTP (src/server.ts → src/desk/routes.ts):
  *   GET  /api/desk?column=&project=&open=1  → { items: DeskItem[]; check: CheckResult }
  *   GET  /api/desk/week?days=7&stale=7       → DeskWeekReply (обзор недели, src/desk/week.ts)
+ *   GET  /api/desk/item?key=…                → DeskItemReply (дело и его история из журнала — подробности карточки)
  *   POST /api/desk/put   { key, patch }     → DeskItem         (by: 'me')
  *   POST /api/desk/move  { key, column }    → DeskItem
  *   POST /api/desk/close { key, reason }    → DeskItem
@@ -146,6 +147,12 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  * Изменения доски приходят в общий поток событий как { type: 'desk' }.
  */
 export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
+
+/**
+ * GET /api/desk/item?key=…: дело целиком и его движения из журнала log.jsonl (старые сверху; журнал обрезается, поэтому
+ * начала может не быть). Дело, переехавшее со своего (relink), несёт и движения своего — у них другой key.
+ */
+export type DeskItemReply = { item: DeskItem; moves: DeskMove[] };
 
 /** GET /api/desk: дела по фильтру и итог последней сверки (нет — сверки ещё не было). */
 export type DeskListReply = { items: DeskItem[]; check?: CheckResult };

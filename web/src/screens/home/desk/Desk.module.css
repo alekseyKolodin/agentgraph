@@ -105,3 +105,50 @@ a.title:hover { color: var(--act-hover); text-decoration: underline; }
 @container (max-width: 640px) {
   .cols { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* подробности дела: справа от доски, пока места хватает; уже — лист поверх (доска остаётся под ним) */
+.card.selected { border-color: var(--live); box-shadow: 0 0 0 1px var(--live); }
+.split.has-panel { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain; }
+.d-top { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.d-title { margin: 0; font-size: var(--fs-h3); font-weight: 600; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.d-title:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-xs); }
+.d-why { margin: 0; font-size: var(--fs-small); color: var(--ink-2); overflow-wrap: anywhere; }
+.d-open { font-size: var(--fs-small); color: var(--ink-2); }
+.d-open:hover { color: var(--act-hover); }
+.d-acts { padding-bottom: 2px; }
+.d-sec { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); min-width: 0; }
+.d-h { margin: 0; font-size: var(--fs-meta); font-weight: 600; color: var(--ink-2); }
+.d-cols { display: flex; gap: 4px; flex-wrap: wrap; }
+.d-cols :global(.btn) { min-height: 26px; padding: 3px 8px; }
+.d-cur { color: var(--ink); border-color: var(--line-strong); }
+.d-from { margin: 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: var(--fs-small); color: var(--ink); }
+.d-from b { font-weight: 600; }
+.d-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-small); overflow-wrap: anywhere; }
+.d-list a, .d-signal a, .d-ev a, .d-rows a { color: var(--ink-2); text-decoration: none; }
+.d-list a:hover, .d-signal a:hover, .d-ev a:hover, .d-rows a:hover { color: var(--ink); text-decoration: underline; }
+.d-kind { font-size: var(--fs-meta); color: var(--ink-3); }
+.d-signal { margin: 0; padding: 8px 10px; background: var(--well); border-radius: var(--r-sm); display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-small); color: var(--ink-2); min-width: 0; }
+.d-signal p { margin: 0; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.d-signal a { font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.d-signal-head { display: flex; gap: 8px; justify-content: space-between; flex-wrap: wrap; font-size: var(--fs-meta); }
+.d-mute { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); }
+.d-mute.err { color: var(--st-fail); }
+.d-rows { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.d-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; font-size: var(--fs-small); }
+.d-row dt { color: var(--ink-3); font-size: var(--fs-meta); line-height: 1.6; }
+.d-row dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.d-tl { list-style: none; margin: 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 12px; border-left: 1px solid var(--line-strong); }
+.d-ev { position: relative; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-small); min-width: 0; }
+.d-ev::before { content: ''; position: absolute; left: -18px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+.d-ev-signal::before { background: var(--live); }
+.d-ev-head { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+.d-ev-head b { font-weight: 600; color: var(--ink); }
+.d-ev-body { display: flex; gap: 6px; flex-wrap: wrap; color: var(--ink-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+.d-who { color: var(--ink-3); }
+.d-who::after { content: ' ·'; }
+
+@container (max-width: 900px) {
+  .split.has-panel { display: block; }
+  .panel { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); max-height: none; border-radius: var(--r-lg) 0 0 var(--r-lg); border-right: 0; box-shadow: var(--shadow-pop); }
+}
