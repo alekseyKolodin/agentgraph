@@ -13,7 +13,7 @@ export const THINGS_MAX = 20;
 
 const JIRA_KEY = /^[A-Z][A-Z0-9_]+-[1-9]\d*$/;
 /** Похоже на ключ задачи, но это стандарт, кодировка или модель: UTF-8, ISO-8601, SHA-256, GPT-4, CVE-2024… */
-const NOT_JIRA = new Set(['UTF', 'ISO', 'SHA', 'MD', 'RFC', 'CVE', 'CWE', 'GPT', 'COVID', 'TLS', 'SSL', 'HTTP', 'HTTPS', 'IPV', 'AES', 'RSA', 'PEP', 'ES', 'ECMA', 'IEEE', 'IEC', 'ANSI', 'WCAG', 'CP', 'KOI', 'WIN', 'ARM', 'MP', 'AVX', 'SSE', 'DDR', 'LPDDR', 'PCI', 'USB', 'HDMI', 'UTC', 'GMT', 'EN', 'DIN', 'BASE', 'TOP', 'NO', 'OAUTH', 'IE', 'AI', 'ML', 'LLM', 'IOS', 'FY']);
+const NOT_JIRA = new Set(['UTF', 'ISO', 'SHA', 'MD', 'RFC', 'CVE', 'CWE', 'GPT', 'COVID', 'TLS', 'SSL', 'HTTP', 'HTTPS', 'IPV', 'AES', 'RSA', 'PEP', 'ES', 'ECMA', 'IEEE', 'IEC', 'ANSI', 'WCAG', 'CP', 'KOI', 'WIN', 'ARM', 'MP', 'AVX', 'SSE', 'DDR', 'LPDDR', 'PCI', 'USB', 'HDMI', 'UTC', 'GMT', 'EN', 'DIN', 'BASE', 'TOP', 'NO', 'OAUTH', 'IE', 'AI', 'ML', 'LLM', 'IOS', 'FY', 'Q1', 'Q2', 'Q3', 'Q4', 'PR', 'MR']);
 /** Кварталы и полугодия (Q3-2024, H1-2025) — не задачи. */
 const PERIOD = /^(Q[1-4]|H[12])$/;
 
@@ -78,9 +78,19 @@ export function thingOfUrl(raw: string, jiraHosts: readonly string[] = []): Thin
     // …/issues/ABC-12 и очереди Service Management (…/queues/custom/1/ABC-12)
     const inPath = /\/(?:issues\/|queues\/(?:[^/]+\/)*)([A-Z][A-Z0-9_]+-[1-9]\d*)\/?$/.exec(path)?.[1];
     const key = [u.searchParams.get('selectedIssue'), /\/browse\/([A-Za-z][A-Za-z0-9_]+-[1-9]\d*)\/?$/.exec(path)?.[1], inPath].map((k) => k?.toUpperCase()).find((k) => k && JIRA_KEY.test(k));
-    if (key) return jiraThing({ host, key, url: `${origin}/browse/${key}` });
+    if (key) return jiraThing({ host, key, url: `${origin}${jiraContext(host, path)}/browse/${key}` });
   }
   return undefined;
+}
+
+/** Разделы Jira Server/Data Center: всё, что до них в пути, — путь контекста (https://x/jira/browse/ABC-1 → /jira). */
+const JIRA_SECTIONS = ['/browse/', '/secure/', '/projects/', '/servicedesk/', '/plugins/'];
+
+/** Путь контекста Jira Server по адресу; у Jira Cloud его нет (/jira/software/… — часть приложения, задачи — в /browse/). */
+function jiraContext(host: string, path: string): string {
+  if (host.endsWith('.atlassian.net')) return '';
+  const at = JIRA_SECTIONS.map((s) => path.indexOf(s)).filter((i) => i >= 0);
+  return at.length ? path.slice(0, Math.min(...at)).replace(/\/+$/, '') : '';
 }
 
 /** Ключи ABC-12 в тексте (без адресов): только когда хост Jira один — иначе не знаем, чья это задача. */

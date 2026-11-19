@@ -197,16 +197,17 @@ test('GitLab: версия ревью в id — обновление (новые
   // автор запросил ревью снова — новый todo
   st.todos = [{ id: 11, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' }, created_at: '2026-11-17T13:00:00Z' }];
   const again = (await kind.poll!(ctx))[0];
-  assert.deepEqual([again.id, again.fields.event, again.fields.again, again.at], [`review:${url}@2`, 'review', true, '2026-11-17T13:00:00Z']);
+  assert.deepEqual([again.id, again.fields.event, again.fields.again, again.at], [`review:${url}@t11`, 'review', true, '2026-11-17T13:00:00Z']);
   assert.match(again.title, /^Ревью снова: grp\/repo!5/);
   // todo закрыли — не новый запрос
   st.todos = [];
-  assert.deepEqual((await ids())[0][0], `review:${url}@2`);
+  assert.deepEqual((await ids())[0][0], `review:${url}@t11`);
   // меня сняли с ревьюеров и вернули — тоже запрос снова
   st.list = false;
   assert.deepEqual(await ids(), []);
   st.list = true;
-  assert.deepEqual((await ids())[0].slice(0, 3), [`review:${url}@3`, 'review', true]);
+  // метка — время обновления MR (todo нет); то же время, что у прошлого запроса, — всё равно новый id
+  assert.deepEqual((await ids())[0].slice(0, 3), [`review:${url}@u20261117120000`, 'review', true]);
 });
 
 test('GitLab: todo «review_requested» не отдался (старый GitLab) — опрос идёт, запрос снова не выдумывается', async () => {
@@ -255,7 +256,7 @@ test('GitHub: PR вернулся в список ревью — запрос с
   st.list = false;
   assert.equal(await first(), undefined);
   st.list = true;
-  assert.equal(await first(), `review:${url}@2`);
+  assert.equal(await first(), `review:${url}@u20261117120000`);
 });
 
 test('комментарии к MR: за опрос — одно событие из новых; новых нет — то же событие; все новые мои — «своё»', async () => {
@@ -346,7 +347,7 @@ test('GitLab: todo исходного запроса пришёл позже п�
   todos = [{ id: 20, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' }, created_at: new Date(Date.now() + 30_000).toISOString() }];
   assert.equal(await id(), `review:${url}`);
   todos = [{ id: 21, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' }, created_at: new Date(Date.now() + 30 * 60_000).toISOString() }];
-  assert.equal(await id(), `review:${url}@2`);
+  assert.equal(await id(), `review:${url}@t21`);
 });
 
 test('GitLab с корнем не в «/»: ключ вещи — по веб-адресу (как у ссылки в чате), путь для API — из ответа', async () => {
@@ -406,4 +407,45 @@ test('комментарии: MR впервые в курсоре — стары
   const ids = (ctx.cursorValue() as { notes: Record<string, { ids: string[] }> }).notes['grp/repo!9'].ids;
   assert.ok(ids.includes('7') && ids.includes('8'));
   assert.equal(ids.length, 40);
+});
+
+test('MR, вытесненный из курсора и вернувшийся в ревью, получает id с меткой, а не уже виденный review:<адрес>', async () => {
+  const url = 'https://gitlab.test/grp/repo/-/merge_requests/5';
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/reviewer_username=me/.test(line)) return JSON.stringify([glMr(5, { sha: 'aaa', updated_at: '2026-11-18T09:30:00Z' })]);
+    if (/review_requested/.test(line)) return JSON.stringify([{ id: 99, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' } }]);
+    return '[]';
+  };
+  // курсор уже работал (прошлый опрос был), а этого MR в нём нет — вытеснен
+  const ctx = gitlabCtx('gl-evicted.test');
+  ctx.cursor.set({ reviews: { 'https://gitlab.test/other/-/merge_requests/1': { req: 1, id: 'review:x', kind: 'review' } }, notes: {}, at: '2026-11-18T09:00:00Z' });
+  const [e] = await gitlabKind(x).poll!(ctx);
+  assert.equal(e.id, `review:${url}@t99`);
+  // самый первый опрос источника — как раньше, без метки
+  assert.equal((await gitlabKind(x).poll!(gitlabCtx('gl-fresh.test')))[0].id, `review:${url}`);
+});
+
+test('MR из форка: ветку не отдаём (она в другом репо), fields.fork = true', async () => {
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/reviewer_username=me/.test(line))
+      return JSON.stringify([glMr(5, { source_branch: 'feat', source_project_id: 7, target_project_id: 3 }), glMr(6, { source_branch: 'fix', source_project_id: 3, target_project_id: 3 })]);
+    return '[]';
+  };
+  const [fork, own] = await gitlabKind(x).poll!(gitlabCtx('gl-fork.test'));
+  assert.deepEqual([fork.fields.fork, fork.fields.branch], [true, undefined]);
+  assert.deepEqual([own.fields.fork, own.fields.branch], [undefined, 'fix']);
+  // GitHub: голова PR из другого репо
+  const gx: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/gh-fork\.test user$/.test(line)) return JSON.stringify({ login: 'me' });
+    if (/review-requested:me/.test(line)) return JSON.stringify({ items: [ghItem(1)] });
+    if (/pulls\/1$/.test(line)) return JSON.stringify({ head: { sha: 's1', repo: { full_name: 'dave/r' } }, base: { repo: { full_name: 'o/r' } } });
+    return JSON.stringify({ items: [] });
+  };
+  const [pr] = await githubKind(gx).poll!(makeCtx({ slug: 'gh', kind: 'github', config: { host: 'gh-fork.test' } }));
+  assert.equal(pr.fields.fork, true);
 });

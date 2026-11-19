@@ -2,8 +2,10 @@
 // упоминания, новые комментарии к моим MR/PR — одним событием на MR за опрос. Ответ — комментарий в MR/PR. Внешние
 // команды — через Exec из git.ts (в тестах подменяется).
 //
-// Версия в id ревью (курсор источника помнит каждый MR): первый запрос — review:<адрес> (как раньше), ревью запрошено
-// снова — review:<адрес>@<номер запроса>, новые коммиты, пока я ревьюер, — update:<адрес>@<head sha>. «Снова» — MR
+// Версия в id ревью (курсор источника помнит каждый MR): запрос — review:<адрес>@<метка запроса> (todo t<id> или время
+// u<updated_at>; без метки, как раньше, — только в самый первый опрос источника, чтобы после обновления ничего не пришло
+// заново), новые коммиты, пока я ревьюер, — update:<адрес>@<head sha>. Метка, а не номер: MR, вытесненный из курсора
+// и вернувшийся в ревью, не получит уже виденный движком id. «Снова» — MR
 // вернулся в мой список ревью (GitHub снимает ревьюера после ревью) или в GitLab появился новый todo «review_requested».
 // Версия вещи MR у событий (thing.ref.version, правило повтора рутин): у запроса — его id; у обновления и упоминания MR,
 // где я ревьюер, — id текущего запроса: новые коммиты и «@me» в том же MR — не новая просьба, сутки после ревью это повтор.
@@ -39,7 +41,7 @@ const KIND_LABEL: Record<Kind, string> = { review: 'Ревью', update: 'Обн
  * Что курсор помнит о MR в моём списке ревью: номер запроса, head sha, todo запроса (0 — запроса в todo не было,
  * нет поля — не знаем), когда увидели впервые, ушёл ли MR из списка; что отдали.
  */
-type ReviewMem = { req: number; sha?: string; upd?: string; todo?: number; seen?: string; gone?: boolean; id: string; kind: 'review' | 'update' };
+type ReviewMem = { req: number; sha?: string; upd?: string; todo?: number; seen?: string; gone?: boolean; id: string; kind: 'review' | 'update'; /** id текущего запроса — версия вещи у обновлений и упоминаний. */ rid?: string; /** MR из форка (ветка — не в этом репо). */ fork?: boolean };
 /** Виденные id комментариев MR и id последнего события-пачки. */
 type NotesMem = { ids: string[]; last?: string };
 /** at — время прошлого опроса. */
@@ -51,8 +53,11 @@ function readCursor(ctx: SourceCtx): Cursor {
   return { reviews: { ...obj(c?.reviews) }, notes: { ...obj(c?.notes) }, ...(typeof c?.at === 'string' ? { at: c.at } : {}) };
 }
 
-/** id запроса ревью с номером req — версия вещи MR, пока запрос тот же. */
-const requestId = (url: string, req: number): string => (req > 1 ? `review:${url}@${req}` : `review:${url}`);
+/** id текущего запроса ревью — версия вещи MR, пока запрос тот же (у старых записей курсора без rid — по номеру). */
+const requestId = (m: ReviewMem, url: string): string => m.rid ?? (m.req > 1 ? `review:${url}@${m.req}` : `review:${url}`);
+
+/** Метка запроса: todo запроса (GitLab), иначе время обновления MR, иначе сейчас. Свежий запрос — новая метка. */
+const stampOf = (todo?: number, at?: string): string => (todo ? `t${todo}` : at && /\d/.test(at) ? `u${at.replace(/\D/g, '').slice(0, 14)}` : `n${Date.now()}`);
 
 /** Запись в конец (самые свежие — последними) и не больше max записей. */
 function remember<T>(map: Record<string, T>, key: string, value: T, max = CURSOR_MRS): void {
@@ -68,21 +73,32 @@ function remember<T>(map: Record<string, T>, key: string, value: T, max = CURSOR
  * в список или новый todo: id больше известного, а если todo раньше не было — создан позже TODO_GRACE_MS после первого
  * взгляда (GitLab создаёт todo исходного запроса не сразу, опрос может успеть раньше).
  */
-export function nextReview(prev: ReviewMem | undefined, url: string, cur: { sha?: string; upd?: string; todo?: number; todoAt?: string; now?: string }): ReviewMem {
+export function nextReview(
+  prev: ReviewMem | undefined,
+  url: string,
+  cur: { sha?: string; upd?: string; todo?: number; todoAt?: string; now?: string; /** Время обновления MR — для метки запроса. */ at?: string; /** Самый первый опрос источника: id без метки, как раньше. */ first?: boolean },
+): ReviewMem {
   const todo = cur.todo === undefined ? prev?.todo : Math.max(prev?.todo ?? 0, cur.todo);
-  if (!prev) return strip({ req: 1, sha: cur.sha, upd: cur.upd, todo, seen: cur.now, id: requestId(url, 1), kind: 'review' as const });
+  if (!prev) {
+    const id = cur.first ? `review:${url}` : `review:${url}@${stampOf(cur.todo, cur.at ?? cur.upd)}`;
+    return strip({ req: 1, sha: cur.sha, upd: cur.upd, todo, seen: cur.now, id, rid: id, kind: 'review' as const });
+  }
   const newTodo =
     cur.todo !== undefined &&
     cur.todo > 0 &&
     prev.todo !== undefined &&
     (prev.todo > 0 ? cur.todo > prev.todo : Boolean(prev.seen && cur.todoAt && Date.parse(cur.todoAt) > Date.parse(prev.seen) + TODO_GRACE_MS));
-  const keep = { seen: prev.seen ?? cur.now };
+  const keep = { seen: prev.seen ?? cur.now, ...(prev.fork ? { fork: true } : {}) };
+  const rid = requestId(prev, url);
   if (prev.gone === true || newTodo) {
     const req = prev.req + 1;
-    return strip({ req, sha: cur.sha ?? prev.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id: requestId(url, req), kind: 'review' as const });
+    let id = `review:${url}@${stampOf(newTodo ? cur.todo : undefined, cur.at ?? cur.upd)}`;
+    // метка совпала с прошлым запросом (время не сдвинулось) — всё равно новый запрос
+    if (id === rid) id = `${id}.${req}`;
+    return strip({ req, sha: cur.sha ?? prev.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id, rid: id, kind: 'review' as const });
   }
-  if (cur.sha && prev.sha && cur.sha !== prev.sha) return strip({ req: prev.req, sha: cur.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id: `update:${url}@${cur.sha.slice(0, 12)}`, kind: 'update' as const });
-  return strip({ req: prev.req, sha: prev.sha ?? cur.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id: prev.id, kind: prev.kind });
+  if (cur.sha && prev.sha && cur.sha !== prev.sha) return strip({ req: prev.req, sha: cur.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id: `update:${url}@${cur.sha.slice(0, 12)}`, rid, kind: 'update' as const });
+  return strip({ req: prev.req, sha: prev.sha ?? cur.sha, upd: cur.upd ?? prev.upd, todo, ...keep, id: prev.id, rid, kind: prev.kind });
 }
 
 /** MR, которых нет в полном списке ревью, — ушли из него: вернутся — «ревью запрошено снова». Неполный список — не знаем. */
@@ -190,7 +206,7 @@ function reviewEvent(ctx: SourceCtx, forge: Forge, host: string, me: string, m: 
     kind: m.kind,
     id: m.id,
     mrUrl: e.link,
-    version: requestId(e.link, m.req),
+    version: requestId(m, e.link),
     ...(again ? { label: 'Ревью снова' } : {}),
     // запрос снова и обновление случились сейчас, а не когда MR открыли
     at: again ? (e.requestAt ?? e.updatedAt ?? e.at) : m.kind === 'update' ? (e.updatedAt ?? e.at) : e.at,
@@ -200,7 +216,10 @@ function reviewEvent(ctx: SourceCtx, forge: Forge, host: string, me: string, m: 
 
 // ---------------------------------------------------------------- GitLab
 
-type GlMr = { iid: number; title?: string; description?: string | null; web_url: string; updated_at?: string; created_at?: string; author?: { username?: string }; draft?: boolean; source_branch?: string; target_branch?: string; project_id?: number; references?: { full?: string }; sha?: string };
+type GlMr = { iid: number; title?: string; description?: string | null; web_url: string; updated_at?: string; created_at?: string; author?: { username?: string }; draft?: boolean; source_branch?: string; target_branch?: string; project_id?: number; source_project_id?: number; target_project_id?: number; references?: { full?: string }; sha?: string };
+
+/** MR из форка: ветка source_branch живёт в другом репо — её не отдаём (work-links не должен искать её в этом). */
+const glFork = (mr: GlMr): boolean => typeof mr.source_project_id === 'number' && typeof mr.target_project_id === 'number' && mr.source_project_id !== mr.target_project_id;
 type GlNote = { id: number; body?: string; system?: boolean; created_at?: string; author?: { username?: string } };
 type GlTodo = { id: number; action_name?: string; body?: string; target_url?: string; created_at?: string; author?: { username?: string }; target?: { iid?: number; title?: string }; project?: { path_with_namespace?: string }; target_type?: string };
 
@@ -237,13 +256,15 @@ async function gitlabEvents(ctx: SourceCtx, x: Exec): Promise<RoutineEvent[]> {
     ctx.log(`GitLab: запросы ревью из todo не получены: ${(err as Error).message}`);
   }
   const present = new Set<string>();
+  const first = cur.at === undefined && !Object.keys(cur.reviews).length;
   for (const mr of review) {
     const p = glProject(mr) || project || '';
     present.add(mr.web_url);
     const req = requests?.get(`${p}!${mr.iid}`);
-    const m = nextReview(cur.reviews[mr.web_url], mr.web_url, { sha: mr.sha, upd: mr.updated_at, todo: requests ? (req?.id ?? 0) : undefined, todoAt: req?.at, now: new Date().toISOString() });
+    const m = nextReview(cur.reviews[mr.web_url], mr.web_url, { sha: mr.sha, upd: mr.updated_at, at: mr.updated_at, todo: requests ? (req?.id ?? 0) : undefined, todoAt: req?.at, now: new Date().toISOString(), first });
     remember(cur.reviews, mr.web_url, m);
-    out.push(reviewEvent(ctx, 'gitlab', host, me, m, { at: mr.created_at ?? mr.updated_at, updatedAt: mr.updated_at, requestAt: req?.at, title: mr.title ?? '', text: mr.description ?? '', link: mr.web_url, author: mr.author?.username ?? '', project: p, number: mr.iid, extra: { draft: Boolean(mr.draft), branch: mr.source_branch ?? '', target_branch: mr.target_branch ?? '' } }));
+    const where = glFork(mr) ? { fork: true } : { branch: mr.source_branch ?? '' };
+    out.push(reviewEvent(ctx, 'gitlab', host, me, m, { at: mr.created_at ?? mr.updated_at, updatedAt: mr.updated_at, requestAt: req?.at, title: mr.title ?? '', text: mr.description ?? '', link: mr.web_url, author: mr.author?.username ?? '', project: p, number: mr.iid, extra: { draft: Boolean(mr.draft), ...where, target_branch: mr.target_branch ?? '' } }));
   }
   markGone(cur.reviews, present, review.length < REVIEW_PAGE);
   // 2. упоминания — список дел
@@ -256,7 +277,7 @@ async function gitlabEvents(ctx: SourceCtx, x: Exec): Promise<RoutineEvent[]> {
     const number = type === 'Issue' || type === 'MergeRequest' ? (t.target?.iid ?? 0) : 0;
     const mrUrl = type === 'MergeRequest' ? (t.target_url ?? '').replace(/#.*$/, '') : undefined;
     const asked = mrUrl ? cur.reviews[mrUrl] : undefined;
-    out.push(toEvent(ctx, 'gitlab', host, me, { kind: 'mention', id: `mention:${t.id}`, at: t.created_at, title: t.target?.title ?? t.body ?? '', text: t.body ?? '', link: t.target_url ?? '', author: t.author?.username ?? '', project: p, number, issue: type === 'Issue', ...(mrUrl ? { mrUrl } : {}), ...(asked && !asked.gone ? { version: requestId(mrUrl!, asked.req) } : {}) }));
+    out.push(toEvent(ctx, 'gitlab', host, me, { kind: 'mention', id: `mention:${t.id}`, at: t.created_at, title: t.target?.title ?? t.body ?? '', text: t.body ?? '', link: t.target_url ?? '', author: t.author?.username ?? '', project: p, number, issue: type === 'Issue', ...(mrUrl ? { mrUrl } : {}), ...(asked && !asked.gone ? { version: requestId(asked, mrUrl!) } : {}) }));
   }
   // 3. новые комментарии к моим открытым MR
   const mine = await glApi<GlMr[]>(x, host, [`${scope}?state=opened&scope=all&author_username=${encodeURIComponent(me)}&per_page=${MY_MR_LIMIT}&order_by=updated_at`]);
@@ -289,7 +310,7 @@ async function gitlabReply(x: Exec, target: Record<string, unknown> | undefined,
 // ---------------------------------------------------------------- GitHub
 
 type GhItem = { number: number; comments?: number; title?: string; body?: string | null; html_url: string; updated_at?: string; created_at?: string; user?: { login?: string }; repository_url?: string; draft?: boolean; pull_request?: unknown };
-type GhPull = { head?: { sha?: string } };
+type GhPull = { head?: { sha?: string; repo?: { full_name?: string } | null }; base?: { repo?: { full_name?: string } } };
 type GhComment = { id: number; body?: string; html_url?: string; created_at?: string; user?: { login?: string } };
 
 const repoOf = (item: GhItem): string => item.repository_url?.replace(/^.*\/repos\//, '') ?? '';
@@ -327,30 +348,38 @@ async function githubEvents(ctx: SourceCtx, x: Exec): Promise<RoutineEvent[]> {
   // в поиске нет — берём его отдельно, только у PR, которые обновились (updated_at), и не больше SHA_FETCH_MAX за опрос
   const review = await search(`is:pr+is:open+review-requested:${me}`);
   const present = new Set<string>();
+  const first = cur.at === undefined && !Object.keys(cur.reviews).length;
   let fetches = 0;
   for (const pr of review) {
     const repo = repoOf(pr);
     present.add(pr.html_url);
     const prev = cur.reviews[pr.html_url];
     let sha: string | undefined;
+    let fork: boolean | undefined;
     if (repo && (!prev || prev.upd !== pr.updated_at) && fetches < SHA_FETCH_MAX) {
       fetches++;
       try {
-        sha = (await ghApiJson<GhPull>(x, host, [`repos/${repo}/pulls/${pr.number}`])).head?.sha;
+        const pull = await ghApiJson<GhPull>(x, host, [`repos/${repo}/pulls/${pr.number}`]);
+        sha = pull.head?.sha;
+        // голова из другого репо (форк) или репо форка уже удалено (repo: null)
+        const head = pull.head?.repo === null ? '' : pull.head?.repo?.full_name;
+        const base = pull.base?.repo?.full_name;
+        if (head !== undefined && base) fork = head !== base;
       } catch (err) {
         ctx.log(`GitHub: head sha ${repo}#${pr.number} не получен: ${(err as Error).message}`);
       }
     }
     // без sha updated_at не двигаем: обновление проверим в следующий опрос
-    const m = nextReview(prev, pr.html_url, { sha, upd: sha ? pr.updated_at : undefined, now: new Date().toISOString() });
+    const next = nextReview(prev, pr.html_url, { sha, upd: sha ? pr.updated_at : undefined, at: pr.updated_at, now: new Date().toISOString(), first });
+    const m = fork ? { ...next, fork: true } : fork === false ? strip({ ...next, fork: undefined }) : next;
     remember(cur.reviews, pr.html_url, m);
-    out.push(reviewEvent(ctx, 'github', host, me, m, { at: pr.created_at, updatedAt: pr.updated_at, title: pr.title ?? '', text: pr.body ?? '', link: pr.html_url, author: pr.user?.login ?? '', project: repo, number: pr.number, extra: { draft: Boolean(pr.draft) } }));
+    out.push(reviewEvent(ctx, 'github', host, me, m, { at: pr.created_at, updatedAt: pr.updated_at, title: pr.title ?? '', text: pr.body ?? '', link: pr.html_url, author: pr.user?.login ?? '', project: repo, number: pr.number, extra: { draft: Boolean(pr.draft), ...(m.fork ? { fork: true } : {}) } }));
   }
   // поиск ответил не всем (incomplete_results) — кого нет, тот не обязательно ушёл
   markGone(cur.reviews, present, review.length < GH_PAGE && !incomplete);
   for (const it of await search(`is:open+mentions:${me}`)) {
     const asked = it.pull_request ? cur.reviews[it.html_url] : undefined;
-    out.push(toEvent(ctx, 'github', host, me, { kind: 'mention', id: `mention:${it.html_url}`, at: it.created_at, title: it.title ?? '', text: it.body ?? '', link: it.html_url, author: it.user?.login ?? '', project: repoOf(it), number: it.number, ...(it.pull_request ? { mrUrl: it.html_url } : {}), ...(asked && !asked.gone ? { version: requestId(it.html_url, asked.req) } : {}), extra: { is_pr: Boolean(it.pull_request) } }));
+    out.push(toEvent(ctx, 'github', host, me, { kind: 'mention', id: `mention:${it.html_url}`, at: it.created_at, title: it.title ?? '', text: it.body ?? '', link: it.html_url, author: it.user?.login ?? '', project: repoOf(it), number: it.number, ...(it.pull_request ? { mrUrl: it.html_url } : {}), ...(asked && !asked.gone ? { version: requestId(asked, it.html_url) } : {}), extra: { is_pr: Boolean(it.pull_request) } }));
   }
   const mine = (await search(`is:pr+is:open+author:${me}`)).slice(0, MY_MR_LIMIT);
   for (const pr of mine) {

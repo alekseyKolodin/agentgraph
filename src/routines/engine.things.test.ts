@@ -58,8 +58,8 @@ function setup(o: { jiraHosts?: () => string[] } = {}) {
   const at = () => new Date(clock.now.getTime() + 1000 + seq++).toISOString();
   /** Сигнал GitLab: ссылка события — сам MR, id — версия (ревью, ревью снова, комментарий). */
   const gl = (id: string, extra: Partial<RoutineEvent> = {}): RoutineEvent => ({ source: 'gl', id, at: at(), title: `Ревью: grp/app!12`, text: 'описание', link: `${MR}#${id}`, fields: {}, ...extra });
-  /** Сообщение в чате со ссылкой в тексте; ссылка события — на само сообщение. */
-  const chat = (id: string, text = `глянь ${MR} пожалуйста`): RoutineEvent => ({ source: 'chat', id, at: at(), title: text.slice(0, 40), text, link: `https://acme.slack.com/archives/C1/p${id}`, fields: {}, thread: { source: 'chat', channel: 'C1', thread: id } });
+  /** Сообщение в чате со ссылкой в тексте; ссылка события — на само сообщение; нить — своя или тред thread. */
+  const chat = (id: string, text = `глянь ${MR} пожалуйста`, thread = id): RoutineEvent => ({ source: 'chat', id, at: at(), title: text.slice(0, 40), text, link: `https://acme.slack.com/archives/C1/p${id}`, fields: {}, thread: { source: 'chat', channel: 'C1', thread } });
   const push = async (source: 'gl' | 'chat', ...evs: RoutineEvent[]) => {
     items[source].push(...evs);
     await engine.pollSource(source);
@@ -146,19 +146,20 @@ test('своя версия вещи — новое: два комментари
   }
 });
 
-test('ссылка на тот же MR в чате дважды за сутки — один запуск; через сутки — снова', async () => {
+test('ссылка на тот же MR в той же нити за сутки — один запуск; через сутки — снова', async () => {
   const t = setup();
   try {
     t.routine('b', 'chat');
     await t.push('chat', t.chat('1'));
     await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.5 });
     t.later(20 * HOUR);
-    await t.push('chat', t.chat('2', `поправил, глянь ещё раз ${MR}`));
+    await t.push('chat', t.chat('2', `поправил, глянь ещё раз ${MR}`, '1'));
     assert.equal(t.started.length, 1);
     t.later(5 * HOUR);
-    await t.push('chat', t.chat('3'));
+    await t.push('chat', t.chat('3', `глянь ${MR}`, '1'));
     assert.equal(t.started.length, 2);
     assert.deepEqual(t.outcomes('b'), ['started', 'duplicate', 'started']);
+    assert.equal(t.engine.logOf('b', {})[0].thread, 'thread:chat/C1/1');
   } finally {
     t.done();
   }
@@ -171,7 +172,7 @@ test('пока первое срабатывание открыто (ожида�
     await t.push('chat', t.chat('1'));
     assert.equal(t.engine.waits().length, 1);
     t.later(3 * 24 * HOUR);
-    await t.push('chat', t.chat('2'));
+    await t.push('chat', t.chat('2', `напоминаю: ${MR}`, '1'));
     assert.deepEqual(t.outcomes('b'), ['waiting', 'duplicate']);
     assert.match(t.engine.logOf('b', {})[0].reason!, /уже ждёт решения/);
     assert.equal(t.engine.waits().length, 1);
@@ -267,10 +268,10 @@ test('повтор — только если все вещи события уж
     await t.push('chat', t.chat('1'));
     await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.5 });
     t.later(HOUR);
-    await t.push('chat', t.chat('2', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`));
+    await t.push('chat', t.chat('2', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`, '1'));
     assert.deepEqual(t.outcomes('b'), ['started', 'started']);
-    // теперь были оба — то же сообщение ещё раз повтор, с подписью «и ещё 1»
-    await t.push('chat', t.chat('3', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`));
+    // теперь были оба — то же сообщение ещё раз в той же нити повтор, с подписью «и ещё 1»
+    await t.push('chat', t.chat('3', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`, '1'));
     assert.match(t.engine.logOf('b', {})[0].reason!, /MR grp\/app!12 \(и ещё 1\) уже/);
   } finally {
     t.done();
@@ -372,6 +373,54 @@ test('MR, упомянутый в описании другого MR, не де�
     assert.deepEqual(t.engine.logOf('a', {})[0].things, ['mr:gitlab.company.com/grp/app/13', MR_KEY]);
     await t.push('chat', t.chat('2'));
     assert.deepEqual(t.outcomes('b'), ['started']);
+  } finally {
+    t.done();
+  }
+});
+
+test('упоминание без версии в двух разных тредах — две просьбы: обе запускаются; срабатывание, где вещь своя, держит любой тред', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    const pay = 'https://jira.company.com/browse/PAY-7';
+    await t.push('chat', t.chat('1', `падает оплата ${pay}`), t.chat('2', `и у нас ${pay}`));
+    assert.deepEqual(t.outcomes('b'), ['started', 'started']);
+    // назначение MR в GitLab — вещь своя: ссылка на него в любом треде в эти сутки — повтор
+    await t.push('gl', t.gl('review:12'));
+    await t.push('chat', t.chat('3'), t.chat('4'));
+    assert.deepEqual(t.outcomes('b'), ['started', 'started', 'duplicate', 'duplicate']);
+  } finally {
+    t.done();
+  }
+});
+
+test('версия другого источника — не новое: RSS (или коннектор) GitLab со ссылкой на тот же MR после назначения — повтор', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    await t.push('gl', t.gl('review:12'));
+    // у события свой id и ссылка на сам MR — вещь своя, версия — id этого источника
+    await t.push('chat', { source: 'chat', id: 'rss-77', at: new Date(t.clock.now.getTime() + 5000).toISOString(), title: 'MR !12 обновлён', text: '', link: MR, fields: {} });
+    assert.equal(t.engine.logOf('b', {})[0].thingVersion, 'rss-77');
+    assert.deepEqual(t.outcomes('b'), ['duplicate']);
+    // а новая версия того же источника — новое
+    t.later(HOUR);
+    await t.push('gl', t.gl('comment:grp/app!12:9'));
+    assert.deepEqual(t.outcomes('a'), ['started', 'started']);
+  } finally {
+    t.done();
+  }
+});
+
+test('ревью и упоминание того же MR за один опрос forge — один запуск (у упоминания версия запроса)', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    const thing = (version: string) => [{ type: 'mr' as const, key: MR_KEY, ref: { host: 'gitlab.company.com', project: 'grp/app', number: 12, version } }];
+    await t.push('gl', t.gl('review:12', { things: thing('review:12') }), t.gl('mention:70', { things: thing('review:12') }));
+    assert.deepEqual(t.outcomes('a'), ['started', 'duplicate']);
   } finally {
     t.done();
   }

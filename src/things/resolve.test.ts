@@ -119,3 +119,18 @@ test('Slack экранирует & в адресе — ключ из ?selectedIs
 test('задача в очереди Jira Service Management — по ключу в конце пути', () => {
   assert.equal(thingOfUrl('https://acme.atlassian.net/jira/servicedesk/projects/SUP/queues/custom/1/SUP-12')?.key, 'jira:acme.atlassian.net/SUP-12');
 });
+
+test('Jira Server с путём контекста: ссылка задачи сохраняет /jira, ключ — без него', () => {
+  const hosts = ['jira.corp.local'];
+  const t = thingOfUrl('https://jira.corp.local/jira/browse/ABC-12', hosts)!;
+  assert.deepEqual([t.key, t.url], ['jira:jira.corp.local/ABC-12', 'https://jira.corp.local/jira/browse/ABC-12']);
+  assert.equal(thingOfUrl('https://jira.corp.local/jira/secure/RapidBoard.jspa?rapidView=1&selectedIssue=ABC-3', hosts)?.url, 'https://jira.corp.local/jira/browse/ABC-3');
+  assert.equal(thingOfUrl('https://jira.corp.local/jira/servicedesk/projects/SUP/queues/custom/1/SUP-4', hosts)?.url, 'https://jira.corp.local/jira/browse/SUP-4');
+  // без контекста и в Cloud — /browse/ от корня
+  assert.equal(thingOfUrl('https://jira.corp.local/browse/ABC-12', hosts)?.url, 'https://jira.corp.local/browse/ABC-12');
+  assert.equal(thingOfUrl('https://acme.atlassian.net/jira/software/c/projects/ABC/issues/ABC-9')?.url, 'https://acme.atlassian.net/browse/ABC-9');
+});
+
+test('PR-12, MR-3, Q1-2025 в тексте — не задачи Jira', () => {
+  assert.deepEqual(keys({ text: 'см. PR-12 и MR-3, план на Q1-2025' }), []);
+});

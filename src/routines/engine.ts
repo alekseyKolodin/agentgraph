@@ -20,6 +20,7 @@ import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
 import { builtinKinds } from './sources/index.js';
+import { threadKey } from '../things/keys.js';
 import { resolveSignal, settingsJiraHosts, thingLabel, THINGS_MAX } from '../things/resolve.js';
 import type { Thing } from '../things/types.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait } from './store.js';
@@ -662,7 +663,12 @@ export class RoutineEngine {
     // версия есть только у своей главной вещи события (addThings)
     const version = e.things?.[0]?.key === main.key ? thingVersion(e) : undefined;
     const keys = new Set(version ? [main.key] : things.map((t) => t.key));
-    const held = (x: LogEntry, k: string): boolean => x.things?.[0] === k || !x.thingVersion;
+    const thread = threadKeyOf(e);
+    // своё событие (с версией) держит строка, где вещь главная, или сигнал без версии о ней (просьба в чате); упоминание
+    // без версии — только срабатывание, где вещь своя, или та же нить: два треда про одну задачу — две просьбы
+    const held = version
+      ? (x: LogEntry, k: string): boolean => x.things?.[0] === k || !x.thingVersion
+      : (x: LogEntry, k: string): boolean => (x.things?.[0] === k && Boolean(x.thingVersion)) || (Boolean(thread) && x.thread === thread);
     const runKey = runKeyOf(spec);
     const now = this.now().getTime();
     const open = new Map<string, string>();
@@ -703,8 +709,9 @@ export class RoutineEngine {
     // «Не повтор» от человека на это событие сильнее правила
     if (this.pastVerdicts(slug).get(e.id) === 'not_duplicate') return undefined;
     if (version) {
-      // версия строки — версия её главной вещи: в счёт только строки, где главная — та же
-      const versions = new Set(lines.filter(({ routine, line: x }) => x.things?.[0] === main.key && ((x.id === h.line.id && routine === h.routine) || (x.sameAs?.routine === h.routine && x.sameAs.logId === h.line.id))).map(({ line }) => line.thingVersion).filter((v): v is string => Boolean(v)));
+      // версия строки — версия её главной вещи: в счёт только строки, где главная — та же, и того же источника — у
+      // другого источника (RSS, коннектор GitLab) свои id, его версия ничего нового не значит
+      const versions = new Set(lines.filter(({ routine, line: x }) => x.things?.[0] === main.key && x.event.source === e.source && ((x.id === h.line.id && routine === h.routine) || (x.sameAs?.routine === h.routine && x.sameAs.logId === h.line.id))).map(({ line }) => line.thingVersion).filter((v): v is string => Boolean(v)));
       if (versions.size && !versions.has(version)) return undefined;
     }
     const state = open.get(h.line.id) ?? (h.line.outcome === 'rejected' ? 'отклонено человеком' : 'запускалось');
@@ -883,6 +890,7 @@ export class RoutineEngine {
       outcome,
       ...(e.things?.some((t) => t.ref.guess !== true) ? { things: e.things.filter((t) => t.ref.guess !== true).map((t) => t.key) } : {}),
       ...(thingVersion(e) ? { thingVersion: thingVersion(e) } : {}),
+      ...(threadKeyOf(e) ? { thread: threadKeyOf(e) } : {}),
       ...strip(extra),
     };
     this.store.appendLog(entry);
@@ -1870,6 +1878,15 @@ const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…`
 function uniqThings(list: Thing[]): Thing[] {
   const seen = new Set<string>();
   return list.filter((t) => !seen.has(t.key) && Boolean(seen.add(t.key)));
+}
+
+/** Ключ нити события (thread:<источник>/<канал>/<нить>); нити нет — undefined. */
+function threadKeyOf(e: RoutineEvent): string | undefined {
+  try {
+    return e.thread ? threadKey(e.thread) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Версия главной вещи события: есть только у своей вещи (addThings), у упомянутой — нет. */
