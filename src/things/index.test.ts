@@ -23,8 +23,8 @@ function fakeWatcher(over: Partial<Watcher> & { calls?: Thing[][] } = {}): Watch
   };
 }
 
-test('реестр пока пуст: наблюдателей приносят сессии этапа 2', () => {
-  assert.deepEqual(watchers(), []);
+test('реестр: по одному наблюдателю на MR, задачу Jira и ветку', () => {
+  assert.deepEqual(watchers().map((w) => w.type).sort(), ['branch', 'jira', 'mr']);
 });
 
 test('watch: повторы ключей — один запрос, каждый наблюдатель получает только свои вещи', async () => {
