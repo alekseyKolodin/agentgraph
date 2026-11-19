@@ -33,6 +33,8 @@ test('excerpt: без разметки и кода, в одну строку, д
   assert.equal(excerpt('# Итог\n\n- **тесты** падают\n```\nstack\n```\n> `x` сломан'), 'Итог тесты падают x сломан');
   assert.equal(excerpt('a'.repeat(10), 5), 'aaaa…');
   assert.equal(excerpt(undefined), '');
+  // «_» внутри ссылки и имени — не разметка
+  assert.equal(excerpt('Глянь https://gitlab.example.com/grp/pay/-/merge_requests/7 и __срочно__, флаг _x_ и max_retries'), 'Глянь https://gitlab.example.com/grp/pay/-/merge_requests/7 и срочно, флаг x и max_retries');
 });
 
 test('feedTime: только что, минуты назад, дальше — часы', () => {
