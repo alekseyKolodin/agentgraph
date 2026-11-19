@@ -327,6 +327,29 @@ export type FlowHistory = {
   noSnapshot: number;
   /** Файл flow сейчас ни с одним запуском не запускался (поправили после последнего). */
   currentUnrun?: true;
+  /** Запуски flow от новых к старым, не больше 100: «Прошлые запуски» и запуски под версиями. Старый сервер поля не отдаёт. */
+  runs?: FlowRunRow[];
+};
+
+/** Где встал незавершённый запуск: блок по порядку (1 — первый) из blocks, у упавшего — этап и итерация. */
+export type FlowRunStop = { block: number; blocks: number; blockTitle: string; phase?: string; iteration?: number };
+
+/** Строка запуска на экране flow (GET /api/flows/:name/history → runs). */
+export type FlowRunRow = {
+  id: string;
+  startedAt: string;
+  status: string;
+  title?: string;
+  /** Задача запуска, не длиннее 300 символов; cut — обрезана (целиком — GET /api/runs/:id). */
+  input: string;
+  inputCut?: true;
+  costUsd: number;
+  /** Отпечаток версии (FlowVersion.id), с которой запуск начался; нет — снимка нет. */
+  version?: string;
+  /** Только у незавершённого (не done и не идёт). */
+  stop?: FlowRunStop;
+  /** Продолжение с места остановки есть (POST /api/runs/:id/continue): с какого блока оно пойдёт. Считается у трёх последних. */
+  continueAt?: number;
 };
 
 /** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */

@@ -1,27 +1,51 @@
-/* Форма запуска на вкладке «Запуск» (ui/style.css: .run-form … .run-bar, вложения и недавние папки, теги, .run-link):
-   правила перенесены как есть, в порядке старого файла. id старого UI стали классами: #run-form.drop → .run-form.drop,
-   #run-source a → .run-source a, .run-link #wt-branch → .wt-branch. Глобальные .form, .row, .chips, .chip, .attach-chip,
-   .attach-x, .path-field, .pick-dir, .msg, .field-label — в base.css. */
-/* в ui/style.css .run-form { gap: 14px } перебито стоящим ниже .form { gap: 12px }: промежуток — 12px от .form */
-.run-form textarea[name=input] { min-height: 118px; }
-/* .run-source { gap: 8px } в ui/style.css перебито стоящим ниже .row { gap: 12px }: промежуток — 12px от .row */
-/* раскрывашка-строка: каретка, название, справа от него — тихая сводка того, что внутри */
-.run-more > summary { list-style: none; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 0; cursor: pointer; border-radius: var(--r-sm); }
-.run-more > summary::-webkit-details-marker { display: none; }
-.run-more:not([open]) > summary :global(.caret) { transform: rotate(-90deg); }
-.run-more > summary:hover .run-more-title { color: var(--ink); }
-.run-more-title { flex: none; font-weight: 500; color: var(--ink-2); }
-.run-more-sum { min-width: 0; margin-left: 4px; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.run-more-sum.set { color: var(--ink-2); }
-.run-more-body { display: flex; flex-direction: column; gap: 14px; padding: 10px 0 2px 20px; }
-.run-limits label { min-width: 160px; }
-/* «Запустить» всегда на виду: панель липнет к низу экрана, пока форма длиннее него */
-.run-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 0; background: var(--deck); border-top: 1px solid var(--line); }
+/* Форма запуска на вкладке «Запуск» (docs/flow-redesign/design/Main.dc.html, RunSetup.dc.html): карточка задачи и
+   карточка из трёх строк настроек. Глобальные .form, .row, .chips, .chip, .attach-chip, .attach-x, .path-field,
+   .pick-dir, .msg, .field-label — в base.css. */
+.run-form { gap: 16px; }
+.card { display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px 18px; min-width: 0; }
+.cap { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 
-/* вложения, доп. директории, чипы недавних путей */
-.run-form.drop { outline: 2px dashed var(--live); outline-offset: 6px; border-radius: var(--r-sm); }
-.run-attach, .run-adddirs { display: flex; flex-direction: column; gap: 6px; }
-.run-attach :global(.row) { gap: 8px; }
+/* задача: крупное поле, под ним — файлы и «Запустить» */
+.task { gap: 8px; }
+.task textarea { min-height: 150px; font-size: var(--fs-body); line-height: 1.55; resize: vertical; }
+.card-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.bar-hint { min-width: 0; }
+.bar-msg { margin-left: auto; min-width: 0; }
+.bar-msg:empty { display: none; }
+.card-bar > .bar-msg:empty + .kbd { margin-left: auto; }
+.kbd { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--r-xs); }
+.card-bar > .kbd:first-child { margin-left: auto; }
+
+/* строки настроек: подпись, сводка словами, кнопка; раскрытая — поля и «Готово» */
+.card:has(> .set-row) { padding: 0; gap: 0; }
+.set-row { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px; border-top: 1px solid var(--line); }
+.set-row:first-child { border-top: 0; }
+.set-head { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 16px; }
+.set-title { flex: 0 0 140px; padding-top: 3px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.set-sum { flex: 1 1 240px; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.set-body { display: flex; flex-direction: column; gap: 12px; padding-left: 156px; }
+.sum-head { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.sum-path { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.sum-meta { color: var(--ink-2); }
+.sum-note { flex-basis: 100%; font-size: var(--fs-small); color: var(--ink-2); }
+
+/* «Где работать»: пространства радиокнопками — один выбор с «без пространства» */
+.options { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.options > legend { padding: 0; margin-bottom: 4px; }
+:global(.form) label.opt { flex-direction: row; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer; min-width: 0; }
+:global(.form) label.opt > input { width: auto; margin: 0; flex: none; }
+.opt:hover { background: var(--hover); }
+.opt.on { background: var(--select); }
+.opt-name { flex: none; color: var(--ink); font-size: var(--fs-small); }
+.opt-path { min-width: 0; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opt-more { align-self: flex-start; margin-top: 2px; }
+:global(.form) label.check { flex-direction: row; align-items: flex-start; gap: 10px; cursor: pointer; font-size: var(--fs-small); color: var(--ink); }
+:global(.form) label.check > input { width: auto; margin: 3px 0 0; flex: none; }
+.run-limits label { min-width: 160px; }
+
+/* вложения, другие папки, чипы недавних путей */
+.run-form.drop { outline: 2px dashed var(--live); outline-offset: 6px; border-radius: var(--r-lg); }
+.run-adddirs { display: flex; flex-direction: column; gap: 6px; }
 .recent-dirs { margin-top: -6px; }
 .recent-dirs :global(.chip) { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-dirs .recent-chip { display: inline-flex; align-items: center; gap: 2px; padding: 0; }
@@ -30,15 +54,24 @@
 .recent-chip > :global(.attach-x) { padding: 3px 8px 3px 2px; opacity: .35; }
 .recent-chip:hover > :global(.attach-x), .recent-chip > :global(.attach-x):focus-visible { opacity: 1; }
 .run-tag { display: flex; flex-direction: column; gap: 6px; }
-:global(.form) label.inline-check { flex-direction: row; align-items: center; gap: 6px; flex: 0 0 auto; cursor: pointer; }
-:global(.form) label.inline-check > input { width: auto; }
 
 /* привязка к задаче, MR/PR или ветке и worktree (ui/dash.js renderRunLink) */
 .dash-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.run-link { display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--line); border-radius: var(--r-md); padding: 8px 12px; }
+.run-link { display: flex; flex-direction: column; gap: 8px; }
 .run-link :global(.row) { gap: 8px; }
 .run-link select, .run-link .wt-branch { padding: 5px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
 .run-link .wt-branch { flex: 1; min-width: 180px; width: auto; }
+.run-source { gap: 8px; }
 .run-source a { color: var(--live); text-decoration: none; }
-/* «из пространства …» под директорией проекта: её подставило выбранное пространство */
+/* «из пространства …» под папкой проекта: её подставило выбранное пространство */
 .cwd-from { margin-top: -6px; }
+
+@media (max-width: 700px) {
+  .card { padding: 14px; }
+  /* на телефоне клавиатурного ⌘↵ нет: «Запустить» — справа */
+  .kbd { display: none; }
+  .card-bar > [type=submit] { margin-left: auto; }
+  .set-row { padding: 12px 14px; }
+  .set-title { flex-basis: 100%; padding-top: 0; }
+  .set-body { padding-left: 0; }
+}

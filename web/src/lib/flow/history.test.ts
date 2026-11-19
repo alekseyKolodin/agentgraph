@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { clock } from '../format';
-import { usageLine, versionMeta, versionsNote } from './history';
+import { usageLine, versionGroups, versionMeta, versionsNote } from './history';
 
 const now = new Date('2026-11-19T18:00:00Z');
 
@@ -31,4 +31,17 @@ test('заметка под версиями: текущая не запуска
     versionsNote({ versions: [], noSnapshot: 2, currentUnrun: true, total: 2 }),
     'Файл flow поправили после последнего запуска: текущая версия ещё не запускалась. Без снимка flow.yaml — 2 запуска: их версия неизвестна.',
   );
+});
+
+test('история: версии сверху вниз с их запусками, «сейчас» без запусков, без версии — в конце', () => {
+  const v = (id: string, n: number) => ({ id, n, current: false, runs: 1, firstAt: '', lastAt: '', runId: 'r', file: 'flow.yaml' });
+  const r = (id: string, version?: string) => ({ id, startedAt: '', status: 'done', input: '', costUsd: 0, ...(version ? { version } : {}) });
+  const g = versionGroups({ versions: [v('b', 2), v('a', 1)], currentUnrun: true, runs: [r('1', 'b'), r('2', 'a'), r('3'), r('4', 'b'), r('5', 'old')] });
+  assert.deepEqual(g.map((x) => x.kind), ['unrun', 'version', 'version', 'unknown']);
+  const [, b, a, rest] = g;
+  assert.deepEqual(b?.kind === 'version' && [b.v.id, b.prev?.id, b.runs.map((x) => x.id)], ['b', 'a', ['1', '4']]);
+  assert.equal(a?.kind === 'version' && a.prev, undefined);
+  assert.deepEqual(rest?.kind === 'unknown' && rest.runs.map((x) => x.id), ['3', '5']);
+  // старый сервер без runs — версии без запусков, без группы «неизвестно»
+  assert.deepEqual(versionGroups({ versions: [v('a', 1)] }).map((x) => x.kind), ['version']);
 });

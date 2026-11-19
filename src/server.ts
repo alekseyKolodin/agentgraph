@@ -719,7 +719,22 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     } catch {
       // файла нет (удалили или переименовали): история его запусков всё равно есть
     }
-    return sendJson(res, 200, flowHistory(m[1], listRuns(), { runsDir: RUNS_DIR, currentYaml }) satisfies FlowHistory);
+    return sendJson(res, 200, flowHistory(m[1], listRuns(), {
+      runsDir: RUNS_DIR,
+      currentYaml,
+      report: readReport,
+      // «Продолжить с блока N» на экране flow — то же правило, что у кнопки на странице запуска (continuability), с номером блока
+      continueAt: (report) => {
+        if (live.has(report.id) || !report.cwd || report.parent) return undefined;
+        try {
+          const at = canContinue(report, specOf(report));
+          return at.ok ? at.skip.length + 1 : undefined;
+        } catch {
+          // flow не загружается: продолжить нельзя, как и на странице запуска; историю это не роняет
+          return undefined;
+        }
+      },
+    }) satisfies FlowHistory);
   }
 
   // Версия flow из снимка запуска — для «В редактор» на вкладке «Версии»: задача запуска заменена задачей файла flow

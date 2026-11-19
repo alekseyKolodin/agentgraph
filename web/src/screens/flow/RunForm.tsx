@@ -1,9 +1,11 @@
-// Форма запуска на вкладке «Запуск» (ui/app.js renderFlow, startRun, wireAttachments, wireRecentDirs, wireRunTag,
-// renderRunMoreSum, renderConnWarn; ui/dash.js renderRunLink, prepareWorktree, toFlow): пространство (первым: его рабочая
-// папка подставляется в директорию проекта с подписью «из пространства»), директория проекта и недавние папки, задача,
-// «Дополнительно» (теги знаний, вложения, доп. директории, worktree, лимиты, модель), «Запустить» в липкой панели.
-// Вход из «Запустить…» с главной приходит в location.state.intake; черновик разового запуска уходит со spec из конструктора.
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent } from 'react';
+// Форма запуска на вкладке «Запуск» (docs/flow-redesign/SPEC.md → «Запуск»; ui/app.js renderFlow, startRun, wireAttachments,
+// wireRecentDirs, wireRunTag, renderConnWarn; ui/dash.js renderRunLink, prepareWorktree, toFlow): одна карточка — задача,
+// «Приложить файл» (и вставка скриншота, и перетаскивание на форму), «Запустить» и ⌘↵; ниже три строки словами — «Где
+// работать» (пространство или папка одним выбором: его рабочая папка подставляется с подписью «из пространства»; состояние
+// после «готово», автопространство, worktree), «Модель и лимиты», «Что дать агенту» (теги знаний, другие папки): поля
+// появляются только по «Сменить / Изменить / Добавить». Вход из «Запустить…» с главной приходит в location.state.intake;
+// черновик разового запуска уходит со spec из конструктора.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Intake } from '@server/api-types';
@@ -16,20 +18,21 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { PickDirButton } from '../../components/PickDirButton';
 import { SpacePicker } from '../../components/SpacePicker';
 import { TagInput } from '../../components/TagInput';
-import { ICON } from '../../components/shell/FlowList';
 import { useToast } from '../../components/Toast';
-import { collectSpec } from '../../lib/flow/edit';
+import { collectSpec, toEditable } from '../../lib/flow/edit';
+import { repeatsText } from '../../lib/flow/plan';
+import { tildePath } from '../../lib/paths';
 import { t } from '../../lib/i18n';
 import { modelOptions } from '../../lib/flow/tools';
 import {
-  appendDir, ATTACH_ACCEPT, attachName, attachOverLimit, attachTypeError, attachWarn, CONN_WARN_TEXT, connWarn, dirLines, fileSize,
-  recentChips, runBody, runMoreSum, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
+  appendDir, ATTACH_ACCEPT, attachName, attachOverLimit, attachTypeError, attachWarn, CONN_WARN_TEXT, connWarn, dirLines, fileSize, giveSum,
+  limitsSum, recentChips, runBody, sourceLabel, staleWorktreeCwd, TAG_SLUG_ERROR, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, withWorktreeNote, worktreeProject,
   worktreeRequest, type RunLink,
 } from '../../lib/run-form';
-import { pickWorkdir, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint } from '../../lib/spaces';
+import { pickerRows, pickWorkdir, spaceLabel, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import { useIntegrations } from '../home/Dash';
-import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm } from './formStore';
+import { attachReads, nextAttachId, resetExtras, resetForm, runForm, setForm, useRunForm, type RowsOpen } from './formStore';
 import { closeFlow, flowState, msgClass, NO_MSG, useFlowStore } from './store';
 import { readBase64 } from '../../components/readBase64';
 import styles from './RunForm.module.css';
@@ -37,6 +40,9 @@ import styles from './RunForm.module.css';
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 
 const hasFiles = (e: DragEvent) => [...(e.dataTransfer?.types || [])].includes('Files');
+/** Свежих пространств радиокнопками в «Где работать»; остальные — в поиске. */
+const SPACES_SHOWN = 5;
+const SUBMIT_KEYS = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵';
 
 export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; intakeKey: string }) {
   const st = useFlowStore();
@@ -125,10 +131,7 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     el.scrollTop = 0;
   }, [f.focusSeq]);
 
-  const setMore = (open: boolean) => {
-    LS.set('agentgraph.runMore', open);
-    setForm({ more: open });
-  };
+  const openRow = (row: keyof RowsOpen, v: boolean) => setForm({ open: { ...runForm.open, [row]: v } });
 
   // ---------- директория проекта: смена (как change старого поля) снимает worktree с привязки
   const cwdAtFocus = useRef('');
@@ -182,8 +185,6 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     if (errors.length) toast(errors.join('; '));
   };
   const addAttachments = (files: File[]) => {
-    // файлы бросили на форму или вставили в задачу: их чипы и предупреждения — в «Дополнительно»
-    setMore(true);
     const p: Promise<void> = readAttachments(files).finally(() => attachReads.delete(p));
     attachReads.add(p);
   };
@@ -247,12 +248,13 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
   // ---------- «Запустить»
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
-    if (runForm.busy) return;
+    // ⌘↵ отправляет форму и при выключенной «Запустить»: flow без сводки не проходит валидацию
+    if (runForm.busy || !flowState.flow?.summary) return;
     // тег вписан, но не добавлен (Enter не нажимали): добавляем, чтобы он не пропал молча
     if (can.tags && runForm.tagText.trim()) {
       await addTag();
       // неверный слаг остаётся в поле с ошибкой: запуск без него ушёл бы молча
-      if (runForm.tagText.trim()) return setMore(true);
+      if (runForm.tagText.trim()) return openRow('give', true);
     }
     const flowRef = flowState.flow;
     const draft = Boolean(flowRef?.draft);
@@ -325,18 +327,28 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
 
   const multiBlock = (summary?.blocks?.length ?? 0) > 1;
   const models = modelOptions(f.modelBase);
-  const sum = runMoreSum({
-    tags: f.tags,
-    attach: f.attach.length,
-    addDirs: f.addDirs,
-    worktree: Boolean(f.link?.worktree),
-    maxIterations: f.maxIterations,
-    flowMaxIterations: summary?.maxIterations,
-    budget: f.budget,
-    modelLabel: f.model ? (models.find(([id]) => id === f.model)?.[1] ?? f.model) : '',
-  });
+  const modelLabel = f.model ? (models.find(([id]) => id === f.model)?.[1] ?? f.model) : '';
+  const limits = limitsSum({ modelLabel, budget: f.budget });
+  const edit = useMemo(() => (flow.spec ? toEditable(flow.spec) : null), [flow.spec]);
+  const repeats = edit ? repeatsText(edit, f.maxIterations === String(summary?.maxIterations ?? '') ? '' : f.maxIterations) : '';
+  const give = giveSum({ tags: f.tags, addDirs: f.addDirs });
   const blindWarn = attachWarn(summary);
   const source = f.link?.source;
+  const home = config?.home;
+  const tilde = (p: string) => tildePath(p, home);
+  const chosenSpace = spaceList.find((s) => s.slug === spaceSlug);
+  // свежие пространства — радиокнопками; выбранное, которого среди них нет, — тоже; остальные и новое — в поиске
+  const topSpaces = pickerRows('', spaceList).flatMap((r) => (r.kind === 'space' ? [r.s] : [])).slice(0, SPACES_SHOWN);
+  const spaceRadios = chosenSpace && !topSpaces.includes(chosenSpace) ? [...topSpaces, chosenSpace] : topSpaces;
+  const [findSpace, setFindSpace] = useState(false);
+  const newSpace = Boolean(spaceSlug) && !chosenSpace && !spacesQuery.isPending;
+  const canWorktree = can.integrations && projects.length > 0;
+  const [wtOpen, setWtOpen] = useState(false);
+  // другой flow или форма заново — поиск пространства и галочка worktree свёрнуты, как и строки
+  useEffect(() => {
+    setFindSpace(false);
+    setWtOpen(false);
+  }, [f.formSeq]);
 
   const recentRow = (onPick: (path: string) => void) =>
     recent.length > 0 && (
@@ -351,10 +363,28 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
       </div>
     );
 
+  // ---------- «Где работать» свёрнутой строкой: пространство или папка, что будет после «готово», worktree
+  const whereHead = spaceSlug ? (chosenSpace ? spaceLabel(chosenSpace) : spaceSlug) : f.cwd.trim() ? tilde(f.cwd.trim()) : t('папка не выбрана');
+  const wherePath = spaceSlug && f.cwd.trim() ? tilde(f.cwd.trim()) : '';
+  const whereNote = [
+    spaceSlug
+      ? newSpace
+        ? t('Заведётся новое пространство {slug}.', { slug: spaceSlug })
+        : f.saveState ? t('Запуск попадёт в это пространство. После «готово» его состояние обновится.') : t('Запуск попадёт в это пространство, его состояние не обновится.')
+      : can.spaces && can.autoSpace && f.autoSpace ? t('Пространство заведётся само по тексту задачи.') : can.spaces ? t('Без пространства.') : '',
+    f.link?.worktree ? t('В отдельной копии репозитория (worktree{branch}).', { branch: f.link.worktree.branch ? ` · ${f.link.worktree.branch}` : '' }) : '',
+  ].filter(Boolean).join(' ');
+
   return (
     <form
       className={cx('form', styles.runForm, drop && styles.drop)}
       onSubmit={(e) => void submit(e)}
+      onKeyDown={(e) => {
+        // ⌘↵ (Ctrl+↵) из любого поля формы — «Запустить»
+        if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+        e.preventDefault();
+        e.currentTarget.requestSubmit();
+      }}
       onDragOver={(e) => {
         if (!can.attachments || !hasFiles(e)) return;
         e.preventDefault();
@@ -370,16 +400,164 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
         addAttachments([...e.dataTransfer.files]);
       }}
     >
-      {can.spaces && (
-        <div className={styles.runTag}>
-          <SpacePicker id="run-space" value={f.space} onChange={pickSpace} options={spaceList} loading={spacesQuery.isPending} />
+      {/* задача, файлы и «Запустить» — одна карточка */}
+      <div className={styles.card}>
+        <label className={styles.task}>
+          <span className={styles.cap} title={t('Подставится в {{input}}')}>{t('Что нужно сделать')}</span>
+          <textarea
+            ref={taskRef}
+            name="input"
+            rows={6}
+            placeholder={t('Опиши задачу своими словами')}
+            value={f.input}
+            onChange={(e) => setForm({ input: e.target.value })}
+            // вставка скриншота; обычную вставку текста не трогаем. Excel, Numbers и Word кладут в буфер рядом с текстом
+            // ещё и картинку: если текст есть, вставляется он
+            onPaste={(e: ClipboardEvent) => {
+              const files = [...(e.clipboardData?.files || [])];
+              if (!can.attachments || !files.length || [...e.clipboardData.types].includes('text/plain')) return;
+              e.preventDefault();
+              addAttachments(files);
+            }}
+          />
+        </label>
+        {connWarn(f.input, summary) && <p className="msg warn">{CONN_WARN_TEXT}</p>}
+        {can.integrations && source && (
+          <div className={cx('row', styles.runSource)}>
+            <span className="muted small">{`${sourceLabel(source)}:`}</span>
+            {source.url ? <a href={source.url} target="_blank" rel="noopener"><b>{source.key}</b></a> : <b>{source.key}</b>}
+            <span className={cx('small', styles.dashName)}>{source.title}</span>
+            <button type="button" className="btn small ghost" title={t('Запуск не будет привязан к источнику (текст задачи останется)')} onClick={unlink}>{t('Отвязать')}</button>
+          </div>
+        )}
+        {f.attach.length > 0 && (
+          <div className="chips">
+            {f.attach.map((a) => (
+              <span key={a.id} className="chip attach-chip">
+                {`${a.name} · ${fileSize(a.size)}`}
+                <button type="button" className="attach-x" title={t('Убрать')} onClick={() => setForm({ attach: runForm.attach.filter((x) => x.id !== a.id) })}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {f.attach.length > 0 && blindWarn && <p className="msg warn">{blindWarn}</p>}
+        <div className={styles.cardBar}>
+          {can.attachments && (
+            <>
+              <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе. Можно перетащить на форму')} onClick={() => fileRef.current?.click()}>
+                {t('Приложить файл')}
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                hidden
+                accept={ATTACH_ACCEPT}
+                onChange={(e) => {
+                  addAttachments([...(e.target.files || [])]);
+                  e.target.value = '';
+                }}
+              />
+              <span className={cx('muted small', styles.barHint)}>{t('скриншот можно вставить прямо в текст')}</span>
+            </>
+          )}
+          <span className={cx(msgClass(f.msg), styles.barMsg)}>{f.msg.text}</span>
+          <kbd className={styles.kbd} title={t('Запустить с клавиатуры')}>{SUBMIT_KEYS}</kbd>
+          <button type="submit" className="btn primary" disabled={!summary || f.busy}>{t('Запустить')}</button>
+        </div>
+      </div>
+
+      {/* три строки словами; поля — только по «Сменить / Изменить / Добавить» */}
+      <div className={styles.card}>
+        <Row
+          title={t('Где работать')}
+          open={f.open.where}
+          onOpen={(v) => openRow('where', v)}
+          action={t('Сменить')}
+          summary={
+            <>
+              <span className={styles.sumHead}>{whereHead}</span>
+              {wherePath && <span className={styles.sumPath} title={f.cwd}>{wherePath}</span>}
+              {whereNote && <span className={styles.sumNote}>{whereNote}</span>}
+            </>
+          }
+        >
+          {can.spaces && (
+            <fieldset className={styles.options}>
+              <legend className={styles.cap}>{t('Пространство')}</legend>
+              {spaceRadios.map((s) => (
+                <label key={s.slug} className={cx(styles.opt, s.slug === spaceSlug && styles.on)}>
+                  <input type="radio" name="where" checked={s.slug === spaceSlug} onChange={() => pickSpace(s.slug)} />
+                  <span className={styles.optName}>{spaceLabel(s)}</span>
+                  {s.workdir && <span className={styles.optPath} title={s.workdir.path}>{tilde(s.workdir.path)}</span>}
+                </label>
+              ))}
+              {newSpace && (
+                <label className={cx(styles.opt, styles.on)}>
+                  <input type="radio" name="where" checked onChange={() => undefined} />
+                  <span className={styles.optName}>{spaceSlug}</span>
+                  <span className={styles.optPath}>{t('новое — заведётся при запуске')}</span>
+                </label>
+              )}
+              <label className={cx(styles.opt, !spaceSlug && styles.on)}>
+                <input type="radio" name="where" checked={!spaceSlug} onChange={() => pickSpace('')} />
+                <span className={styles.optName}>{t('Без пространства — только папка')}</span>
+              </label>
+              {findSpace ? (
+                <SpacePicker
+                  id="run-space"
+                  value={f.space}
+                  onChange={(slug) => {
+                    pickSpace(slug);
+                    setFindSpace(false);
+                  }}
+                  options={spaceList}
+                  loading={spacesQuery.isPending}
+                  label={t('Другое или новое пространство')}
+                  autoFocus
+                />
+              ) : (
+                <button type="button" className={cx('btn small ghost', styles.optMore)} onClick={() => setFindSpace(true)}>{t('Другое или новое пространство…')}</button>
+              )}
+            </fieldset>
+          )}
+          <label>
+            <span className={styles.cap}>{t('Папка проекта')}</span>
+            <div className="path-field">
+              <input
+                name="cwd"
+                placeholder="/path/to/repo"
+                value={f.cwd}
+                onChange={(e) => setForm({ cwd: e.target.value, cwdFrom: '', cwdTouched: true })}
+                onFocus={(e) => (cwdAtFocus.current = e.target.value)}
+                onBlur={(e) => {
+                  if (e.target.value !== cwdAtFocus.current) cwdChanged();
+                }}
+                onKeyDown={(e) => {
+                  // и при ⌘↵: сначала снять worktree с другой папки, потом форма отправится своим обработчиком
+                  if (e.key !== 'Enter' || e.currentTarget.value === cwdAtFocus.current) return;
+                  cwdAtFocus.current = e.currentTarget.value;
+                  cwdChanged();
+                }}
+              />
+              <PickDirButton prompt={t('Выбери папку проекта')} start={() => runForm.cwd} onPick={pickCwd}>{t('Выбрать другую папку')}</PickDirButton>
+            </div>
+          </label>
+          {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
+          {cwdOffer && (
+            <span className={cx('muted small', styles.cwdFrom)}>
+              {t('Рабочая папка пространства: {path}', { path: cwdOffer.path })}{' '}
+              <button type="button" className="btn small ghost" title={f.link?.worktree ? t('Директория worktree отвяжется от запуска') : undefined} onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
+            </span>
+          )}
+          {recentRow(pickCwd)}
           {spaceSlug ? (
-            <label className={styles.inlineCheck} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
+            <label className={styles.check} title={t('После запуска со статусом «готово» короткая сессия перепишет состояние пространства: суть, где код, решения, где читать подробнее')}>
               <input type="checkbox" name="saveState" checked={f.saveState} onChange={(e) => setForm({ saveState: e.target.checked })} />
-              <span>{t('Обновить состояние пространства после запуска')}</span>
+              <span>{t('Обновить состояние пространства {name} после «готово»', { name: chosenSpace ? spaceLabel(chosenSpace) : spaceSlug })}</span>
             </label>
-          ) : can.autoSpace && (
-            <label className={styles.inlineCheck} title={t('ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…), после «готово» запишет его состояние. Существующие не переиспользуются: чтобы продолжить фичу, выбери её пространство в поле выше')}>
+          ) : can.spaces && can.autoSpace && (
+            <label className={styles.check} title={t('ИИ по тексту задачи заведёт новое пространство (слаг занят — с суффиксом -2…), после «готово» запишет его состояние. Существующие не переиспользуются: чтобы продолжить фичу, выбери её пространство выше')}>
               <input
                 type="checkbox"
                 name="autoSpace"
@@ -389,80 +567,84 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
                   setForm({ autoSpace: e.target.checked });
                 }}
               />
-              <span>{t('Завести пространство автоматически')}</span>
+              <span>{t('Завести пространство само по тексту задачи')}</span>
             </label>
           )}
-        </div>
-      )}
-      {/* что пространство и теги знаний дадут этапам — тот же текст, что сервер допишет в конец промптов; задача остаётся задачей */}
-      <ModelPreview space={f.space} tags={f.tags} where="phase" options={spaceList} loaded={!spacesQuery.isPending} />
-      <label>
-        <span>{t('Директория проекта')}</span>
-        <div className="path-field">
-          <input
-            name="cwd"
-            placeholder="/path/to/repo"
-            value={f.cwd}
-            onChange={(e) => setForm({ cwd: e.target.value, cwdFrom: '', cwdTouched: true })}
-            onFocus={(e) => (cwdAtFocus.current = e.target.value)}
-            onBlur={(e) => {
-              if (e.target.value !== cwdAtFocus.current) cwdChanged();
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' || e.currentTarget.value === cwdAtFocus.current) return;
-              cwdAtFocus.current = e.currentTarget.value;
-              cwdChanged();
-            }}
-          />
-          <PickDirButton prompt={t('Выбери директорию проекта')} start={() => runForm.cwd} onPick={pickCwd} />
-        </div>
-      </label>
-      {cwdNote && <span className={cx('muted small', styles.cwdFrom)} title={workdir?.path}>{cwdNote}</span>}
-      {cwdOffer && (
-        <span className={cx('muted small', styles.cwdFrom)}>
-          {t('Рабочая папка пространства: {path}', { path: cwdOffer.path })}{' '}
-          <button type="button" className="btn small ghost" title={f.link?.worktree ? t('Директория worktree отвяжется от запуска') : undefined} onClick={() => applyWorkdir(cwdOffer.path)}>{t('подставить')}</button>
-        </span>
-      )}
-      {recentRow(pickCwd)}
-      <label>
-        <span title={t('Подставится в {{input}}')}>{t('Задача')}</span>
-        <textarea
-          ref={taskRef}
-          name="input"
-          rows={5}
-          placeholder={t('Что нужно сделать')}
-          value={f.input}
-          onChange={(e) => setForm({ input: e.target.value })}
-          // вставка скриншота; обычную вставку текста не трогаем. Excel, Numbers и Word кладут в буфер рядом с текстом
-          // ещё и картинку: если текст есть, вставляется он
-          onPaste={(e: ClipboardEvent) => {
-            const files = [...(e.clipboardData?.files || [])];
-            if (!can.attachments || !files.length || [...e.clipboardData.types].includes('text/plain')) return;
-            e.preventDefault();
-            addAttachments(files);
-          }}
-        />
-      </label>
-      {connWarn(f.input, summary) && <p className="msg warn">{CONN_WARN_TEXT}</p>}
-      {can.integrations && source && (
-        <div className={cx('row', styles.runSource)}>
-          <span className="muted small">{`${sourceLabel(source)}:`}</span>
-          {source.url ? <a href={source.url} target="_blank" rel="noopener"><b>{source.key}</b></a> : <b>{source.key}</b>}
-          <span className={cx('small', styles.dashName)}>{source.title}</span>
-          {f.link?.worktree && (
-            <span className="chip on" title={f.link.worktree.path}>{`worktree${f.link.worktree.branch ? ` · ${f.link.worktree.branch}` : ''}`}</span>
+          {canWorktree && (
+            <div className={styles.runLink}>
+              {f.link?.worktree ? (
+                <div className="row">
+                  <span className="chip on" title={f.link.worktree.path}>{`worktree${f.link.worktree.branch ? ` · ${f.link.worktree.branch}` : ''}`}</span>
+                  <span className={cx('muted small', styles.dashName)} title={f.link.worktree.path}>{tilde(f.link.worktree.path)}</span>
+                  <span className={msgClass(f.wtMsg)}>{f.wtMsg.text}</span>
+                </div>
+              ) : (
+                <label className={styles.check}>
+                  <input type="checkbox" checked={wtOpen} onChange={(e) => setWtOpen(e.target.checked)} />
+                  <span>
+                    {t('Работать в отдельной копии репозитория')}
+                    <span className="muted small">{` — ${t('git worktree: основная папка останется нетронутой')}`}</span>
+                  </span>
+                </label>
+              )}
+              {!f.link?.worktree && wtOpen && (
+                <div className="row">
+                  <select title={t('Проект')} value={wtProject} onChange={(e) => setForm({ wtProject: e.target.value })}>
+                    {projects.map((p) => <option key={p.path} value={p.path}>{p.name}</option>)}
+                  </select>
+                  <input
+                    className={styles.wtBranch}
+                    placeholder={t('ветка (пусто — от базовой)')}
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={f.wtBranch}
+                    onChange={(e) => setForm({ wtBranch: e.target.value })}
+                  />
+                  <button type="button" className="btn small" title={t('Создать worktree и подставить его в папку проекта')} disabled={f.wtBusy} onClick={() => void makeWorktree()}>{t('Подготовить копию')}</button>
+                  <span className={msgClass(f.wtMsg)}>{f.wtMsg.text}</span>
+                </div>
+              )}
+            </div>
           )}
-          <button type="button" className="btn small ghost" title={t('Запуск не будет привязан к источнику (текст задачи останется)')} onClick={unlink}>{t('Отвязать')}</button>
-        </div>
-      )}
-      <details className={styles.runMore} open={f.more} onToggle={(e) => e.currentTarget.open !== runForm.more && setMore(e.currentTarget.open)}>
-        <summary>
-          <span className="caret">{ICON.caret}</span>
-          <span className={styles.runMoreTitle}>{t('Дополнительно')}</span>
-          <span className={cx(styles.runMoreSum, sum.set && styles.set)}>{sum.text}</span>
-        </summary>
-        <div className={styles.runMoreBody}>
+        </Row>
+
+        <Row
+          title={t('Модель и лимиты')}
+          open={f.open.limits}
+          onOpen={(v) => openRow('limits', v)}
+          action={t('Изменить')}
+          summary={
+            <>
+              <span className={styles.sumHead}>{limits.model}</span>
+              <span className={styles.sumMeta}>{[limits.budget, repeats].filter(Boolean).join(' · ')}</span>
+            </>
+          }
+        >
+          <div className={cx('row', styles.runLimits)}>
+            <label>
+              <span className={styles.cap}>{t('Модель')}</span>
+              <select name="model" value={f.model} onChange={(e) => setForm({ model: e.target.value })}>
+                {models.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className={styles.cap}>{t('Не дороже, $')}</span>
+              <input name="maxBudgetUsd" type="number" min={0} step="any" placeholder={t('без лимита')} value={f.budget} onChange={(e) => setForm({ budget: e.target.value })} />
+            </label>
+            <label>
+              <span className={styles.cap} title={multiBlock ? t('Общий потолок повторов для каждого цикла; пусто — у каждого блока свой') : undefined}>{multiBlock ? t('Повторов у блока, не больше') : t('Повторов, не больше')}</span>
+              <input name="maxIterations" type="number" min={1} max={50} placeholder={multiBlock ? t('как в блоках') : ''} value={f.maxIterations} onChange={(e) => setForm({ maxIterations: e.target.value })} />
+            </label>
+          </div>
+        </Row>
+
+        <Row
+          title={t('Что дать агенту')}
+          open={f.open.give}
+          onOpen={(v) => openRow('give', v)}
+          action={give.set ? t('Изменить') : t('Добавить')}
+          summary={<span className={give.set ? styles.sumHead : styles.sumMeta}>{give.text}</span>}
+        >
           {can.tags && (
             <div className={styles.runTag}>
               <TagInput
@@ -482,43 +664,14 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
               <span className={msgClass(f.tagMsg)}>{f.tagMsg.text}</span>
             </div>
           )}
-          {can.attachments && (
-            <div className={styles.runAttach}>
-              <div className="row">
-                <span className="field-label">{t('Вложения')}</span>
-                <button type="button" className="btn small" title={t('Картинки, PDF и текстовые файлы: до 10 файлов, до 10 МБ каждый, до 25 МБ вместе')} onClick={() => fileRef.current?.click()}>{t('Добавить файлы…')}</button>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  multiple
-                  hidden
-                  accept={ATTACH_ACCEPT}
-                  onChange={(e) => {
-                    addAttachments([...(e.target.files || [])]);
-                    e.target.value = '';
-                  }}
-                />
-                <span className="muted small">{t('или перетащи файлы на форму, скриншот — вставь в поле задачи')}</span>
-              </div>
-              <div className="chips">
-                {f.attach.map((a) => (
-                  <span key={a.id} className="chip attach-chip">
-                    {`${a.name} · ${fileSize(a.size)}`}
-                    <button type="button" className="attach-x" title={t('Убрать')} onClick={() => setForm({ attach: runForm.attach.filter((x) => x.id !== a.id) })}>×</button>
-                  </span>
-                ))}
-              </div>
-              {f.attach.length > 0 && blindWarn && <p className="msg warn">{blindWarn}</p>}
-            </div>
-          )}
           {can.addDirs && (
             <div className={styles.runAdddirs}>
               <label>
-                <span title={t('Куда агенты всех этапов могут ходить, кроме директории проекта: по пути на строку. Например, соседний репозиторий с правилами')}>{t('Дополнительные директории')}</span>
+                <span title={t('Куда агенты всех этапов могут ходить, кроме папки проекта: по пути на строку. Например, соседний репозиторий с правилами')}>{t('Другие папки')}</span>
                 <div className="path-field">
                   <textarea name="addDirs" rows={2} placeholder="~/projects/qa-rules" value={f.addDirs} onChange={(e) => setForm({ addDirs: e.target.value })} />
                   <PickDirButton
-                    prompt={t('Выбери дополнительную директорию')}
+                    prompt={t('Выбери дополнительную папку')}
                     start={() => dirLines(runForm.addDirs).at(-1) ?? ''}
                     onPick={(path) => setForm({ addDirs: appendDir(runForm.addDirs, path) })}
                   />
@@ -527,49 +680,32 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
               {recentRow((path) => setForm({ addDirs: appendDir(runForm.addDirs, path) }))}
             </div>
           )}
-          {can.integrations && projects.length > 0 && (
-            <div className={styles.runLink}>
-              <div className="row">
-                <span className="field-label">{t('Отдельный git worktree:')}</span>
-                <select title={t('Проект')} value={wtProject} onChange={(e) => setForm({ wtProject: e.target.value })}>
-                  {projects.map((p) => <option key={p.path} value={p.path}>{p.name}</option>)}
-                </select>
-                <input
-                  className={styles.wtBranch}
-                  placeholder={t('ветка (пусто — от базовой)')}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={f.wtBranch}
-                  onChange={(e) => setForm({ wtBranch: e.target.value })}
-                />
-                <button type="button" className="btn small" title={t('Создать worktree и подставить в директорию')} disabled={f.wtBusy} onClick={() => void makeWorktree()}>{t('Подготовить worktree')}</button>
-                <span className={msgClass(f.wtMsg)}>{f.wtMsg.text}</span>
-              </div>
-            </div>
-          )}
-          <div className={cx('row', styles.runLimits)}>
-            <label>
-              <span>{multiBlock ? t('Лимит итераций каждого цикла') : t('Лимит итераций')}</span>
-              <input name="maxIterations" type="number" min={1} max={50} placeholder={multiBlock ? t('как в блоках') : ''} value={f.maxIterations} onChange={(e) => setForm({ maxIterations: e.target.value })} />
-            </label>
-            <label>
-              <span>{t('Лимит стоимости, $')}</span>
-              <input name="maxBudgetUsd" type="number" min={0} step="any" placeholder={t('без лимита')} value={f.budget} onChange={(e) => setForm({ budget: e.target.value })} />
-            </label>
-            <label>
-              <span>{t('Модель')}</span>
-              <select name="model" value={f.model} onChange={(e) => setForm({ model: e.target.value })}>
-                {models.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-              </select>
-            </label>
-          </div>
-        </div>
-      </details>
-      <div className={styles.runBar}>
-        <button type="submit" className="btn primary" disabled={!summary || f.busy}>{t('Запустить')}</button>
-        <span className={msgClass(f.msg)}>{f.msg.text}</span>
+          {/* что пространство и теги знаний дадут этапам — тот же текст, что сервер допишет в конец промптов */}
+          <ModelPreview space={f.space} tags={f.tags} where="phase" options={spaceList} loaded={!spacesQuery.isPending} />
+        </Row>
       </div>
     </form>
+  );
+}
+
+/** Строка настроек: подпись слева, сводка словами, справа — кнопка; раскрытая — поля и «Готово». */
+function Row({ title, summary, action, open, onOpen, children }: { title: string; summary: ReactNode; action: string; open: boolean; onOpen: (v: boolean) => void; children: ReactNode }) {
+  return (
+    <section className={styles.setRow} aria-label={title}>
+      <div className={styles.setHead}>
+        <span className={styles.setTitle}>{title}</span>
+        <div className={styles.setSum}>{summary}</div>
+        {!open && <button type="button" className="btn small" onClick={() => onOpen(true)}>{action}</button>}
+      </div>
+      {open && (
+        <div className={styles.setBody}>
+          {children}
+          <div>
+            <button type="button" className="btn small" onClick={() => onOpen(false)}>{t('Готово')}</button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

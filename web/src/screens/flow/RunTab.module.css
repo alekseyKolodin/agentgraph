@@ -1,0 +1,56 @@
+/* Вкладка «Запуск» (docs/flow-redesign/design/Main.dc.html, RunBig.dc.html): слева форма и прошлые запуски, справа
+   «Что произойдёт»; уже 1000px — одной колонкой, план под формой. Строки запусков — и на вкладке «История». */
+.tab { display: flex; flex-direction: column; gap: 16px; }
+.tab[hidden] { display: none; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); grid-template-areas: "form plan" "past plan"; grid-template-rows: auto 1fr; gap: 20px; align-items: start; }
+.form { grid-area: form; min-width: 0; }
+
+/* «Что произойдёт» */
+.plan { grid-area: plan; position: sticky; top: 12px; display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); min-width: 0; }
+.plan-head { display: flex; flex-direction: column; gap: 2px; }
+.plan-title { margin: 0; font-size: var(--fs-h3); font-weight: 600; color: var(--ink); }
+.plan-sum { font-size: var(--fs-small); color: var(--ink-2); }
+.facts { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.fact { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; font-size: var(--fs-small); }
+.fact dt { color: var(--ink-3); font-size: var(--fs-meta); font-weight: 500; padding-top: 1px; }
+.fact dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.fact-note { color: var(--ink-2); }
+.money { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.fact .money { color: var(--ink); }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.step, .blk { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 6px 8px; margin: 0 -8px; width: calc(100% + 16px); border-radius: var(--r-sm); font-size: var(--fs-small); color: var(--ink); text-align: left; }
+.step { border: 0; background: none; font: inherit; font-size: var(--fs-small); cursor: pointer; }
+.step:hover { background: var(--hover); }
+.step:focus-visible { outline: none; box-shadow: var(--focus); }
+.num { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--raised); color: var(--ink-2); font-size: var(--fs-meta); font-weight: 600; }
+.num.num-ask { background: color-mix(in srgb, var(--st-wait) 18%, transparent); color: var(--st-wait); }
+.step-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; padding-top: 1px; overflow-wrap: anywhere; }
+.step-note { font-size: var(--fs-meta); color: var(--ink-2); }
+.step-note.ask { color: var(--st-wait); }
+.blk-meta { flex: none; max-width: 45%; padding-top: 2px; font-size: var(--fs-meta); color: var(--ink-2); text-align: right; }
+.more { align-self: flex-start; }
+
+/* «Прошлые запуски» и запуски под версиями */
+.past { grid-area: past; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.past-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.past-title { margin: 0; font-size: var(--fs-small); font-weight: 500; color: var(--ink-3); }
+.run-list { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.run-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 10px 18px; border-top: 1px solid var(--line); font-size: var(--fs-small); }
+.run-row:first-child { border-top: 0; }
+.run-row:hover { background: var(--hover); }
+.run-main { flex: 1 1 320px; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 14px; color: var(--ink); text-decoration: none; }
+.run-main:hover .run-task { text-decoration: underline; }
+.run-when { flex: none; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.run-task { flex: 1 1 200px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-stop { flex-basis: 100%; font-size: var(--fs-meta); color: var(--ink-2); }
+.run-side { flex: none; display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
+.run-side :global(.badge) { margin-left: 0; }
+
+@media (max-width: 1000px) {
+  .grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "form" "plan" "past"; grid-template-rows: none; }
+  .plan { position: static; }
+}
+@media (max-width: 700px) {
+  .run-row { padding: 10px 14px; }
+  .run-side { flex: 1 1 100%; margin-left: 0; flex-wrap: wrap; }
+}

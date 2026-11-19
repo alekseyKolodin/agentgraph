@@ -8,6 +8,8 @@ import { LS } from '../../lib/storage';
 import type { Attach, RunLink } from '../../lib/run-form';
 import { NO_MSG, type Msg } from './store';
 
+export type RowsOpen = { where: boolean; limits: boolean; give: boolean };
+
 export type RunFormState = {
   input: string;
   cwd: string;
@@ -16,8 +18,8 @@ export type RunFormState = {
   model: string;
   /** Модель на момент сброса: её значение не из списка остаётся отдельным пунктом, пока форму не сбросят снова. */
   modelBase: string;
-  /** «Дополнительно» раскрыто; запоминается (agentgraph.runMore). */
-  more: boolean;
+  /** Какие строки под задачей раскрыты: «Где работать», «Модель и лимиты», «Что дать агенту». Новый flow — все свёрнуты. */
+  open: RowsOpen;
   /** Пространство (слаг): выбранное или вписанное новое; пусто — без пространства. */
   space: string;
   /** Слаг пространства, которое подставило директорию проекта; правка директории руками — ''. */
@@ -53,7 +55,7 @@ export type RunFormState = {
 };
 
 export const runForm: RunFormState = {
-  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', more: LS.get('agentgraph.runMore', false), space: '', cwdFrom: '', cwdTouched: false, saveState: true, autoSpace: false,
+  input: '', cwd: '', maxIterations: '', budget: '', model: '', modelBase: '', open: { where: false, limits: false, give: false }, space: '', cwdFrom: '', cwdTouched: false, saveState: true, autoSpace: false,
   tagText: '', tags: [], tagMsg: NO_MSG, attach: [], addDirs: '', link: null, wtProject: '', wtBranch: '', wtMsg: NO_MSG, wtBusy: false,
   msg: NO_MSG, busy: false, formSeq: -1, extrasSeq: -1, tagSeq: 0, intakeKey: '', focusSeq: 0,
 };
@@ -116,6 +118,7 @@ export function resetForm(summary: FlowSummary | undefined, defaultCwd: string, 
     wtProject: '',
     wtMsg: NO_MSG,
     msg: NO_MSG,
+    open: { where: false, limits: false, give: false },
     formSeq,
   });
 }

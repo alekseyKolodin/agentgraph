@@ -5,8 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringify as toYaml } from 'yaml';
 import { parse as parseYaml } from 'yaml';
-import { flowFingerprint, flowHistory, versionYaml } from './flow-history.js';
+import { FLOW_RUN_INPUT_MAX, flowFingerprint, flowHistory, runStop, versionYaml } from './flow-history.js';
 import { parseFlow } from './flows.js';
+import type { RunReport } from './api-types.js';
 
 const flowYaml = (prompt: string) => `name: demo\nphases:\n  - name: work\n    prompt: ${prompt}\n    tools: [Read]\n`;
 /** Снимок, как его пишет раннер: разобранная схема через stringify. */
@@ -106,4 +107,64 @@ test('версия для редактора: задача запуска зам
   assert.equal('input' in parseYaml(versionYaml(snap, flowYaml('новый'))), false);
   assert.equal('input' in parseYaml(versionYaml(snap, undefined)), false);
   assert.throws(() => versionYaml('- список', undefined));
+});
+
+const block = (name: string, status: string, over: Record<string, unknown> = {}) => ({ index: 0, name, title: name.toUpperCase(), status, iterations: 1, maxIterations: 3, condition: 'none', looped: true, onFail: 'stop', ...over });
+const phase = (block: string, name: string, ok: boolean, iteration = 1) => ({ block, phase: name, title: `Этап ${name}`, ok, iteration });
+
+test('где встал: последний начатый блок; у упавшего — его упавший этап; готовый и идущий — нигде', () => {
+  const blocks = [block('plan', 'done'), block('build', 'failed'), block('ship', 'pending')];
+  const phases = [phase('plan', 'p', true), phase('build', 'b1', true), phase('build', 'b2', false, 2)];
+  assert.deepEqual(runStop({ status: 'failed', blocks, phases } as never), { block: 2, blocks: 3, blockTitle: 'BUILD', phase: 'Этап b2', iteration: 2 });
+  // прервали: этап не называем — последний в отчёте закончился, а не прерван
+  assert.deepEqual(runStop({ status: 'aborted', blocks: [block('plan', 'done'), block('build', 'aborted'), block('ship', 'pending')], phases } as never), { block: 2, blocks: 3, blockTitle: 'BUILD' });
+  // блок, через который перешла развилка, — не «где встал»
+  assert.equal(runStop({ status: 'aborted', blocks: [block('plan', 'aborted'), block('ship', 'pending', { bypassed: true })], phases: [] } as never)?.block, 1);
+  assert.equal(runStop({ status: 'done', blocks, phases } as never), undefined);
+  assert.equal(runStop({ status: 'running', blocks, phases } as never), undefined);
+  assert.equal(runStop({ status: 'failed', blocks: [], phases: [] } as never), undefined);
+});
+
+test('строки запусков: задача, цена, версия, где встал; продолжение — только у трёх последних незавершённых', () => {
+  const v1 = flowYaml('раз');
+  withRuns({ r1: { 'flow.yaml': snapshot(v1) }, r2: { 'flow.yaml': snapshot(v1) } }, (dir) => {
+    // сводка запуска уже обрезана до FLOW_RUN_INPUT_MAX: такая длина — признак, что задача длиннее
+    const long = 'а'.repeat(FLOW_RUN_INPUT_MAX);
+    const reports: Record<string, unknown> = {
+      r1: { id: 'r1', status: 'failed', blocks: [block('work', 'failed')], phases: [phase('work', 'work', false)] },
+      r2: { id: 'r2', status: 'done', blocks: [block('work', 'done')], phases: [] },
+      r5: { id: 'r5', status: 'aborted', blocks: [block('work', 'aborted')], phases: [] },
+    };
+    const asked: string[] = [];
+    const h = flowHistory(
+      'demo',
+      [
+        run('r1', 1, { status: 'failed', input: 'Сделай', totalCostUsd: 1.5, title: 'Первый' }),
+        run('r2', 2, { input: long, totalCostUsd: 2 }),
+        run('r3', 3, { status: 'running', input: '' }),
+        run('r4', 4, { input: 'x' }),
+        run('r5', 5, { status: 'aborted', input: 'y' }),
+      ],
+      {
+        runsDir: dir,
+        now: NOW,
+        report: (id) => reports[id] as RunReport | undefined,
+        continueAt: (r) => {
+          asked.push(r.id);
+          return 2;
+        },
+      },
+    );
+    const rows = h.runs!;
+    assert.deepEqual(rows.map((r) => r.id), ['r1', 'r2', 'r3', 'r4', 'r5']);
+    assert.deepEqual(rows[0], { id: 'r1', startedAt: at(1), status: 'failed', title: 'Первый', input: 'Сделай', costUsd: 1.5, version: flowFingerprint(v1), stop: { block: 1, blocks: 1, blockTitle: 'WORK', phase: 'Этап work', iteration: 1 }, continueAt: 2 });
+    assert.equal(rows[1]!.input.length, FLOW_RUN_INPUT_MAX);
+    assert.equal(rows[1]!.inputCut, true);
+    assert.equal(rows[1]!.stop, undefined);
+    assert.equal(rows[2]!.version, undefined);
+    // r5 не среди трёх последних: где встал — есть, продолжение не спрашивали
+    assert.deepEqual(rows[4]!.stop, { block: 1, blocks: 1, blockTitle: 'WORK' });
+    assert.equal(rows[4]!.continueAt, undefined);
+    assert.deepEqual(asked, ['r1']);
+  });
 });

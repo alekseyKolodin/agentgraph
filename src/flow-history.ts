@@ -8,21 +8,37 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
-import type { FlowHistory, FlowVersion, RunSummary } from './api-types.js';
+import type { FlowHistory, FlowRunRow, FlowRunStop, FlowVersion, RunReport, RunSummary } from './api-types.js';
 import { parseFlow } from './flows.js';
 
 export const FLOW_STATS_DAYS = 30;
 /** Версий в ответе не больше: дальше — самые старые, они почти никогда не нужны. */
 export const FLOW_VERSIONS_MAX = 30;
+/** Строк запусков в ответе не больше. */
+export const FLOW_RUNS_MAX = 100;
+/**
+ * Задача в строке запуска — не длиннее: целиком она в отчёте запуска. Столько же оставляет сводка запуска (listRuns в
+ * server.ts), из которой строки собираются: задача такой длины считается обрезанной.
+ */
+export const FLOW_RUN_INPUT_MAX = 200;
+/** У скольких последних запусков считать, можно ли продолжить: «Прошлые запуски» на вкладке «Запуск». */
+export const FLOW_CONTINUE_CHECK = 3;
+/** Статусы идущего запуска в сводке (liveStatus сервера): у них нет места остановки. */
+const LIVE_STATUSES = new Set(['running', 'waiting', 'paused']);
 
-type RunLike = Pick<RunSummary, 'id' | 'flow' | 'startedAt' | 'status'> & Partial<Pick<RunSummary, 'title' | 'adhoc'>>;
+type RunLike = Pick<RunSummary, 'id' | 'flow' | 'startedAt' | 'status'> & Partial<Pick<RunSummary, 'title' | 'adhoc' | 'input' | 'totalCostUsd'>>;
+type ReportLike = Pick<RunReport, 'id' | 'status' | 'blocks' | 'phases'>;
 
-export type FlowHistoryDeps = {
+export type FlowHistoryDeps<R extends ReportLike = ReportLike> = {
   runsDir: string;
   /** YAML файла flow сейчас; нет — flow удалили (ни одна версия не текущая). */
   currentYaml?: string;
   now?: number;
   read?: (file: string) => string | undefined;
+  /** Отчёт запуска (readReport сервера): по нему — где встал незавершённый. Нет — строки без stop. */
+  report?: (id: string) => R | undefined;
+  /** Продолжение с места: с какого блока (1 — первый) пойдёт, undefined — нельзя. Только у FLOW_CONTINUE_CHECK последних. */
+  continueAt?: (report: R) => number | undefined;
 };
 
 const readText = (file: string): string | undefined => {
@@ -96,8 +112,32 @@ export function startSnapshot(runDir: string, read: (file: string) => string | u
   return undefined;
 }
 
+/**
+ * Где встал незавершённый запуск: последний начатый блок (не ждущий и не пропущенный развилкой), у упавшего — этап,
+ * который упал. done и идущий — undefined.
+ */
+export function runStop(r: Pick<RunReport, 'status' | 'blocks' | 'phases'>): FlowRunStop | undefined {
+  if (r.status === 'done' || r.status === 'running') return undefined;
+  const blocks = r.blocks ?? [];
+  if (!blocks.length) return undefined;
+  let at = 0;
+  blocks.forEach((b, i) => {
+    if (b.status !== 'pending' && !b.bypassed) at = i;
+  });
+  const b = blocks[at]!;
+  const out: FlowRunStop = { block: at + 1, blocks: blocks.length, blockTitle: b.title || b.name };
+  if (r.status === 'failed') {
+    const bad = (r.phases ?? []).filter((p) => p.block === b.name && !p.ok).at(-1);
+    if (bad) Object.assign(out, { phase: bad.title || bad.phase, iteration: bad.iteration });
+  }
+  return out;
+}
+
+const cutInput = (s: string): Pick<FlowRunRow, 'input' | 'inputCut'> =>
+  s.length >= FLOW_RUN_INPUT_MAX ? { input: s.slice(0, FLOW_RUN_INPUT_MAX), inputCut: true } : { input: s };
+
 /** runs — все запуски (от новых к старым, как listRuns): берутся только этого flow, разовые — нет. */
-export function flowHistory(name: string, runs: RunLike[], deps: FlowHistoryDeps): FlowHistory {
+export function flowHistory<R extends ReportLike>(name: string, runs: RunLike[], deps: FlowHistoryDeps<R>): FlowHistory {
   const read = deps.read ?? readText;
   const now = deps.now ?? Date.now();
   const mine = runs.filter((r) => r.flow === name && !r.adhoc).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -107,10 +147,12 @@ export function flowHistory(name: string, runs: RunLike[], deps: FlowHistoryDeps
   const current = deps.currentYaml === undefined ? undefined : flowFingerprint(deps.currentYaml);
 
   const byPrint = new Map<string, Omit<FlowVersion, 'n'>>();
+  const printOf = new Map<string, string>();
   let noSnapshot = 0;
   for (const r of mine) {
     const snap = startSnapshot(path.join(deps.runsDir, r.id), read);
     const print = snap && flowFingerprint(snap.text);
+    if (print) printOf.set(r.id, print);
     if (!snap || !print) {
       noSnapshot++;
       continue;
@@ -128,6 +170,25 @@ export function flowHistory(name: string, runs: RunLike[], deps: FlowHistoryDeps
     .map((v, i): FlowVersion => ({ ...v, n: i + 1 }))
     .reverse()
     .slice(0, FLOW_VERSIONS_MAX);
+  const rows = mine.slice(0, FLOW_RUNS_MAX).map((r, i): FlowRunRow => {
+    const print = printOf.get(r.id);
+    // отчёт читаем только у незавершённого: где встал, можно ли продолжить (у последних). Идущий (и ждущий, и на паузе) — нет
+    const ended = r.status !== 'done' && !LIVE_STATUSES.has(r.status);
+    const rep = ended && deps.report ? deps.report(r.id) : undefined;
+    const stop = rep ? runStop(rep) : undefined;
+    const cont = rep && i < FLOW_CONTINUE_CHECK ? deps.continueAt?.(rep) : undefined;
+    return {
+      id: r.id,
+      startedAt: r.startedAt,
+      status: r.status,
+      ...(r.title ? { title: r.title } : {}),
+      ...cutInput(r.input ?? ''),
+      costUsd: r.totalCostUsd ?? 0,
+      ...(print ? { version: print } : {}),
+      ...(stop ? { stop } : {}),
+      ...(cont ? { continueAt: cont } : {}),
+    };
+  });
   return {
     name,
     total: mine.length,
@@ -137,5 +198,6 @@ export function flowHistory(name: string, runs: RunLike[], deps: FlowHistoryDeps
     noSnapshot,
     // «поправили после последнего» — только если запуски со снимком были
     ...(current && byPrint.size && !byPrint.has(current) ? { currentUnrun: true as const } : {}),
+    runs: rows,
   };
 }
