@@ -117,7 +117,8 @@ import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRe
 import { routinesRoute } from './routines/routes.js';
 import { deskStorage, deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
-import { deskRoute } from './desk/routes.js';
+import { deskCheck } from './desk/check.js';
+import { deskRoute, PROCESS_STARTED } from './desk/routes.js';
 import { trackable, watch, watcherFor, watchers } from './things/index.js';
 import type { ThingType } from './things/types.js';
 import { repoRoot } from './git.js';
@@ -526,7 +527,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', 'desk-check', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -593,7 +594,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
 
   // --- дела: список с итогом сверки, put/move/close с карточки (src/desk/routes.ts)
   if (p === '/api/desk' || p.startsWith('/api/desk/')) {
-    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore() });
+    // сверка «N из N»: итоги источников рутин (движок читает их с диска) и наблюдателей; на остановке — только наблюдатели
+    const check = stopping
+      ? undefined
+      : () => {
+          const eng = routines(opts);
+          return deskCheck({ sources: eng.sourceViews(), arrivals: (s) => eng.store.checks(s).arrivals, watcher: deskStore().readCheck(), startedAt: PROCESS_STARTED });
+        };
+    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore(), ...(check ? { check } : {}) });
     if (r) return sendJson(res, r.status, r.body);
   }
 

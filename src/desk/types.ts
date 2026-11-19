@@ -142,3 +142,20 @@ export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
 
 /** GET /api/desk: дела по фильтру и итог последней сверки (нет — сверки ещё не было). */
 export type DeskListReply = { items: DeskItem[]; check?: CheckResult };
+
+/**
+ * Состояние источника или наблюдателей в сверке «N из N» (SPEC 3.4): ok — проверено; empty — проверки идут, новых записей
+ * нет дольше обычного; error — проверка не прошла (или вид неизвестен); needs_secret — не хватает ключа; unchecked — не
+ * проверялось с запуска приложения.
+ */
+export type DeskCheckStatus = 'ok' | 'empty' | 'error' | 'needs_secret' | 'unchecked';
+
+/**
+ * Строка сверки: источник рутин (kind 'source', итог — routines-state/checks/<slug>.json) или наблюдатели вещей дел
+ * (kind 'watcher', итог — desk/check.json). result — итог последней проверки (нет — ещё не было); usual — сколько раз в день
+ * обычно приходит новое (по последним приходам; нет — мало данных).
+ */
+export type DeskCheckSource = { slug: string; title: string; kind: 'source' | 'watcher'; status: DeskCheckStatus; result?: CheckResult; usual?: number; error?: string };
+
+/** GET /api/desk/check: из итогов источников и наблюдателей, своего не хранит. at — время самой свежей проверки. */
+export type DeskCheckReply = { sources: DeskCheckSource[]; at?: string };

@@ -3,10 +3,11 @@
 import { randomBytes } from 'node:crypto';
 import { readSpaceMeta, spaceSlug } from '../spaces.js';
 import { settingsJiraHosts } from '../things/resolve.js';
+import { deskCheck } from './check.js';
 import { isColumn } from './rules.js';
 import { canonicalKey, resolveThing } from './tools.js';
 import type { DeskStore } from './store.js';
-import type { DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
+import type { DeskCheckReply, DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
 
 export type Reply = { status: number; body: unknown };
 
@@ -15,9 +16,16 @@ const bad = (error: string, status = 400): Reply => ({ status, body: { error } }
 
 const KEY_RE = /^[a-z]+:\S/;
 const KEY_MAX = 600;
+/** Запуск процесса: итог сверки наблюдателей старше — «не проверялось с запуска приложения». */
+export const PROCESS_STARTED = new Date(Date.now() - process.uptime() * 1000);
 
+/**
+ * check — сверка «N из N» (check.ts): сервер собирает её из итогов источников рутин и наблюдателей. Нет — в сверке только
+ * наблюдатели (в тестах и без рутин).
+ */
 export type DeskRouteDeps = {
   store: DeskStore;
+  check?: () => DeskCheckReply;
   /** Есть ли пространство (patch.project); по умолчанию — папка пространства в настройках. */
   hasProject?: (slug: string) => boolean;
   /** Хосты Jira для ссылки на задачу в key; по умолчанию — из настроек. */
@@ -88,6 +96,9 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
   if (p === '/api/desk' && method === 'GET') {
     const reply: DeskListReply = { items: await store.list(filterOf(url.searchParams)), ...((c) => (c ? { check: c } : {}))(store.readCheck()) };
     return ok(reply);
+  }
+  if (p === '/api/desk/check' && method === 'GET') {
+    return ok(deps.check ? deps.check() : deskCheck({ watcher: store.readCheck(), startedAt: PROCESS_STARTED }));
   }
   if (method !== 'POST') return p === '/api/desk' || p.startsWith('/api/desk/') ? bad('Метод не поддерживается', 405) : undefined;
   if (p === '/api/desk/put') {
