@@ -275,6 +275,22 @@ test('собрать flow: папка — по умолчанию, простр�
   }
 });
 
+test('собрать flow: папка по умолчанию — домашняя (как в приложении) — без названной папки сборка не начинается', async () => {
+  const t = setup();
+  t.deps.defaultCwd = os.homedir();
+  try {
+    await t.run(async (call) => {
+      const r = await call('build_flow', { task: 'ревью MR' });
+      assert.equal(r.isError, true);
+      assert.match(out(r), /корень диска и домашняя папка целиком не подходят.*спроси человека/s);
+      return 'спрошу';
+    });
+    assert.deepEqual(t.generated, []);
+  } finally {
+    t.done();
+  }
+});
+
 test('папка для помощника: только названная человеком целиком; подстрока сообщения, предок, корень и домашняя папка не годятся', () => {
   const said = ['собери flow в /proj/mine и/или в «/proj/missing», подожди... ~10 минут, см. https://git.example.com/a/b и ~/work/app.'];
   const allowed = saidDirs(said);

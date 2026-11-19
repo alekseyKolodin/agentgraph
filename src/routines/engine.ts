@@ -11,7 +11,7 @@ import { STATUS_LABEL } from '../reporters.js';
 import { SESSION_PROMPT_MAX } from '../sessions.js';
 import type { RunStatus } from '../api-types.js';
 import type { Notice } from '../notify.js';
-import { checkEvent, checkPrompt, eventText, EVENT_FIELDS_MAX, EVENT_TEXT_MAX, type CheckInput, type CheckResult } from './check.js';
+import { CHECK_MODEL, checkEvent, checkPrompt, eventText, EVENT_FIELDS_MAX, EVENT_TEXT_MAX, type CheckInput, type CheckResult } from './check.js';
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
 import { acquireEngineLock, type EngineOwner, type LockDeps } from './lock.js';
@@ -2019,7 +2019,8 @@ export class RoutineEngine {
   startHistory(slug: string, body: { spec?: unknown; limit?: number }): HistoryRun {
     const key = JSON.stringify([slug, body.spec ?? null, body.limit ?? null]);
     for (const r of this.historyRuns.values()) {
-      if (r.state !== 'working' || r.slug !== slug) continue;
+      // остановленная проверка доживает начатые ответы модели, но это уже не «она же»
+      if (r.state !== 'working' || r.slug !== slug || r.abort.signal.aborted) continue;
       if (r.key === key) return historyRunView(r);
       r.abort.abort();
     }
@@ -2252,6 +2253,9 @@ export class RoutineEngine {
     if (!event && !this.store.logAll(slug).some((x) => x.event.id === eventId)) throw new HttpishError(404, 'Событие не найдено ни в журнале, ни в истории источника');
     const rec: FeedbackRecord = { eventId, verdict, at: this.now().toISOString(), ...(event ? { event } : {}) };
     this.store.setFeedback(slug, rec);
+    // ответ человека меняет примеры проверки: прошлые ответы модели устарели, а для самого события ключ кэша прежний
+    // (событие в свои примеры не входит) — без сброса «Учесть» показало бы тот же ответ из кэша, не спросив модель
+    this.store.setCheckCache(slug, {});
     this.changed();
     return { ok: true };
   }
@@ -2499,7 +2503,7 @@ const HISTORY_PARALLEL = 4;
 
 /** Ключ ответа узла «ИИ рутины»: всё, что уходит модели (условие, событие, примеры, «кто я»), модель и исход «спросить меня». */
 function checkKey(input: CheckInput): string {
-  return createHash('sha256').update(JSON.stringify([input.model ?? '', input.ask === true, checkPrompt(input)])).digest('hex').slice(0, 32);
+  return createHash('sha256').update(JSON.stringify([input.model?.trim() || CHECK_MODEL, input.ask === true, checkPrompt(input)])).digest('hex').slice(0, 32);
 }
 
 /** fn по списку, не больше n одновременно; итог — в порядке списка. Первая ошибка обрывает всё. */

@@ -146,6 +146,10 @@ test('долгий шаг: вызов отвечает «ещё выполняе
       assert.equal(h.a.get('a1')!.steps[0]!.note, 'собираю…');
       assert.equal(h.a.get('a1')!.steps[0]!.state, 'run');
       assert.equal((await call(WAIT_TOOL, { step: 's9' })).isError, true);
+      // пока шаг идёт, второй не начинается: расход идущего ещё не известен, и потолок хода иначе не работал бы
+      const second = await call('slow', {});
+      assert.equal(second.isError, true);
+      assert.match(out(second), /^Шаг s1 ещё выполняется\. Сначала дождись его/);
       slow.open('Собрано');
       assert.equal(out(await call(WAIT_TOOL, { step: 's1' })), 'Собрано');
       return { text: 'Готово.' };

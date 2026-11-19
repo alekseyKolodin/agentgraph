@@ -21,7 +21,7 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
-export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant']);
+export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant', 'assistant-draft']);
 
 const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
 

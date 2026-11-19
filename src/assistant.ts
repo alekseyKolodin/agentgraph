@@ -173,6 +173,8 @@ const errText = (err: unknown): string => (err instanceof Error ? err.message : 
 export function assistantCwd(): string {
   const dir = path.join(configDir(), 'assistant-cwd');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mode действует только при создании: папка от прошлой версии могла остаться открытой
+  fs.chmodSync(dir, 0o700);
   return dir;
 }
 
@@ -246,6 +248,9 @@ export function createAssistant<R>(section: AssistantSection<R>, opts: Assistant
       if (!parsed.success) return text(`Аргументы не подошли: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'вход'} — ${i.message}`).join('; ')}`, true);
       const input = parsed.data as Record<string, unknown>;
       // потолки хода: действие, повторённое много раз, и расход вложенных сессий — помощник не должен жечь деньги по кругу
+      // шаги — по одному: расход шага известен только после его конца, и параллельные шаги обходили бы потолок
+      const busy = [...c.jobs.values()].find((j) => j.step.state === 'run');
+      if (busy) return text(`Шаг ${busy.step.id} ещё выполняется. Сначала дождись его: ${WAIT_TOOL} со step: "${busy.step.id}", потом продолжай.`, true);
       if (spent >= stepsBudget) return text(`Шаги этого сообщения уже потратили $${spent.toFixed(2)} — это потолок на одно сообщение. Больше ничего не запускай: расскажи человеку, что сделано и что не получилось.`, true);
       if (t.level === 'act') {
         const n = (acts.get(t.name) ?? 0) + 1;

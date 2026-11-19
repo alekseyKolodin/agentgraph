@@ -337,9 +337,11 @@ export function routineTools(deps: RoutineAssistantDeps): AssistantTool<RoutineA
       },
       say: (i) => `Собрать flow: ${clip(i.task, 120)}`,
       run: async (input, ctx) => {
-        if (input.cwd) {
-          const problem = dirProblem(input.cwd, allowedDirs(ctx));
-          if (problem) throw new AssistantFail(`Эту папку взять нельзя: ${problem}. Спроси человека, в каком проекте собирать flow, или собери в папке по умолчанию.`);
+        // папка по умолчанию проверяется так же: в приложении это домашняя папка, а сборщик читает всё внутри своей папки
+        const problem = dirProblem(input.cwd || deps.defaultCwd, allowedDirs(ctx));
+        if (problem) {
+          const hint = input.cwd ? 'Спроси человека, в каком проекте собирать flow.' : 'Папка по умолчанию не подходит: спроси человека, в каком проекте собирать flow, и передай её в cwd.';
+          throw new AssistantFail(`Эту папку взять нельзя: ${problem}. ${hint}`);
         }
         const d = await deps.checkDir(input.cwd || deps.defaultCwd);
         if (!d.exists || !d.isDir) throw new AssistantFail('Такой папки нет: спроси человека путь к проекту.');

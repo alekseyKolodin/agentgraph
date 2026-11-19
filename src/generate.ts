@@ -1,5 +1,6 @@
 // Генератор: описание задачи -> FlowSpec (сессия смотрит проект только на чтение и отдаёт structured output).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { compactSpec, flowBlocks, flowJsonSchema, FlowSchema, GeneratedFlowSchema, isWriter, nextRules, phaseSteps, type Block, type FlowSpec, type Until } from './schema.js';
 import { runSession, type LogFn, type SessionEvent, type SessionRequest, type SessionResult } from './agent.js';
@@ -183,6 +184,27 @@ export function generatorGuard(cwd: string, probe: Pick<PathProbe, 'realpath'> =
  * permission_mode, add_dirs и plugins остаются, только если пользователь написал их в задаче — иначе их могло подсказать
  * прочитанное в проекте, а это права без подтверждений.
  */
+/**
+ * Человек назвал это значение отдельным словом, а не частью другого: «auto» в «autotests» и «/Users/me» внутри
+ * «/Users/me/work/app» не считаются — иначе любой названный путь разрешал бы его родителя, а любое слово — режим.
+ */
+export function saidAsWord(text: string, s: string): boolean {
+  if (!s) return false;
+  const part = /[\p{L}\p{N}_/.~-]/u;
+  for (let at = text.indexOf(s); at !== -1; at = text.indexOf(s, at + 1)) {
+    const before = text[at - 1];
+    const after = text[at + s.length];
+    if ((before === undefined || !part.test(before)) && (after === undefined || !part.test(after) || (after === '.' && !part.test(text[at + s.length + 1] ?? ' ')))) return true;
+  }
+  return false;
+}
+
+/** Корень диска или домашняя папка целиком: дать их этапу — дать ему ключи и все репозитории. */
+function wholeRootOrHome(dir: string): boolean {
+  const abs = path.resolve(dir.startsWith('~') ? path.join(os.homedir(), dir.slice(1)) : dir);
+  return abs === path.parse(abs).root || abs === path.resolve(os.homedir());
+}
+
 export function tidyGenerated(spec: FlowSpec, task: string, cwd: string): FlowSpec {
   const prefix = path.resolve(cwd) + path.sep;
   const rel = (s: string | undefined) => (s === undefined ? s : s.split(prefix).join(''));
@@ -190,9 +212,9 @@ export function tidyGenerated(spec: FlowSpec, task: string, cwd: string): FlowSp
     if (u.type === 'command') u.run = rel(u.run)!;
     if (u.type === 'judge') u.prompt = rel(u.prompt)!;
   };
-  const asked = (s: string) => task.includes(s);
-  const keepAsked = (list: string[] | undefined) => {
-    const kept = list?.filter(asked);
+  const asked = (s: string) => saidAsWord(task, s);
+  const keepAsked = (list: string[] | undefined, dirs = false) => {
+    const kept = list?.filter((s) => asked(s) && !(dirs && wholeRootOrHome(s)));
     return kept?.length ? kept : undefined;
   };
   if (spec.defaults?.permission_mode && !asked(spec.defaults.permission_mode)) delete spec.defaults.permission_mode;
@@ -207,7 +229,7 @@ export function tidyGenerated(spec: FlowSpec, task: string, cwd: string): FlowSp
       p.system = rel(p.system);
       for (const k of ['handoff', 'system'] as const) if (p[k] === undefined) delete p[k];
       if (p.permission_mode && !asked(p.permission_mode)) delete p.permission_mode;
-      p.add_dirs = keepAsked(p.add_dirs);
+      p.add_dirs = keepAsked(p.add_dirs, true);
       p.plugins = keepAsked(p.plugins);
       for (const k of ['add_dirs', 'plugins'] as const) if (!p[k]) delete p[k];
     }

@@ -1381,6 +1381,25 @@ test('проверка на истории: сбой проверки не за�
   }
 });
 
+test('проверка на истории: ответ человека («Учесть») сбрасывает кэш — модель читает событие заново', async () => {
+  const t = setup({ check: () => ({ match: true, duplicate: false, reason: 'да', costUsd: 0.01 }) });
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', check: 'баг' } });
+    await t.push(t.event('1'));
+    const live = t.checks.length;
+    await t.engine.history('r', {});
+    await t.engine.history('r', {});
+    assert.equal(t.checks.length, live + 1);
+    t.engine.setFeedback('r', { eventId: '1', verdict: 'no_match' });
+    assert.deepEqual(t.store.checkCache('r'), {});
+    await t.engine.history('r', {});
+    assert.equal(t.checks.length, live + 2);
+  } finally {
+    t.done();
+  }
+});
+
 test('проверка на истории: модель читает события по несколько сразу, итог — в порядке событий', async () => {
   let now = 0;
   let peak = 0;
@@ -1458,6 +1477,13 @@ test('проверка на истории с ходом: другое прав�
     assert.equal(Object.keys(t.store.checkCache('r')).length, 4);
     assert.equal(t.engine.stopHistory('r', second.id), true);
     assert.equal(t.engine.stopHistory('r', 'nope'), false);
+    // «Проверить снова» сразу после «Остановить»: остановленная проверка ещё дочитывает начатое, но это новая проверка
+    const third = t.engine.startHistory('r', { spec: rule('не баг') });
+    assert.notEqual(third.id, second.id);
+    while (t.engine.historyRun('r', third.id)!.state === 'working') {
+      gates.splice(0).forEach((g) => g());
+      await tick();
+    }
     while (t.engine.historyRun('r', second.id)!.state === 'working') {
       gates.splice(0).forEach((g) => g());
       await tick();

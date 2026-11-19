@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DESIGN_RULES, generateFlow, generatorGuard, tidyGenerated, validateReferences } from './generate.js';
+import { DESIGN_RULES, generateFlow, generatorGuard, saidAsWord, tidyGenerated, validateReferences } from './generate.js';
 import type { runSession, SessionEvent, SessionRequest, SessionResult } from './agent.js';
 import { FlowSchema, type FlowSpec } from './schema.js';
 
@@ -135,6 +135,17 @@ test('сгенерированный flow: права без подтвержд�
   assert.deepEqual(asked.blocks![0].plugins, ['~/evil-plugin']);
   assert.equal(asked.blocks![0].phases![0].permission_mode, 'acceptEdits');
   assert.deepEqual(asked.blocks![0].phases![0].add_dirs, ['~/specs'], 'не названная папка отброшена');
+});
+
+test('права собранного flow: значение названо отдельным словом, а не частью другого; корень и домашняя папка не даются', () => {
+  const g = generated('/p');
+  g.defaults = { ...g.defaults, permission_mode: 'auto' };
+  g.blocks![0].phases![0].add_dirs = ['/Users/me', '/', '/Users/me/work/app'];
+  const t = tidyGenerated(g, 'прогони autotests в /Users/me/work/app и /, плагин /x/auto-deploy.', '/p');
+  assert.equal(t.defaults?.permission_mode, undefined, '«auto» внутри «autotests» — не режим');
+  assert.deepEqual(t.blocks![0].phases![0].add_dirs, ['/Users/me/work/app'], 'предок названного пути и корень не даются');
+  assert.equal(saidAsWord('режим auto.', 'auto'), true, 'точка в конце фразы — граница слова');
+  assert.equal(saidAsWord('/x/auto-deploy', 'auto'), false);
 });
 
 test('переменная шаблона в команде условия — ошибка, шаблон Go — нет', () => {
