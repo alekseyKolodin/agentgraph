@@ -139,6 +139,12 @@ test('шаг «Дело»: без flow рутина только заводит 
   // дела из flow без flow заводить некому; вид дела обязателен
   assert.deepEqual(draftMissing({ ...d, taskFrom: 'flow' }), ['flow']);
   assert.deepEqual(draftMissing({ ...d, taskKind: ' ' }), ['kind']);
+  // «условие словами» без условия не сохраняется молча как «вещь закрыта»
+  assert.deepEqual(draftMissing({ ...d, taskClose: '' }), ['close']);
+  // без flow пространство формы — проект дела; с flow — пространство запуска
+  assert.equal(buildSpec({ ...d, space: 'billing' }, []).task?.project, 'billing');
+  assert.equal(draftFromSpec(buildSpec({ ...d, space: 'billing' }, [])).space, 'billing');
+  assert.equal(buildSpec({ ...d, space: 'billing', flow: 'review' }, []).task?.project, undefined);
 });
 
 test('шаг «Дело» с flow: все поля блока task туда и обратно', () => {

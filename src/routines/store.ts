@@ -54,7 +54,7 @@ export type FileEntry<T> = { slug: string; yaml: string } & Parsed<T>;
 export type CatchUpRecord = CatchUp & { items: RoutineEvent[]; matchingIds: string[] };
 
 /** Событие, ждущее очереди parallel. */
-export type QueueItem = { routine: string; event: RoutineEvent; at: string; /** Строка журнала limit, которая станет started. */ logId?: string; /** Решение человека: per_day не действует. */ human?: boolean };
+export type QueueItem = { routine: string; event: RoutineEvent; at: string; /** Строка журнала limit, которая станет started. */ logId?: string; /** Решение человека: per_day не действует. */ human?: boolean; /** Дело события (рутина с task): запуск переносит его «В работу». */ deskKey?: string };
 
 /** Обратная связь на диске: со снимком события — для примеров проверки словами. */
 export type FeedbackRecord = Feedback & { at: string; event?: RoutineEvent };
@@ -377,6 +377,14 @@ export class RoutineStore {
   lastCheck = (key: string): string | undefined => this.lastChecks()[key];
   setLastCheck(key: string, at: string): void {
     this.writeJson(this.stateFile('last-check.json'), { ...this.lastChecks(), [key]: at });
+  }
+  /** Снять отметки, чьи ключи подходят (удалена рутина: её засев дел — заново). */
+  deleteLastChecks(match: (key: string) => boolean): void {
+    const cur = this.lastChecks();
+    const keys = Object.keys(cur).filter(match);
+    if (!keys.length) return;
+    for (const k of keys) delete cur[k];
+    this.writeJson(this.stateFile('last-check.json'), cur);
   }
 }
 

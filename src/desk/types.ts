@@ -48,10 +48,13 @@ export type DeskItem = {
   closed?: { at: string; reason: string };
   /** Последний ход по вещи от наблюдателя: правила срабатывают только на его изменение. */
   turn?: 'me' | 'others' | 'none';
-  /** Как закрывается: 'thing' (по умолчанию) — сверка закрывает, когда вещь закрыта; 'never' — только руками; иное — условие словами. */
-  close?: string;
   /** Отпечаток последнего применённого состояния вещи (closed + turn + updatedAt), чтобы правило сработало один раз. */
   seen?: string;
+  /**
+   * Правило закрытия (task.close рутины): 'thing' или нет — сверка закрывает, когда вещь закрыта; 'never' — только руками;
+   * иная строка — условие словами (на этапе 3 сверка его не исполняет — как 'never').
+   */
+  close?: string;
 };
 
 /**
@@ -69,10 +72,10 @@ export type DeskPatch = {
   due?: string;
   thing?: DeskItem['thing'];
   links?: Partial<DeskLinks>;
-  /** Правило закрытия (task.close рутины), как DeskItem.close; передано — перезаписывает. */
-  close?: string;
   /** Пришло новое по тому же: 'plan' — из «Ждёт других»/«Готово» в «В плане» (по умолчанию), 'keep' — колонка та же. */
   onRepeat?: 'plan' | 'keep';
+  /** Правило закрытия дела (DeskItem.close); у существующего дела переданное перезаписывает. */
+  close?: string;
 };
 
 export type DeskFilter = { column?: DeskColumn | DeskColumn[]; project?: string; kind?: string; key?: string; open?: boolean };

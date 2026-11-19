@@ -46,13 +46,16 @@ function fakeDesk(o: { fail?: boolean } = {}) {
       return items.get(key);
     },
     async list() {
+      if (o.fail) throw new Error('диск занят');
       return [...items.values()];
     },
     async get(key) {
       return items.get(key);
     },
   };
-  return { api, items, calls, puts: () => calls.filter((c): c is Extract<Call, { op: 'put' }> => c.op === 'put') };
+  const allPuts = () => calls.filter((c): c is Extract<Call, { op: 'put' }> => c.op === 'put');
+  // puts — дела по сигналам; links — привязка запуска к делу (put без сигнала)
+  return { api, items, calls, puts: () => allPuts().filter((c) => c.patch.signal), links: () => allPuts().filter((c) => !c.patch.signal) };
 }
 
 function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
@@ -62,6 +65,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
   const items: Record<string, RoutineEvent[]> = { gl: [], chat: [] };
   const started: RoutineRunRequest[] = [];
   const desk = fakeDesk({ fail: o.failDesk });
+  const checks: string[] = [];
   const kind: SourceKind = {
     kind: 'fake',
     title: 'Фейк',
@@ -87,7 +91,10 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
     jiraHosts: () => [],
     desk: () => desk.api,
-    projectOf: (spec) => spec.run?.space,
+    check: async (i) => {
+      checks.push(i.event.id);
+      return { match: true, duplicate: false, reason: 'подходит', costUsd: 0 };
+    },
     log: () => {},
     lock: { who: 'test', deps: { alive: () => false } },
   });
@@ -118,7 +125,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
     await engine.idle();
   };
   const log = (slug: string) => engine.logOf(slug, {}).reverse();
-  return { root, store, engine, items, started, desk, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, engine, items, started, desk, checks, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('рутина без flow: событие заводит дело по ключу вещи — без запуска, строка журнала «дело»', async () => {
@@ -183,6 +190,8 @@ test('рутина с flow и task: дело заводится, запуск н
     await t.push('gl', t.gl('review:1'));
     assert.equal(t.started.length, 1);
     assert.equal(t.desk.puts()[0].patch.project, 'billing');
+    // запуск привязан к делу ссылкой
+    assert.deepEqual(t.desk.links().map((c) => [c.key, c.patch]), [[MR_KEY, { links: { runs: ['run-1'] } }]]);
     assert.deepEqual(t.desk.calls.filter((c) => c.op === 'move').map((c) => [c.key, (c as { column: string }).column, c.by]), [[MR_KEY, 'work', 'routine']]);
     const line = t.log('gitlab')[0];
     assert.equal(line.outcome, 'started');
@@ -341,6 +350,61 @@ test('3.9: проверка на истории — дело, в план, за�
     const none = await t.engine.history('plain', {});
     assert.equal(none.tasks, undefined);
     assert.equal(none.events[0].task, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('проект дела: task.project у рутины без flow, иначе пространство запуска', async () => {
+  const t = setup();
+  try {
+    t.routine('only', 'gl', { run: undefined, task: { kind: 'Ревью', project: 'billing' } });
+    t.routine('both', 'gl', { run: { flow: 'review', input: 'другое', space: 'shop' } });
+    await t.push('gl', t.gl('review:1'));
+    assert.deepEqual(t.desk.puts().map((p) => [p.patch.signal?.routine, p.patch.project]).sort(), [['both', 'shop'], ['only', 'billing']]);
+  } finally {
+    t.done();
+  }
+});
+
+test('засев: доска недоступна — отметки нет, засев на следующем опросе; удалённая рутина засевается заново', async () => {
+  const t = setup({ lastCheck: false, failDesk: true });
+  try {
+    t.routine('only', 'gl', { run: undefined });
+    await t.push('gl', t.gl('review:1'));
+    // ни строк ошибок по каждой записи, ни отметки засева
+    assert.deepEqual(t.log('only'), []);
+    assert.equal(t.store.lastCheck('task:only@gl'), undefined);
+  } finally {
+    t.done();
+  }
+  const u = setup({ lastCheck: false });
+  try {
+    u.routine('only', 'gl', { run: undefined });
+    await u.push('gl', u.gl('review:1'));
+    assert.ok(u.store.lastCheck('task:only@gl'));
+    u.engine.deleteRoutine('only');
+    assert.equal(u.store.lastCheck('task:only@gl'), undefined);
+    u.routine('only', 'gl', { run: undefined });
+    await u.engine.pollSource('gl');
+    await u.engine.idle();
+    assert.equal(u.desk.puts().length, 2);
+  } finally {
+    u.done();
+  }
+});
+
+test('простой с проверкой словами: «догнать» не проверяет второй раз и берёт дело из строки засева', async () => {
+  const t = setup();
+  try {
+    t.routine('both', 'gl', { run: { flow: 'review' }, when: { source: 'gl', check: 'это ревью' } });
+    await t.push('gl', t.gl('review:1', { at: '2026-11-17T09:30:00.000Z' }));
+    assert.deepEqual(t.checks, ['review:1']);
+    const [row] = t.engine.catchUps();
+    await t.engine.catchUpAction(row.id, 'run');
+    assert.deepEqual(t.checks, ['review:1']);
+    assert.equal(t.started.length, 1);
+    assert.equal(t.log('both').at(-1)?.deskKey, MR_KEY);
   } finally {
     t.done();
   }

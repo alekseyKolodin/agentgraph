@@ -53,6 +53,8 @@ test('блок task: рутина без run только заводит дел�
   assert.match(parseRoutineYaml('title: X\nwhen: { source: s }\nmode: auto\ntask: { kind: " " }\n').problems[0], /^task\.kind/);
   // без запуска отвечать нечему — проблема правила, а не тихий пропуск
   assert.deepEqual(routineProblems({ ...only.spec!, reply: { to: 'source' } }, { ...ctx, sourceExists: () => true }), ['ответ: рутина без flow только заводит дела — отвечать в источник нечему']);
+  // расписание без flow дел не заводит
+  assert.match(routineProblems({ ...only.spec!, when: { schedule: '0 9 * * *' } }, ctx)[0], /^расписание без flow/);
 });
 
 test('слаг: кириллица транслитом, занятый — с номером, пустой — запасной', () => {

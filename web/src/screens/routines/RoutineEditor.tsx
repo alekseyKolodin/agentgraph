@@ -117,7 +117,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
   // источник «через Claude» без настроенного ответа: «в источник» ответить нечем
   const replyNotSet = !isSchedule(d) && d.reply !== 'off' && source?.spec.kind === 'connector' && !source.canReply && d.replyTo === 'source';
   const moreSummary = [
-    d.worktree === 'new' ? t('новое рабочее дерево') : d.cwd ? d.cwd : '',
+    !runs ? '' : d.worktree === 'new' ? t('новое рабочее дерево') : d.cwd ? d.cwd : '',
     !runs ? '' : d.reply === 'off' ? t('без ответа') : replyNotSet ? t('ответ в источник не настроен') : `${t('ответ')} ${replyWhere(source?.spec.kind, d.replyTo, data.sources)} ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
     d.usd ? t('до {usd} за запуск', { usd: `$${d.usd}` }) : '',
     d.perDay ? t('{n} в день', { n: d.perDay }) : '',
@@ -212,6 +212,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
         <span className={styles.barGap} />
         {missing.includes('block') && <span className="warn small">{t('Выбери блок, перед которым ждать.')}</span>}
         {missing.includes('kind') && <span className="warn small">{t('Назови вид дела.')}</span>}
+        {missing.includes('close') && <span className="warn small">{t('Напиши, когда закрыть дело.')}</span>}
         {draft || r.spec.enabled === false ? (
           <>
             <button type="button" className="btn" disabled={saving || !dirty || missing.length > 0} onClick={() => void save(false)}>
@@ -310,6 +311,10 @@ const KINDS = ['Ревью', 'Jira', 'Встреча', 'Задача', 'Своё
  */
 function TaskClause({ d, set }: ClauseProps) {
   const closeChoice = isCloseText(d.taskClose) ? 'text' : d.taskClose;
+  const spacesOn = useFeature('spaces');
+  // у рутины без flow проект дела выбирается здесь (с flow — пространство запуска в «Запустить»)
+  const ownProject = spacesOn && !draftRuns(d);
+  const spaces = useSpaces(ownProject);
   return (
     <div className={styles.clause}>
       <span className={styles.k}>{t('Дело')}</span>
@@ -352,6 +357,12 @@ function TaskClause({ d, set }: ClauseProps) {
                 <option value="flow">{t('flow, инструментом desk_put')}</option>
               </select>
             </div>
+            {ownProject && (
+              <div className={styles.inline}>
+                <span>{t('Проект дела')}</span>
+                <SpacePicker id="routine-task-space" value={d.space} onChange={(space) => set({ space })} options={spaces.data?.spaces ?? []} loading={spaces.isPending} compact placeholder={t('без проекта')} className={styles.flowSearch} inputClassName={styles.slot} />
+              </div>
+            )}
             {d.taskFrom === 'event' && (
               <>
                 <div className={styles.sentence}>
@@ -441,19 +452,21 @@ function More({ d, set, r, data, kindCanReply, replyNotSet, source, onYamlSaved 
   const toggleOn = (v: 'start' | 'pause' | 'end') => set({ replyOn: d.replyOn.includes(v) ? d.replyOn.filter((x) => x !== v) : [...d.replyOn, v] });
   return (
     <>
-      <div className={styles.clause}>
-        <span className={styles.k}>{t('Где')}</span>
-        <div className={styles.clauseBody}>
-          <div className={styles.sentence}>
-            {t('в')}{' '}
-            <select className={styles.slot} aria-label={t('Рабочее дерево')} value={d.worktree} onChange={(e) => set({ worktree: e.target.value as 'new' | 'none' })}>
-              <option value="none">{t('рабочей папке')}</option>
-              <option value="new">{t('новом рабочем дереве')}</option>
-            </select>
+      {draftRuns(d) && (
+        <div className={styles.clause}>
+          <span className={styles.k}>{t('Где')}</span>
+          <div className={styles.clauseBody}>
+            <div className={styles.sentence}>
+              {t('в')}{' '}
+              <select className={styles.slot} aria-label={t('Рабочее дерево')} value={d.worktree} onChange={(e) => set({ worktree: e.target.value as 'new' | 'none' })}>
+                <option value="none">{t('рабочей папке')}</option>
+                <option value="new">{t('новом рабочем дереве')}</option>
+              </select>
+            </div>
+            <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
           </div>
-          <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
         </div>
-      </div>
+      )}
       {draftRuns(d) && (
         <div className={styles.clause}>
           <span className={styles.k}>{t('Ответить')}</span>
@@ -486,27 +499,31 @@ function More({ d, set, r, data, kindCanReply, replyNotSet, source, onYamlSaved 
           </div>
         </div>
       )}
-      <div className={styles.clause}>
-        <span className={styles.k}>{t('Лимит')}</span>
-        <div className={styles.inline}>
-          <label className={styles.inline}>
-            <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={5} inputMode="decimal" aria-label={t('Бюджет на запуск, $')} placeholder="$" value={d.usd} onChange={(e) => set({ usd: e.target.value })} />
-            <span>{t('на запуск,')}</span>
-          </label>
-          <label className={styles.inline}>
-            <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={3} inputMode="numeric" aria-label={t('Запусков в день')} value={d.perDay} onChange={(e) => set({ perDay: e.target.value })} />
-            <span>{t('запусков в день,')}</span>
-          </label>
-          <label className={styles.inline}>
-            <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={3} inputMode="numeric" aria-label={t('Одновременно')} value={d.parallel} onChange={(e) => set({ parallel: e.target.value })} />
-            <span>{t('одновременно')}</span>
-          </label>
-        </div>
-      </div>
-      <div className={styles.clause}>
-        <span className={styles.k}>{t('Модель')}</span>
-        <input className={cx(styles.inp, styles.mono, styles.flowSearch)} placeholder={t('как в flow')} value={d.model} onChange={(e) => set({ model: e.target.value })} />
-      </div>
+      {draftRuns(d) && (
+        <>
+          <div className={styles.clause}>
+            <span className={styles.k}>{t('Лимит')}</span>
+            <div className={styles.inline}>
+              <label className={styles.inline}>
+                <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={5} inputMode="decimal" aria-label={t('Бюджет на запуск, $')} placeholder="$" value={d.usd} onChange={(e) => set({ usd: e.target.value })} />
+                <span>{t('на запуск,')}</span>
+              </label>
+              <label className={styles.inline}>
+                <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={3} inputMode="numeric" aria-label={t('Запусков в день')} value={d.perDay} onChange={(e) => set({ perDay: e.target.value })} />
+                <span>{t('запусков в день,')}</span>
+              </label>
+              <label className={styles.inline}>
+                <input className={cx(styles.inp, styles.mono, styles.inlineSel)} size={3} inputMode="numeric" aria-label={t('Одновременно')} value={d.parallel} onChange={(e) => set({ parallel: e.target.value })} />
+                <span>{t('одновременно')}</span>
+              </label>
+            </div>
+          </div>
+          <div className={styles.clause}>
+            <span className={styles.k}>{t('Модель')}</span>
+            <input className={cx(styles.inp, styles.mono, styles.flowSearch)} placeholder={t('как в flow')} value={d.model} onChange={(e) => set({ model: e.target.value })} />
+          </div>
+        </>
+      )}
       <div className={styles.clause}>
         <span className={styles.k}>YAML</span>
         <div className={styles.clauseBody}>

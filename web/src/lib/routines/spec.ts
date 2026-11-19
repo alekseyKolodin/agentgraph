@@ -88,7 +88,7 @@ export function emptyDraft(): RoutineDraft {
   };
 }
 
-/** Шаг «Дело» → блок task. Значения по умолчанию не пишутся. */
+/** Шаг «Дело» → блок task. Значения по умолчанию не пишутся; проект — пространство формы, если flow нет (иначе run.space). */
 export function taskRule(d: RoutineDraft): TaskRule | undefined {
   if (!d.taskOn) return undefined;
   const close = d.taskClose.trim();
@@ -99,6 +99,7 @@ export function taskRule(d: RoutineDraft): TaskRule | undefined {
     ...(d.taskSame ? { same: d.taskSame } : {}),
     ...(d.taskRepeat !== 'plan' ? { on_repeat: d.taskRepeat } : {}),
     ...(close && close !== 'thing' ? { close } : {}),
+    ...(!draftRuns(d) && d.space ? { project: d.space } : {}),
   };
 }
 
@@ -182,7 +183,7 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
     missed: sched ? (w.missed ?? 'ask') : 'ask',
     flow: run?.flow ?? '',
     input: run?.input ?? '',
-    space: run?.space ?? '',
+    space: run?.space ?? task?.project ?? '',
     cwd: run?.cwd ?? '',
     worktree: run?.worktree === 'new' ? 'new' : 'none',
     pauseBefore: run?.pause_before ?? [],
@@ -209,13 +210,15 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
   };
 }
 
-/** Чего не хватает, чтобы сохранить: источник, flow (не нужен, если рутина только заводит дела), блок у «перед блоком», вид дела. */
-export function draftMissing(d: RoutineDraft): Array<'source' | 'flow' | 'block' | 'kind'> {
-  const out: Array<'source' | 'flow' | 'block' | 'kind'> = [];
+/** Чего не хватает, чтобы сохранить: источник, flow (не нужен, если рутина только заводит дела), блок у «перед блоком», вид дела, условие закрытия. */
+export function draftMissing(d: RoutineDraft): Array<'source' | 'flow' | 'block' | 'kind' | 'close'> {
+  const out: Array<'source' | 'flow' | 'block' | 'kind' | 'close'> = [];
   if (!d.source) out.push('source');
   if (!d.flow && (!d.taskOn || d.taskFrom === 'flow')) out.push('flow');
   if (d.flow && d.mode === 'until_pause' && !d.pauseBefore.length) out.push('block');
   if (d.taskOn && !d.taskKind.trim()) out.push('kind');
+  // «условие словами» выбрано, а условия нет — иначе молча сохранилось бы закрытие по вещи
+  if (d.taskOn && d.taskFrom === 'event' && !d.taskClose.trim()) out.push('close');
   return out;
 }
 

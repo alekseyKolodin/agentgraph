@@ -598,21 +598,27 @@ export class RoutineEngine {
       // 3.4: рутина с task, которая этот источник ещё не видела, заводит дела по текущему списку (а не только запоминает):
       // ревью, на которые уже назначили до подключения, — тоже дела. Засев — только то, что уже было видено до этой пачки
       // (у самого первого опроса источника — всё): запусков и ожиданий по нему нет. Новое в пачке идёт обычным путём.
-      const toSeed = this.taskRoutines(source).filter((r) => !this.store.lastCheck(seedKey(r.slug)));
-      if (toSeed.length) {
+      // Засев — не больше SEED_MAX самых свежих записей (лента чата — не список дел). Доска недоступна — засев ждёт
+      // следующего опроса (журнал не забивается ошибками); отметка ставится, только когда все дела завелись.
+      const toSeed = this.taskRoutines(source).filter((r) => !this.store.lastCheck(seedKey(r.slug, source)));
+      if (toSeed.length && (await this.deskReady())) {
         const freshIds = new Set(fresh.map((e) => e.id));
-        const list = events.filter((e) => notSelf(e) && (!lastCheck || !freshIds.has(e.id)));
+        const list = events
+          .filter((e) => notSelf(e) && (!lastCheck || !freshIds.has(e.id)))
+          .sort((a, b) => a.at.localeCompare(b.at))
+          .slice(-SEED_MAX);
         this.addThings(list.filter((e) => !e.things));
-        list.sort((a, b) => a.at.localeCompare(b.at));
         for (const r of toSeed) {
+          let ok = true;
           for (const e of list) {
             try {
-              await this.process(r.slug, r.spec, e, { seed: 'было в источнике, когда рутина начала заводить дела' });
+              if ((await this.process(r.slug, r.spec, e, { seed: 'было в источнике, когда рутина начала заводить дела' })).outcome === 'error') ok = false;
             } catch (err) {
+              ok = false;
               this.failed(r.slug, e, err);
             }
           }
-          this.store.setLastCheck(seedKey(r.slug), this.now().toISOString());
+          if (ok) this.store.setLastCheck(seedKey(r.slug, source), this.now().toISOString());
         }
       }
       if (!fresh.length) return;
@@ -750,7 +756,10 @@ export class RoutineEngine {
     let why: string | undefined;
     let checkCost: number | undefined;
     const task = taskFromEvent(spec);
-    if (!isSchedule(spec.when)) {
+    // «догнать» у рутины с делом: событие простоя уже прошло путь и завело дело — проверку словами второй раз не платим
+    const seededRow = task && o.noPut ? this.seededRow(slug, e) : undefined;
+    if (seededRow) why = seededRow.why;
+    if (!isSchedule(spec.when) && !seededRow) {
       const m = matchRule(spec.when.match, e);
       // засев по текущему списку: то, что под условия не подошло, журнал не забивает (рутина его и так не взяла бы)
       if (!m.ok) return o.seed ? { outcome: 'filtered', reason: m.reason } : this.record(slug, e, 'filtered', { reason: m.reason });
@@ -769,7 +778,8 @@ export class RoutineEngine {
           return this.record(slug, e, 'error', { reason: msg(err) });
         }
         const cost = c.costUsd > 0 ? { costUsd: c.costUsd, checkCostUsd: c.costUsd } : {};
-        if (!c.match) return this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
+        // засев: неподошедшее журнал не забивает, но расход проверки остаётся в журнале одной строкой check_no
+        if (!c.match) return o.seed && !c.costUsd ? { outcome: 'check_no', reason: c.reason } : this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
         // «Не повтор» от человека сильнее ответа модели
         if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') return this.record(slug, e, 'duplicate', { reason: c.reason, ...cost });
         why = c.reason?.trim() || undefined;
@@ -780,7 +790,7 @@ export class RoutineEngine {
     const spent = checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {};
     let deskKey: string | undefined;
     if (task) {
-      if (o.noPut) deskKey = deskKeyOf(task, e).key;
+      if (o.noPut) deskKey = seededRow?.deskKey;
       else {
         try {
           deskKey = await this.putTask(slug, spec, task, e, why);
@@ -790,7 +800,11 @@ export class RoutineEngine {
           this.say(`[${slug}] дело по событию «${e.title}» не завелось: ${msg(err)}`);
         }
       }
-      if (!spec.run || o.seed) return this.record(slug, e, 'task', { ...(deskKey ? { deskKey } : {}), ...(o.seed ? { reason: o.seed } : {}), ...(why ? { why } : {}), ...spent });
+      if (!spec.run || o.seed) {
+        // примеры проверки словами на повтор — и у рутины без flow
+        this.store.addEvent(slug, 'started', e);
+        return this.record(slug, e, 'task', { ...(deskKey ? { deskKey } : {}), ...(o.seed ? { reason: o.seed } : {}), ...(why ? { why } : {}), ...spent });
+      }
       if (!o.human) {
         const same = this.sameFiring(slug, spec, e);
         if (same) return this.record(slug, e, 'duplicate', { reason: same.reason, sameAs: { routine: same.routine, logId: same.logId }, ...(deskKey ? { deskKey } : {}), ...spent });
@@ -815,7 +829,27 @@ export class RoutineEngine {
       if (!o.quiet) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
       return { outcome: 'waiting', wait };
     }
-    return this.launch(slug, spec, e, { human: o.human, why, checkCost });
+    return this.launch(slug, spec, e, { human: o.human, why, checkCost, deskKey });
+  }
+
+  /** Строка журнала «дело» по этому событию (засев, простой): с ней «догнать» не проверяет и не заводит дело заново. */
+  private seededRow(slug: string, e: RoutineEvent): LogEntry | undefined {
+    try {
+      return this.store.logAll(slug).find((x) => x.outcome === 'task' && x.event.source === e.source && x.event.id === e.id);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Доска отвечает: засев по текущему списку без неё не начинаем (иначе — строка ошибки на каждую запись). */
+  private async deskReady(): Promise<boolean> {
+    try {
+      await this.deskApi().list({ open: true });
+      return true;
+    } catch (err) {
+      this.say(`дела по текущему списку не заводятся — доска недоступна: ${msg(err)}`);
+      return false;
+    }
   }
 
   /** Включённые рутины на этом источнике, у которых событие и есть дело (task без from: flow). */
@@ -866,25 +900,29 @@ export class RoutineEngine {
   }
 
   /** Перенос дела рутины (запуск начат → «В работе», «Не сейчас» → «В плане», «Не то» → закрыто). Сбой доски запуск не валит. */
-  private async moveTask(key: string | undefined, how: { column: 'work' | 'plan'; by: 'routine' | 'me'; why: string } | { close: string }): Promise<void> {
+  private async moveTask(key: string | undefined, how: { column: 'work' | 'plan'; by: 'routine' | 'me'; why: string; runId?: string } | { close: string }): Promise<void> {
     if (!key) return;
     try {
       if ('close' in how) await this.deskApi().close(key, how.close, 'me');
-      else await this.deskApi().move(key, how.column, how.by, how.why);
+      else {
+        // ссылка на запуск — put без сигнала: колонку он не двигает, двигает move
+        if (how.runId) await this.deskApi().put(key, { links: { runs: [how.runId] } }, 'routine');
+        await this.deskApi().move(key, how.column, how.by, how.why);
+      }
     } catch (err) {
       this.say(`дело ${key} не перенесено: ${msg(err)}`);
     }
   }
 
   /** Запуск с лимитами: per_day (кроме решения человека), parallel — в очередь, usd — бюджет запуска. */
-  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; why?: string; checkCost?: number } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
+  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; why?: string; checkCost?: number; /** Дело события: запуск переносит его «В работу». */ deskKey?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
     const lim = spec.limits ?? {};
     // строка ожидания или очереди уже хранит why и расход проверки — патч их не трогает
     const w = { ...(o.why ? { why: o.why } : {}), ...(o.checkCost ? { costUsd: o.checkCost, checkCostUsd: o.checkCost } : {}) };
     // сервер останавливается: запуск не начинаем, событие ждёт в очереди следующего старта (виденным оно уже стало)
     if (this.stopped) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId, ...w });
-      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}) }]);
+      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
       return { outcome: 'limit', reason: entry.reason };
     }
     if (!o.human && lim.per_day && this.startedToday(slug) >= lim.per_day) {
@@ -892,7 +930,7 @@ export class RoutineEngine {
     }
     if (lim.parallel && this.activeOf(slug) >= lim.parallel) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: `в очереди: идут ${lim.parallel} из ${lim.parallel}`, logId: o.logId, ...w });
-      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}) }]);
+      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
       this.changed();
       return { outcome: 'limit', reason: entry.reason };
     }
@@ -917,13 +955,13 @@ export class RoutineEngine {
         /* уже кончился */
       }
     }
-    const task = taskFromEvent(spec);
-    const deskKey = task ? deskKeyOf(task, e).key : undefined;
+    const deskKey = o.deskKey;
     const entry = this.upsertLog(slug, e, 'started', { runId, logId: o.logId, reason: undefined, startedAt: this.now().toISOString(), ...w, ...(deskKey ? { deskKey } : {}) });
     this.active.set(runId, { routine: slug, event: e, logId: entry.id, paused: new Set() });
-    await this.moveTask(deskKey, { column: 'work', by: 'routine', why: `запущен flow ${spec.run?.flow ?? ''}`.trim() });
     this.store.addEvent(slug, 'started', e);
     this.changed();
+    // дело — «В работу» со ссылкой на запуск (конец запуска сервер допишет делу сам); доска запуск не задерживает
+    if (deskKey) void this.moveTask(deskKey, { column: 'work', by: 'routine', why: `запущен flow ${spec.run?.flow ?? ''}`.trim(), runId });
     // при draft «Взял в работу» не уходит: черновик ждёт решения человека (на паузе или в конце)
     if (spec.reply && spec.reply.to !== 'none' && !spec.reply.draft && (spec.reply.on ?? ['start']).includes('start')) {
       await this.reply(slug, spec, e, routineTexts(e).taken(e.title), entry.id);
@@ -969,7 +1007,7 @@ export class RoutineEngine {
       const r = this.store.routine(item.routine);
       if (!r?.spec) continue;
       try {
-        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human });
+        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human, ...(item.deskKey ? { deskKey: item.deskKey } : {}) });
       } catch (err) {
         this.failed(item.routine, item.event, err);
       }
@@ -1203,7 +1241,10 @@ export class RoutineEngine {
       if (w.kind === 'suggest') {
         if (a.action === 'run') {
           if (!spec) throw new HttpishError(404, 'Рутина удалена');
-          runId = (await this.enqueue(() => this.launch(w.routine, spec, w.event, { human: true, logId }))).runId;
+          const res = await this.enqueue(() => this.launch(w.routine, spec, w.event, { human: true, logId, ...(w.deskKey ? { deskKey: w.deskKey } : {}) }));
+          runId = res.runId;
+          // запуск не начался, а ожидание уже снято: дело не остаётся в «Новом» без кнопки — уходит в план
+          if (res.outcome === 'error') await this.moveTask(w.deskKey, { column: 'plan', by: 'routine', why: res.reason ?? 'запуск не начался' });
         } else {
           this.reject(w, logId);
           await this.moveTask(w.deskKey, { close: 'человек ответил «не то»' });
@@ -1510,6 +1551,8 @@ export class RoutineEngine {
     }
     const before = this.store.routine(slug)?.spec;
     this.store.writeRoutine(slug, text);
+    // дела из событий только что включили — текущий список источника заводится делами заново
+    if (taskFromEvent(spec) && !(before && taskFromEvent(before))) this.store.deleteLastChecks((k) => k.startsWith(seedKey(slug, '')));
     // расписание считает пропуски с момента сохранения, а не с прошлой жизни рутины
     if (isSchedule(spec.when) && (!before || !isSchedule(before.when) || before.when.schedule !== spec.when.schedule || before.enabled === false)) this.store.setLastCheck(this.scheduleKey(slug), this.now().toISOString());
     this.changed();
@@ -1520,6 +1563,9 @@ export class RoutineEngine {
   deleteRoutine(slug: string): void {
     if (!this.store.deleteRoutine(slug)) throw new HttpishError(404, 'Рутина не найдена');
     this.store.deleteRoutineState(slug);
+    // рутина с тем же слагом заново — засев дел заново; дела её ожиданий не висят в «Новом» без кнопки — в план
+    this.store.deleteLastChecks((k) => k.startsWith(seedKey(slug, '')));
+    for (const w of this.store.waits()) if (w.routine === slug && w.kind === 'suggest' && w.deskKey) void this.moveTask(w.deskKey, { column: 'plan', by: 'routine', why: 'рутина удалена' });
     this.store.setWaits(this.store.waits().filter((w) => w.routine !== slug || w.kind === 'pause'));
     this.store.setCatchUp(this.store.catchUp().filter((c) => c.routine !== slug));
     this.store.setQueue(this.store.queue().filter((q) => q.routine !== slug));
@@ -2039,7 +2085,9 @@ function taskFromEvent(spec: RoutineSpec): TaskRule | undefined {
 }
 
 /** Отметка «рутина уже завела дела по текущему списку источника» (в last-check.json; двоеточия в слаге нет). */
-const seedKey = (slug: string) => `task:${slug}`;
+const seedKey = (slug: string, source: string) => `task:${slug}@${source}`;
+/** Засев по текущему списку — не больше стольких самых свежих записей. */
+const SEED_MAX = 50;
 
 /**
  * Ключ дела события по task.same (docs/desk/plan-3.md): thing — ключ главной вещи события; thread — ключ нити
@@ -2066,6 +2114,7 @@ function deskThing(t: Thing): NonNullable<DeskPatch['thing']> {
 }
 
 function defaultProjectOf(spec: RoutineSpec): string | undefined {
+  if (spec.task?.project) return spec.task.project;
   if (spec.run?.space) return spec.run.space;
   return spec.run?.cwd ? (projectOfPath(spec.run.cwd).space ?? undefined) : undefined;
 }

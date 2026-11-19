@@ -528,4 +528,7 @@ export const routines: Record<string, string> = {
   'Дело закроется; рутина запомнит и учтёт в проверке словами': 'The task closes; the routine remembers and uses it in the check in words',
   'Дело — в план. Запуск ждёт в срабатываниях рутины.': 'Task moved to planned. The run waits in the routine’s firings.',
   'Дело закрыто как «не то». Рутина учтёт это в следующий раз.': 'Task closed as “not it”. The routine will take it into account next time.',
+  'Напиши, когда закрыть дело.': 'Write when to close the task.',
+  'напиши, когда закрыть дело': 'write when to close the task',
+  'Проект дела': 'Task project',
 };

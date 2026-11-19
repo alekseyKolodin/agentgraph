@@ -263,6 +263,8 @@ export type TaskRule = {
   same?: 'thing' | 'thread' | 'event';
   on_repeat?: 'plan' | 'keep';
   close?: 'thing' | 'never' | string;
+  /** Проект дела (слаг пространства); нет — run.space, иначе пространство run.cwd. Нужен рутине без flow. */
+  project?: string;
 };
 
 // ---------------------------------------------------------------- журнал и ожидания

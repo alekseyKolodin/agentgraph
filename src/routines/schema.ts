@@ -100,6 +100,7 @@ export const TaskRuleSchema = z
     same: z.enum(['thing', 'thread', 'event']).optional().describe('Что считать тем же делом: thing — та же вещь (MR, задача), thread — тот же разговор, event — каждое событие отдельно. По умолчанию — вещь, если распознана, иначе нить, иначе событие'),
     on_repeat: z.enum(['plan', 'keep']).optional().describe('Пришло новое по тому же делу: plan — вернуть в «В плане» (по умолчанию), keep — оставить колонку'),
     close: z.string().trim().min(1).optional().describe('Когда закрывать: thing — когда вещь закрыта (по умолчанию), never — только руками, или условие словами'),
+    project: z.string().trim().min(1).optional().describe('Проект дела — слаг пространства; нет — пространство из run'),
   })
   .strict();
 
@@ -211,7 +212,10 @@ export function routineProblems(spec: RoutineSpec, ctx: ProblemCtx): string[] {
     }
     if (!blocks && !out.length) out.push(`flow ${run.flow} не найден`);
     if (blocks) for (const b of run.pause_before ?? []) if (!blocks.includes(b)) out.push(`во flow ${run.flow} нет блока «${b}» из pause_before`);
-  } else if (spec.reply && spec.reply.to !== 'none') out.push('ответ: рутина без flow только заводит дела — отвечать в источник нечему');
+  } else {
+    if (spec.reply && spec.reply.to !== 'none') out.push('ответ: рутина без flow только заводит дела — отвечать в источник нечему');
+    if (isSchedule(spec.when)) out.push('расписание без flow: заводить дело по часам не из чего — выбери источник или flow');
+  }
   if (isSchedule(spec.when)) {
     const c = parseCron(spec.when.schedule);
     if (typeof c === 'string') out.push(`расписание: ${c}`);
