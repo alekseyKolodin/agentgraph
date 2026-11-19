@@ -4,7 +4,7 @@
 //     считает наблюдатель веток (src/things/branch.ts): git и glab/gh, без модели;
 //   - сессии терминала, которые закончились на вопросе Claude или запросе разрешения (SessionRecord.ask) — без модели;
 //   - разбор «Не доделано» (src/session-review.ts): вердикт модели «не доделано» / «последний шаг». Разбор идёт в фоне по
-//     расписанию этого источника (config.review, по умолчанию раз в сутки) и только по сессиям с новыми ходами; итог —
+//     расписанию этого источника (config.review: 24h — раз в сутки; по умолчанию выключен) и только по сессиям с новыми ходами; итог —
 //     на сервере, тот же, что у кнопки на главной, его вердикты — записи следующих проверок. Пробная проверка модель не зовёт.
 // Список проектов — из пространств (src/spaces.ts): их репозитории; у события — проект (слаг пространства) и вещь
 // (branch:/session: из src/things/keys.ts), поэтому дело рутины с task ложится на свою вещь и свой проект.
@@ -41,7 +41,6 @@ export type ProjectsDeps = {
 
 const MIN_POLL_MS = 5 * 60_000;
 /** Разбор моделью по умолчанию — раз в сутки (и только если в сессиях были новые ходы). */
-const REVIEW_EVERY_MS = 24 * 3_600_000;
 const REVIEW_MIN_MS = 3_600_000;
 /** Веток одного репозитория в обходе: открытые в checkout — всегда, остальные — самые свежие. */
 export const BRANCHES_MAX = 15;
@@ -63,10 +62,10 @@ function readCursor(v: unknown): Cursor {
   return { first, roots, ...(typeof o.reviewTried === 'string' ? { reviewTried: o.reviewTried } : {}) };
 }
 
-/** «24h», «12h», «off»; пусто — раз в сутки. Чаще раза в час — раз в час. */
+/** «24h», «12h», «off»; пусто — без модели (разбор тратит деньги — только когда включили явно). Чаще раза в час — раз в час. */
 export function reviewEvery(spec: SourceKindSpec): number {
   const raw = (cfgStr(spec, 'review') ?? '').toLowerCase();
-  if (!raw) return REVIEW_EVERY_MS;
+  if (!raw) return 0;
   if (['off', 'no', 'нет', 'выкл', '0'].includes(raw)) return 0;
   const m = /^(\d+(?:\.\d+)?)\s*(m|h|d|м|ч|д)$/.exec(raw);
   if (!m) throw new Error(`review — интервал вроде 24h или off, а не «${raw}»`);
@@ -300,9 +299,9 @@ export function projectsKind(deps: ProjectsDeps = {}): SourceKind {
       {
         key: 'review',
         label: 'Разбор сессий моделью',
-        placeholder: '24h',
+        placeholder: 'off',
         optional: true,
-        hint: 'Как часто модель (sonnet) разбирает сессии с новыми ходами: «не доделано» и «последний шаг» станут делами. ≈ $0.05–0.6 за разбор; off — без модели.',
+        hint: 'Как часто модель (sonnet) разбирает сессии с новыми ходами: «не доделано» и «последний шаг» станут делами. ≈ $0.05–0.6 за разбор. Пусто или off — без модели; 24h — раз в сутки.',
       },
     ],
     match: [

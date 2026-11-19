@@ -181,14 +181,17 @@ test('разбор по расписанию: в фоне, только в на�
   await projectsKind(d).poll!(ctx({}));
   await projectsKind(d).poll!(Object.assign(ctx({}), { cost: () => {} }));
   assert.equal(calls, 0);
-  const c1 = ctx({}, undefined, true);
+  // review не задан — по умолчанию без модели и в настоящей проверке
+  await projectsKind(d).poll!(ctx({}, undefined, true));
+  assert.equal(calls, 0);
+  const c1 = ctx({ review: '24h' }, undefined, true);
   await projectsKind(d).poll!(c1);
   assert.equal(calls, 1);
   // разбор идёт в фоне: цена приходит, когда он кончился
   await new Promise((r) => setImmediate(r));
   assert.deepEqual((c1 as unknown as { costs: number[] }).costs, [0.2]);
   // сутки не прошли — второго разбора нет
-  await projectsKind(d).poll!(ctx({}, c1.cursorValue(), true));
+  await projectsKind(d).poll!(ctx({ review: '24h' }, c1.cursorValue(), true));
   assert.equal(calls, 1);
   // review: off — без модели вовсе
   await projectsKind({ ...d, now: () => NOW + 2 * 86_400_000 }).poll!(ctx({ review: 'off' }, c1.cursorValue(), true));
@@ -215,7 +218,8 @@ test('настройки: пространства по слагу — ветк�
   assert.deepEqual(events.map((e) => e.id), ['branch:/code/kai#x@dirty', `ask:s1@${ago(1)}`]);
   assert.match(events[1]!.why ?? '', /^Claude просит разрешения: Bash/);
   await assert.rejects(projectsKind(d).poll!(ctx({ spaces: 'nope', review: 'off' })), /Нет открытых пространств nope/);
-  assert.equal(reviewEvery({ title: '', kind: 'projects', config: {} }), 86_400_000);
+  assert.equal(reviewEvery({ title: '', kind: 'projects', config: {} }), 0);
+  assert.equal(reviewEvery({ title: '', kind: 'projects', config: { review: '24h' } }), 86_400_000);
   assert.equal(reviewEvery({ title: '', kind: 'projects', config: { review: 'off' } }), 0);
   assert.equal(reviewEvery({ title: '', kind: 'projects', config: { review: '10m' } }), 3_600_000);
   assert.equal(reviewEvery({ title: '', kind: 'projects', config: { review: '12h' } }), 12 * 3_600_000);
