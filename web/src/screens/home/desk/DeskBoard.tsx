@@ -3,12 +3,13 @@
 // запуски, пространства и проекты «Подключений» — чтобы найти связи дела и папку для сессии. Монтирует Главная
 // (HomeScreen.tsx) с project — срезом по проекту; полоса над доской (вопросы агентов, сверка, «Начни с этого») — DeskTop.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionView } from '@server/api-types';
 import type { DeskColumn as Column, DeskItem } from '@server/desk/types';
 import { errorText, fetchIntegrations, keys, useConfig, useFeature, useRuns } from '../../../api';
-import { closeDesk, linkDesk, moveDesk, refreshDesk, useDesk } from '../../../api/desk';
+import { closeDesk, linkDesk, moveDesk, refreshDesk, useDesk, useDeskCheck } from '../../../api/desk';
+import { useRoutines } from '../../../api/routines';
 import { continueSession, createSession, defaultSessionCwd, sessionKeys, thingIntake, useSessions } from '../../../api/sessions';
 import { useSpaces } from '../../../api/spaces';
 import { useToast } from '../../../components/Toast';
@@ -25,6 +26,7 @@ import {
   sessionCwd,
   type DeskProject,
 } from '../../../lib/desk-board';
+import { quietBoard, type CheckTone } from '../../../lib/desk-top';
 import { LIVE_STATUSES } from '../../../lib/home';
 import { t } from '../../../lib/i18n';
 import { termSize } from '../../../lib/sessions';
@@ -41,6 +43,9 @@ function projectTone(slug: string): number {
   return (h % 8) + 1;
 }
 
+/** Точка подсказки пустой доски — цвет сверки (не проверялось — серая). */
+const QUIET_TONE: Record<CheckTone, string | undefined> = { ok: styles.toneOk, wait: styles.toneWait, fail: styles.toneFail, off: undefined };
+
 /** Перенос, который сервер ещё не подтвердил: карточка уже в новой колонке; seq — чей (снимает только свой ответ). */
 type Pending = Record<string, { to: Column; seq: number; item: DeskItem }>;
 
@@ -55,6 +60,10 @@ function withPending(i: DeskItem, to: Column | undefined, now: number): DeskItem
 export function DeskBoard({ project, onProject }: { project?: string; onProject?: (project: string | undefined) => void }) {
   const on = useFeature('desk');
   const open = useDesk({ open: true });
+  // рутины и сверка — только для подсказки пустой доски: рутины есть, а дел нет
+  const routinesOn = useFeature('routines');
+  const routines = useRoutines(routinesOn);
+  const check = useDeskCheck();
   // «Готово» — закрытые: доска показывает сегодняшние
   const closed = useDesk({ column: ['done'], open: false });
   const sessionsOn = useFeature('sessions');
@@ -108,7 +117,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
 
   if (!on) return null;
   // полоса над доской (вопросы агентов, сверка, «Начни с этого», срез) — и пока дела грузятся или не загрузились: вопросы от них не зависят
-  const top = <DeskTop project={project} onProject={onProject} />;
+  const top = <DeskTop project={project} onProject={onProject} busy={busy} />;
   if (open.isError) return <>{top}<p className={`${styles.msg} ${styles.err}`}>{t('Дела не загрузились: {error}', { error: errorText(open.error) })}</p></>;
   if (!open.data) return <>{top}<p className={styles.msg}>{t('Загружаю дела…')}</p></>;
 
@@ -215,9 +224,22 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   };
 
   const byKey = new Map(all.map((i) => [i.key, i]));
+  // ни одного открытого дела, но рутины есть (ни дел, ни рутин — Главная ведёт к шаблонам сама, DeskEmpty): почему пусто —
+  // словами сверки. Пока рутины грузятся — молчим, чтобы не мигать
+  const quiet = !open.data.items.length && (!routinesOn || (routines.data !== undefined && routines.data.routines.length > 0)) ? quietBoard(check.data, new Date(now)) : undefined;
   return (
     <div className={styles.board}>
       {top}
+      {quiet && (
+        <section className={styles.quiet} aria-label={quiet.title}>
+          <span className={`${styles.quietDot} ${QUIET_TONE[quiet.tone] ?? ''}`} aria-hidden="true" />
+          <div className={styles.quietText}>
+            <b>{quiet.title}</b>
+            <span title={quiet.line}>{quiet.line}</span>
+          </div>
+          <Link className="btn small ghost" to="/routines">{t('Шаблоны рутин')}</Link>
+        </section>
+      )}
       <div className={styles.scroll}>
         <div className={styles.cols}>
           {view.columns.map((col) => (

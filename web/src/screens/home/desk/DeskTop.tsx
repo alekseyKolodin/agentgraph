@@ -14,7 +14,9 @@ import { useRoutines } from '../../../api/routines';
 import { useSessions } from '../../../api/sessions';
 import { QuestionCard } from '../../../components/question/QuestionCard';
 import { useNow } from '../../../components/useNow';
-import { checkedAgo, checkSummary, checkText, checkTone, projectSlices, startOrder, startWhyText, type CheckTone } from '../../../lib/desk-top';
+import type { DeskItem } from '@server/desk/types';
+import { inProject, startQueue } from '../../../lib/desk-board';
+import { checkedAgo, checkSummary, checkText, checkTone, projectSlices, type CheckTone } from '../../../lib/desk-top';
 import { inbox, withoutQuestion } from '../../../lib/home';
 import { t } from '../../../lib/i18n';
 import { activeWaits } from '../../../lib/routines/view';
@@ -35,16 +37,21 @@ export type DeskTopProps = {
   /** Выбранный проект среза: слаг пространства, '' — без проекта, нет — все. */
   project?: string;
   onProject?: (project: string | undefined) => void;
+  /**
+   * По делу уже работает агент или открыта сессия — не «мой ход» (считает доска по живым запускам и сессиям дела). Та же
+   * функция, что у номеров «В плане»: «Начни с этого» и №1 на доске — одно дело.
+   */
+  busy?: (i: DeskItem) => boolean;
 };
 
-export function DeskTop({ project, onProject }: DeskTopProps) {
+export function DeskTop({ project, onProject, busy }: DeskTopProps) {
   const now = useNow(TICK_MS);
   const [week, setWeek] = useState(false);
   const [staleDays, setStaleDays] = useStaleDays();
   return (
     <div className={styles.top}>
       <Questions now={now} />
-      <StartWith now={now} project={project} />
+      <StartWith now={now} project={project} busy={busy} />
       <LearnPrompts now={now} />
       <div className={styles.strip}>
         <CheckStrip now={now} />
@@ -98,11 +105,14 @@ function Questions({ now }: { now: number }) {
 /** Адрес вещи для «Открыть» — только http(s). */
 const webUrl = (u: string | undefined): string | undefined => (u && /^https?:\/\//i.test(u) ? u : undefined);
 
-/** «Начни с этого»: первое по правилу без модели и два следующих строкой «дальше: …». Начинать нечего — блока нет. */
-function StartWith({ now, project }: { now: number; project?: string }) {
+/**
+ * «Начни с этого»: первое по правилу без модели (startQueue — то же, что номера «В плане» на доске) и два следующих
+ * строкой «дальше: …». Начинать нечего — блока нет.
+ */
+function StartWith({ now, project, busy }: { now: number; project?: string; busy?: (i: DeskItem) => boolean }) {
   const desk = useDesk();
   const all = desk.data?.items ?? [];
-  const order = startOrder(project === undefined ? all : all.filter((i) => (i.project ?? '') === project), new Date(now));
+  const order = startQueue(all.filter((i) => inProject(i, project)), { now, ...(busy ? { busy } : {}) });
   const first = order[0];
   if (!first) return null;
   const { item } = first;
@@ -117,7 +127,7 @@ function StartWith({ now, project }: { now: number; project?: string }) {
           <span className={styles.startTitle} title={item.title}>{item.title}</span>
         </div>
         {item.why && <span className={styles.startWhy}>{item.why}</span>}
-        <span className={styles.startReason}>{startWhyText(first, new Date(now))}</span>
+        <span className={styles.startReason}>{first.text}</span>
       </div>
       <div className={styles.startSide}>
         {url && (
