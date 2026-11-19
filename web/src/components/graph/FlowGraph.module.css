@@ -175,3 +175,44 @@
 .fg :global(.react-flow__handle) { opacity: 0; pointer-events: none; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
 .fg :global(.react-flow__pane) { cursor: grab; }
 .fg :global(.react-flow__pane.dragging) { cursor: grabbing; }
+
+/* ---------- большой flow в конструкторе (lib/graph/collapse.ts): поиск и переключатели в панели, блоки плитками над холстом */
+.fg-bar { flex-wrap: wrap; row-gap: 4px; }
+.fg-search {
+  flex: 0 1 200px; min-width: 120px; font: inherit; font-size: var(--fs-meta); color: var(--ink); background: var(--well);
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 2px 8px; min-height: 26px;
+}
+.fg-search:focus-visible { outline: none; box-shadow: var(--focus); }
+.fg-count { font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; margin-left: 6px; font-variant-numeric: tabular-nums; }
+.fg-gap { flex: 1; }
+.fg-sep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; }
+.fg-btn.is-on { background: var(--select); }
+
+.fg-tiles {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px 0; padding: 14px 16px;
+  background: var(--well); border-bottom: 1px solid var(--line);
+}
+.fg-tile {
+  flex: 0 0 186px; min-height: 84px; display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; text-align: left;
+  font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-sm); cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.fg-tile:hover { border-color: var(--ink-3); }
+.fg-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.fg-tile.is-changed { border-color: var(--st-ok); }
+.fg-tile.is-found { border-color: var(--st-wait); }
+.fg-tile.is-open { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.fg-tile-title { font-size: var(--fs-small); font-weight: 500; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fg-tile-meta { font-size: var(--fs-cap); line-height: 1.3; color: var(--ink-2); }
+.fg-tile-foot { margin-top: auto; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: var(--fs-cap); line-height: 18px; }
+.fg-tile-tag { font-weight: 600; padding: 0 7px; border-radius: var(--r-xs); color: var(--st-ok); background: color-mix(in srgb, var(--st-ok) 15%, transparent); }
+.fg-tile-ask { color: var(--st-wait); }
+.fg-tile-found { color: var(--st-wait); }
+.fg-tile-item { display: flex; align-items: stretch; }
+.fg-tile-arrow { flex: 0 0 22px; align-self: center; display: grid; place-items: center; color: var(--ink-3); font-size: var(--fs-cap); }
+.fg-tiles-more { align-self: center; margin-left: 12px; font-size: var(--fs-cap); color: var(--ink-3); }
+
+/* найденный поиском этап и приглушённый «Только изменённым» */
+.fg-node.is-found { border-color: var(--st-wait); box-shadow: 0 0 0 2px color-mix(in srgb, var(--st-wait) 40%, transparent); }
+.fg-node.is-dim { opacity: .4; }
+.fg-node.is-dim:hover, .fg-node.is-dim:focus-visible { opacity: 1; }

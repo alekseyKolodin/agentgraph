@@ -17,7 +17,7 @@ export type GraphPhase = {
   writes?: string[];
 };
 export type GraphUntil = { type?: string; run?: string; marker?: string };
-export type GraphLoop = { max_iterations: number; until: GraphUntil };
+export type GraphLoop = { max_iterations: number; until: GraphUntil; pause_marker?: string };
 /** Правило развилки next: условие (как until, без none) и куда идти — блок ниже или end. */
 export type GraphNextRule = { if?: GraphUntil & { prompt?: string; phase?: string }; goto: string };
 export type GraphBlock = {
@@ -63,6 +63,8 @@ export type GraphNode = {
   art?: string;
   /** Узел вызова: имя вызываемого flow. */
   flow?: string;
+  /** У этапа есть AskUserQuestion: он может спросить человека. */
+  asks?: boolean;
 };
 
 export type EdgeKind = 'flow' | 'next' | 'loop' | 'art-write' | 'art-read';
@@ -99,6 +101,15 @@ export type GraphFrame = {
   /** Шапка рамки блока: «↺ до N итераций» или «один проход», чипы тегов знаний. */
   loop?: string;
   knowledge?: string[];
+  /** Рамка блока: название блока без номера (title или name), лимит и тип условия цикла, вызываемый flow, явные переходы next. */
+  label?: string;
+  iters?: number;
+  until?: string;
+  flow?: string;
+  /** Куда ведут правила next (индексы блоков, число блоков — конец запуска); есть, только если next задан. */
+  next?: number[];
+  /** У цикла блока есть pause_marker: блок может остановиться и ждать человека. */
+  pauses?: boolean;
 };
 
 export type GraphModel = { nodes: GraphNode[]; edges: GraphEdge[]; frames: GraphFrame[]; width: number; height: number };
@@ -275,7 +286,7 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
           id: `p:${b.name}:${p.name}`, key: `p:${b.name}:${p.name}`, kind: call ? 'call' : 'phase', b: bi, i, block: b.name, name: p.name,
           num: multi ? `${bi + 1}.${i + 1}` : `${i + 1}`, title: p.title || p.name,
           sub: call ? opts.callSub?.(raw.flow!) || t('вызов flow') : [p.name, p.model, p.effort].filter(Boolean).join(' · '),
-          tools: (p.tools || []).length, group: p.group || '',
+          tools: (p.tools || []).length, group: p.group || '', ...((p.tools || []).includes('AskUserQuestion') ? { asks: true } : {}),
           x, y: top + k * (nodeH + ROW_GAP), w: NODE_W, h: nodeH,
           ...(call ? { flow: raw.flow } : {}),
         };
@@ -362,6 +373,10 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       const knowledge = [...(b.knowledge || [])];
       const fr: GraphFrame = {
         kind: 'block', key: `b:${b.name}`, b: bi, block: b.name, title, loop: loopNote, knowledge,
+        label: raw.title || (call ? raw.flow : '') || raw.name,
+        ...(b.loop ? { iters: b.loop.max_iterations, until: b.loop.until?.type } : {}),
+        ...(b.loop?.pause_marker ? { pauses: true } : {}),
+        ...(call ? { flow: raw.flow } : {}),
         x: x0 - GPAD - FPAD, y: laneTop,
         w: Math.max(x - x0 + 2 * (GPAD + FPAD), Math.ceil(headWidth(title, loopNote, knowledge))),
         h: contentBottom + FPAD - laneTop,
@@ -381,6 +396,8 @@ export function flowGraphModel(spec: GraphSpec, opts: GraphModelOptions = {}): G
       : loop.until?.type === 'none' ? t('после {n} →', { n: iterWord(loop.max_iterations) }) : b.on_fail === 'continue' ? t('выполнено или лимит →') : t('выполнено →');
     const end = cond || (isGroupStep(lastCol.s) ? { ...lastCol.box, id: lastCol.frameKey } : lastCol.members[0]!);
     const targets = blockTargets(b, bi, names, nextLabel);
+    const fr = framed ? frames.findLast((f) => f.kind === 'block' && f.b === bi) : undefined;
+    if (fr && b.next !== undefined) fr.next = [...targets.keys()].sort((a, z) => a - z);
     prev = { end, frameBottom, targets };
     exits.push({ bi, end, frameBottom, targets });
     // рёбра через блоки идут своими горизонталями под блоком: промежуток до следующего блока шире на их число
