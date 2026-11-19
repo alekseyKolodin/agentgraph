@@ -252,7 +252,7 @@ export function itemLine(i: DeskItem): string {
  * к которому вернулись из другой папки, своего проекта не теряет.
  */
 export async function deskPut(ctx: DeskCallCtx, a: DeskPutArgs): Promise<{ item: DeskItem; created: boolean; text: string }> {
-  const ref: ThingRef = a.thing ? resolveThing(a.thing, refOpts(ctx)) : { key: `own:${crypto.randomUUID()}` };
+  const ref: ThingRef = a.thing ? await resolveOrExisting(ctx, a.thing) : { key: `own:${crypto.randomUUID()}` };
   const before = await ctx.api.get(ref.key);
   if (!before && !a.title && !ref.thing && !ref.link) throw new Error('У своего дела нужен title — заголовок одной строкой');
   const at = (ctx.now?.() ?? new Date()).toISOString();
@@ -313,9 +313,24 @@ function createdByOf(ctx: Pick<DeskCallCtx, 'run' | 'session' | 'routine'>): { c
 
 const refOpts = (ctx: Pick<DeskCallCtx, 'thing' | 'jiraHosts'>) => ({ jiraHosts: (ctx.jiraHosts ?? settingsJiraHosts)(), ...(ctx.thing ? { known: ctx.thing } : {}) });
 
+/**
+ * resolveThing, а ключ, который канон не разбирает, — как есть, если такое дело уже заведено: свои дела рутин с пробелом
+ * в ключе (файл папки, тред) desk_list выдаёт, и desk_close / desk_put / CLI должны их находить. Нового дела с таким
+ * ключом не заводит — ошибка resolveThing.
+ */
+async function resolveOrExisting(ctx: Pick<DeskCallCtx, 'api' | 'thing' | 'jiraHosts'>, raw: string): Promise<ThingRef> {
+  try {
+    return resolveThing(raw, refOpts(ctx));
+  } catch (err) {
+    const k = clean(raw).trim();
+    if (/^[a-z]+:\S/.test(k) && !/^https?:/i.test(k) && (await ctx.api.get(k))) return { key: k };
+    throw err;
+  }
+}
+
 /** desk_close: дело по ключу или ссылке на вещь; нет такого или оно чужое месту вызова (owns) — ошибка. */
 export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 'jiraHosts' | 'owns'>, a: DeskCloseArgs): Promise<{ item: DeskItem; text: string }> {
-  const { key } = resolveThing(a.thing, refOpts(ctx));
+  const { key } = await resolveOrExisting(ctx, a.thing);
   const missing = () => new Error(`Дела ${key} нет: ключи открытых дел — в desk_list`);
   if (ctx.owns) {
     const cur = await ctx.api.get(key);

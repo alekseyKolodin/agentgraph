@@ -6,6 +6,7 @@ import { settingsJiraHosts, thingLabel, thingOfUrl } from '../things/resolve.js'
 import { deskCheck } from './check.js';
 import { isColumn } from './rules.js';
 import { canonicalKey, resolveThing } from './tools.js';
+import { DAYS_MAX, deskWeek, STALE_DAYS, WEEK_DAYS } from './week.js';
 import type { DeskStore } from './store.js';
 import type { DeskCheckReply, DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
 
@@ -28,6 +29,8 @@ export type DeskRouteDeps = {
   check?: () => DeskCheckReply;
   /** Есть ли пространство (patch.project); по умолчанию — папка пространства в настройках. */
   hasProject?: (slug: string) => boolean;
+  /** Время обзора недели; по умолчанию — сейчас. */
+  now?: () => Date;
   /** Хосты Jira для ссылки на задачу в key; по умолчанию — из настроек. */
   jiraHosts?: () => readonly string[];
 };
@@ -102,6 +105,13 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
   if (p === '/api/desk' && method === 'GET') {
     const reply: DeskListReply = { items: await store.list(filterOf(url.searchParams)), ...((c) => (c ? { check: c } : {}))(store.readCheck()) };
     return ok(reply);
+  }
+  if (p === '/api/desk/week' && method === 'GET') {
+    const n = (k: string, d: number) => {
+      const v = Number(url.searchParams.get(k) ?? d);
+      return Number.isInteger(v) && v >= 1 && v <= DAYS_MAX ? v : d;
+    };
+    return ok(deskWeek(await store.list({}), store.readLog(), (deps.now ?? (() => new Date()))(), { days: n('days', WEEK_DAYS), staleDays: n('stale', STALE_DAYS) }));
   }
   if (p === '/api/desk/check' && method === 'GET') {
     return ok(deps.check ? deps.check() : deskCheck({ watcher: store.readCheck(), startedAt: PROCESS_STARTED }));

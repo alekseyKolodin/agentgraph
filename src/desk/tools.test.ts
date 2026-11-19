@@ -344,3 +344,13 @@ test('ключ ветки собирается через branchKey: тот же
   const x: Exec = async (_cmd, args) => (args.includes('--git-common-dir') ? `${real}/.git\n` : 'refs/heads/feat/y\n');
   assert.equal(await branchKeyOf(real, x), branchKey(fs.realpathSync(real), 'feat/y'));
 });
+
+test('ключ с пробелом (своё дело рутины из desk_list): desk_put и desk_close находят заведённое; нового не заводят', async () => {
+  const api = memDesk();
+  await api.put('own:folder/a b.md@1', { title: 'файл' }, 'routine');
+  const put = await deskPut(ctxOf(api), { thing: 'own:folder/a b.md@1', text: 'глянул' });
+  assert.deepEqual([put.created, put.item.key], [false, 'own:folder/a b.md@1']);
+  const r = await deskClose({ api, by: 'session' }, { thing: 'own:folder/a b.md@1', reason: 'разобрал' });
+  assert.equal(r.item.closed?.reason, 'разобрал');
+  await assert.rejects(deskPut(ctxOf(api), { thing: 'own:нет такого файла', title: 'x' }), /Не ключ вещи/);
+});

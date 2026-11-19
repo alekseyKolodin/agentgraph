@@ -138,6 +138,7 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
 /**
  * HTTP (src/server.ts → src/desk/routes.ts):
  *   GET  /api/desk?column=&project=&open=1  → { items: DeskItem[]; check: CheckResult }
+ *   GET  /api/desk/week?days=7&stale=7       → DeskWeekReply (обзор недели, src/desk/week.ts)
  *   POST /api/desk/put   { key, patch }     → DeskItem         (by: 'me')
  *   POST /api/desk/move  { key, column }    → DeskItem
  *   POST /api/desk/close { key, reason }    → DeskItem
@@ -165,3 +166,27 @@ export type DeskCheckSource = { slug: string; title: string; kind: 'source' | 'w
 
 /** GET /api/desk/check: из итогов источников и наблюдателей, своего не хранит. at — время самой свежей проверки. */
 export type DeskCheckReply = { sources: DeskCheckSource[]; at?: string };
+
+/** Дело в обзоре недели: что закрыто или что висит. */
+export type DeskWeekItem = { key: string; title: string; kind: string; project?: string; column: DeskColumn };
+
+/**
+ * GET /api/desk/week?days=7&stale=7 (SPEC 6.1, src/desk/week.ts): обзор за последние days дней из «Готово» и журнала
+ * движений. closed — закрытые за период (свежие сверху; by — кто закрыл по журналу); stale — открытые в «В плане», «Ждёт
+ * других» и «В работе», не двигавшиеся дольше stale дней (дольше всех сверху); arrived — сколько дел заведено за период и
+ * от каких рутин (routine — слаг; у заведённых не рутиной — other).
+ */
+export type DeskWeekReply = {
+  from: string;
+  to: string;
+  days: number;
+  staleDays: number;
+  closed: Array<DeskWeekItem & { at: string; reason: string; by?: DeskBy }>;
+  /** Сколько закрыто и висит всего: списки обрезаны до 50. */
+  closedTotal: number;
+  stale: Array<DeskWeekItem & { since: string; days: number }>;
+  staleTotal: number;
+  arrived: { total: number; routines: Array<{ routine: string; count: number }>; other: number };
+  /** Движений за период (заведение, переносы, закрытие). */
+  moves: number;
+};

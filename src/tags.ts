@@ -243,6 +243,40 @@ export function updateTag(slug: string, patch: TagPatch): Tag | undefined {
   return readTag(slug)!;
 }
 
+/** Запись знания за раз — не больше: одна мысль после дела, а не транскрипт. */
+export const TAG_NOTE_MAX = 1000;
+
+/**
+ * Знание по виду работы после дела (docs/desk/SPEC.md, 6.6): строка «- ГГГГ-ММ-ДД · текст» в конец заметок тега.
+ * Тега нет — заводится тег знаний с title (вид работы). Текст — то, что пользователь подтвердил кликом; модель его не
+ * пишет. Заметки не влезают в TAG_NOTES_MAX — ошибка, файл прежний.
+ */
+export function appendTagNote(slug: string, text: string, o: { title?: string; now?: Date } = {}): Tag {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (!line) throw new Error('Пустая запись');
+  if (line.length > TAG_NOTE_MAX) throw new Error(`Запись длиннее ${TAG_NOTE_MAX} знаков`);
+  // заводит или дописывает заголовок, если его не было; слаг старого тега задачи — понятная ошибка
+  const tag = createTag(slug, o.title);
+  const day = (o.now ?? new Date()).toISOString().slice(0, 10);
+  const notes = [tag.notes.trim(), `- ${day} · ${line}`].filter(Boolean).join('\n');
+  if (notes.length > TAG_NOTES_MAX) throw new Error(`Заметки тега ${slug} не влезут в ${TAG_NOTES_MAX} знаков: сократи их на странице «Знания»`);
+  return updateTag(slug, { notes })!;
+}
+
+/** POST /api/tags/:slug/notes { text, title? }: 201 — тег заведён, 200 — дописан. */
+export function appendTagNoteReply(slug: string, body: { text?: unknown; title?: unknown }): ApiReply {
+  if (typeof body?.text !== 'string') return { status: 400, body: { error: 'text — строка' } };
+  if (body.title !== undefined && typeof body.title !== 'string') return { status: 400, body: { error: 'title — строка' } };
+  try {
+    if (!TAG_SLUG_RE.test(slug)) throw new Error('Слаг тега — строчные латинские буквы, цифры и дефис');
+    const existed = Boolean(readMeta(slug));
+    const tag = appendTagNote(slug, body.text, { ...(body.title ? { title: body.title } : {}) });
+    return { status: existed ? 200 : 201, body: { ...tag, input: knowledgeSection(tag) } satisfies TagDetail };
+  } catch (err) {
+    return bad(err);
+  }
+}
+
 /** Удаляет тег знаний. Папку старого тега задачи не трогаем: из неё перенесено пространство. */
 export function deleteTag(slug: string): boolean {
   const dir = tagDir(slug);

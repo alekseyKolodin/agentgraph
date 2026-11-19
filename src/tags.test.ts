@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   addTagAttachmentReply,
+  appendTagNoteReply,
   createTag,
   createTagReply,
   deleteTagAttachmentReply,
@@ -319,3 +320,27 @@ test('теги: блоки тегов задач старых запусков �
   assert.equal(stripTagBlocks('  просто задача '), 'просто задача');
   assert.equal(stripTagBlocks(block('p', 'только блок')), '');
 });
+
+test(
+  'знание после дела: строка с датой в конец заметок; тега нет — заводится с видом работы в заголовке; пусто, длинно, переполнено, старый тег задачи — 400',
+  withConfigDir(() => {
+    const first = appendTagNoteReply('review', { text: '  Ревью «Починить вход»:\n проверять миграции  ', title: 'Ревью' });
+    assert.equal(first.status, 201);
+    assert.equal(readTag('review')?.title, 'Ревью');
+    assert.equal(appendTagNoteReply('review', { text: 'тесты на граничные случаи' }).status, 200);
+    assert.match(readTag('review')!.notes, /^- \d{4}-\d{2}-\d{2} · Ревью «Починить вход»: проверять миграции\n- \d{4}-\d{2}-\d{2} · тесты на граничные случаи\n$/);
+    assert.equal(appendTagNoteReply('review', { text: '   ' }).status, 400);
+    assert.equal(appendTagNoteReply('review', { text: 'я'.repeat(1001) }).status, 400);
+    assert.equal(appendTagNoteReply('Ревью', { text: 'x' }).status, 400);
+    for (let i = 0; i < 4; i++) appendTagNoteReply('review', { text: 'з'.repeat(900) });
+    const full = appendTagNoteReply('review', { text: 'з'.repeat(900) });
+    assert.match((full.body as { error: string }).error, /не влезут/);
+    legacyTaskTag('old-task');
+    const old = appendTagNoteReply('old-task', { text: 'x' });
+    assert.deepEqual([old.status, /пространство/.test((old.body as { error: string }).error)], [400, true]);
+    // тег без заголовка: заголовок вида работы дописывается
+    createTag('meetings');
+    assert.equal(appendTagNoteReply('meetings', { text: 'итоги — в тред', title: 'Встреча' }).status, 200);
+    assert.equal(readTag('meetings')?.title, 'Встреча');
+  }),
+);

@@ -65,7 +65,7 @@ import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, s
 import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fix.js';
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
-  addTagAttachmentReply,
+  addTagAttachmentReply, appendTagNoteReply,
   createTagReply,
   deleteTagAttachmentReply,
   deleteTagReply,
@@ -527,7 +527,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', 'desk-check', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', 'desk-check', 'desk-week', 'tag-notes', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -948,6 +948,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (method === 'DELETE') return reply(res, deleteTagReply(slug));
   }
   if (method === 'POST' && (m = p.match(/^\/api\/tags\/([^/]+)\/attachments$/))) return reply(res, addTagAttachmentReply(m[1], await readJson(req)));
+  // знание по виду работы после дела (SPEC 6.6): строка в конец заметок, тег по виду заводится сам
+  if (method === 'POST' && (m = p.match(/^\/api\/tags\/([^/]+)\/notes$/))) return reply(res, appendTagNoteReply(m[1], (await readJson(req)) as { text?: unknown; title?: unknown }));
   if (method === 'DELETE' && (m = p.match(/^\/api\/tags\/([^/]+)\/attachments\/([^/]+)$/))) {
     let name: string;
     try {
