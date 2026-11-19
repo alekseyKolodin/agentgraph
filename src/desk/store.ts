@@ -161,7 +161,8 @@ const isItem = (v: unknown): v is DeskItem => {
   );
 };
 
-function matches(i: DeskItem, f: DeskFilter): boolean {
+/** Подходит ли дело под фильтр list — и для дел поставщиков (index.ts). */
+export function matchesFilter(i: DeskItem, f: DeskFilter): boolean {
   if (f.key !== undefined && i.key !== f.key) return false;
   if (f.project !== undefined && i.project !== f.project) return false;
   if (f.kind !== undefined && i.kind !== f.kind) return false;
@@ -370,7 +371,7 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
     move: (key, column, by, why) => one(key, { type: 'move', column, by, ...(why ? { why } : {}) }),
     async list(filter: DeskFilter = {}) {
       const items = await enqueue(dir, read);
-      return items.filter((i) => matches(i, filter)).sort((a, b) => b.movedAt.localeCompare(a.movedAt));
+      return items.filter((i) => matchesFilter(i, filter)).sort((a, b) => b.movedAt.localeCompare(a.movedAt));
     },
     async get(key: string) {
       return (await enqueue(dir, read)).find((i) => i.key === key);

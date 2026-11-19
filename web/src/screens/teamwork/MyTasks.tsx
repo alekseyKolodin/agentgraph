@@ -1,13 +1,17 @@
-// Главная, блок «Мои задачи» (spec §11): задачи активных спринтов во всех командах, где исполнитель — я, из одного запроса
-// GET /api/teams/mine. Строка: номер, заголовок (ссылка на панель задачи поверх доски), команда · проект · спринт, статус
-// названием колонки команды, «ждёт PAY-3», мой запуск или сессия по задаче и «В работу ▸». Блок есть, только когда есть
-// хотя бы одна команда; HomeScreen грузит этот файл лениво вместе с экранами Teamwork.
+// Главная, блок «Мои задачи» (spec §11, docs/desk/SPEC.md 4.3): мои задачи во всех командах — в спринтах и в бэклоге — из
+// GET /api/teams/mine, а колонка, «почему» и «новое» — из дел (GET /api/desk, поставщик Teamwork): задача и дело — одно.
+// Строка: номер, заголовок (ссылка на панель задачи поверх доски), команда · проект · спринт или бэклог, статус названием
+// колонки команды, «новое» с причиной (назначил коллега, его комментарий), «ждёт PAY-3», мой запуск или сессия по задаче
+// и «В работу ▸». Открыл новую — дело отмечается виденным. Блок есть, только когда есть хотя бы одна команда; HomeScreen
+// грузит этот файл лениво вместе с экранами Teamwork.
 import type { MouseEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 import type { TeamMine } from '@server/api-types';
+import { putDesk, refreshDesk, useDesk } from '../../api/desk';
 import { plural, t } from '../../lib/i18n';
 import { blockedLabel } from '../../lib/teamwork/board';
-import { canSendToWork, myTaskRows, unknownMe, workHref } from '../../lib/teamwork/mine';
+import { canSendToWork, myTaskRows, rowWhere, unknownMe, workHref, type MyTaskRow } from '../../lib/teamwork/mine';
 import { cx } from './parts';
 import { taskBoardPath, TEAMS_PATH, teamPath } from './shell';
 import { columnText } from './tasks/parts';
@@ -17,11 +21,17 @@ import styles from './MyTasks.module.css';
 
 export function MyTasks({ mine, className }: { mine: TeamMine; className?: string }) {
   const navigate = useNavigate();
-  const { rows, done } = myTaskRows(mine);
+  const qc = useQueryClient();
+  const { rows, done } = myTaskRows(mine, useDesk().data?.items);
+  // открыл новое — виденное: дело уходит из «Нового» (put от меня без правки)
+  const seen = (r: MyTaskRow) => {
+    if (r.item?.column !== 'new') return;
+    void putDesk({}, r.item.key).then(() => refreshDesk(qc), () => undefined);
+  };
   const noEmail = unknownMe(mine);
   return (
     <section className={className} aria-labelledby="home-my-tasks">
-      <h2 id="home-my-tasks" title={t('Ваши задачи в активных спринтах всех команд')}>
+      <h2 id="home-my-tasks" title={t('Ваши задачи во всех командах: в спринтах и в бэклоге')}>
         {t('Мои задачи')}
         {rows.length > 0 && <span className={styles.count}>{rows.length}</span>}
       </h2>
@@ -33,18 +43,25 @@ export function MyTasks({ mine, className }: { mine: TeamMine; className?: strin
             const open = (e: MouseEvent<HTMLLIElement>) => {
               const el = e.target as HTMLElement;
               if (!e.currentTarget.contains(el) || el.closest('a, button, input, select, textarea, dialog, [role="menu"]')) return;
+              seen(r);
               void navigate(to);
             };
             const b = r.badge;
+            const fresh = r.item?.column === 'new';
+            const where = rowWhere(r, t('бэклог'), (n) => t('спринт {n}', { n }));
             return (
               <li key={r.key} className={cx(styles.row, b?.state === 'waiting' && styles.wait)} onClick={open}>
                 <span className={styles.id}>{r.task.id}</span>
                 <div className={styles.main}>
-                  <Link to={to} className={styles.title} title={r.task.title}>{r.task.title}</Link>
+                  <Link to={to} className={styles.title} title={r.task.title} onClick={() => seen(r)}>{r.task.title}</Link>
                   <div className={styles.meta}>
-                    <span className={styles.where} title={`${r.team.title} · ${r.project.title} · ${r.project.sprint.title}`}>
-                      {`${r.team.title} · ${r.project.title} · ${r.project.sprint.title}`}
-                    </span>
+                    {fresh && (
+                      <span className={styles.fresh} title={r.item!.why}>
+                        <span className={styles.freshTag}>{t('новое')}</span>
+                        {r.item!.why}
+                      </span>
+                    )}
+                    <span className={styles.where} title={where}>{where}</span>
                     {r.waiting.length > 0 && <span className={styles.q}>{blockedLabel(r.waiting)}</span>}
                     {b && (
                       <Link to={workHref(b.work)} className={cx(styles.work, b.state === 'waiting' && tw.tWait, b.state === 'failed' && styles.fail)} title={b.text}>
@@ -66,7 +83,7 @@ export function MyTasks({ mine, className }: { mine: TeamMine; className?: strin
       )}
       {!rows.length && mine.teams.some((x) => x.me) && (
         <p className={styles.empty}>
-          {done ? t('Все ваши задачи в активных спринтах готовы.') : t('В активных спринтах задач на вас нет.')}{' '}
+          {done ? t('Все ваши задачи готовы.') : t('Задач на вас нет.')}{' '}
           <Link to={mine.teams.length === 1 ? teamPath(mine.teams[0]!.slug) : TEAMS_PATH}>{mine.teams.length === 1 ? t('К команде') : t('К командам')}</Link>
         </p>
       )}
