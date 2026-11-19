@@ -6,6 +6,8 @@
 // Конструктор (autoFit) вписывает не мельче своего порога, дальше — прокрутка холста, и вписывает заново, когда холст меняет
 // ширину (открылся или закрылся инспектор): вокруг блока выбранного узла.
 // Колесо без модификатора двигает холст, а когда двигать некуда — прокручивает страницу, как прокрутка старого холста.
+// Большой flow в конструкторе (collapse, lib/graph/collapse.ts): сверху блоки плитками, на холсте — только раскрытый блок;
+// в панели — «Найти этап», «Только изменённое», «Развернуть всё». Маленький и одноблочный — целиком, как раньше.
 import '@xyflow/react/dist/base.css';
 import {
   createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
@@ -17,6 +19,10 @@ import {
 } from '@xyflow/react';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import {
+  blockOfSelection, blockTiles, findPhases, firstChangedBlock, flowSize, initialOpenBlock, isBigFlow, sliceBlock, tileChanged, tileChangedLabel,
+  tileMeta, tileNext, visibleTiles, type BlockTile,
+} from '../../lib/graph/collapse';
 import { clampView, fitView, type FitMode } from '../../lib/graph/fit';
 import type { GraphEdge, GraphFrame, GraphModel, GraphNode } from '../../lib/graph/model';
 import { blockLoopNote, loopRunLabel, loopVerdict, nodeBadge, phaseNodeTitle, STATUSES, type GraphRunState } from '../../lib/graph/run-state';
@@ -81,13 +87,23 @@ export type FlowGraphProps = {
    * ручного масштаба возвращает это вписывание.
    */
   autoFit?: { min: number; focus: string | null };
+  /**
+   * Большой flow (lib/graph/collapse.ts, isBigFlow) — плитками блоков, раскрыт один блок. По умолчанию — в режиме правки;
+   * false — всегда целиком.
+   */
+  collapse?: boolean;
 };
+
+/** Что добавляет к холсту обёртка большого flow: найденные этапы, приглушение нетронутых, начало панели, плитки над холстом. */
+type CanvasProps = FlowGraphProps & { found?: Set<string>; dimUnchanged?: boolean; barStart?: ReactNode; top?: ReactNode; viewKey?: unknown };
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 const statusClass = (status: string | undefined) => (status ? styles[`is${status[0]!.toUpperCase()}${status.slice(1)}`] : '');
 const statusClasses = (status: string | undefined) => STATUSES.map((st) => (st === status ? statusClass(st) : '')).filter(Boolean).join(' ');
 
-type Ctx = Omit<FlowGraphProps, 'model' | 'place' | 'host' | 'refitKey' | 'reveal' | 'fill' | 'autoFit'> & { markers: string; current: Set<string>; hl: string; setHl: (k: string) => void };
+type Ctx = Omit<FlowGraphProps, 'model' | 'place' | 'host' | 'refitKey' | 'reveal' | 'fill' | 'autoFit' | 'collapse'> & {
+  markers: string; current: Set<string>; hl: string; setHl: (k: string) => void; found?: Set<string>; dimUnchanged?: boolean;
+};
 const GraphCtx = createContext<Ctx | null>(null);
 const useG = () => useContext(GraphCtx)!;
 
@@ -183,9 +199,13 @@ const NodeView = memo(function NodeView({ data }: NodeProps<Node<{ n: GraphNode 
     ? `${n.num}. ${t('Вызов flow {flow}', { flow: n.flow! })}${n.title !== n.flow ? ` · ${n.title}` : ''}`
     : `${n.num}. ${n.title}${tools ? `\n${t('Инструменты: {tools}', { tools })}` : ''}`;
   const selected = (g.selectedName && g.selectedName === n.name) || g.selectedKey === n.key || (call && g.selectedBlock === n.b);
+  const changed = call ? g.changedBlocks?.has(n.block!) : g.changed?.has(n.name!);
   return (
     <div
-      className={cx(styles.fgNode, styles.fgPhase, call && styles.fgCall, (call ? g.changedBlocks?.has(n.block!) : g.changed?.has(n.name!)) && styles.aiChanged, selected && styles.isSelected, status, 'nopan')}
+      className={cx(
+        styles.fgNode, styles.fgPhase, call && styles.fgCall, changed && styles.aiChanged, selected && styles.isSelected, status,
+        g.found?.has(n.key) && styles.isFound, g.dimUnchanged && !changed && styles.isDim, 'nopan',
+      )}
       title={phaseNodeTitle(base, s)}
       {...common}
     >
@@ -315,15 +335,189 @@ function storedZoom(key: string, min?: number): number | null {
 }
 
 export function FlowGraph(props: FlowGraphProps) {
+  const big = (props.collapse ?? props.mode === 'edit') && isBigFlow(props.model);
+  return <ReactFlowProvider>{big ? <BigGraph {...props} /> : <Canvas {...props} />}</ReactFlowProvider>;
+}
+
+/** Подпись содержимого плитки: что в блоке, развилка, пометки «изменены», «спросит тебя», «найдено». */
+function TileBody({ tile, total }: { tile: BlockTile; total: number }) {
+  const changed = tileChangedLabel(tile);
+  const next = tileNext(tile, total);
   return (
-    <ReactFlowProvider>
-      <Canvas {...props} />
-    </ReactFlowProvider>
+    <>
+      <span className={styles.fgTileTitle}><span className={styles.fgNum}>{tile.b + 1}</span>{tile.label}</span>
+      <span className={styles.fgTileMeta}>{tileMeta(tile)}</span>
+      {next && <span className={styles.fgTileMeta}>{next}</span>}
+      {(changed || tile.asks || tile.found > 0) && (
+        <span className={styles.fgTileFoot}>
+          {changed && <span className={styles.fgTileTag}>{changed}</span>}
+          {tile.asks && <span className={styles.fgTileAsk}>{t('спросит тебя')}</span>}
+          {tile.found > 0 && <span className={styles.fgTileFound}>{t('найдено {n}', { n: tile.found })}</span>}
+        </span>
+      )}
+    </>
   );
 }
 
-function Canvas(props: FlowGraphProps) {
-  const { model, mode, place, host, refitKey, reveal } = props;
+/**
+ * Большой flow: плитки блоков над холстом и один раскрытый блок на нём (sliceBlock). Раскрыт блок выбранного (этап, блок,
+ * reveal), после правки ИИ — первый изменённый, иначе тот, по чьей плитке кликнули; поиск раскрывает блок найденного.
+ */
+function BigGraph(props: FlowGraphProps) {
+  const { model, changed, changedBlocks } = props;
+  const [query, setQuery] = useState('');
+  const [hit, setHit] = useState(0);
+  const [all, setAll] = useState(false);
+  const [onlyChanged, setOnlyChanged] = useState(false);
+  const found = useMemo(() => findPhases(model, query), [model, query]);
+  const foundKeys = useMemo(() => new Set(found.map((n) => n.key)), [found]);
+  const tiles = useMemo(() => blockTiles(model, changed, changedBlocks, foundKeys), [model, changed, changedBlocks, foundKeys]);
+  const sel = { name: props.selectedName, key: props.selectedKey, block: props.selectedBlock };
+  const [open, setOpen] = useState(() => initialOpenBlock(model, sel, tiles));
+  const seq = useRef(0);
+  const [seek, setSeek] = useState<{ key: string; seq: number } | null>(null);
+  const show = (b: number, key?: string) => {
+    setOpen(b);
+    if (key) setSeek({ key, seq: ++seq.current });
+  };
+
+  // смена выбора, правки ИИ и запроса reveal — во время отрисовки, а не эффектом: холст сразу рисует нужный блок
+  const selSig = `${props.selectedName ?? ''}|${props.selectedKey ?? ''}|${props.selectedBlock ?? ''}`;
+  const [prevSel, setPrevSel] = useState(selSig);
+  if (prevSel !== selSig) {
+    setPrevSel(selSig);
+    const b = blockOfSelection(model, sel);
+    if (b !== null) setOpen(b);
+  }
+  const aiSig = `${[...(changed ?? [])].sort().join('\n')}|${[...(changedBlocks ?? [])].sort().join('\n')}`;
+  const [prevAi, setPrevAi] = useState(aiSig);
+  if (prevAi !== aiSig) {
+    setPrevAi(aiSig);
+    const b = firstChangedBlock(tiles);
+    if (b !== null) setOpen(b);
+    else setOnlyChanged(false);
+  }
+  const revSig = props.reveal ? `${props.reveal.key}|${props.reveal.seq}` : '';
+  const [prevRev, setPrevRev] = useState(revSig);
+  if (prevRev !== revSig) {
+    setPrevRev(revSig);
+    const b = props.reveal ? blockOfSelection(model, { key: props.reveal.key }) : null;
+    if (b !== null) show(b, props.reveal!.key);
+  }
+
+  // блок удалили — раскрыт ближайший оставшийся
+  const openB = tiles.some((x) => x.b === open) ? open : (tiles.at(Math.min(open, tiles.length - 1))?.b ?? 0);
+  const shown = useMemo(() => (all ? model : sliceBlock(model, openB)), [all, model, openB]);
+  const hasChanges = tiles.some(tileChanged);
+  const dim = onlyChanged && hasChanges;
+  const vis = visibleTiles(tiles, dim, openB);
+  const { blocks, phases } = flowSize(model);
+
+  const onSearch = (q: string) => {
+    setQuery(q);
+    setHit(0);
+    const first = findPhases(model, q)[0];
+    if (first) show(first.b!, first.key);
+  };
+  const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape' && query) {
+      e.preventDefault();
+      e.stopPropagation();
+      onSearch('');
+    } else if (e.key === 'Enter' && found.length) {
+      e.preventDefault();
+      const k = (hit + (e.shiftKey ? found.length - 1 : 1)) % found.length;
+      setHit(k);
+      show(found[k]!.b!, found[k]!.key);
+    }
+  };
+
+  // выбранное, которого нет на холсте (этап другого блока), не вписывается: холст вписывает раскрытый блок
+  const focus = props.autoFit?.focus ?? null;
+  const present = focus !== null && [...shown.nodes, ...shown.frames].some((x) => x.key === focus);
+  const autoFit = props.autoFit && { ...props.autoFit, focus: present ? focus : null };
+  const view = all ? 'all' : openB;
+  const reveal = seek ?? props.reveal;
+
+  const barStart = (
+    <>
+      <input
+        type="search"
+        className={styles.fgSearch}
+        placeholder={t('Найти этап')}
+        aria-label={t('Найти этап')}
+        title={t('Название, имя или номер этапа. Enter — следующий найденный, Esc — очистить')}
+        value={query}
+        onChange={(e) => onSearch(e.target.value)}
+        onKeyDown={onSearchKey}
+      />
+      <span className={styles.fgCount} aria-live="polite">
+        {query.trim()
+          ? found.length ? t('найдено {n}', { n: found.length }) : t('не найдено')
+          : t('{blocks} · {phases}', { blocks: `${blocks} ${plural(blocks, 'блок', 'блока', 'блоков')}`, phases: `${phases} ${plural(phases, 'этап', 'этапа', 'этапов')}` })}
+      </span>
+      <span className={styles.fgGap} />
+      {hasChanges && (
+        <button type="button" className={cx(styles.fgBtn, dim && styles.isOn)} aria-pressed={dim} title={t('Показать только блоки, которые задела правка ИИ, и приглушить нетронутые этапы')} onClick={() => setOnlyChanged(!dim)}>
+          {t('Только изменённое')}
+        </button>
+      )}
+      <button
+        type="button"
+        className={cx(styles.fgBtn, all && styles.isOn)}
+        aria-pressed={all}
+        title={all ? t('Сверху блоки плитками, ниже — этапы выбранного') : t('Показать все блоки и этапы одной схемой')}
+        onClick={() => setAll(!all)}
+      >
+        {all ? t('Свернуть в блоки') : t('Развернуть всё')}
+      </button>
+      <span className={styles.fgSep} />
+    </>
+  );
+
+  const top = all ? null : (
+    <div className={styles.fgTiles} role="group" aria-label={t('Блоки flow')}>
+      {vis.map((x, k) => (
+        // стрелка — вместе со следующей плиткой: при переносе строки она начинает строку, а не висит в конце прошлой
+        <span key={x.key} className={styles.fgTileItem}>
+          {k > 0 && (
+            <span className={styles.fgTileArrow} aria-hidden="true">
+              {x.b === vis[k - 1]!.b + 1 ? <svg width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M0 6h19M15 2l4 4-4 4" /></svg> : '…'}
+            </span>
+          )}
+          <button
+            type="button"
+            className={cx(styles.fgTile, x.b === openB && styles.isOpen, tileChanged(x) && styles.isChanged, x.found > 0 && styles.isFound)}
+            aria-pressed={x.b === openB}
+            title={t('Показать этапы блока {n}', { n: x.b + 1 })}
+            onClick={() => setOpen(x.b)}
+          >
+            <TileBody tile={x} total={blocks} />
+          </button>
+        </span>
+      ))}
+      {vis.length < tiles.length && <span className={styles.fgTilesMore}>{t('не тронуто: {n}', { n: tiles.length - vis.length })}</span>}
+    </div>
+  );
+
+  return (
+    <Canvas
+      {...props}
+      model={shown}
+      refitKey={`${String(props.refitKey)}|${view}`}
+      viewKey={view}
+      autoFit={autoFit}
+      reveal={reveal}
+      found={foundKeys}
+      dimUnchanged={dim}
+      barStart={barStart}
+      top={top}
+    />
+  );
+}
+
+function Canvas(props: CanvasProps) {
+  const { model, mode, place, host, refitKey, reveal, viewKey } = props;
   const rf = useReactFlow();
   const zoomKey = `agentgraph.graphZoom.${place}`;
   const scroll = useRef<HTMLDivElement>(null);
@@ -406,6 +600,16 @@ function Canvas(props: FlowGraphProps) {
     void rf.setViewport(next);
     return true;
   };
+
+  // большой flow раскрыл другой блок или всё — холст с левого верхнего края (вписывание ниже, если оно будет, поправит)
+  const firstView = useRef(true);
+  useEffect(() => {
+    if (firstView.current) {
+      firstView.current = false;
+      return;
+    }
+    void rf.setViewport({ x: 0, y: 0, zoom: scaleRef.current });
+  }, [viewKey]);
 
   // пока масштаб не выбирали руками, широкий граф один раз вписывается по ширине (не мельче 70%, в конструкторе — autoFit.min);
   // скрытый холст ширины не имеет — ждём
@@ -525,8 +729,8 @@ function Canvas(props: FlowGraphProps) {
   const ctx = useMemo<Ctx>(() => ({
     mode, selectedName: props.selectedName, selectedBlock: props.selectedBlock, selectedKey: props.selectedKey, changed: props.changed, changedBlocks: props.changedBlocks, chip: props.chip,
     startSub: props.startSub, startChips: props.startChips, toolsOf: props.toolsOf, run, artInfo: props.artInfo, artLocked: props.artLocked, onNode: props.onNode, onAdd: props.onAdd,
-    markers, current: new Set(run?.currentKeys ?? []), hl, setHl,
-  }), [mode, props.selectedName, props.selectedBlock, props.selectedKey, props.changed, props.changedBlocks, props.chip, props.startSub, props.startChips, props.toolsOf, run, props.artInfo, props.artLocked, props.onNode, props.onAdd, markers, hl]);
+    markers, current: new Set(run?.currentKeys ?? []), hl, setHl, found: props.found, dimUnchanged: props.dimUnchanged,
+  }), [mode, props.selectedName, props.selectedBlock, props.selectedKey, props.changed, props.changedBlocks, props.chip, props.startSub, props.startChips, props.toolsOf, run, props.artInfo, props.artLocked, props.onNode, props.onAdd, markers, hl, props.found, props.dimUnchanged]);
 
   const marker = (id: string, cls: string) => (
     <marker id={`${id}-${markers}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -539,6 +743,7 @@ function Canvas(props: FlowGraphProps) {
     <GraphCtx.Provider value={ctx}>
       <div className={cx(styles.fg, styles[`fg${mode[0]!.toUpperCase()}${mode.slice(1)}`], styles[`fg${host[0]!.toUpperCase()}${host.slice(1)}Host`], hl && styles.fgHl)}>
         <div className={styles.fgBar}>
+          {props.barStart}
           <button type="button" className={styles.fgBtn} title={t('Мельче')} onClick={() => zoom(scale - 0.1)}>−</button>
           <span className={styles.fgZoom}>{Math.round(scale * 100)}%</span>
           <button type="button" className={styles.fgBtn} title={t('Крупнее')} onClick={() => zoom(scale + 0.1)}>+</button>
@@ -551,6 +756,7 @@ function Canvas(props: FlowGraphProps) {
             {marker('ara', cx(styles.fgMk, styles.fgMkArt))}
           </defs>
         </svg>
+        {props.top}
         <div ref={scroll} className={cx(styles.fgScroll, props.fill && styles.fgFill)} style={props.fill ? undefined : { height: Math.ceil(model.height * scale) }}>
           <ReactFlow
             nodes={nodes}
