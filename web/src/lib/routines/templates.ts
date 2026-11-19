@@ -19,13 +19,15 @@ export type RoutineTemplate = {
   desk?: boolean;
   /** Каким источником подключить, если подходящего нет: рецепт или вид на «Подключить сервис». */
   connect?: string;
+  /** Куда сразу вести «Подключить сервис»: вид источника из «Готовых» и сервис, который в нём отметить (по имени). */
+  connectTo?: { kind: string; service?: string };
   /** Flow идёт в папке проекта (своей или пространства): без неё шаблон не сохранить. */
   needsDir?: boolean;
 };
 
 export const ROUTINE_TEMPLATES: readonly RoutineTemplate[] = [
   { tpl: 'review-forge', title: 'Ревью: назначили в GitLab или GitHub', sub: 'Дело «Ревью» и первое ревью агентом', flow: 'desk-review-mr', desk: true, connect: 'GitLab или GitHub' },
-  { tpl: 'review-slack', title: 'Ревью: кинули ссылку в Slack', sub: 'Сообщение со ссылкой на MR — то же дело «Ревью»', flow: 'desk-review-mr', desk: true, connect: 'Slack через Claude' },
+  { tpl: 'review-slack', title: 'Ревью: кинули ссылку в Slack', sub: 'Сообщение со ссылкой на MR — то же дело «Ревью»', flow: 'desk-review-mr', desk: true, connect: 'Slack через Claude', connectTo: { kind: 'connector', service: 'slack' } },
   { tpl: 'jira', title: 'Jira: назначили на меня', sub: 'Дело «Jira» и запуск «задача в работу» по кнопке', flow: 'desk-task-start', desk: true, connect: 'Jira', needsDir: true },
   { tpl: 'meetings', title: 'Встречи → дела', sub: 'Пункты действий на мне — делами', flow: 'desk-meeting-tasks', desk: true, connect: 'Fireflies.ai' },
   { tpl: 'sweep', title: 'Каждое утро → обход проекта', sub: 'Незакоммиченное и ветки без MR — делами', flow: 'desk-projects-sweep', desk: true, needsDir: true },
@@ -34,6 +36,27 @@ export const ROUTINE_TEMPLATES: readonly RoutineTemplate[] = [
 ];
 
 export const templateOf = (tpl: string | null | undefined): RoutineTemplate | undefined => ROUTINE_TEMPLATES.find((x) => x.tpl === tpl);
+
+/**
+ * «Подключить сервис» для шаблона: с вида, который шаблону нужен (Slack-ревью — коннектор Claude, SPEC 9.1), сразу
+ * в «Готовые» с этим видом и сервисом; иначе — обычная страница. tpl переживает подключение и возвращает на форму.
+ */
+export function connectHref(tpl: Pick<RoutineTemplate, 'tpl' | 'connectTo'>): string {
+  const p = new URLSearchParams({ from: 'new', tpl: tpl.tpl });
+  if (tpl.connectTo) {
+    p.set('mode', 'ready');
+    p.set('kind', tpl.connectTo.kind);
+    if (tpl.connectTo.service) p.set('service', tpl.connectTo.service);
+  }
+  return `/routines/connect?${p.toString()}`;
+}
+
+/** Параметр адреса «Подключить сервис» (kind, service): только слаг, иначе нет. */
+export const connectParam = (v: string | null): string | undefined => (v && /^[a-z0-9-]{1,32}$/.test(v) ? v : undefined);
+
+/** Подключённые сервисы коннектора, чьё имя или сервер содержит подсказку шаблона (slack): их отметить сразу. */
+export const servicesFor = <S extends { server: string; title: string }>(ready: readonly S[], hint: string | undefined): string[] =>
+  hint ? ready.filter((s) => `${s.server} ${s.title}`.toLowerCase().includes(hint.toLowerCase())).map((s) => s.server) : [];
 
 const MESSAGE_KINDS = ['slack', 'telegram'];
 const CODE_KINDS = ['gitlab', 'github'];

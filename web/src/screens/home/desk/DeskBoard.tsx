@@ -31,6 +31,7 @@ import { termSize } from '../../../lib/sessions';
 import { FlowPicker, pickerAt, type PickerState } from '../FlowPicker';
 import { DeskCard, type CardActions } from './DeskCard';
 import { DeskColumn } from './DeskColumn';
+import { DeskTop } from './DeskTop';
 import styles from './Desk.module.css';
 
 /** Цвет квадрата проекта — категория по слагу: один проект — один цвет на всех карточках. */
@@ -50,7 +51,8 @@ function withPending(i: DeskItem, to: Column | undefined, now: number): DeskItem
   return { ...rest, column: to, movedAt: at, movedBy: 'me', ...(to === 'done' ? { closed: { at, reason: i.closed?.reason ?? 'закрыто вручную' } } : {}) };
 }
 
-export function DeskBoard({ project }: { project?: string }) {
+/** project — срез по проекту ('' — без проекта), onProject — сменить срез (пилюли проектов в DeskTop; Главная держит его в адресе). */
+export function DeskBoard({ project, onProject }: { project?: string; onProject?: (project: string | undefined) => void }) {
   const on = useFeature('desk');
   const open = useDesk({ open: true });
   // «Готово» — закрытые: доска показывает сегодняшние
@@ -105,8 +107,10 @@ export function DeskBoard({ project }: { project?: string }) {
   });
 
   if (!on) return null;
-  if (open.isError) return <p className={`${styles.msg} ${styles.err}`}>{t('Дела не загрузились: {error}', { error: errorText(open.error) })}</p>;
-  if (!open.data) return <p className={styles.msg}>{t('Загружаю дела…')}</p>;
+  // полоса над доской (вопросы агентов, сверка, «Начни с этого», срез) — и пока дела грузятся или не загрузились: вопросы от них не зависят
+  const top = <DeskTop project={project} onProject={onProject} />;
+  if (open.isError) return <>{top}<p className={`${styles.msg} ${styles.err}`}>{t('Дела не загрузились: {error}', { error: errorText(open.error) })}</p></>;
+  if (!open.data) return <>{top}<p className={styles.msg}>{t('Загружаю дела…')}</p></>;
 
   /** Объявление диктору; тот же текст подряд — с невидимой разницей, иначе второй раз он промолчит. */
   const say = (text: string) => setSaid((prev) => (prev === text ? `${text}\u00a0` : text));
@@ -213,6 +217,7 @@ export function DeskBoard({ project }: { project?: string }) {
   const byKey = new Map(all.map((i) => [i.key, i]));
   return (
     <div className={styles.board}>
+      {top}
       <div className={styles.scroll}>
         <div className={styles.cols}>
           {view.columns.map((col) => (

@@ -1,93 +1,77 @@
-// Главная (ui/index.html #view-home, ui/app.js renderHome): вопросы агентов с ответом и сессии терминала, которые ждут
-// тебя, идущие запуски и работающие сессии, «Не доделано» (разбор недавних сессий моделью по кнопке, Review.tsx), мои задачи
-// Teamwork, мои MR, которым нужно внимание, лента событий справа. Ни запусков, ни сессий ещё не было — строка «с чего
-// начать». «ждёт N мин», «идёт N мин» и время в ленте — раз в 30 секунд.
-// Все задачи Jira, MR и ветки проектов — в своём разделе «Код» (screens/code); здесь только строка «ничего не подключено».
-import { lazy, Suspense, useCallback, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
-import type { HomeResponse } from '@server/api-types';
-import { keys, useFeature, useFlows, useHome, useRuns, type IntakeTarget } from '../../api';
+// Главная — доска дел (docs/desk/SPEC.md, этап 5; макет docs/desk/design/DeskPult.dc.html). Полосу над доской — ожидания
+// рутин и «догнать», вопросы агентов, сессии, ждущие ответа, сверку «N из N», «Начни с этого» и срез по проектам — рисует
+// сама доска (DeskTop внутри DeskBoard). Одна вещь — одно место: свои MR, «Не доделано», «Мои задачи», «Ждёт тебя» и «Идут»
+// стали карточками; идущие запуски и сессии — в «Сейчас» боковой панели. Справа — журнал (Feed). Ни дел, ни рутин — плитки
+// шаблонов рутин «Моих дел». `/?desk=<ключ>` (ссылка из «Кода») показывает карточку, `?project=<слаг>` — срез по проекту
+// ('' — без проекта).
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { useConfig, useFeature, useRuns } from '../../api';
+import { useDesk } from '../../api/desk';
 import { useRoutines } from '../../api/routines';
 import { useSessions } from '../../api/sessions';
-import { useTeamMine } from '../../api/teamwork';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
-import { QuestionCard } from '../../components/question/QuestionCard';
 import { useNow } from '../../components/useNow';
 import { hasConnections } from '../../lib/dash';
-import { homeMeta, inbox, withoutQuestion } from '../../lib/home';
+import { DESK_PARAM, deskEmpty, deskMeta } from '../../lib/desk';
+import { inProject } from '../../lib/desk-board';
 import { t } from '../../lib/i18n';
-import { homeSessions } from '../../lib/sessions';
 import { NewFlowDialog } from '../flow/NewFlowDialog';
-import { Attention } from './Attention';
+import { RoutineTemplates } from '../routines/RoutineTemplates';
 import { useIntegrations } from './Dash';
 import { DashSettings } from './DashSettings';
+import { DeskBoard } from './desk/DeskBoard';
 import { Feed } from './Feed';
-import { FlowPicker, pickerAt, type PickerState } from './FlowPicker';
-import { HomeRuns } from './HomeRuns';
-import { HomeSessions } from './HomeSessions';
 import { Limits } from './Limits';
-import { Review } from './Review';
-import { RoutineHome } from './RoutineWaits';
-import { activeWaits } from '../../lib/routines/view';
 import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
 
 const TICK_MS = 30_000;
 
-/** «Мои задачи» Teamwork — из файла экранов Teamwork: без команд он не грузится. */
-const MyTasks = lazy(() => import('../teamwork').then((m) => ({ default: m.MyTasks })));
-
 export function HomeScreen() {
-  const qc = useQueryClient();
-  const navigate = useNavigate();
-  const home = useHome();
+  const [params, setParams] = useSearchParams();
   const limits = useFeature('limits');
   const dashOn = useFeature('integrations');
-  // ничего не подключено — вместо MR (их неоткуда взять) строка с «Подключениями»; пока не знаем — ни того, ни другого
+  // ничего не подключено — строка с «Подключениями»; пока не знаем — без неё
   const integrations = useIntegrations(dashOn);
   const connected = integrations.data ? hasConnections(integrations.data) : undefined;
-  const attentionOn = useFeature('attention') && dashOn && connected === true;
   const feedOn = useFeature('feed');
+  // сервер старше доски: /api/config ответил, а дел в нём нет
+  const config = useConfig().data;
+  const oldServer = config !== undefined && !config.features.includes('desk');
   const now = useNow(TICK_MS);
-  const [picker, setPicker] = useState<PickerState>(null);
-  // список flow — заранее: выбор у «Запустить…» открывается сразу с ним (старый UI грузил flow при старте)
-  useFlows();
   const [settings, setSettings] = useState(false);
-  // сессии терминала: тот же список, что у «Сейчас» в сайдбаре, — пока есть живые, он обновляется сам
+  const desk = useDesk();
+  const items = desk.data?.items;
+  // рутины — только чтобы понять, пуста ли доска; их ожидания и «догнать» рисует полоса над доской (DeskTop)
+  const routinesOn = useFeature('routines');
+  const routines = useRoutines(routinesOn);
   const sessionsOn = useFeature('sessions');
-  const reviewOn = useFeature('session-review');
   const sessionList = useSessions(sessionsOn);
-  const sessions = homeSessions(sessionList.data?.sessions ?? []);
   const history = useRuns();
-  // «Мои задачи» (spec §11): блок есть, только когда есть хотя бы одна команда
-  const mine = useTeamMine(useFeature('teamwork'));
-
-  // /api/home и ленту перезапрашивает сам React Query при каждом открытии главной (refetchOnMount): запуски из CLI
-  // в общий поток не пишут, их события подхватываются при возврате на главную
-  const runs = home.data?.runs ?? [];
-  const items = inbox(runs);
-  // без /api/home пустая главная соврала бы «ничего не идёт», а запуски могут идти
-  const down = home.isError;
-  const loadHomeSoon = () => setTimeout(() => void qc.invalidateQueries({ queryKey: keys.home }), 300);
-  // рутины: карточки ожидания и «догнать» — над вопросами агентов (docs/routines/design/Home.dc.html)
-  const routines = useRoutines(useFeature('routines'));
-  // отложенные («Не сейчас») на главной не показываются — они в полосе ожиданий /routines
-  const routineWaits = activeWaits(routines.data?.waits ?? []);
-  const catchUp = routines.data?.catchUp ?? [];
-  const waiting = items.length + sessions.waiting.length + routineWaits.length;
-  const going = runs.length + sessions.live.length;
   // первый раз: ни одного запуска и ни одной сессии — подсказываем, с чего начать (только по ответам, не пока грузятся)
-  const fresh = !down && history.isSuccess && !history.data.length && (!sessionsOn || (sessionList.isSuccess && !sessionList.data.sessions.length));
-  const onLaunch = useCallback((target: IntakeTarget, btn: HTMLElement) => setPicker(pickerAt(target, btn)), []);
-  const closePicker = useCallback(() => setPicker(null), []);
+  const fresh = history.isSuccess && !history.data.length && (!sessionsOn || (sessionList.isSuccess && !sessionList.data.sessions.length));
+  // ни дел, ни рутин: доску наполняют рутины — ведём к их шаблонам
+  const empty = deskEmpty(items, routinesOn ? routines.data?.routines : undefined);
+  // срез по проекту — в адресе: переживает уход и возврат, им можно поделиться; пишет его доска (пилюли проектов)
+  const project = params.get('project') ?? undefined;
+  const onProject = (slug: string | undefined) =>
+    setParams((p) => {
+      const next = new URLSearchParams(p);
+      if (slug !== undefined) next.set('project', slug);
+      else next.delete('project');
+      next.delete(DESK_PARAM);
+      return next;
+    }, { replace: true });
+  const shown = project === undefined ? items : items?.filter((i) => inProject(i, project));
+  useShowCard(params.get(DESK_PARAM), items !== undefined);
 
   return (
     <>
       <header className="view-head">
         <div>
-          <h1>{t('Главная')}</h1>
-          <p className="muted" title={t('Стоимость: оценка по прайсу API; с подписки не списывается')}>{homeMeta(runs, items.length)}</p>
+          <h1>{t('Мои дела')}</h1>
+          <p className="muted">{deskMeta(shown, new Date(now))}</p>
         </div>
         {limits && <Limits />}
         <div className="row">
@@ -96,66 +80,55 @@ export function HomeScreen() {
       </header>
       <div className={`${styles.homeGrid}${feedOn ? '' : ` ${styles.noFeed}`}`}>
         <div className={styles.homeMain}>
-          {fresh && <Start sessions={sessionsOn} />}
-          <RoutineHome waits={routineWaits} catchUp={catchUp} sources={routines.data?.sources ?? []} routines={routines.data?.routines ?? []} now={now} />
-          {waiting - routineWaits.length > 0 && (
-            <section className={styles.homeSec}>
-              <h2 title={t('Вопросы агентов, сначала те, что ждут дольше; под ними — сессии, где ход за тобой')}>{t('Ждёт тебя')}</h2>
-              <div>
-                {items.map(({ q, run }) => (
-                  <QuestionCard
-                    key={q.id}
-                    q={q}
-                    run={run}
-                    onHome
-                    now={now}
-                    onOpenRun={() => void navigate(`/run/${run.id}`)}
-                    // ответ ушёл: убираем вопрос из входящих сразу, не дожидаясь события
-                    onAnswered={() => qc.setQueryData<HomeResponse>(keys.home, (d) => (d ? { runs: withoutQuestion(d.runs, run.id, q.id) } : d))}
-                    onFailed={loadHomeSoon}
-                  />
-                ))}
-              </div>
-              {sessions.waiting.length > 0 && <HomeSessions sessions={sessions.waiting} now={now} />}
-            </section>
-          )}
-          {going > 0 && (
-            <section className={styles.homeSec}>
-              <h2>{t('Идут')}</h2>
-              {runs.length > 0 && <HomeRuns runs={runs} now={now} />}
-              {sessions.live.length > 0 && <HomeSessions sessions={sessions.live} now={now} />}
-            </section>
-          )}
-          {reviewOn && <Review />}
-          {Boolean(mine.data?.teams.length) && (
-            <Suspense fallback={null}>
-              <MyTasks mine={mine.data!} className={styles.homeSec} />
-            </Suspense>
-          )}
-          {attentionOn && <Attention onLaunch={onLaunch} />}
-          {dashOn && connected === false && <Connect onSettings={() => setSettings(true)} />}
-          {down && (
+          {/* пустая доска сама говорит, с чего начать: вторая подсказка рядом — шум */}
+          {fresh && !empty && <Start sessions={sessionsOn} />}
+          {empty && <DeskEmpty />}
+          {/* сервер старше доски: у него нет /api/desk — честно говорим, а не рисуем пустые колонки */}
+          {oldServer ? (
             <p className={`run-paused ${styles.homeDown}`}>
-              {t('Главная заработает после перезапуска UI-сервера: этот сервер запущен до её появления и не отдаёт вопросы и идущие запуски. Пока они видны в списке слева. Перезапуск остановит идущие запуски — дождись их конца.')}
+              {t('Доска заработает после перезапуска UI-сервера: этот сервер запущен до её появления. Перезапуск остановит идущие запуски — дождись их конца.')}
             </p>
+          ) : (
+            <DeskBoard project={project} onProject={onProject} />
           )}
-          {/* строка «ничего не подключено» сама говорит, что делать: большая пустая заглушка под ней не нужна; пока
-              подключения грузятся — тоже нет (не мигать), не ответили — есть */}
-          {(!dashOn || connected === true || integrations.isError) && !down && !fresh && !waiting && !going && (
-            <div className={`empty ${styles.homeEmpty}`}>
-              <h1>{t('Ничего не идёт, вопросов нет')}</h1>
-              <p title={t('Flow — цепочка этапов. Каждый этап идёт в отдельной сессии Claude Code со своим промптом и получает то, что ему передали предыдущие. После всех этапов проверяется условие, и цикл повторяется, пока оно не выполнится.')}>
-                {t('Выбери flow слева или создай новый.')}
-              </p>
-              <p className="muted small">{t('Вопросы агентов со всех flow появятся здесь — отвечать можно не открывая запуск.')}</p>
-            </div>
-          )}
+          {dashOn && connected === false && <Connect onSettings={() => setSettings(true)} />}
         </div>
         {feedOn && <Feed now={now} />}
       </div>
-      <FlowPicker state={picker} onClose={closePicker} />
       {dashOn && <DashSettings open={settings} onClose={() => setSettings(false)} />}
     </>
+  );
+}
+
+/**
+ * `/?desk=<ключ>`: прокрутить к карточке дела и коротко подсветить. Карточка доски помечена `data-desk-key`; дела уже
+ * нет на доске (закрыто, другой срез) — тихо ничего. Один раз на ключ.
+ */
+function useShowCard(key: string | null, loaded: boolean) {
+  useEffect(() => {
+    if (!key || !loaded) return;
+    // доска рисуется в том же кадре, что и данные, — ищем на следующем
+    const id = window.setTimeout(() => {
+      const card = document.querySelector<HTMLElement>(`[data-desk-key="${CSS.escape(key)}"]`);
+      if (!card) return;
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.remove(styles.deskFlash!);
+      void card.offsetWidth;
+      card.classList.add(styles.deskFlash!);
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [key, loaded]);
+}
+
+/** Ни дел, ни рутин: доску наполняют рутины — шаблоны «Моих дел», flow к ним готовы. */
+function DeskEmpty() {
+  return (
+    <section className={styles.deskEmpty} aria-label={t('Пустая доска')}>
+      <h2>{t('Дел пока нет')}</h2>
+      <p className="muted">{t('Дела заводят рутины: назначили ревью, пришла задача Jira, прошла встреча. Выбери шаблон — flow к нему уже готов.')}</p>
+      <RoutineTemplates deskOnly />
+      <Link className="btn small ghost" to="/routines">{t('Все шаблоны и своя рутина')}</Link>
+    </section>
   );
 }
 
@@ -194,12 +167,12 @@ function Start({ sessions }: { sessions: boolean }) {
   );
 }
 
-/** Ничего не подключено: одна тихая строка с «Подключениями» — задачи и MR потом будут в разделе «Код». */
+/** Ничего не подключено: одна тихая строка с «Подключениями» — задачи и MR потом будут в разделе «Код», дела — на доске. */
 function Connect({ onSettings }: { onSettings: () => void }) {
   return (
     <section className={`${styles.homeSec} ${styles.homeConnect}`}>
       <div className={`${dashStyles.dashHead} ${dashStyles.dashQuiet}`}>
-        <h2 title={t('Подключи Jira или git-репозиторий: задачи, MR и ветки появятся в разделе «Код», а MR, которым нужно внимание, — здесь')}>
+        <h2 title={t('Подключи Jira или git-репозиторий: задачи, MR и ветки появятся в разделе «Код», а дела о них — на доске')}>
           {t('Задачи и код')} <span className="muted small">{t('— ничего не подключено')}</span>
         </h2>
         <button className="btn small" onClick={onSettings}>{t('Подключения')}</button>

@@ -5,7 +5,7 @@ import {
   dashCap, dashMore, hasConnections, jiraSessionCwd, jiraThing, mrSign, mrThing, pickerFlows, pickerPosition, runsForBranch, runsForJira, sessionsForThing, thingSessionName,
   thingSessionPrompt,
 } from './dash';
-import { feedTone, feedWhat, isUnread, unreadCount } from './feed';
+import { feedTone, feedWhat } from './feed';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
   id, flow: 'f', status: 'done', iterations: 1, totalCostUsd: 0, startedAt: '2026-10-24T10:00:00Z', input: '', hidden: false, ...over,
@@ -123,12 +123,9 @@ test('выпадашка выбора flow: под кнопкой правым �
 
 const item = (over: Partial<FeedItem>): FeedItem => ({ id: 'x', kind: 'question', at: '2026-10-24T10:00:00Z', runId: 'r', flow: 'f', ...over });
 
-test('лента: новые после отметки, цвет точки и подписи событий', () => {
+test('журнал: цвет точки и подписи событий', () => {
   const now = new Date(2026, 9, 24, 12, 0);
-  const items = [item({ at: '2026-10-24T10:05:00Z' }), item({ at: '2026-10-24T09:00:00Z' })];
-  assert.equal(unreadCount(items, '2026-10-24T10:00:00Z'), 1);
-  assert.equal(isUnread(items[1]!, '2026-10-24T10:00:00Z'), false);
-  assert.equal(feedTone(item({ open: true })), 'waiting');
+  assert.equal(feedTone(item({ open: true })), 'closed');
   assert.equal(feedTone(item({ open: false })), 'closed');
   assert.equal(feedTone(item({ kind: 'end', status: 'failed' })), 'failed');
   assert.deepEqual(feedWhat(item({ title: 'План', open: true }), now), { head: 'Вопрос от «План»', state: { text: 'ждёт ответа', wait: true }, tip: 'Вопрос от «План» · ждёт ответа' });

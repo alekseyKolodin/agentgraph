@@ -1,0 +1,10 @@
+/* Плитки шаблонов рутин: две колонки, узко — одна */
+.tpls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+.tpl { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink); text-decoration: none; text-align: left; font: inherit; cursor: pointer; transition: border-color .12s; }
+.tpl:hover { border-color: var(--line-strong); }
+.tpl:focus-visible { outline: none; box-shadow: var(--focus); }
+.tpl b { font-weight: 500; }
+.tpl span { font-size: var(--fs-meta); color: var(--ink-2); }
+/* шаблон «Моих дел»: заводит дела — чуть заметнее остальных */
+.tpl.tpl-desk { border-color: var(--line-strong); }
+@media (max-width: 640px) { .tpls { grid-template-columns: minmax(0, 1fr); } }

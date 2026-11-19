@@ -1,11 +1,14 @@
 // «Задачи и код» (ui/dash.js; раньше на главной, теперь свой раздел /code — screens/code) — задачи Jira и MR или ветки
 // проектов; «Запустить…» заполнит форму запуска выбранного flow, запустишь сам. Разделы обновляются своими запросами;
 // данные старше 5 минут подтягиваются при возврате. Файл остался здесь: useIntegrations и LaunchButton берут главная и формы.
+// «Код» — каталог, а не список дел: у строки MR и задачи, по которой есть открытое дело, — ссылка на его карточку на Главной.
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IntegrationsInfo, ProjectInfo, RunSummary, SessionView, Thing } from '@server/api-types';
+import type { DeskItem } from '@server/desk/types';
 import { errorText, fetchBranches, fetchIntegrations, fetchJiraIssues, fetchMrs, keys, useConfig, useFeature, useRuns, type IntakeTarget } from '../../api';
+import { useDesk } from '../../api/desk';
 import { createSession, defaultSessionCwd, SESSION_CWD_KEY, sessionKeys, thingIntake, useSessions } from '../../api/sessions';
 import { Badge } from '../../components/Badge';
 import { useToast } from '../../components/Toast';
@@ -14,6 +17,7 @@ import {
   DASH_STALE_MS, dashCap, dashMore, jiraSessionCwd, jiraThing, mrThing, PRESET_LABEL, runsForBranch, runsForJira, sessionsForThing, thingSessionName, thingSessionPrompt,
   type JiraPreset,
 } from '../../lib/dash';
+import { deskByKey, deskHref, deskLinkText } from '../../lib/desk';
 import { when } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { projectHint, projectLabel } from '../../lib/spaces';
@@ -166,6 +170,21 @@ function RelatedSessions({ sessions }: { sessions: SessionView[] }) {
   );
 }
 
+/** Открытые дела по ключу вещи — для ссылок строк на карточку. */
+function useDeskByKey(): Map<string, DeskItem> {
+  return deskByKey(useDesk().data?.items);
+}
+
+/** Ссылка строки на её дело на Главной: «Дело · В плане». Дела нет — ничего. */
+function DeskLink({ item }: { item: DeskItem | undefined }) {
+  if (!item) return null;
+  return (
+    <Link className={`chip ${styles.dashDesk}`} to={deskHref(item.key)} title={item.why ? `${item.title} — ${item.why}` : item.title} onClick={(e) => e.stopPropagation()}>
+      {deskLinkText(item)}
+    </Link>
+  );
+}
+
 /** Сессии для связей строк: только когда сессии в этом сервере есть. */
 function useThingSessions(): SessionView[] {
   const on = useFeature('sessions');
@@ -182,6 +201,7 @@ function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }
   const qc = useQueryClient();
   const runs = useRuns().data ?? [];
   const sessions = useThingSessions();
+  const desk = useDeskByKey();
   const serverCwd = useConfig().data?.defaultCwd;
   const [preset, setPreset] = useMemoryState<JiraPreset>('dash.jira.preset', 'sprint');
   // jql — что в поле (недописанный переживает перерисовку), jqlQuery — по какому искали
@@ -258,6 +278,7 @@ function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }
                     <a href={i.url} target="_blank" rel="noopener" className={styles.dashKey}>{i.key}</a>
                     <span className={styles.dashName} title={i.title}>{i.title}</span>
                     <span className={styles.dashMeta}>{`${i.type} · ${i.status}${i.parent ? ` · ↑ ${i.parent.key}` : ''}`}</span>
+                    <DeskLink item={thing && desk.get(thing.key)} />
                     <SessionButton
                       session={thing && cwd ? { target: { type: 'jira', key: i.key }, thing, cwd, name: thingSessionName(i.key, i.title) } : undefined}
                       title={t('Сессия Claude в {cwd}: первым сообщением — эта задача', { cwd })}
@@ -283,6 +304,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
   const qc = useQueryClient();
   const runs = useRuns().data ?? [];
   const sessions = useThingSessions();
+  const desk = useDeskByKey();
   const path = p.path;
   const [tab, setTab] = useMemoryState<'mr' | 'branches'>(`dash.proj.tab:${path}`, p.remote ? 'mr' : 'branches');
   const [mine, setMine] = useMemoryState(`dash.proj.mine:${path}`, () => LS.raw(MR_MINE_KEY) === '1');
@@ -323,6 +345,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
                     {`${m.sourceBranch} → ${m.targetBranch} · ${m.author}`}
                     {m.hasConflicts && <> · <span className="err">{t('конфликты')}</span></>}
                   </span>
+                  <DeskLink item={thing && desk.get(thing.key)} />
                   <SessionButton
                     session={thing ? { target: { type: 'mr', key: m.ref, project: path }, thing, cwd: path, name: thingSessionName(`${gh ? '#' : '!'}${m.iid}`, m.title) } : undefined}
                     title={t('Сессия Claude в папке проекта: первым сообщением — этот {mr}', { mr: mrWord })}
