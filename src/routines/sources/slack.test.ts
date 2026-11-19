@@ -70,6 +70,16 @@ test('ответ в треде помечается thread и отвечает �
   assert.equal(e.replyTo?.thread_ts, '1700000000.000200');
 });
 
+test('нить события: у просьбы и у ответа в её треде — одна нить (продолжение того же разговора)', () => {
+  const ch = { id: 'C1', name: 'review' };
+  const ask = slackEvent('slack-work', ch, { ts: '1700000000.000200', text: 'глянь https://gitlab.com/g/app/-/merge_requests/3' });
+  const reply = slackEvent('slack-work', ch, { ts: '1700000005.000100', thread_ts: '1700000000.000200', text: 'поправил, глянь' });
+  assert.deepEqual(ask.thread, { source: 'slack-work', channel: 'C1', thread: '1700000000.000200' });
+  assert.deepEqual(reply.thread, ask.thread);
+  // другое сообщение вне треда — своя нить
+  assert.notDeepEqual(slackEvent('slack-work', ch, { ts: '1700000009.000100', text: 'другое' }).thread, ask.thread);
+});
+
 test('служебные сообщения (вошёл в канал, правка) и пустые — не события', () => {
   assert.equal(isUserMessage({ ts: '1.1', subtype: 'channel_join', text: 'x' }), false);
   assert.equal(isUserMessage({ ts: '1.1', subtype: 'message_changed' }), false);

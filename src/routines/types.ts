@@ -76,7 +76,7 @@ export type McpServiceView = { server: string; title: string; origin: 'claudeai'
 export type McpServicesView = { services: McpServiceView[]; at: string };
 
 /** Разбор текстового ответа инструмента: split — регулярка-разделитель записей, поля — регулярки с одной группой. */
-export type TextRule = { split: string; id?: string; title?: string; text?: string; link?: string; at?: string; author?: string };
+export type TextRule = { split: string; id?: string; title?: string; text?: string; link?: string; at?: string; author?: string; /** Нить и канал — для чатов, как в FieldMap. */ thread?: string; channel?: string };
 /**
  * Шаг скрипта «Сервис через Claude»: вызов читающего инструмента с готовыми аргументами. В строках аргументов
  * {{since}} (ISO), {{since_unix}} (секунды), {{since_date}} (ГГГГ-ММ-ДД) — время прошлой проверки (в первый раз — сутки назад).
@@ -281,6 +281,14 @@ export type LogEntry = {
   startedAt?: string;
   /** Обратная связь человека на это событие (кнопки журнала «Это баг» / «Не повтор»). */
   feedback?: Feedback['verdict'];
+  /** Ключи вещей события (src/things/keys.ts); первый — главная вещь, по ней «то же срабатывание». */
+  things?: string[];
+  /** Версия главной вещи в этом событии: id события, которое само о ней (новый комментарий, ревью снова). Нет — только упоминание. */
+  thingVersion?: string;
+  /** Повтор по вещи: строка срабатывания, которое уже было по той же вещи (эта или другая рутина с тем же flow и задачей). */
+  sameAs?: { routine: string; logId: string };
+  /** Чем кончился запуск строки (статус запуска): упавший запуск повтор по вещи не держит. */
+  runStatus?: string;
 };
 
 /**
