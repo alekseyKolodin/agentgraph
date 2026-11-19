@@ -1194,7 +1194,15 @@ export type RunReport = {
   flowEdits?: RunFlowEdit[];
   /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
   parent?: RunParent;
+  /** Дела, которые запуск завёл или дополнил инструментом desk_put (вместе с вызванными flow). Нет вызовов — поля нет. */
+  desk?: RunDesk;
 };
+
+/**
+ * Дела запуска (src/desk/tools.ts): created — заведено новых, signals — сигналов к уже существующим делам, keys — ключи
+ * всех тронутых дел по порядку, без повторов (не больше 100). Журнал рутины показывает created.
+ */
+export type RunDesk = { created: number; signals: number; keys: string[] };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };

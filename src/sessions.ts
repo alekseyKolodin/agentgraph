@@ -16,6 +16,7 @@ import type { SessionAsk, SessionPermissionMode, SessionStatus, Space, Tag } fro
 import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { configDir } from './settings.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
+import { DESK_LIST_TOOL } from './desk/tools.js';
 import { existingSpacePaths, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 import { teamsDir } from './teamwork.js';
 
@@ -86,8 +87,11 @@ export function versionAtLeast(version: string | undefined, min: string): boolea
   return true;
 }
 
-/** Разрешены без подтверждения: только чтение тегов знаний сессии. */
-export const SESSION_ALLOWED_TOOLS = [KNOWLEDGE_READ_TOOL].map((t) => `mcp__${SESSION_MCP_SERVER}__${t}`);
+/**
+ * Разрешены без подтверждения: только чтение — тегов знаний сессии и дел (desk_list). desk_put и desk_close — не здесь и
+ * не в ASK_TOOLS: личная доска, о вызове спрашивает сам claude по режиму разрешений сессии.
+ */
+export const SESSION_ALLOWED_TOOLS = [KNOWLEDGE_READ_TOOL, DESK_LIST_TOOL].map((t) => `mcp__${SESSION_MCP_SERVER}__${t}`);
 /** Заголовок с токеном сессии у хуков и MCP: без него (или с чужим) — 404. */
 export const SESSION_TOKEN_HEADER = 'X-Agentgraph-Session';
 /** Живых сессий не больше: каждый claude занимает около 300 МБ. */
