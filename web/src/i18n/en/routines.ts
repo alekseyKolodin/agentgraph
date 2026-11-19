@@ -531,4 +531,6 @@ export const routines: Record<string, string> = {
   'Напиши, когда закрыть дело.': 'Write when to close the task.',
   'напиши, когда закрыть дело': 'write when to close the task',
   'Проект дела': 'Task project',
+  'Запуск завёл {n} {w}.': 'The run created {n} {w}.',
+  'Дописал в дела сигналов: {n}.': 'Signals added to tasks: {n}.',
 };

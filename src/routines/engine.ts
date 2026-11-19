@@ -66,7 +66,7 @@ export type RoutineRunRequest = {
 export type RoutineRunEvent =
   | { type: 'pause'; block: string; /** Что агент уже сделал: итог последнего блока или сводка запуска. */ context?: string }
   | { type: 'resumed' }
-  | { type: 'end'; status: RunStatus | string; costUsd: number; summary?: string; context?: string; /** Текст ошибки запуска (для уведомления). */ error?: string };
+  | { type: 'end'; status: RunStatus | string; costUsd: number; summary?: string; context?: string; /** Текст ошибки запуска (для уведомления). */ error?: string; /** Дела, которые запуск завёл и тронул (report.desk). */ desk?: { created: number; signals: number } };
 
 export type Timers = {
   setInterval: (fn: () => void, ms: number) => unknown;
@@ -1163,7 +1163,7 @@ export class RoutineEngine {
     try {
       line = this.store.logAll(a.routine).find((x) => x.id === a.logId);
       // проверка словами уже стоила денег: запуск добавляется к ней, а не затирает
-      this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd), runStatus: String(ev.status) });
+      this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd), runStatus: String(ev.status), ...(ev.desk?.created || ev.desk?.signals ? { desk: ev.desk } : {}) });
       if (ev.status === 'budget_exceeded') this.log(a.routine, a.event, 'limit', { runId, reason: `бюджет запуска превышен${spec?.limits?.usd ? ` (limits.usd = ${spec.limits.usd})` : ''}` });
     } catch (err) {
       line = undefined;

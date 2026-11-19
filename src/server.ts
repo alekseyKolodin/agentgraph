@@ -1522,7 +1522,7 @@ function launchRun(
       } else if (e.type === 'end') {
         routineRuns.delete(id);
         const context = routineContext(e.report);
-        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}), ...(e.report.error ? { error: e.report.error } : {}) });
+        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}), ...(e.report.error ? { error: e.report.error } : {}), ...(e.report.desk ? { desk: { created: e.report.desk.created, signals: e.report.desk.signals } } : {}) });
       }
     }
     if (e.type === 'end') {

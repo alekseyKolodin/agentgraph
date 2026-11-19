@@ -4,7 +4,7 @@ import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/rout
 import { buildMatch, conditionText, matchFields, opsFor, parseMatch } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
 import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
-import { taskVerdict } from './view';
+import { logDetail as detailOf, taskVerdict } from './view';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
   brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
@@ -409,4 +409,9 @@ test('главная: источник, который читают только
 test('шапка списка: расход опроса источников за сегодня входит в деньги дня', () => {
   const meta = overviewMeta([view({ stats: { today: 1, started: 1, waiting: 0, costUsd: 1 }, recent: [entry({ outcome: 'started', at: new Date().toISOString(), costUsd: 1 })] })], new Date(), [src({ pollCostUsd: { today: 0.5, week: 2 } })]);
   assert.equal(meta, 'сегодня 1 запуск · $1.50');
+});
+
+test('строка журнала: сколько дел завёл запуск', () => {
+  const e = { id: '1', at: '2026-11-17T10:00:00.000Z', routine: 'r', event: { source: 's', id: 'e', title: 'x', at: '2026-11-17T10:00:00.000Z' }, outcome: 'started' as const, desk: { created: 2, signals: 1 } };
+  assert.match(detailOf(e), /Запуск завёл 2 дела\. Дописал в дела сигналов: 1\./);
 });

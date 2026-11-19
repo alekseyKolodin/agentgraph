@@ -312,6 +312,8 @@ export type LogEntry = {
   runStatus?: string;
   /** Рутина с task: ключ дела, которое завело или обновило это событие. */
   deskKey?: string;
+  /** Сколько дел запуск завёл (created) и скольким дописал сигнал (signals) инструментом desk_put — report.desk. */
+  desk?: { created: number; signals: number };
 };
 
 /**

@@ -247,6 +247,8 @@ export function logDetail(e: LogEntry): string {
   // почему подошло (ответ проверки словами) — у запуска и ожидания, где своей причины нет
   else if (e.why) parts.push(e.why.trim().replace(/([^.!?…])$/, '$1.'));
   if (e.replied) parts.push(t('Ответ ушёл: «{text}».', { text: e.replied.text }));
+  if (e.desk?.created) parts.push(t('Запуск завёл {n} {w}.', { n: e.desk.created, w: plural(e.desk.created, 'дело', 'дела', 'дел') }));
+  if (e.desk?.signals) parts.push(t('Дописал в дела сигналов: {n}.', { n: e.desk.signals }));
   if (e.costUsd) parts.push(t('Потрачено {usd}.', { usd: usd(e.costUsd) }));
   if (!parts.length) parts.push(e.outcome === 'started' ? t('Запуск начат.') : t('Подробностей нет.'));
   return parts.join(' ');

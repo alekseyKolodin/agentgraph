@@ -11,6 +11,7 @@ import { RoutineStore } from './store.js';
 import type { SourceKind } from './kind.js';
 import type { RoutineEvent, RoutineSpec } from './types.js';
 import type { DeskApi, DeskBy, DeskColumn, DeskItem, DeskPatch } from '../desk/types.js';
+import { openDesk } from '../desk/index.js';
 
 const MR = 'https://gitlab.company.com/grp/app/-/merge_requests/12';
 const MR_KEY = 'mr:gitlab.company.com/grp/app/12';
@@ -58,7 +59,7 @@ function fakeDesk(o: { fail?: boolean } = {}) {
   return { api, items, calls, puts: () => allPuts().filter((c) => c.patch.signal), links: () => allPuts().filter((c) => !c.patch.signal) };
 }
 
-function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
+function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-'));
   const store = new RoutineStore(root);
   const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
@@ -66,6 +67,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
   const started: RoutineRunRequest[] = [];
   const desk = fakeDesk({ fail: o.failDesk });
   const checks: string[] = [];
+  const real = o.realDesk ? openDesk(path.join(root, 'desk')) : undefined;
   const kind: SourceKind = {
     kind: 'fake',
     title: 'Фейк',
@@ -90,7 +92,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
     now: () => clock.now,
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
     jiraHosts: () => [],
-    desk: () => desk.api,
+    desk: () => real ?? desk.api,
     check: async (i) => {
       checks.push(i.event.id);
       return { match: true, duplicate: false, reason: 'подходит', costUsd: 0 };
@@ -125,7 +127,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
     await engine.idle();
   };
   const log = (slug: string) => engine.logOf(slug, {}).reverse();
-  return { root, store, engine, items, started, desk, checks, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, engine, items, started, desk, real, checks, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('рутина без flow: событие заводит дело по ключу вещи — без запуска, строка журнала «дело»', async () => {
@@ -405,6 +407,37 @@ test('простой с проверкой словами: «догнать» н
     assert.deepEqual(t.checks, ['review:1']);
     assert.equal(t.started.length, 1);
     assert.equal(t.log('both').at(-1)?.deskKey, MR_KEY);
+  } finally {
+    t.done();
+  }
+});
+
+test('журнал рутины: сколько дел завёл запуск — из report.desk конца запуска', async () => {
+  const t = setup();
+  try {
+    t.routine('plain', 'gl', { run: { flow: 'review' }, task: undefined });
+    await t.push('gl', t.gl('review:1'));
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.2, desk: { created: 2, signals: 1 } });
+    assert.deepEqual(t.log('plain')[0].desk, { created: 2, signals: 1 });
+  } finally {
+    t.done();
+  }
+});
+
+test('настоящее хранилище дел: две рутины на один MR — одно дело с двумя сигналами и правилом закрытия', async () => {
+  const t = setup({ realDesk: true });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined, task: { kind: 'Ревью', close: 'never' } });
+    t.routine('slack', 'chat', { run: undefined, task: { kind: 'Ревью', close: 'never' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', t.chat('2'));
+    const items = await t.real!.list();
+    assert.equal(items.length, 1);
+    assert.equal(items[0].key, MR_KEY);
+    assert.equal(items[0].column, 'new');
+    assert.equal(items[0].close, 'never');
+    assert.deepEqual(items[0].signals.map((x) => x.routine), ['gitlab', 'slack']);
+    assert.deepEqual(t.log('slack').map((x) => x.outcome), ['task']);
   } finally {
     t.done();
   }
