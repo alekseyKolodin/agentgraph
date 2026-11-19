@@ -685,6 +685,7 @@ test('ход чата: шаги трассы (с ошибкой инструме
     req.onEvent!({ kind: 'tool_use', id: 't3', name: 'mcp__ui__show_table', input: {} });
     await call(tools('ui'), 'show_table', { columns: ['a'], rows: [['1']] });
     await call(tools('run'), 'pause_run');
+    req.onEvent!({ kind: 'text', text: 'Готово.' });
   });
   const chat = await chatTurn({
     runDir, cwd: dir, message: 'что с тестами?', controls: fake(),
@@ -694,33 +695,145 @@ test('ход чата: шаги трассы (с ошибкой инструме
     onEffect: (e) => live.push(['effect', e.kind]),
   }, deps);
   const last = chat.messages.at(-1)!;
-  assert.equal(last.text, 'Готово.');
+  assert.equal(last.text, 'Смотрю вывод.\n\nГотово.');
   assert.deepEqual(last.steps, [
     { tool: 'Read', target: 'iter-01/01-a.output.md', runFile: 'iter-01/01-a.output.md' },
     { tool: 'Bash', target: 'npm test', error: 'Exit code 1' },
   ]);
   assert.deepEqual(last.widgets, [{ type: 'table', columns: ['a'], rows: [['1']] }]);
-  assert.deepEqual(live, [['text', 'Смотрю вывод.'], ['step', 0, 'iter-01/01-a.output.md'], ['step', 1, 'npm test'], ['step', 1, 'Exit code 1'], ['widget', 'table'], ['effect', 'run']]);
+  assert.deepEqual(live, [['text', 'Смотрю вывод.'], ['step', 0, 'iter-01/01-a.output.md'], ['step', 1, 'npm test'], ['step', 1, 'Exit code 1'], ['widget', 'table'], ['effect', 'run'], ['text', 'Готово.']]);
   assert.deepEqual(readChat(runDir).messages.at(-1), last);
   // сессии разрешены инструменты обоих серверов
   assert.ok(deps.reqs[0]!.allow!.includes('mcp__ui__propose_actions') && deps.reqs[0]!.allow!.includes('mcp__run__flow_read'));
 }));
 
-test('ход чата: ответ только виджетом (пустой текст) — не ошибка; старый chat.json без steps и widgets читается и продолжается', withDir(async (dir) => {
+/** Поддельная сессия с отдельным сценарием на каждый ход: ход по номеру, стоимость — с начала сессии, как у SDK. */
+type Turn = { script?: (req: SessionRequest, tools: (server: string) => ChatTool[]) => Promise<void>; result?: Partial<SessionResult> };
+function turnsDeps(turns: Turn[]): ChatDeps & { reqs: SessionRequest[] } {
+  const reqs: SessionRequest[] = [];
+  return {
+    reqs,
+    mcpServer: (name, tools) => ({ type: 'sdk', name, instance: tools }) as never,
+    runSession: async (req) => {
+      const t = turns[reqs.length] ?? assert.fail(`лишний ход сессии №${reqs.length + 1}`);
+      reqs.push(req);
+      await t.script?.(req, (server) => (req.mcpServers![server] as unknown as { instance: ChatTool[] }).instance);
+      return { ok: true, subtype: 'success', text: '', costUsd: 0.1, turns: 3, durationMs: 1, errors: [], sessionId: 's1', ...t.result };
+    },
+  };
+}
+const LONG = 'Этап сбора тредов уже 44 минуты ждёт команду find по корню проекта: там десятки копий репозитория в игнорируемой папке worktree.';
+const RETRY = /^Ответ не дан: ты отослал к вариантам/;
+
+test('ход чата: ответ только виджетом (пустой текст) — один повторный ход той же сессии; старый chat.json без steps и widgets читается и продолжается', withDir(async (dir) => {
   const old = { sessionId: 's0', cwd: dir, sessionCostUsd: 0.5, totalCostUsd: 0.5, messages: [
     { role: 'user', text: 'привет', at: '2026-01-01T00:00:00.000Z' },
     { role: 'assistant', text: 'Начат новый запуск r9', at: '2026-01-01T00:00:01.000Z', costUsd: 0.5, openRun: 'r9' },
   ] };
   fs.writeFileSync(path.join(dir, CHAT_FILE), JSON.stringify(old));
   assert.deepEqual(readChat(dir).messages, old.messages);
-  const deps = fakeDeps(async (_req, tools) => { await call(tools('ui'), 'offer_replies', { items: ['Да'] }); }, { text: '', costUsd: 0.6 });
-  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'ещё', controls: fake() }, deps);
+  const deps = turnsDeps([
+    { script: async (_req, tools) => { await call(tools('ui'), 'offer_replies', { items: ['Да'] }); }, result: { text: '', costUsd: 0.6 } },
+    { script: async (req) => { req.onEvent!({ kind: 'tool_use', id: 'p1', name: 'Bash', input: { command: 'ps aux' } }); }, result: { text: LONG, costUsd: 0.7 } },
+  ]);
+  const live: string[] = [];
+  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'ещё', controls: fake(), onText: (t) => live.push(t) }, deps);
+  assert.equal(deps.reqs.length, 2);
   assert.equal(deps.reqs[0]!.resume, 's0');
+  assert.equal(deps.reqs[1]!.resume, 's1', 'повтор — в сессии, которую вернул первый ход');
+  assert.match(deps.reqs[1]!.prompt, RETRY);
   assert.deepEqual(chat.messages.slice(0, 2), old.messages);
+  assert.equal(chat.messages.length, 4, 'в истории одно сообщение assistant на оба хода');
   const last = chat.messages.at(-1)!;
-  assert.deepEqual([last.text, last.error, last.steps, last.widgets], ['', undefined, undefined, [{ type: 'replies', items: ['Да'] }]]);
-  assert.ok(Math.abs(last.costUsd! - 0.1) < 1e-9);
+  assert.deepEqual([last.text, last.error, last.widgets], [LONG, undefined, [{ type: 'replies', items: ['Да'] }]]);
+  assert.deepEqual(last.steps, [{ tool: 'Bash', target: 'ps aux' }], 'шаги второго хода — в той же трассе');
+  assert.ok(Math.abs(last.costUsd! - 0.2) < 1e-9, 'стоимость двух ходов: (0.6-0.5)+(0.7-0.6)');
+  assert.equal(chat.sessionCostUsd, 0.7);
+  assert.ok(Math.abs(chat.totalCostUsd - 0.7) < 1e-9);
+  assert.deepEqual(readChat(dir).messages.at(-1), last);
 }));
+
+test('ход чата: текст «Выберите вариант под ответом.» с вариантами — повтор; живой текст заменяется текстом повтора', withDir(async (dir) => {
+  const live: string[] = [];
+  const deps = turnsDeps([
+    { script: async (req, tools) => { await call(tools('ui'), 'offer_replies', { items: ['Подождём'] }); req.onEvent!({ kind: 'text', text: 'Выберите вариант под ответом.' }); }, result: { text: 'Выберите вариант под ответом.' } },
+    { script: async (req) => { req.onEvent!({ kind: 'text', text: LONG }); }, result: { text: LONG, costUsd: 0.15 } },
+  ]);
+  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'почему завис?', controls: fake(), onText: (t) => live.push(t) }, deps);
+  assert.deepEqual(live, ['Выберите вариант под ответом.', LONG.slice(0, 600)]);
+  assert.equal(chat.messages.at(-1)!.text, LONG);
+  assert.deepEqual(chat.messages.at(-1)!.widgets, [{ type: 'replies', items: ['Подождём'] }]);
+  // отсылка к кнопкам — ошибка при любых виджетах, и английская тоже
+  const withTable = turnsDeps([
+    { script: async (_r, tools) => { await call(tools('ui'), 'show_table', { columns: ['a'], rows: [['1']] }); }, result: { text: 'Choose an option below, please' } },
+    { result: { text: LONG } },
+  ]);
+  const c2 = await chatTurn({ runDir: dir, cwd: dir, message: 'ещё', controls: fake() }, withTable);
+  assert.equal(withTable.reqs.length, 2);
+  assert.equal(c2.messages.at(-1)!.text, LONG);
+}));
+
+test('ход чата: повтора нет — содержательный текст с виджетом, короткая фраза с кнопкой действия, короткий текст без виджетов, слово «выберите» не в начале', withDir(async (dir) => {
+  const once = async (text: string, widget?: (tools: (s: string) => ChatTool[]) => Promise<unknown>) => {
+    const deps = turnsDeps([{ script: async (_req, tools) => { await widget?.(tools); }, result: { text } }]);
+    const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'вопрос', controls: fake() }, deps);
+    assert.equal(deps.reqs.length, 1, text);
+    return chat.messages.at(-1)!;
+  };
+  const replies = (tools: (s: string) => ChatTool[]) => call(tools('ui'), 'offer_replies', { items: ['Да'] });
+  assert.equal((await once(LONG, replies)).text, LONG);
+  const propose = (tools: (s: string) => ChatTool[]) => call(tools('ui'), 'propose_actions', { items: [{ kind: 'abort', label: 'Остановить запуск' }] });
+  assert.equal((await once('Остановить можно кнопкой.', propose)).text, 'Остановить можно кнопкой.');
+  assert.equal((await once('Поставил на паузу.')).text, 'Поставил на паузу.');
+  assert.equal((await once('Можно подождать или выбрать другой вариант — решать вам, причина в команде find.', propose)).error, undefined);
+}));
+
+test('ход чата: после abort повтора нет', withDir(async (dir) => {
+  const abort = new AbortController();
+  const deps = turnsDeps([{ script: async (_req, tools) => { await call(tools('ui'), 'offer_replies', { items: ['Да'] }); abort.abort(); }, result: { text: '' } }]);
+  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'ещё', controls: fake(), abort }, deps);
+  assert.equal(deps.reqs.length, 1);
+  assert.equal(chat.messages.at(-1)!.text, '');
+}));
+
+test('ход чата: второй пустой ответ сохраняется как есть — третьего хода нет, ошибки нет', withDir(async (dir) => {
+  const deps = turnsDeps([
+    { script: async (_req, tools) => { await call(tools('ui'), 'offer_replies', { items: ['Да'] }); }, result: { text: 'Выберите вариант.' } },
+    { result: { text: 'Выберите вариант ниже.', costUsd: 0.3 } },
+  ]);
+  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'ещё', controls: fake() }, deps);
+  assert.equal(deps.reqs.length, 2);
+  const last = chat.messages.at(-1)!;
+  assert.deepEqual([last.text, last.error, last.widgets], ['Выберите вариант ниже.', undefined, [{ type: 'replies', items: ['Да'] }]]);
+}));
+
+test('ход чата: в сообщение входят все текстовые блоки главного агента — до виджета и после; текст сабагента — нет', withDir(async (dir) => {
+  const deps = turnsDeps([{
+    script: async (req, tools) => {
+      req.onEvent!({ kind: 'text', text: 'Этап ждёт find уже 44 минуты: он обходит корень проекта вместе с копиями репозитория.' });
+      req.onEvent!({ kind: 'text', text: 'мысли сабагента', parent: 'toolu_1' });
+      await call(tools('ui'), 'offer_replies', { items: ['Подождём'] });
+      req.onEvent!({ kind: 'text', text: 'Можно подождать или поставить паузу.' });
+    },
+    result: { text: 'Можно подождать или поставить паузу.' },
+  }]);
+  const chat = await chatTurn({ runDir: dir, cwd: dir, message: 'почему?', controls: fake() }, deps);
+  assert.equal(deps.reqs.length, 1);
+  assert.equal(chat.messages.at(-1)!.text, 'Этап ждёт find уже 44 минуты: он обходит корень проекта вместе с копиями репозитория.\n\nМожно подождать или поставить паузу.');
+}));
+
+test('системный промпт: «сначала ответь текстом», убить процесс этапа — опасное, варианты не заменяют ответ', () => {
+  const p = chatSystemPrompt(report(), '/runs/r1', '/repo');
+  assert.doesNotMatch(p, /Их содержимое в тексте не повторяй/);
+  assert.match(p, /сначала ответь на вопрос текстом/);
+  assert.match(p, /только отсылает к кнопкам или вариантам/);
+  assert.match(p, /остановить или убить процесс идущего этапа/);
+  assert.match(p, /только по прямой просьбе|только после прямой просьбы|после прямой просьбы/);
+  assert.match(p, /«почему завис», «почему так долго», «что он делает»[^\n]*run_status, run_log/);
+  assert.match(p, /короткие следующие реплики пользователя/);
+  const tool = uiTools(fake(), newSink({}), '/runs/r1').find((t) => t.name === 'offer_replies')!;
+  assert.match(tool.description, /Только в дополнение к ответу текстом, не вместо него/);
+});
 
 // ---------- via chat в артефактах
 
