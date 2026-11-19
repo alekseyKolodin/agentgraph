@@ -331,3 +331,10 @@ test('dropRoutineWorktrees: убирает worktree рутины этой вещ
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('вещь события — первая не угаданная: задача по голому ключу в тексте (ref.guess) — не вещь работы', () => {
+  const guess = { type: 'jira' as const, key: 'jira:j.test/ABC-1', ref: { host: 'j.test', key: 'ABC-1', guess: true } };
+  const mr = { type: 'mr' as const, key: 'mr:gl.test/g/app/3', ref: { host: 'gl.test', project: 'g/app', number: 3 } };
+  assert.equal(eventThing({ things: [guess], fields: {} }), undefined);
+  assert.equal(eventThing({ things: [guess, mr], fields: {} })?.key, mr.key);
+});

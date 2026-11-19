@@ -1,6 +1,7 @@
 // Разбор сигнала (SPEC 3.1): из ссылки и текста события достаются ссылки и ключи известных вещей — адрес MR/PR GitLab и
 // GitHub любого хоста, адрес задачи Jira по хостам из настроек Jira (и *.atlassian.net), ключ задачи ABC-12 в тексте,
-// когда хост Jira один. Несколько ссылок — несколько вещей. Нить разговора — из записи по FieldMap (thread/channel).
+// когда хост Jira один (такая вещь угадана: ref.guess — правило повтора рутин на неё не опирается). Несколько ссылок —
+// несколько вещей. Нить разговора — из записи по FieldMap (thread/channel).
 import { pathGet } from '../routines/match.js';
 import type { FieldMap } from '../routines/types.js';
 import { loadSettings } from '../settings.js';
@@ -12,7 +13,9 @@ export const THINGS_MAX = 20;
 
 const JIRA_KEY = /^[A-Z][A-Z0-9_]+-[1-9]\d*$/;
 /** Похоже на ключ задачи, но это стандарт, кодировка или модель: UTF-8, ISO-8601, SHA-256, GPT-4, CVE-2024… */
-const NOT_JIRA = new Set(['UTF', 'ISO', 'SHA', 'MD', 'RFC', 'CVE', 'CWE', 'GPT', 'COVID', 'TLS', 'SSL', 'HTTP', 'HTTPS', 'IPV', 'AES', 'RSA', 'PEP', 'ES', 'ECMA', 'IEEE', 'IEC', 'ANSI', 'WCAG', 'CP', 'KOI', 'WIN', 'ARM', 'MP', 'AVX', 'SSE', 'DDR', 'LPDDR', 'PCI', 'USB', 'HDMI', 'UTC', 'GMT', 'EN', 'DIN', 'BASE', 'TOP', 'NO', 'OAUTH', 'H', 'X']);
+const NOT_JIRA = new Set(['UTF', 'ISO', 'SHA', 'MD', 'RFC', 'CVE', 'CWE', 'GPT', 'COVID', 'TLS', 'SSL', 'HTTP', 'HTTPS', 'IPV', 'AES', 'RSA', 'PEP', 'ES', 'ECMA', 'IEEE', 'IEC', 'ANSI', 'WCAG', 'CP', 'KOI', 'WIN', 'ARM', 'MP', 'AVX', 'SSE', 'DDR', 'LPDDR', 'PCI', 'USB', 'HDMI', 'UTC', 'GMT', 'EN', 'DIN', 'BASE', 'TOP', 'NO', 'OAUTH', 'IE', 'AI', 'ML', 'LLM', 'IOS', 'FY', 'Q1', 'Q2', 'Q3', 'Q4', 'PR', 'MR']);
+/** Кварталы и полугодия (Q3-2024, H1-2025) — не задачи. */
+const PERIOD = /^(Q[1-4]|H[12])$/;
 
 export type MrRef = { forge: 'gitlab' | 'github'; host: string; project: string; number: number };
 
@@ -38,7 +41,8 @@ export function thingLabel(t: Thing): string {
 function urlsIn(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/https?:\/\/[^\s<>"'`|\\\])}]+/gi)) {
-    out.push(m[0].replace(/(&gt;|&lt;|&amp;)+$/i, '').replace(/[.,;:!?»”'"]+$/, ''));
+    // Slack экранирует & внутри адреса: ?a=1&amp;selectedIssue=ABC-12
+    out.push(m[0].replace(/(&gt;|&lt;|&amp;)+$/i, '').replace(/&amp;/gi, '&').replace(/[.,;:!?»”'"]+$/, ''));
   }
   return out;
 }
@@ -68,15 +72,25 @@ export function thingOfUrl(raw: string, jiraHosts: readonly string[] = []): Thin
   // GitHub и GitHub Enterprise: /<владелец>/<репозиторий>/pull/7[/files]
   const gh = /^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)(?:\/.*)?$/.exec(path);
   if (gh) return mrThing({ forge: 'github', host, project: `${gh[1]}/${gh[2]}`, number: Number(gh[3]), url: `${origin}/${gh[1]}/${gh[2]}/pull/${gh[3]}` });
-  // Jira: хост из настроек или Jira Cloud; ключ — ?selectedIssue=ABC-12, /browse/abc-12 или последний сегмент пути
-  // заглавными (…/issues/ABC-12); страницы Confluence на том же хосте (/wiki/…) — не задачи
+  // Jira: хост из настроек или Jira Cloud; ключ — ?selectedIssue=ABC-12, /browse/abc-12, …/issues/ABC-12, очередь. Любой
+  // последний сегмент не берём: на том же хосте бывает Confluence (/wiki/…, /confluence/…) со страницами «RELEASE-2»
   if (jiraHosts.map(normHost).includes(host) || host.endsWith('.atlassian.net')) {
-    if (path.startsWith('/wiki/')) return undefined;
-    const tail = path.split('/').filter(Boolean).at(-1) ?? '';
-    const key = [u.searchParams.get('selectedIssue')?.toUpperCase(), /\/browse\/([A-Za-z][A-Za-z0-9_]+-[1-9]\d*)\/?$/.exec(path)?.[1].toUpperCase(), tail].find((k) => k && JIRA_KEY.test(k));
-    if (key) return jiraThing({ host, key, url: `${origin}/browse/${key}` });
+    // …/issues/ABC-12 и очереди Service Management (…/queues/custom/1/ABC-12)
+    const inPath = /\/(?:issues\/|queues\/(?:[^/]+\/)*)([A-Z][A-Z0-9_]+-[1-9]\d*)\/?$/.exec(path)?.[1];
+    const key = [u.searchParams.get('selectedIssue'), /\/browse\/([A-Za-z][A-Za-z0-9_]+-[1-9]\d*)\/?$/.exec(path)?.[1], inPath].map((k) => k?.toUpperCase()).find((k) => k && JIRA_KEY.test(k));
+    if (key) return jiraThing({ host, key, url: `${origin}${jiraContext(host, path)}/browse/${key}` });
   }
   return undefined;
+}
+
+/** Разделы Jira Server/Data Center: всё, что до них в пути, — путь контекста (https://x/jira/browse/ABC-1 → /jira). */
+const JIRA_SECTIONS = ['/browse/', '/secure/', '/projects/', '/servicedesk/', '/plugins/'];
+
+/** Путь контекста Jira Server по адресу; у Jira Cloud его нет (/jira/software/… — часть приложения, задачи — в /browse/). */
+function jiraContext(host: string, path: string): string {
+  if (host.endsWith('.atlassian.net')) return '';
+  const at = JIRA_SECTIONS.map((s) => path.indexOf(s)).filter((i) => i >= 0);
+  return at.length ? path.slice(0, Math.min(...at)).replace(/\/+$/, '') : '';
 }
 
 /** Ключи ABC-12 в тексте (без адресов): только когда хост Jira один — иначе не знаем, чья это задача. */
@@ -85,8 +99,9 @@ function bareJiraKeys(text: string, jiraHosts: readonly string[]): Thing[] {
   const host = normHost(jiraHosts[0]);
   const out: Thing[] = [];
   for (const m of text.matchAll(/(?<![\w./#@-])([A-Z][A-Z0-9_]{1,9})-([1-9]\d{0,6})(?![\w-]|\.\d)/g)) {
-    if (NOT_JIRA.has(m[1])) continue;
-    out.push(jiraThing({ host, key: `${m[1]}-${m[2]}` }));
+    if (NOT_JIRA.has(m[1]) || PERIOD.test(m[1])) continue;
+    const t = jiraThing({ host, key: `${m[1]}-${m[2]}` });
+    out.push({ ...t, ref: { ...t.ref, guess: true } });
   }
   return out;
 }
@@ -120,7 +135,7 @@ export function resolveSignal(s: Signal, o: ResolveOpts = {}): { own: Thing[]; m
   return { own, mentioned };
 }
 
-/** Все вещи сигнала: свои, потом упомянутые; первая — главная (по ней «то же срабатывание»). */
+/** Все вещи сигнала: свои, потом упомянутые; первая — главная (у своей — версия, по ней «то же срабатывание»). */
 export function resolveThings(s: Signal, o: ResolveOpts = {}): Thing[] {
   const r = resolveSignal(s, o);
   return [...r.own, ...r.mentioned].slice(0, THINGS_MAX);
@@ -146,7 +161,7 @@ export function threadRef(source: string, channel: unknown, thread: unknown): Th
   return { source, ...(c ? { channel: c } : {}), thread: t };
 }
 
-/** Нить записи по путям FieldMap (thread, channel) — для чатов через коннектор и свою команду. */
+/** Нить записи по путям FieldMap (thread, channel) — для чатов через коннектор (у «Своей команды» map.thread схема пока не пускает). */
 export function threadOfItem(source: string, item: unknown, map: Pick<FieldMap, 'thread' | 'channel'>): ThreadRef | undefined {
   if (!map.thread) return undefined;
   return threadRef(source, map.channel ? pathGet(item, map.channel) : undefined, pathGet(item, map.thread));
