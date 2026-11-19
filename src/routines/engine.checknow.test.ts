@@ -7,12 +7,14 @@ import path from 'node:path';
 import { RoutineEngine } from './engine.js';
 import { RoutineStore } from './store.js';
 import { routinesRoute } from './routes.js';
+import { openDesk } from '../desk/index.js';
 import type { SourceKind } from './kind.js';
 import type { HistoryRun, RoutineEvent, SourceCheckNow, SourceEvents } from './types.js';
 
 function setup(o: { live?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-checknow-'));
   const store = new RoutineStore(root);
+  const desk = openDesk(path.join(root, 'desk'));
   const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
   const items: RoutineEvent[] = [];
   const started: string[] = [];
@@ -39,11 +41,13 @@ function setup(o: { live?: boolean } = {}) {
     now: () => clock.now,
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: () => 0, clearTimeout: () => {} },
     check: async () => ({ match: true, duplicate: false, reason: 'да', costUsd: 0 }),
+    // своя доска во временной папке: без неё движок берёт общую доску процесса — настоящую ~/.agentgraph/desk
+    desk: () => desk,
   });
   store.writeSource('src', { title: 'Чат', kind: 'fake', config: {}, every: '1h' });
   const event = (id: string, channel = 'bugs'): RoutineEvent => ({ source: 'src', id, at: '2026-11-17T10:00:05.000Z', title: `Баг ${id}`, text: id, fields: { channel } });
   const connected = () => store.setLastCheck('src', '2026-11-17T09:00:00.000Z');
-  return { root, store, engine, clock, items, started, polls: () => polls, event, connected, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, desk, engine, clock, items, started, polls: () => polls, event, connected, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('проверить сейчас: новое событие проходит правила, запускает flow и пишется в журнал', async () => {
@@ -117,9 +121,10 @@ test('проверить сейчас: рутина, у которой дело 
     t.engine.saveRoutine('r', { spec: { title: 'Р', when: { source: 'src' }, task: { kind: 'Задача' }, mode: 'auto' } as never });
     t.items.push(t.event('1'));
     const r: SourceCheckNow = await t.engine.checkNow('src');
-    // доска в тесте недоступна: событие либо завело дело, либо записалось ошибкой — но не потерялось
-    assert.equal(r.tasks + r.errors, 1);
-    assert.equal(t.engine.logOf('r', {}).length, 1);
+    assert.deepEqual({ tasks: r.tasks, errors: r.errors }, { tasks: 1, errors: 0 });
+    assert.deepEqual(t.engine.logOf('r', {}).map((e) => e.outcome), ['task']);
+    // дело легло во временную доску теста, а не в настоящую
+    assert.deepEqual((await t.desk.list()).map((x) => x.title), ['Баг 1']);
   } finally {
     t.done();
   }
