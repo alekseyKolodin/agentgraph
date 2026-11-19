@@ -9,7 +9,7 @@ import { exec, repoRoot, type Exec } from '../git.js';
 import { branchKey, jiraKey, keyLabel, mrKey, parseKey } from '../things/keys.js';
 import { settingsJiraHosts, thingLabel, thingOfUrl } from '../things/resolve.js';
 import type { Thing, ThingType } from '../things/types.js';
-import type { DeskApi, DeskBy, DeskColumn, DeskItem, DeskLinks, DeskPatch, DeskSignal } from './types.js';
+import type { DeskApi, DeskBy, DeskColumn, DeskCreatedBy, DeskItem, DeskLinks, DeskPatch, DeskSignal } from './types.js';
 
 export const DESK_PUT_TOOL = 'desk_put';
 export const DESK_CLOSE_TOOL = 'desk_close';
@@ -50,6 +50,7 @@ export type DeskCallCtx = {
   /** Ключ ветки branch:<корень>#<ветка> (см. branchKeyOf). */
   branch?: () => Promise<string | undefined>;
   session?: string;
+  /** Запуск flow: в links.mentionedBy (не в runs — это не запуск по делу) и в createdBy нового дела. */
   run?: string;
   /** Рутина, запустившая flow: в сигнал. */
   routine?: string;
@@ -59,8 +60,13 @@ export type DeskCallCtx = {
   jiraHosts?: () => readonly string[];
   /** «Почему» у нового дела, если модель не сказала: «из сессии …», «из запуска …». */
   why: string;
-  /** Можно ли закрыть это дело отсюда; строка — почему нет. Нет — можно любое. */
-  canClose?: (item: DeskItem) => string | undefined;
+  /**
+   * Своё ли дело месту вызова. Нет функции — своё любое (сессия: о вызове спрашивает claude; CLI — человек). Чужое дело
+   * desk_put только дополняет сигналом — без why, срока, ссылок, проекта и без переноса колонки (onRepeat: 'keep': не
+   * переоткрывает закрытое и не двигает «Ждёт других»), а desk_close его не закрывает. Так текст из Slack в задаче flow
+   * не перепишет и не вычистит доску пользователя.
+   */
+  owns?: (item: DeskItem) => boolean;
   /** Новое дело или сигнал к существующему — для счётчика дел запуска. */
   onPut?: (item: DeskItem, created: boolean) => void;
   now?: () => Date;
@@ -144,7 +150,7 @@ export async function branchKeyOf(cwd: string, x: Exec = exec): Promise<string |
     if (!root) return undefined;
     const branch = (await x('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 10_000 })).trim();
     if (!branch || branch === 'HEAD') return undefined;
-    return `branch:${root.replace(/\\/g, '/')}#${branch}`;
+    return branchKey(root, branch);
   } catch {
     return undefined;
   }
@@ -257,10 +263,19 @@ export async function deskPut(ctx: DeskCallCtx, a: DeskPutArgs): Promise<{ item:
     ...(a.text ? { text: a.text } : {}),
     ...(ctx.routine ? { routine: ctx.routine } : {}),
   };
+  // чужое дело — только сигнал: ни полей, ни переноса колонки; своё, но закрытое не отсюда (руками, наблюдателем), —
+  // тоже: запуск не переоткрывает то, что закрыл пользователь
+  const foreign = before && ctx.owns ? (!ctx.owns(before) ? 'завёл не этот запуск' : before.closed && before.movedBy !== ctx.by ? 'закрыто не этим запуском' : '') : '';
+  if (before && foreign) {
+    const item = await ctx.api.put(ref.key, { signal, onRepeat: 'keep', ...(ctx.run ? { links: { mentionedBy: [ctx.run] } } : {}) }, ctx.by);
+    ctx.onPut?.(item, false);
+    const ignored = [a.title && 'title', a.kind && 'kind', a.why && 'why', a.due && 'due', a.column && 'column'].filter(Boolean);
+    return { item, created: false, text: `Только сигнал (${foreign}${ignored.length ? `; ${ignored.join(', ')} не применены` : ''}): ${itemLine(item)}` };
+  }
   const project = !before?.project ? ctx.project?.() : undefined;
   const branch = !before?.links.branch && ctx.branch ? await ctx.branch() : undefined;
   const links: Partial<DeskLinks> = {
-    ...(ctx.run ? { runs: [ctx.run] } : {}),
+    ...(ctx.run ? { mentionedBy: [ctx.run] } : {}),
     ...(ctx.session ? { sessions: [ctx.session] } : {}),
     ...(branch ? { branch } : {}),
     ...(ref.thing?.type === 'mr' && ref.thing.url ? { mr: ref.thing.url } : {}),
@@ -277,6 +292,7 @@ export async function deskPut(ctx: DeskCallCtx, a: DeskPutArgs): Promise<{ item:
     ...(a.due ? { due: a.due } : {}),
     ...(ref.thing ? { thing: ref.thing } : {}),
     ...(Object.keys(links).length ? { links } : {}),
+    ...(before ? {} : createdByOf(ctx)),
     signal,
   };
   const item = await ctx.api.put(ref.key, patch, ctx.by);
@@ -290,17 +306,21 @@ export async function deskPut(ctx: DeskCallCtx, a: DeskPutArgs): Promise<{ item:
   return { item, created, text: `${head}: ${itemLine(item)}` };
 }
 
+function createdByOf(ctx: Pick<DeskCallCtx, 'run' | 'session' | 'routine'>): { createdBy?: DeskCreatedBy } {
+  const c: DeskCreatedBy = { ...(ctx.run ? { run: ctx.run } : {}), ...(ctx.session ? { session: ctx.session } : {}), ...(ctx.routine ? { routine: ctx.routine } : {}) };
+  return Object.keys(c).length ? { createdBy: c } : {};
+}
+
 const refOpts = (ctx: Pick<DeskCallCtx, 'thing' | 'jiraHosts'>) => ({ jiraHosts: (ctx.jiraHosts ?? settingsJiraHosts)(), ...(ctx.thing ? { known: ctx.thing } : {}) });
 
-/** desk_close: дело по ключу или ссылке на вещь; нет такого или закрывать его отсюда нельзя (canClose) — ошибка. */
-export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 'jiraHosts' | 'canClose'>, a: DeskCloseArgs): Promise<{ item: DeskItem; text: string }> {
+/** desk_close: дело по ключу или ссылке на вещь; нет такого или оно чужое месту вызова (owns) — ошибка. */
+export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 'jiraHosts' | 'owns'>, a: DeskCloseArgs): Promise<{ item: DeskItem; text: string }> {
   const { key } = resolveThing(a.thing, refOpts(ctx));
   const missing = () => new Error(`Дела ${key} нет: ключи открытых дел — в desk_list`);
-  if (ctx.canClose) {
+  if (ctx.owns) {
     const cur = await ctx.api.get(key);
     if (!cur) throw missing();
-    const why = ctx.canClose(cur);
-    if (why) throw new Error(why);
+    if (!ctx.owns(cur)) throw new Error(`Дело ${key} завёл не этот запуск: закрыть его может пользователь`);
   }
   const item = await ctx.api.close(key, a.reason, ctx.by);
   if (!item) throw missing();
@@ -358,10 +378,11 @@ export function deskToolDescriptions(where: 'session' | 'flow', hint: DeskHint =
     [DESK_PUT_TOOL]:
       'Завести дело на личной доске пользователя «Мои дела» или добавить сигнал к существующему: дело — это вещь (MR, задача Jira, ветка) или своё дело, по которому ход за пользователем. ' +
       `Одно дело на вещь: повторный вызов с тем же thing дописывает сигнал, а не заводит второе. ${self}${thing}${project} ` +
+      (where === 'flow' ? 'Дело, которое завёл не этот запуск, получает только сигнал: заголовок, почему, срок и колонка у него не меняются. ' : '') +
       (where === 'session' ? 'Вызывай, когда пользователь просит запомнить, отложить или завести дело.' : 'Вызывай, когда задача этапа — завести дела или когда нашлось то, что пользователь должен сделать сам.'),
     [DESK_CLOSE_TOOL]:
       'Закрыть дело на доске «Мои дела»: сделано или больше не нужно. Ключ — из desk_list или ссылка на вещь. Закрытое дело откроется снова, если по вещи придёт новый сигнал.' +
-      (where === 'flow' ? ' Запуск закрывает только дела, которые завёл или дополнил сам, и дело о своей вещи.' : ''),
+      (where === 'flow' ? ' Запуск закрывает только дела, которые завёл сам.' : ''),
     [DESK_LIST_TOOL]: 'Дела пользователя на доске «Мои дела» строками «ключ — [колонка] заголовок (вид · проект · почему · срок)». Только чтение. Ключ нужен desk_put и desk_close.',
   };
 }

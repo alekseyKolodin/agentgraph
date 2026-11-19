@@ -143,7 +143,7 @@ test('desk_put по ссылке на MR дважды — одно дело, в�
   assert.match(again.text, /^Сигнал добавлен к делу: /);
 });
 
-test('desk_put у этапа flow: запуск в links.runs, рутина в сигнале, счётчик видит новое и повтор', async () => {
+test('desk_put у этапа flow: запуск в links.mentionedBy (не в runs) и в createdBy, рутина в сигнале, счётчик видит новое и повтор', async () => {
   const api = memDesk();
   const seen: boolean[] = [];
   const ctx = ctxOf(api, { by: 'flow', source: 'flow', session: undefined, run: 'r1', routine: 'review', branch: undefined, why: 'из запуска review', onPut: (_i, c) => seen.push(c) });
@@ -152,7 +152,9 @@ test('desk_put у этапа flow: запуск в links.runs, рутина в �
   await deskPut(ctx, { thing: 'jira:x.atlassian.net/ABC-1' });
   assert.deepEqual(seen, [true, false]);
   assert.equal(api.puts[0].by, 'flow');
-  assert.deepEqual(api.puts[0].patch.links, { runs: ['r1'] });
+  assert.deepEqual(api.puts[0].patch.links, { mentionedBy: ['r1'] }, 'конец запуска why этого дела не перепишет');
+  assert.deepEqual(api.puts[0].patch.createdBy, { run: 'r1', routine: 'review' });
+  assert.equal(api.puts[1].patch.createdBy, undefined, 'у существующего дела createdBy не шлём');
   assert.equal(api.puts[0].patch.signal?.routine, 'review');
   assert.equal(api.puts[0].patch.kind, 'Jira');
 });
@@ -291,18 +293,54 @@ test('новое дело считается один раз: второй put �
   assert.deepEqual(seen, [true, false]);
 });
 
-test('desk_close с canClose: чужое дело — ошибка, хранилище не трогается; своё — закрывается', async () => {
+test('desk_close с owns: чужое дело — ошибка, хранилище не трогается; своё — закрывается', async () => {
   const api = memDesk();
   await deskPut(ctxOf(api), { thing: 'own:a', title: 'a' });
-  await deskPut(ctxOf(api, { run: 'r1' }), { thing: 'own:b', title: 'b' });
-  const ctx = { api, by: 'flow' as const, canClose: (i: DeskItem) => (i.links.runs.includes('r1') ? undefined : 'не этот запуск') };
-  await assert.rejects(deskClose(ctx, { thing: 'own:a', reason: 'x' }), /не этот запуск/);
+  await deskPut(ctxOf(api), { thing: 'own:b', title: 'b' });
+  const ctx = { api, by: 'flow' as const, owns: (i: DeskItem) => i.key === 'own:b' };
+  await assert.rejects(deskClose(ctx, { thing: 'own:a', reason: 'x' }), /Дело own:a завёл не этот запуск/);
   assert.equal(api.items.get('own:a')?.closed, undefined);
   assert.equal((await deskClose(ctx, { thing: 'own:b', reason: 'готово' })).item.closed?.reason, 'готово');
   await assert.rejects(deskClose(ctx, { thing: 'own:nope', reason: 'x' }), /Дела own:nope нет/);
 });
 
+test('desk_put с owns: к чужому делу — только сигнал с onRepeat keep, без why, срока, заголовка, колонки и ссылок, кроме mentionedBy', async () => {
+  const api = memDesk();
+  await deskPut(ctxOf(api), { thing: 'own:a', title: 'a', why: 'моё' });
+  const ctx = ctxOf(api, { by: 'flow', source: 'flow', session: undefined, run: 'r9', owns: () => false });
+  const r = await deskPut(ctx, { thing: 'own:a', title: 'Новый', why: 'взлом', due: '2030-01-01', column: 'done', kind: 'X', text: 'привет' });
+  assert.equal(r.created, false);
+  assert.match(r.text, /^Только сигнал \(завёл не этот запуск; title, kind, why, due, column не применены\)/);
+  const p = api.puts[1].patch;
+  assert.deepEqual(Object.keys(p).sort(), ['links', 'onRepeat', 'signal']);
+  assert.equal(p.onRepeat, 'keep');
+  assert.deepEqual(p.links, { mentionedBy: ['r9'] });
+  assert.equal(p.signal?.text, 'привет');
+});
+
 test('строка дела — без управляющих символов и переводов строк: заголовки из Slack печатает терминал', () => {
   const i = { id: '1', key: 'own:1', kind: 'Своё', title: 'Hi\u001b]52;c;QUJD\u0007\nthere', column: 'new', why: 'a\u009bb', signals: [], links: { runs: [], sessions: [] }, createdAt: '', movedAt: '', movedBy: 'me' } as DeskItem;
   assert.equal(itemLine(i), 'own:1 — [Новое] Hi]52;c;QUJD there (Своё · ab)');
+});
+
+test('desk_put с owns: своё дело, закрытое не этим запуском (руками), — только сигнал, не переоткрывается; закрытое им самим — как обычно', async () => {
+  const api = memDesk();
+  const ctx = ctxOf(api, { by: 'flow', source: 'flow', session: undefined, run: 'r1', owns: () => true });
+  await deskPut(ctx, { thing: 'own:a', title: 'a' });
+  api.items.set('own:a', { ...api.items.get('own:a')!, column: 'done', closed: { at: '', reason: 'руками' }, movedBy: 'me' });
+  const r = await deskPut(ctx, { thing: 'own:a', why: 'снова' });
+  assert.match(r.text, /^Только сигнал \(закрыто не этим запуском; why не применены\)/);
+  assert.equal(api.puts.at(-1)!.patch.onRepeat, 'keep');
+  api.items.set('own:a', { ...api.items.get('own:a')!, movedBy: 'flow' });
+  await deskPut(ctx, { thing: 'own:a', why: 'снова' });
+  assert.equal(api.puts.at(-1)!.patch.why, 'снова');
+  assert.equal(api.puts.at(-1)!.patch.onRepeat, undefined);
+});
+
+test('ключ ветки собирается через branchKey: тот же вид, что у наблюдателя ветки', async () => {
+  const real = process.cwd();
+  const fs = await import('node:fs');
+  const { branchKey } = await import('../things/keys.js');
+  const x: Exec = async (_cmd, args) => (args.includes('--git-common-dir') ? `${real}/.git\n` : 'refs/heads/feat/y\n');
+  assert.equal(await branchKeyOf(real, x), branchKey(fs.realpathSync(real), 'feat/y'));
 });
