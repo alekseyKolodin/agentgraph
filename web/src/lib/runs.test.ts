@@ -7,6 +7,7 @@ import { deleteRunText, nestRuns, projKey, runDepths, runListView, runManageable
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
   id, flow: 'f', status: 'done', iterations: 1, totalCostUsd: 0.5, startedAt: '2026-10-24T10:00:00Z', input: '', hidden: false, ...over,
 });
+const ref = (space: string, title = space) => ({ projectRef: { space, title } });
 const opts = (over: Partial<Parameters<typeof runListView>[1]> = {}) => ({ activeId: null, showHidden: false, statuses: new Set<string>(), query: '', ...over });
 
 test('чипы фильтра: статусы списка по порядку внимания, выбранный без запусков остаётся, один статус — без ряда', () => {
@@ -33,38 +34,51 @@ test('скрытые, фильтр и поиск — до лимитов; отк
   assert.equal(runListView(many, opts(), false, new Set()).runs.length, 40);
 });
 
-test('группы по проектам: по свежести, подписи, первые 10 и «ещё N», живые счётчики, открытый дальше 10 — вся группа', () => {
+test('группы по проектам: по свежести, подписи проекта, первые 10 и «ещё N», живые счётчики, открытый дальше 10 — вся группа', () => {
   const runs = [
-    run('w', { cwd: '/x/app', status: 'waiting' }),
-    run('n', { cwd: '' }),
-    ...Array.from({ length: 11 }, (_, i) => run(`a${i}`, { cwd: '/y/app', status: i === 0 ? 'running' : i === 1 ? 'paused' : 'done' })),
+    run('w', { cwd: '/x/app', status: 'waiting', ...ref('x', 'Икс') }),
+    run('n', { cwd: '/tmp/one-off', projectRef: { space: null, title: 'Без проекта' } }),
+    ...Array.from({ length: 11 }, (_, i) => run(`a${i}`, { cwd: '/y/app', status: i === 0 ? 'running' : i === 1 ? 'paused' : 'done', ...ref('y') })),
+    run('old', { cwd: '/z' }),
   ];
   const v = runListView(runs, opts(), true, new Set());
-  assert.deepEqual(v.groups.map((g) => [g.label, g.count, g.more]), [['x/app', 1, 0], ['без проекта', 1, 0], ['y/app', 11, 1]]);
-  assert.equal(v.groups[1]!.title, 'директория проекта не записана в run.json');
+  // проекта с сервера нет (старый сервер) — без проекта, той же группой
+  assert.deepEqual(v.groups.map((g) => [g.label, g.count, g.more]), [['◇ Икс', 1, 0], ['Без проекта', 2, 0], ['◇ y', 11, 1]]);
+  assert.deepEqual(v.groups.map((g) => g.space), ['x', '', 'y']);
+  assert.equal(v.groups[1]!.title, 'Без проекта: папка не привязана ни к одному пространству');
+  assert.equal(v.groups[0]!.title, 'Проект — пространство x');
   assert.deepEqual(v.groups[2]!.live, { waiting: 0, paused: 1, running: 1 });
   assert.deepEqual(v.groups[0]!.live, { waiting: 1, paused: 0, running: 0 });
-  assert.equal(runListView(runs, opts(), true, new Set([projKey('/y/app')])).groups[2]!.more, 0);
+  assert.equal(projKey(run('q', ref('y'))), 'proj:y');
+  assert.equal(projKey(run('q')), 'proj:');
+  assert.equal(runListView(runs, opts(), true, new Set([projKey(run('q', ref('y')))])).groups[2]!.more, 0);
   assert.equal(runListView(runs, opts({ activeId: 'a10' }), true, new Set()).groups[2]!.runs.length, 11);
 });
 
 test('строка запуска: мета одной строкой — статус словом, когда, пространство, хвост по важности; подсказка — всё остальное', () => {
   const now = new Date('2026-10-24T18:00:00Z');
-  const r = run('a', { title: 'Имя', cwd: '/p/app', iterations: 2, totalCostUsd: 1.234, space: 'shop', knowledge: ['qa'], status: 'failed' });
+  const r = run('a', { title: 'Имя', cwd: '/p/app', iterations: 2, totalCostUsd: 1.234, space: 'shop', knowledge: ['qa'], status: 'failed', ...ref('shop', 'Магазин') });
   const meta = runRowMeta(r, true, now);
   assert.equal(meta.status, 'ошибка');
   assert.equal(meta.tone, 'fail');
   assert.equal(meta.space, 'shop');
+  assert.equal(meta.spaceText, '◇ Магазин', 'явное пространство — подписью проекта');
   // сегодня — только время, иначе дата без года (как в ленте); полная дата — в подсказке
   assert.equal(meta.when, clock(r.startedAt, now));
-  assert.equal(meta.tail, 'f · app · ≈$1.23 · #qa');
+  // проект уже ссылкой пространства — в хвосте не повторяется
+  assert.equal(meta.tail, 'f · ≈$1.23 · #qa');
+  // без явного пространства в плоском списке: проект по папке, без проекта — папка
+  assert.equal(runRowMeta(run('c', { cwd: '/p/app', ...ref('shop', 'Магазин') }), true, now).tail, '◇ Магазин · ≈$0.50');
+  assert.equal(runRowMeta(run('c', { cwd: '/p/app' }), true, now).tail, 'app · ≈$0.50');
   // в группе проект не повторяется, без имени flow уже в заголовке, разовый — в конце
   assert.equal(runRowMeta(r, false, now).tail, 'f · ≈$1.23 · #qa');
   assert.equal(runRowMeta(run('b', { adhoc: true }), true, now).tail, '≈$0.50 · разовый');
   assert.equal(runRowMeta(run('b'), true, now).space, '');
   assert.deepEqual(['running', 'done', 'waiting', 'paused', 'max_iterations', 'aborted', 'interrupted', 'budget_exceeded', 'pending'].map(statusTone), ['live', 'ok', 'wait', 'wait', 'wait', 'fail', 'fail', 'fail', '']);
   const title = runRowTitle(r).split('\n');
-  assert.deepEqual([title[0], title[1], title[3], title[4], title[5]], ['Имя', 'flow f', '◇ shop', '#qa', '/p/app']);
+  assert.deepEqual([title[0], title[1], title[3], title[4], title[5]], ['Имя', 'flow f', '◇ Магазин', '#qa', '/p/app']);
+  // явное пространство не то, что проект (старое имя, удалённое) — оба
+  assert.deepEqual(runRowTitle(run('z', { space: 'gone' })).split('\n').slice(2, 4), ['Без проекта', '◇ gone']);
   assert.match(title[2]!, /^ошибка · .+ · 2 итерации · ≈\$1\.23$/);
   assert.equal(runRowTitle(run('b')).split('\n')[0], 'f');
   assert.equal(runManageable(run('a'), true), true);
@@ -90,12 +104,12 @@ test('дочерние запуски — под родителем в поря�
   assert.match(runRowTitle(list[0]!), /вызван блоком b запуска p1/);
 });
 
-test('список запусков: запуск в worktree — в группе своего проекта, а не отдельной папкой', () => {
+test('список запусков: группа — проект с сервера, папка (worktree, основной checkout) не делит группу', () => {
   const runs = [
-    run('a', { cwd: '/w/worktrees/android/routine-review-1', worktree: { path: '/w/worktrees/android/routine-review-1', branch: 'routine/review-1' }, project: '/code/android' }),
-    run('b', { cwd: '/code/android' }),
+    run('a', { cwd: '/w/worktrees/android/routine-review-1', worktree: { path: '/w/worktrees/android/routine-review-1', branch: 'routine/review-1' }, project: '/code/android', ...ref('android') }),
+    run('b', { cwd: '/code/android', ...ref('android') }),
     run('c', { cwd: '/w/worktrees/android/old', worktree: { path: '/w/worktrees/android/old' } }),
   ];
   const groups = runListView(runs, opts(), true, new Set()).groups;
-  assert.deepEqual(groups.map((g) => [g.cwd, g.runs.map((r) => r.id)]), [['/code/android', ['a', 'b']], ['/w/worktrees/android/old', ['c']]]);
+  assert.deepEqual(groups.map((g) => [g.space, g.runs.map((r) => r.id)]), [['android', ['a', 'b']], ['', ['c']]]);
 });

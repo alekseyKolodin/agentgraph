@@ -117,7 +117,10 @@ export async function integrationsRoute(method: string, url: URL, readBody: () =
     // --- мои MR, которым нужно внимание
     if (p === '/api/attention' && method === 'GET') {
       const projects = await describeProjects(loadSettings(), x);
-      return ok((await collectAttention(projects, { force: url.searchParams.get('force') === '1', exec: x })) satisfies AttentionResult);
+      const res = await collectAttention(projects, { force: url.searchParams.get('force') === '1', exec: x });
+      // подпись проекта MR — пространство его репозитория (выдача кэшируется, поэтому — здесь, по свежему снимку)
+      const refs = new Map(projects.map((q) => [q.path, q.projectRef]));
+      return ok({ ...res, items: res.items.map((i) => ({ ...i, ...(refs.get(i.project) ? { projectRef: refs.get(i.project) } : {}) })) } satisfies AttentionResult);
     }
     if (p === '/api/attention/suggest' && method === 'POST') {
       const b = (await readBody()) as { refs?: unknown };

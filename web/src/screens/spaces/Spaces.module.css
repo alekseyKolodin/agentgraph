@@ -31,6 +31,13 @@
 .sub { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub.preview { color: var(--ink); opacity: .8; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--fs-small); }
 .sub.meta { font-size: var(--fs-meta); }
+/* дата состояния перед превью: давнее состояние видно сразу */
+.state-at { color: var(--ink-3); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; margin-right: 6px; }
+/* закрытые пространства: тихая группа под открытыми */
+.closed-head { margin: 10px 2px 0; display: flex; align-items: center; gap: 8px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.closed-list .row { opacity: .7; }
+.closed-list .row:hover, .closed-list .row.active { opacity: 1; }
+.closed-mark { padding: 0 7px; border-radius: var(--r-pill); background: var(--well); color: var(--ink-2); }
 .main { min-width: 0; }
 .empty { margin: 0; padding: 4px 2px; max-width: 560px; font-size: var(--fs-small); }
 
@@ -63,6 +70,11 @@
 .field-foot > :first-child { max-width: 680px; }
 .dirs { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
 .dirs textarea { grid-column: 1 / -1; font-family: var(--font-mono); font-size: var(--fs-small); }
+/* репозитории пространства: строки «путь · отвязать», под ними поле привязки */
+.repos { display: flex; flex-direction: column; gap: 6px; }
+.repo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.repo-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.repo-list li > :global(.muted) { flex-basis: 100%; }
 
 /* документы: строки с разделителями, не карточки */
 .docs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }

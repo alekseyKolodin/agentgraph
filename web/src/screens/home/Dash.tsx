@@ -11,6 +11,7 @@ import { useMemoryState } from '../../components/useMemoryState';
 import { DASH_STALE_MS, dashCap, dashMore, PRESET_LABEL, runsForBranch, runsForJira, type JiraPreset } from '../../lib/dash';
 import { when } from '../../lib/format';
 import { t } from '../../lib/i18n';
+import { projectHint, projectLabel } from '../../lib/spaces';
 import { LS } from '../../lib/storage';
 import homeStyles from './Home.module.css';
 import styles from './Dash.module.css';
@@ -65,7 +66,7 @@ export function LaunchButton({ target, onLaunch }: { target: IntakeTarget; onLau
   );
 }
 
-/** Чипы запусков, связанных со строкой: flow, пространство, статус; клик — открыть запуск. */
+/** Чипы запусков, связанных со строкой: flow, проект (если есть), статус; клик — открыть запуск. */
 export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
   const navigate = useNavigate();
   if (!runs.length) return null;
@@ -74,10 +75,10 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
       {runs.map((r) => (
         <button key={r.id} className="chip" title={when(r.startedAt)} onClick={() => void navigate(`/run/${r.id}`)}>
           {r.flow}
-          {r.space && (
+          {r.projectRef?.space && (
             <span>
               {' '}
-              <span className="muted">◇ {r.space}</span>
+              <span className="muted">{projectLabel(r.projectRef)}</span>
             </span>
           )}
           <Badge status={r.status} />
@@ -265,6 +266,8 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
     <div className={styles.dashBox}>
       <div className={styles.dashTitle}>
         <b title={path}>{p.webUrl ? <a href={p.webUrl} target="_blank" rel="noopener">{p.name}</a> : p.name}</b>
+        {/* проект репозитория — та же подпись, что у его запусков, сессий и MR на Главной */}
+        <span className="muted small" title={projectHint(p.projectRef)}>{projectLabel(p.projectRef)}</span>
         <span className="chips">
           <button className={`chip ${tab === 'mr' ? 'on' : ''}`} onClick={() => { setTab('mr'); setMore(false); }}>{mrWord}</button>
           <button className={`chip ${tab === 'branches' ? 'on' : ''}`} onClick={() => { setTab('branches'); setMore(false); }}>{t('Ветки')}</button>

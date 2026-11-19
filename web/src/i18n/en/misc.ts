@@ -50,7 +50,6 @@ export const misc: Record<string, string> = {
   'запусков ещё не было': 'no runs yet',
   'Ничего не нашлось': 'Nothing found',
   'нет запусков с таким статусом': 'no runs with this status',
-  'директория проекта не записана в run.json': 'project directory is not recorded in run.json',
   'Удалить запуск {what}?': 'Delete run {what}?',
   '«{flow}» от {date}': '“{flow}” from {date}',
   'Папка runs/{id} с промптами, транскриптами и выводами этапов будет удалена насовсем.':

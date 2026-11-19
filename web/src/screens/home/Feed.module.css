@@ -21,6 +21,7 @@
 .feed-top { display: flex; align-items: baseline; gap: 8px; }
 .feed-flow { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .feed-item.new .feed-flow::after { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--live); margin-left: 6px; vertical-align: middle; }
+.feed-project { flex: 0 1 auto; min-width: 0; max-width: 45%; color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .feed-time { flex: none; color: var(--ink-2); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 .feed-what { font-size: var(--fs-small); display: flex; align-items: baseline; gap: 4px; }
 .feed-what-head { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

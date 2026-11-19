@@ -8,9 +8,9 @@ import { api, errorText, useFeature, useRuns } from '../../api';
 import { useRoutines } from '../../api/routines';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
-import { projectLabels } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { homeRunView } from '../../lib/home';
+import { projectOrFolder } from '../../lib/spaces';
 import { artResume } from '../run/artStore';
 import { runTeamworkLink } from '../teamwork/shell';
 import styles from './Home.module.css';
@@ -28,7 +28,6 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
   const { askConfirm, notify } = useConfirm();
   const artifacts = useFeature('artifacts');
   const toast = useToast();
-  const labels = projectLabels([...new Set(runs.map((r) => r.cwd || ''))]);
   const open = (id: string) => void navigate(`/run/${id}`);
 
   const pause = async (id: string, on: boolean) => {
@@ -52,7 +51,8 @@ export function HomeRuns({ runs, now }: { runs: HomeRun[]; now: number }) {
   return (
     <ul className={styles.homeRuns}>
       {runs.map((r) => {
-        const v = homeRunView(r, labels.get(r.cwd || '') ?? '', artifacts, now);
+        // подпись проекта — как в сайдбаре и у MR: пространство, без проекта — папка
+        const v = homeRunView(r, projectOrFolder(r.projectRef, r.cwd), artifacts, now);
         // запуск по задаче Teamwork — номер задачи ссылкой на её панель; черновик — на вкладку документа
         const tw = runTeamworkLink(r.teamwork);
         const rt = routineOf(r.id);

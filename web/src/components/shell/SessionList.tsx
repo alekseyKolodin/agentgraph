@@ -1,4 +1,5 @@
-// Список «Сессии» в панели сайдбара (завершённые; живые — в «Сейчас»): история сессий терминала группами по пространству — как запуски по проекту.
+// Список «Сессии» в панели сайдбара (завершённые; живые — в «Сейчас»): история сессий терминала группами по проекту
+// (пространству) — так же, как запуски; у группы «Без проекта» — «Предложить пространства…» (ProposeSpaces).
 // Живые сессии — в «Сейчас», сюда они попадают, когда завершатся. Строка — ссылка на экран сессии (Cmd+клик — в новом
 // окне), имя переименовывается на месте (двойной клик или карандаш). Логика — lib/session-history.ts; свёрнутость
 // групп — fold.ts (sspace:<слаг>), «ещё N» — в памяти вкладки.
@@ -13,6 +14,7 @@ import { RENAME_HOST, SessionName } from '../../screens/sessions/SessionName';
 import { isOpen, reveal, setOpen, useFold } from './fold';
 import { useNow } from '../useNow';
 import { ICON } from './FlowList';
+import { ProposeSpaces } from './ProposeSpaces';
 import styles from './Sidebar.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -45,13 +47,13 @@ function useGroups(sessions: SessionView[]) {
   return { activeId, groups: sessionHistory(sessions, activeId, showAll) };
 }
 
-/** Кнопка в шапке секции: свернуть или развернуть все пространства. */
+/** Кнопка в шапке секции: свернуть или развернуть все проекты. */
 export function SessionSectionActions({ sessions }: { sessions: SessionView[] }) {
   useFold();
   const { groups } = useGroups(sessions);
   if (groups.length < 2) return null;
   const anyOpen = groups.some((g) => isOpen(g.key));
-  const label = anyOpen ? t('Свернуть все пространства') : t('Развернуть все пространства');
+  const label = anyOpen ? t('Свернуть все проекты') : t('Развернуть все проекты');
   return (
     <div className={styles.sideActions}>
       <button
@@ -74,7 +76,7 @@ export function SessionList({ sessions }: { sessions: SessionView[] }) {
   const now = new Date(useNow(60_000));
   const { activeId, groups } = useGroups(sessions);
 
-  // открыли завершённую сессию (по ссылке, из таблицы): раздел и её пространство раскрыты, как у запусков
+  // открыли завершённую сессию (по ссылке, из таблицы): раздел и её проект раскрыты, как у запусков
   const activeKey = groups.find((g) => g.sessions.some((s) => s.id === activeId))?.key;
   useEffect(() => {
     if (activeKey) reveal('sec:sessions', activeKey);
@@ -116,6 +118,7 @@ export function SessionList({ sessions }: { sessions: SessionView[] }) {
                   </button>
                 </li>
               )}
+              {!g.space && <ProposeSpaces />}
             </ul>
           </div>
         );

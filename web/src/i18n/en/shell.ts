@@ -24,7 +24,7 @@ export const shell: Record<string, string> = {
   'Все слова должны найтись в имени, папке или описании flow. Esc — очистить': 'All words must be found in the flow name, folder or description. Esc to clear',
   'flow пока нет': 'no flows yet',
   // RunList.tsx
-  'Группировать запуски по директории проекта': 'Group runs by project directory',
+  'Группировать запуски по проекту — пространству, как сессии': 'Group runs by project — space, like sessions',
   'по проектам': 'by project',
   'Свернуть все проекты': 'Collapse all projects',
   'Развернуть все проекты': 'Expand all projects',
@@ -51,10 +51,6 @@ export const shell: Record<string, string> = {
   'Найти запуск': 'Find run',
   'Фильтр по статусу': 'Status filter',
   // SessionList.tsx, lib/session-history.ts: завершённые сессии по пространствам
-  'Свернуть все пространства': 'Collapse all spaces',
-  'Развернуть все пространства': 'Expand all spaces',
-  'Пространство {slug}: завершённые сессии': 'Space {slug}: ended sessions',
-  'Завершённые сессии без пространства': 'Ended sessions without a space',
   'не запустилась': "didn't start",
   'папка не доверена': 'folder not trusted',
   'последняя активность {date}': 'last activity {date}',

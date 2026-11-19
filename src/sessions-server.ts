@@ -23,7 +23,7 @@ import { FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
 import {
-  cleanLine, createSpace, existingSpacePaths, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
+  cleanLine, createSpace, existingSpacePaths, projectResolver, type ProjectResolver, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
   writeSpaceState, WRITE_DOC_EXTS, SpaceError,
 } from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
@@ -320,7 +320,9 @@ export class SessionManager {
   }
 
   list(): SessionList {
-    const views = [...this.sessions.values()].map((s) => this.view(s));
+    // проект — по одному снимку пространств на весь список
+    const proj = projectResolver();
+    const views = [...this.sessions.values()].map((s) => this.view(s, proj));
     views.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivityAt.localeCompare(a.lastActivityAt));
     return { sessions: views, max: LIVE_SESSIONS_MAX };
   }
@@ -394,7 +396,8 @@ export class SessionManager {
     return s;
   }
 
-  view(s: Live): SessionView {
+  /** proj — снимок пространств для проекта сессии (список передаёт один на все); нет — свой. */
+  view(s: Live, proj: ProjectResolver = projectResolver()): SessionView {
     const r = s.rec;
     const live = Boolean(s.pty?.alive);
     const got = s.injected;
@@ -435,6 +438,8 @@ export class SessionManager {
       ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       ...(r.ask ? { ask: r.ask } : {}),
+      // проект: явное пространство, иначе папка — та же подпись в каждом ответе (список, переименование, WS)
+      projectRef: proj.of({ space: r.space, path: r.cwd }),
     };
   }
 

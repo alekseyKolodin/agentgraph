@@ -1,8 +1,10 @@
-// История завершённых сессий в сайдбаре без React и DOM: группы по пространству (как запуски — по проекту), первые
-// SESSION_GROUP_LIMIT и «ещё N», подпись строки. Живые сессии стоят в «Сейчас» и сюда не попадают.
+// История завершённых сессий в сайдбаре без React и DOM: группы по проекту — пространству (как запуски; проект считает
+// сервер, SessionView.projectRef), первые SESSION_GROUP_LIMIT и «ещё N», подпись строки. Живые сессии стоят в «Сейчас» и
+// сюда не попадают.
 import type { SessionView } from '@server/api-types';
 import { baseName, feedTime, plural, when } from './format';
 import { t } from './i18n';
+import { projectHint, projectKeyOf, projectLabel } from './spaces';
 
 export const SESSION_GROUP_LIMIT = 5;
 
@@ -10,11 +12,11 @@ export const SESSION_GROUP_LIMIT = 5;
 export const sessionGroupKey = (space: string | undefined): string => 'sspace:' + (space || '');
 
 export type HistorySession = Pick<SessionView, 'id' | 'name' | 'cwd' | 'live' | 'space' | 'lastActivityAt' | 'turns'> &
-  Partial<Pick<SessionView, 'endedAt' | 'outcome'>>;
+  Partial<Pick<SessionView, 'endedAt' | 'outcome' | 'projectRef'>>;
 
 export type SessionGroup<S extends HistorySession = HistorySession> = {
   key: string;
-  /** Слаг; '' — без пространства. */
+  /** Слаг пространства проекта; '' — без проекта. */
   space: string;
   label: string;
   title: string;
@@ -28,14 +30,14 @@ export type SessionGroup<S extends HistorySession = HistorySession> = {
 const lastAt = (s: HistorySession): string => s.endedAt || s.lastActivityAt;
 
 /**
- * Завершённые сессии группами по пространству: группы и строки — от свежих, «без пространства» — на общих правах.
+ * Завершённые сессии группами по проекту: группы и строки — от свежих, «Без проекта» — на общих правах.
  * activeId — открытая сессия: её группа показана целиком, если она за лимитом.
  */
 export function sessionHistory<S extends HistorySession>(all: S[], activeId: string | null, showAll: Set<string>): SessionGroup<S>[] {
   const ended = all.filter((s) => !s.live).sort((a, b) => lastAt(b).localeCompare(lastAt(a)));
   const bySpace = new Map<string, S[]>();
   for (const s of ended) {
-    const k = s.space || '';
+    const k = projectKeyOf(s.projectRef);
     if (!bySpace.has(k)) bySpace.set(k, []);
     bySpace.get(k)!.push(s);
   }
@@ -46,8 +48,8 @@ export function sessionHistory<S extends HistorySession>(all: S[], activeId: str
     return {
       key,
       space,
-      label: space ? `◇ ${space}` : t('без пространства'),
-      title: space ? t('Пространство {slug}: завершённые сессии', { slug: space }) : t('Завершённые сессии без пространства'),
+      label: projectLabel(list[0]!.projectRef),
+      title: projectHint(list[0]!.projectRef),
       count: list.length,
       sessions: shown,
       more: list.length - shown.length,
@@ -65,6 +67,8 @@ export function historySub(s: HistorySession, withFolder: boolean, now: Date = n
   return { outcome, rest: [...(withFolder ? [baseName(s.cwd)] : []), feedTime(lastAt(s), now), turns].join(' · ') };
 }
 
-/** Подсказка строки: имя, пространство, папка целиком и дата. */
+/** Подсказка строки: имя, проект (и явное пространство, если оно другое), папка целиком и дата. */
 export const historyTitle = (s: HistorySession): string =>
-  [s.name, s.space ? `◇ ${s.space}` : '', s.cwd, t('последняя активность {date}', { date: when(lastAt(s)) })].filter(Boolean).join('\n');
+  [s.name, projectLabel(s.projectRef), s.space && s.space !== s.projectRef?.space ? `◇ ${s.space}` : '', s.cwd, t('последняя активность {date}', { date: when(lastAt(s)) })]
+    .filter(Boolean)
+    .join('\n');

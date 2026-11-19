@@ -4,6 +4,7 @@
 import type { SessionAsk, SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
 import { ago, baseName, clock, feedTime, plural } from './format';
 import { t } from './i18n';
+import { projectOrFolder } from './spaces';
 
 /**
  * Тон точки и подписи: live — работает, wait — ждёт ответа (вопрос, разрешение), idle — закончила ход и простаивает
@@ -98,9 +99,19 @@ export function homeSessions<S extends Pick<SessionView, 'live' | 'status' | 'de
   };
 }
 
-/** Подпись строки сессии на главной: «◇ press-alert · ждёт 5 мин» — пространство (без него — папка) и что с ней сейчас. */
-export function homeSessionMeta(s: Pick<SessionView, 'cwd' | 'space' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'turns' | 'ask'>, now: number = Date.now()): string {
-  const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
+/**
+ * Где сессия: проект (пространство — его считает сервер, projectRef; та же подпись, что у запусков и MR), без проекта —
+ * папка. Сессия не из списка (без projectRef) — её пространство, без него — папка.
+ */
+const sessionWhere = (s: Pick<SessionView, 'cwd' | 'space'> & Partial<Pick<SessionView, 'projectRef'>>): string =>
+  s.projectRef ? projectOrFolder(s.projectRef, s.cwd) : s.space ? `◇ ${s.space}` : baseName(s.cwd);
+
+/** Подпись строки сессии на главной: «◇ press-alert · ждёт 5 мин» — проект (без него — папка) и что с ней сейчас. */
+export function homeSessionMeta(
+  s: Pick<SessionView, 'cwd' | 'space' | 'status' | 'delivery' | 'waitingSince' | 'lastActivityAt' | 'turns' | 'ask'> & Partial<Pick<SessionView, 'projectRef'>>,
+  now: number = Date.now(),
+): string {
+  const where = sessionWhere(s);
   const state =
     s.delivery === 'trust'
       ? t('ждёт: доверие к папке')
@@ -125,12 +136,12 @@ export function endCandidates<S extends Pick<SessionView, 'id' | 'live' | 'statu
     .sort((a, b) => Number(Boolean(a.ask)) - Number(Boolean(b.ask)) || since(a).localeCompare(since(b)));
 }
 
-/** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — пространство (без него — папка), статус, активность. */
-export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt' | 'ask'>>, now: Date = new Date()): string {
+/** Вторая строка в «Сейчас»: «◇ press-alert · работает · 5 мин назад» — проект (без него — папка), статус, активность. */
+export function sessionSub(s: Pick<SessionView, 'cwd' | 'status' | 'space'> & Partial<Pick<SessionView, 'lastActivityAt' | 'ask' | 'projectRef'>>, now: Date = new Date()): string {
   // простаивающая — «ход закончен», без тревоги; «ждёт тебя» — только с вопросом
   const state = s.status === 'working' ? t('работает') : s.status === 'waiting' ? (s.ask ? t('ждёт тебя') : t('ход закончен')) : t('запускается');
-  // чем сессии различаются: пространство (без него — папка), статус и когда была активность — а не повтор папки
-  const where = s.space ? `◇ ${s.space}` : baseName(s.cwd);
+  // чем сессии различаются: проект (без него — папка), статус и когда была активность — а не повтор папки
+  const where = sessionWhere(s);
   return [where, state, ...(s.lastActivityAt ? [feedTime(s.lastActivityAt, now)] : [])].join(' · ');
 }
 

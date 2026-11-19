@@ -130,6 +130,8 @@ export type RunSummary = {
   worktree?: RunWorktree;
   /** Запуск в worktree: основной checkout проекта — список группирует по нему, а не по папке worktree. */
   project?: string;
+  /** Проект запуска (пространство): явное пространство, иначе по папке — список группирует и подписывает по нему. */
+  projectRef?: ProjectRef;
   /** Доп. директории запуска: из них и из cwd собираются недавние пути формы запуска. */
   addDirs?: string[];
   /** Разовый запуск: пометка в списке, вместо «Открыть flow» — «Сохранить как flow». */
@@ -179,6 +181,8 @@ export type HomeRun = {
   parent?: RunParent;
   /** Запуск по задаче или черновик Teamwork (run.json → teamwork): строка на главной ссылается на задачу. */
   teamwork?: RunTeamworkLink;
+  /** Проект запуска — как у RunSummary. */
+  projectRef?: ProjectRef;
 };
 
 export type HomeResponse = { runs: HomeRun[] };
@@ -238,6 +242,8 @@ export type FeedItem = {
   open?: boolean;
   status?: string;
   costUsd?: number;
+  /** Проект запуска — как у RunSummary. */
+  projectRef?: ProjectRef;
 };
 
 export type FeedResponse = { items: FeedItem[] };
@@ -362,6 +368,12 @@ export type SpaceUpdate = { id: string; at: string; kind: 'run' | 'session'; flo
 /** Документ пространства (docs/): имя файла, размер, время правки; title — первый заголовок «# …» текстового файла. */
 export type SpaceDoc = { name: string; size: number; mtimeMs: number; text: boolean; title?: string };
 
+/**
+ * Проект — пространство (docs/desk/SPEC.md, раздел 2). Запуски, сессии, MR и ветки получают его на сервере
+ * (projectOfPath и projectResolver в src/spaces.ts); UI показывает готовый, а не вычисляет по папке.
+ */
+export type ProjectRef = { space: string; title: string } | { space: null; title: 'Без проекта' };
+
 export type SpaceMeta = {
   slug: string;
   title?: string;
@@ -375,6 +387,13 @@ export type SpaceMeta = {
   cwd?: string;
   /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства (их можно снять). */
   tags?: string[];
+  /**
+   * Привязанные репозитории — корни git (основной checkout, не worktree): работа в них без явного пространства — проект
+   * этого пространства. Нет поля — ещё не перенесено: при первом чтении заполняется из cwd и dirs ([] — перенесено, пусто).
+   */
+  repos?: string[];
+  /** Пространство закрыто (ISO-время закрытия): его нет в выборе пространства и в срезах, в списке — отдельной группой. */
+  closedAt?: string;
   /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
   history: SpaceUpdate[];
   /**
@@ -403,6 +422,12 @@ export type SpaceListItem = {
   dirs?: string[];
   /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства. */
   tags?: string[];
+  /** Привязанные репозитории (корни git). */
+  repos?: string[];
+  /** Закрыто: не в выборе и не в срезах. */
+  closedAt?: string;
+  /** Когда переписано состояние (mtime STATE.md): дата у превью. */
+  stateMtimeMs?: number;
   /**
    * Что подставят формы сессии и запуска: заданная рабочая папка (space) или папка последней сессии или запуска в нём —
    * не в worktree, не дочернего и не внутри папки настроек agentgraph или папки запусков («Сессия в папке» не в счёт).
@@ -438,7 +463,15 @@ export type LegacySummary = { path: string; text: string; mtimeMs: number };
  * looseSessions — сессии без пространства, открытые в тех же папках, что сессии и запуски пространства (или в его рабочей
  * папке): их можно добавить в пространство одной кнопкой (у перенесённого — сессии той же работы без тега задачи).
  */
-export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary; looseSessions?: SpaceSession[] };
+export type SpaceDetail = Space & {
+  runs: SpaceRun[];
+  sessions: SpaceSession[];
+  workdir?: SpaceWorkdir;
+  legacySummary?: LegacySummary;
+  looseSessions?: SpaceSession[];
+  /** Куда относится работа в каждом привязанном репозитории: другое пространство — репо привязан и к нему, и оно главнее. */
+  repoProjects?: Record<string, ProjectRef>;
+};
 
 // ---------- черновики пространств от модели (src/space-draft.ts): ничего не записано, сохраняет человек
 
@@ -639,6 +672,8 @@ export type SessionView = {
   ask?: SessionAsk;
   /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
   teamwork?: RunTeamworkLink;
+  /** Проект сессии (пространство): явное пространство, иначе по папке; есть в списке GET /api/sessions. */
+  projectRef?: ProjectRef;
 };
 
 /**
@@ -704,6 +739,8 @@ export type ProjectInfo = {
   /** Где origin: gitlab — MR через glab, github — PR через gh. */
   forge?: 'gitlab' | 'github';
   webUrl?: string;
+  /** Пространство, к которому относится репозиторий (projectOfPath). */
+  projectRef?: ProjectRef;
 };
 
 /** GET /api/integrations. */
@@ -752,6 +789,8 @@ export type AttentionItem = {
   /** Корень проекта (основной checkout) и его имя на главной. */
   project: string;
   projectName: string;
+  /** Проект (пространство) репозитория MR — подпись на главной. */
+  projectRef?: ProjectRef;
   reasons: AttentionReasons;
 };
 

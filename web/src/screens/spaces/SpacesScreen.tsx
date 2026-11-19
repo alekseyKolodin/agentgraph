@@ -13,7 +13,7 @@ import {
   addSpaceDoc, api, ApiError, createSpace, deleteSpace, deleteSpaceDoc, errorText, fetchSpace, fetchSpaceContext, fetchSpaceDoc, keys, saveSpace, saveSpaceDoc, useConfig,
   useFeature, useSpaces, useTags,
 } from '../../api';
-import { setSessionSpace } from '../../api/sessions';
+import { sessionKeys, setSessionSpace } from '../../api/sessions';
 import { onSpaceChanged } from '../../api/spaces';
 import { Badge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -22,12 +22,12 @@ import { readBase64 } from '../../components/readBase64';
 import { TagInput } from '../../components/TagInput';
 import { useToast } from '../../components/Toast';
 import { useMemoryState } from '../../components/useMemoryState';
-import { feedTime } from '../../lib/format';
+import { feedTime, when } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import {
   dirLines, docLine, fieldCount, filterSpaces, itemsCount, MAP_PLACEHOLDER, newSpaceBody, SPACE_DIRTY_TEXT, SPACE_MAP_WARN, SPACE_SLUG_RE, SPACE_STATE_MAX, spaceDeleteText,
-  spaceFormOf, spaceItems, spaceLabel, spaceMetaLine, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, stateByText, type SpaceForm,
+  projectLabel, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine, spacePatch, spacePreview, spacesNoneText, spaceSnapshot, spaceStateAt, splitClosed, stateByText, type SpaceForm,
 } from '../../lib/spaces';
 import { DraftPanel, draftSetupOf, openDraft } from './DraftPanel';
 import { GROUPS, groups } from './draftStore';
@@ -69,6 +69,12 @@ export function SpacesScreen() {
   const [panel, setPanel] = useMemoryState<'new' | 'groups' | null>('spaces.panel', null);
   /** Пространство, у которого вместо вкладок открыт черновик карты с моделью. */
   const [draftFor, setDraftFor] = useMemoryState<string | null>('spaces.draftFor', null);
+  // «Предложить пространства» из группы «Без проекта» в сайдбаре: /spaces?propose — открыть панель и убрать параметр
+  useEffect(() => {
+    if (slug || !draftsOn || !new URLSearchParams(location.search).has('propose')) return;
+    setPanel('groups');
+    void navigate('/spaces', { replace: true });
+  }, [location.search, slug, draftsOn]);
 
   /** Открытое пространство с сервера, поля формы и снимок полей на момент загрузки/сохранения. */
   const [space, setSpace] = useState<SpaceDetail | null>(null);
@@ -90,6 +96,8 @@ export function SpacesScreen() {
   const loaded = spacesQuery.isError || spacesQuery.data !== undefined;
   const list = spacesQuery.isError ? [] : spacesQuery.data?.spaces ?? [];
   const { shown, count } = filterSpaces(list, query);
+  // закрытые — отдельной группой под открытыми: их нет в выборе пространства и в срезах
+  const split = splitClosed(shown);
 
   // уход на другое пространство или к списку с несохранёнными правками — спросить
   const blocker = useBlocker(({ nextLocation }) => {
@@ -269,6 +277,10 @@ export function SpacesScreen() {
       await load(s.slug, my);
       setMsg({ cls: 'msg', text: done });
       void qc.invalidateQueries({ queryKey: keys.spaces });
+      // репозитории и закрытие меняют проект запусков, сессий и MR: подписи в сайдбаре, на Главной и в «Коде»
+      if (patch.repos !== undefined || patch.closed !== undefined) {
+        for (const key of [keys.runs, keys.home, keys.feed, keys.integrations, keys.attention, sessionKeys.list]) void qc.invalidateQueries({ queryKey: key });
+      }
     } catch (err) {
       if (my !== seq.current) return;
       setConflict(err instanceof ApiError && err.status === 409);
@@ -293,6 +305,23 @@ export function SpacesScreen() {
 
   const edit: EditFn = (field, value) => setForm((f) => ({ ...f, [field]: value }));
   const spacesMsg = editorErr || listErr;
+  const now = new Date();
+  const row = (s: (typeof list)[number]) => {
+    const stateAt = spaceStateAt(s, now);
+    return (
+      <li key={s.slug}>
+        <Link to={spacePath(s.slug)} replace={s.slug === space?.slug} aria-current={s.slug === space?.slug ? 'page' : undefined} className={cx(styles.row, s.slug === space?.slug && styles.active)}>
+          <span className={styles.name}><span className={styles.slugMark}>◇</span>{spaceLabel(s)}{s.title && <span className={styles.slugSub}>{s.slug}</span>}</span>
+          <span className={cx(styles.sub, styles.preview)}>
+            {/* дата состояния — у превью: давно не переписанное состояние не выглядит свежим */}
+            {stateAt && <time className={styles.stateAt} title={t('Состояние переписано {date}', { date: when(new Date(s.stateMtimeMs!).toISOString()) })}>{stateAt}</time>}
+            {spacePreview(s)}
+          </span>
+          <span className={cx(styles.sub, styles.meta)}>{spaceMetaLine(s)}{s.migratedFrom ? ` · ${t('из тега задачи')}` : ''}</span>
+        </Link>
+      </li>
+    );
+  };
 
   return (
     <div className={styles.viewSpaces}>
@@ -391,17 +420,17 @@ export function SpacesScreen() {
           />
           <ul className={styles.list}>
             {loaded && (shown.length
-              ? shown.map((s) => (
-                <li key={s.slug}>
-                  <Link to={spacePath(s.slug)} replace={s.slug === space?.slug} aria-current={s.slug === space?.slug ? 'page' : undefined} className={cx(styles.row, s.slug === space?.slug && styles.active)}>
-                    <span className={styles.name}><span className={styles.slugMark}>◇</span>{spaceLabel(s)}{s.title && <span className={styles.slugSub}>{s.slug}</span>}</span>
-                    <span className={cx(styles.sub, styles.preview)}>{spacePreview(s)}</span>
-                    <span className={cx(styles.sub, styles.meta)}>{spaceMetaLine(s)}{s.migratedFrom ? ` · ${t('из тега задачи')}` : ''}</span>
-                  </Link>
-                </li>
-              ))
+              ? split.open.map(row)
               : <li className={cx(styles.none, 'muted small')}>{spacesNoneText(list.length)}</li>)}
           </ul>
+          {loaded && split.closed.length > 0 && (
+            <>
+              <h4 className={styles.closedHead} title={t('Закрытые пространства: их нет в выборе пространства и в срезах; прошлая работа остаётся подписана ими. Открыть снова — на странице пространства')}>
+                {t('Закрытые')} <span className={styles.count}>{split.closed.length}</span>
+              </h4>
+              <ul className={cx(styles.list, styles.closedList)}>{split.closed.map(row)}</ul>
+            </>
+          )}
         </aside>
         <div className={styles.main}>
           {space ? (
@@ -553,6 +582,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                   </button>
                 ) : <span className="mono" title={s.dir}>{tildePath(s.dir, home)}</span>}
                 {s.migratedFrom && <span title={t('Перенесено из тега задачи {tag}: его папка осталась на месте', { tag: s.migratedFrom.tag })}>{t('из тега задачи')}</span>}
+                {s.closedAt && <span className={styles.closedMark} title={t('Закрыто {date}: его нет в выборе пространства и в срезах', { date: when(s.closedAt) })}>{t('закрыто')}</span>}
               </div>
             </div>
             <span className="row push">
@@ -566,6 +596,12 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
                   <Link className="btn small ghost" to={`/sessions?space=${encodeURIComponent(s.slug)}&cwd=${encodeURIComponent(s.dir)}`} title={t('Сессия в самой папке пространства: Claude работает в ней как в проекте, каждую правку пространства ты подтверждаешь')}>{t('Сессия в папке')}</Link>
                 </>
               )}
+              <button
+                type="button"
+                className="btn small ghost"
+                title={s.closedAt ? t('Вернуть пространство в выбор и в срезы') : t('Работа закончена: пространство уйдёт из выбора и срезов, в списке — в «Закрытые». Карта, состояние и история остаются')}
+                onClick={() => onQuick({ closed: !s.closedAt }, s.closedAt ? t('Пространство снова открыто') : t('Пространство закрыто'))}
+              >{s.closedAt ? t('Открыть снова') : t('Закрыть')}</button>
               <button type="button" className="btn small ghost danger" onClick={onRemove}>{t('Удалить')}</button>
               <button type="button" className="btn primary" disabled={!dirty} title={t('Сохранить карту, состояние и настройки (⌘S)')} onClick={onSave}>{t('Сохранить')}</button>
             </span>
@@ -655,6 +691,7 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
           {!draftPanel && tab === 'knowledge' && <KnowledgeTab tags={form.tags} onChange={(tags) => edit('tags', tags)} />}
           {!draftPanel && tab === 'folders' && (
             <div id="space-pane-folders" role="tabpanel" className={styles.tabBody}>
+              <Repos space={s} onQuick={onQuick} />
               <p className={cx('muted small', styles.hint)}>{t('Набор папок, с которым откроется сессия пространства: в рабочей Claude работает, остальные получает на чтение. Быстрая сессия (+ в меню слева или ⌘N) открывает его одним нажатием.')}</p>
               <label>
                 <span title={t('Где идёт работа: её подставят формы сессии и запуска при выборе пространства. Пусто — папка последней сессии или запуска в нём')}>{t('Рабочая папка')}</span>
@@ -721,6 +758,65 @@ function SpaceEditor({ space: s, form, tab, setTab, edit, dirty, msg, conflict, 
           <p className="muted small">{t('Сессий и запусков в этом пространстве ещё не было.')}</p>
         )}
       </aside>
+    </div>
+  );
+}
+
+/**
+ * Репозитории пространства (проект = пространство): работа в них без явного пространства — проект этого пространства на
+ * Главной, в сайдбаре и в «Коде». Привязка и отвязка пишутся сразу. Репозиторий привязан и к другому, более старому
+ * пространству — работа без пространства уходит туда (правило — в projectResolver на сервере), об этом строка под ним.
+ */
+function Repos({ space: s, onQuick }: { space: SpaceDetail; onQuick: EditorProps['onQuick'] }) {
+  const home = useConfig().data?.home;
+  const [path, setPath] = useState('');
+  const repos = s.repos ?? [];
+  // поле чистится, когда привязка дошла (список с сервера изменился); ошибка — путь остаётся, его поправят
+  const reposKey = repos.join('\n');
+  useEffect(() => setPath(''), [reposKey]);
+  const bind = (p: string) => {
+    const v = p.trim();
+    if (v) onQuick({ repos: [...repos, v] }, t('Репозиторий привязан'));
+  };
+  return (
+    <div className={styles.repos}>
+      <span className="field-label" title={t('Корни git: запуски, сессии, MR и ветки в них подписаны этим пространством, даже если пространство при запуске не выбрали. Worktree относится к своему основному репозиторию')}>{t('Репозитории')}</span>
+      {repos.length ? (
+        <ul className={styles.repoList}>
+          {repos.map((r) => {
+            const owner = s.repoProjects?.[r];
+            const elsewhere = owner?.space && owner.space !== s.slug;
+            return (
+              <li key={r}>
+                <span className="mono" title={r}>{tildePath(r, home)}</span>
+                <button type="button" className="btn small ghost" title={t('Работа в нём без явного пространства перестанет относиться к этому')} onClick={() => onQuick({ repos: repos.filter((x) => x !== r) }, t('Репозиторий отвязан'))}>{t('Отвязать')}</button>
+                {elsewhere && <span className="muted small">{t('Привязан и к {project} — работа без пространства идёт туда: оно заведено раньше', { project: projectLabel(owner) })}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <span className="muted small">{t('Не привязаны: работа без явного пространства попадёт сюда, только если она в папках пространства')}</span>
+      )}
+      <div className="path-field">
+        <input
+          name="repo"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="/Users/me/code/app"
+          aria-label={t('Путь к репозиторию')}
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              bind(path);
+            }
+          }}
+        />
+        <button type="button" className="btn small" disabled={!path.trim()} onClick={() => bind(path)}>{t('Привязать')}</button>
+        <PickDirButton prompt={t('Папка репозитория')} title={t('Выбрать папку в Finder — привяжется её корень git')} start={() => path || s.cwd || ''} onPick={bind} />
+      </div>
     </div>
   );
 }

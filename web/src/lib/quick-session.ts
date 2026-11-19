@@ -83,7 +83,8 @@ export function quickRows(o: {
     if (!space && !cwd) continue;
     push({ ...rowOf(space || undefined, cwd, 'pin'), pinned: true });
   }
-  const spaces = [...o.spaces].sort((a, b) => (b.lastWorkAt ?? b.updatedAt).localeCompare(a.lastWorkAt ?? a.updatedAt));
+  // закрытое пространство не предлагаем (закреплённое руками — остаётся: его закрепили сами)
+  const spaces = o.spaces.filter((s) => !s.closedAt).sort((a, b) => (b.lastWorkAt ?? b.updatedAt).localeCompare(a.lastWorkAt ?? a.updatedAt));
   for (const s of spaces) push(rowOf(s.slug, s.workdir?.path ?? '', 'space', s.lastWorkAt));
   const sessions = [...o.sessions].sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   for (const s of sessions) {

@@ -95,6 +95,7 @@ import {
   spaceWorkOf,
   type SpaceWork,
   spaceDocReply,
+  projectResolver,
   spaceReadDirs,
   spaceReply,
   spacesListReply,
@@ -2252,6 +2253,7 @@ const liveStatus = (lr: LiveRun): string => (lr.pending.size > 0 ? 'waiting' : l
 /** Идущие запуски для главной, с открытыми вопросами. От новых к старым. */
 function liveRuns(): HomeRun[] {
   const out: HomeRun[] = [];
+  const proj = projectResolver();
   for (const lr of live.values()) {
     const r = lr.report;
     if (!r) continue;
@@ -2278,9 +2280,15 @@ function liveRuns(): HomeRun[] {
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
       ...(r.parent ? { parent: r.parent } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
+      projectRef: runProject(proj, r),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+}
+
+/** Проект запуска: явное пространство, иначе — папка (запуск в worktree — его основной checkout). */
+function runProject(proj: ReturnType<typeof projectResolver>, r: Pick<RunReport, 'worktree' | 'source' | 'cwd' | 'space' | 'tags'>) {
+  return proj.of({ space: reportSpace(r), path: (r.worktree && worktreeProjectOf(r)) || r.cwd });
 }
 
 /**
@@ -2312,10 +2320,13 @@ function feed(): FeedItem[] {
   const ids = new Set(fs.readdirSync(RUNS_DIR).filter((d) => RUN_ID_RE.test(d)).sort().slice(-FEED_RUNS));
   for (const id of live.keys()) ids.add(id);
   const items: FeedItem[] = [];
+  const proj = projectResolver();
   for (const id of ids) {
     const lr = live.get(id);
     const r = lr?.report ?? readReport(id);
-    if (r) items.push(...reportFeed(id, r, lr && { pending: (qid) => lr.pending.has(qid) }));
+    if (!r) continue;
+    const projectRef = runProject(proj, r);
+    items.push(...reportFeed(id, r, lr && { pending: (qid) => lr.pending.has(qid) }).map((x) => ({ ...x, projectRef })));
   }
   return mergeFeed(items);
 }
@@ -2343,6 +2354,7 @@ function worktreeProjectOf(r: Pick<RunReport, 'worktree' | 'source'>): string | 
 function listRuns(): RunSummary[] {
   if (!fs.existsSync(RUNS_DIR)) return [];
   const out: RunSummary[] = [];
+  const proj = projectResolver();
   for (const dir of fs.readdirSync(RUNS_DIR)) {
     if (!RUN_ID_RE.test(dir)) continue;
     const r = readReport(dir);
@@ -2364,6 +2376,7 @@ function listRuns(): RunSummary[] {
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       worktree: r.worktree,
       ...(r.worktree && worktreeProjectOf(r) ? { project: worktreeProjectOf(r) } : {}),
+      projectRef: runProject(proj, r),
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
       ...(reportSpace(r) ? { space: reportSpace(r) } : {}),
@@ -2471,11 +2484,14 @@ async function draftResolveDeps(body: unknown): Promise<DraftResolveDeps> {
  */
 async function groupSources(): Promise<GroupSource[]> {
   const out: GroupSource[] = [];
+  // только «Без проекта»: работа в привязанном репозитории или в папке пространства уже в проекте
+  const proj = projectResolver();
   for (const s of await spacelessSessions().catch(() => [])) {
+    if (proj.path(s.cwd).space) continue;
     if (s.first.trim()) out.push({ kind: 'session', id: s.id, name: s.name, cwd: s.cwd, at: s.lastActivityAt, text: s.first });
   }
   for (const r of listRuns()) {
-    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running') continue;
+    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running' || r.projectRef?.space) continue;
     const cwd = r.worktree?.path ?? r.cwd;
     out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, flow: r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
   }
