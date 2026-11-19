@@ -137,10 +137,11 @@ test('runEnded: why дел с этим запуском — итог, колон
   const d = openStore(tmp(t));
   await d.put('own:a', { title: 'a', links: { runs: ['r1'] } }, 'routine');
   await d.put('own:b', { title: 'b' }, 'flow');
-  // дело, которое запуск r1 сам завёл через desk_put (by flow): ссылка есть, а итог чужого запуска его не трогает
-  await d.put('own:c', { title: 'c', links: { runs: ['r1'] } }, 'flow');
+  // дело, которое запуск r1 сам завёл через desk_put: ссылка в mentionedBy, итог запуска его не трогает
+  await d.put('own:c', { title: 'c', links: { mentionedBy: ['r1'] }, createdBy: { run: 'r1' } }, 'flow');
   assert.equal(await d.runEnded(['r1'], 'failed', 'бюджет кончился'), 1);
   assert.equal((await d.get('own:c'))?.why, '');
+  assert.deepEqual((await d.get('own:c'))?.createdBy, { run: 'r1' });
   assert.equal((await d.get('own:a'))?.why, 'запуск упал: бюджет кончился');
   assert.equal((await d.get('own:a'))?.column, 'new');
 });
@@ -213,8 +214,48 @@ test('открытых дел не больше OPEN_MAX: новое — пон�
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ version: 1, items: bulk(OPEN_MAX) }));
   const d = openDesk(dir);
-  await assert.rejects(d.put('own:new', { title: 'лишнее' }, 'me'), (e: Error) => e instanceof DeskFullError && /Открытых дел уже 2000/.test(e.message));
+  await assert.rejects(d.put('own:new', { title: 'лишнее' }, 'me'), (e: Error) => e instanceof DeskFullError && new RegExp(`Открытых дел уже ${OPEN_MAX}`).test(e.message));
   assert.equal((await d.move('own:b1', 'plan', 'me'))?.column, 'plan');
+  // заведённое сразу закрытым — можно; переоткрыть закрытое сверх потолка — нет
+  assert.equal((await d.put('own:done', { title: 'сделано', column: 'done' }, 'me')).column, 'done');
+  await assert.rejects(d.move('own:done', 'plan', 'me'), /не открыто снова/);
+});
+
+test('переполненная доска не блокирует закрытие и перенос: отказ — только новому делу или сигналу', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  // запись, которой эта версия не понимает, на 9 МБ: сжатие сигналов файл под потолок не вернёт
+  const file = path.join(dir, 'items.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, items: [...bulk(10, { signals: 1, text: 10 }), { future: 'x'.repeat(9 * 1024 * 1024) }] }));
+  const d = openDesk(dir);
+  const closed = await d.close('own:b1', 'лишнее', 'me');
+  assert.equal(closed?.column, 'done');
+  assert.ok(fs.statSync(file).size > ITEMS_MAX);
+  assert.equal((await d.move('own:b2', 'plan', 'me'))?.column, 'plan');
+  // рутина привязывает запуск к делу (put только ссылок) — тоже можно: потом move в «В работе»
+  assert.deepEqual((await d.put('own:b3', { links: { runs: ['r1'] } }, 'routine')).links.runs, ['r1']);
+  await assert.rejects(d.put('own:b1', { signal: { source: 'slack', at: '2026-11-19T12:00:00.000Z', text: 'я'.repeat(2000) } }, 'routine'), DeskFullError);
+});
+
+test('поле started прошлой версии уходит при записи', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ version: 1, items: bulk(1).map((i) => ({ ...i, started: ['r1'] })) }));
+  await openDesk(dir).move('own:b0', 'plan', 'me');
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, 'items.json'), 'utf8'), /started/);
+});
+
+test('висящий замок отнимает один: свежий замок, оказавшийся под тем же именем, возвращается на место', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, 'items.lock');
+  fs.writeFileSync(lock, 'dead:1');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, old, old);
+  // два хранилища (в жизни — два процесса) на одну папку пишут разом: оба дела целы, замков не осталось
+  await Promise.all([openStore(dir).put('own:a', { title: 'a' }, 'me'), openStore(dir).put('own:b', { title: 'b' }, 'me')]);
+  assert.deepEqual((await openStore(dir).list()).map((i) => i.key).sort(), ['own:a', 'own:b']);
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('lock')), []);
 });
 
 test('доска не влезает в ITEMS_MAX: у дел остаются последние сигналы, дела целы', async (t) => {
@@ -242,7 +283,7 @@ test('замок живого владельца не отнимается: ош
   assert.equal(fs.readFileSync(lock, 'utf8'), 'other:1');
 });
 
-test('запись другого процесса (CLI) — событие подписчикам по mtime; своя запись — одно событие', async (t) => {
+test('запись другого процесса (CLI) — событие подписчикам по смене файла; своя запись — одно событие', async (t) => {
   const dir = tmp(t);
   const server = openStore(dir, { watchMs: 20 });
   let n = 0;

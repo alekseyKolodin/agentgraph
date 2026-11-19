@@ -83,3 +83,28 @@ test('POST /api/desk/put: пространства нет — 400', async (t) =>
   assert.deepEqual([r?.status, (r?.body as { error: string }).error], [400, 'patch.project: пространства nope нет']);
   assert.equal((await call('POST', '/api/desk/put', { patch: { title: 'x', project: 'app' } }))?.status, 200);
 });
+
+test('ключ, который канон не разбирает (своё дело рутины с пробелом), — как есть: карточку можно двигать и закрыть', async (t) => {
+  const { store, call } = setup(t);
+  await store.put('own:folder/a b.md@1', { title: 'файл' }, 'routine');
+  assert.equal(((await call('POST', '/api/desk/move', { key: 'own:folder/a b.md@1', column: 'plan' }))!.body as DeskItem).column, 'plan');
+  const put = await call('POST', '/api/desk/put', { key: 'own:folder/a b.md@1', patch: { why: 'посмотреть' } });
+  assert.deepEqual([put?.status, (put!.body as DeskItem).why], [200, 'посмотреть']);
+  assert.equal(((await call('POST', '/api/desk/close', { key: 'own:folder/a b.md@1' }))!.body as DeskItem).column, 'done');
+  assert.equal((await call('POST', '/api/desk/put', { key: 'https://кривой адрес', patch: { title: 'x' } }))?.status, 400);
+  // не своё и не заведённое — 400: кривой ключ MR завёл бы дубль без вещи
+  assert.equal((await call('POST', '/api/desk/put', { key: 'mr:gitlab.com/a/b/7 x', patch: { title: 'x' } }))?.status, 400);
+  assert.equal((await call('POST', '/api/desk/put', { key: 'own:новое с пробелом', patch: { title: 'x' } }))?.status, 200);
+});
+
+test('POST /api/desk/put: адрес в ключе не теряется — у MR в links.mr, у другого адреса — ссылкой сигнала', async (t) => {
+  const { call } = setup(t);
+  const mr = (await call('POST', '/api/desk/put', { key: 'https://gitlab.example.com/grp/app/-/merge_requests/7', patch: { title: 'MR' } }))!.body as DeskItem;
+  assert.equal(mr.links.mr, 'https://gitlab.example.com/grp/app/-/merge_requests/7');
+  const page = (await call('POST', '/api/desk/put', { key: 'https://wiki.example.com/page', patch: { title: 'Прочитать' } }))!.body as DeskItem;
+  assert.match(page.key, /^own:url-/);
+  // ключ MR без адреса: вещь есть, links.mr не выдумывается
+  const byKey = (await call('POST', '/api/desk/put', { key: 'mr:gitlab.example.com/grp/app/8', patch: { title: 'MR 8' } }))!.body as DeskItem;
+  assert.deepEqual([byKey.thing?.type, byKey.links.mr], ['mr', undefined]);
+  assert.equal(page.signals[0]?.link, 'https://wiki.example.com/page');
+});

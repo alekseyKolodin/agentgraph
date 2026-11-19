@@ -25,16 +25,24 @@ export type DeskRouteDeps = {
 };
 
 const spaceExists = (slug: string): boolean => {
-  const s = spaceSlug(slug);
-  return Boolean(s && readSpaceMeta(s));
+  try {
+    const s = spaceSlug(slug);
+    return Boolean(s && readSpaceMeta(s));
+  } catch {
+    return false; // кривое имя — пространства нет
+  }
 };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
 
-/** Ключ дела в каноническом виде (src/desk/tools.ts → canonicalKey): MR из ссылки в другом регистре — то же дело. */
+/**
+ * Ключ дела в каноническом виде (src/desk/tools.ts → canonicalKey): MR в другом регистре — то же дело. Ключ, который
+ * канон не разбирает (свои дела рутин с пробелом: файл папки, тред), — как есть: карточку должно быть можно двигать.
+ */
 function keyOf(v: unknown): string | undefined {
-  return typeof v === 'string' && v.length <= KEY_MAX && KEY_RE.test(v.trim()) ? canonicalKey(v) : undefined;
+  if (typeof v !== 'string' || v.length > KEY_MAX || !KEY_RE.test(v.trim())) return undefined;
+  return canonicalKey(v) ?? v.trim();
 }
 
 /** Правка с карточки или «Своё» руками: только поля, которые UI вправе задать; сигнал — от 'ui', время сервера. */
@@ -85,21 +93,32 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
   if (p === '/api/desk/put') {
     const b = obj(await readBody());
     const patch = patchOf(b.patch);
-    // ключа нет — своё дело, заведённое руками; ключ или адрес MR/задачи — канонический ключ и вещь для наблюдателя
+    // ключа нет — своё дело, заведённое руками; ключ или адрес MR/задачи — канонический ключ и вещь для наблюдателя;
+    // ключ, который канон не разбирает (своё дело рутины с пробелом), — как есть
     let key: string;
+    let link: string | undefined;
     if (b.key === undefined) key = `own:${randomBytes(6).toString('hex')}`;
     else {
       if (typeof b.key !== 'string' || b.key.length > KEY_MAX) return bad('key: ключ вещи вида тип:… или адрес MR, задачи');
       try {
         const r = resolveThing(b.key, { jiraHosts: (deps.jiraHosts ?? settingsJiraHosts)() });
         key = r.key;
+        link = r.link;
         if (r.thing) patch.thing = r.thing;
       } catch (err) {
-        return bad(`key: ${err instanceof Error ? err.message : String(err)}`);
+        // как есть — только своё дело или уже заведённое: иначе MR-подобный кривой ключ завёл бы дубль без вещи
+        const raw = keyOf(b.key);
+        if (!raw || /^https?:/i.test(b.key.trim()) || !(raw.startsWith('own:') || (await store.get(raw)))) return bad(`key: ${err instanceof Error ? err.message : String(err)}`);
+        key = raw;
       }
     }
     if (patch.project && !(deps.hasProject ?? spaceExists)(patch.project)) return bad(`patch.project: пространства ${patch.project} нет`);
-    if (!(await store.get(key)) && !patch.title && !patch.signal?.text) return bad('patch.title: у нового дела нужно имя');
+    const exists = Boolean(await store.get(key));
+    if (!exists && !patch.title && !patch.signal?.text) return bad('patch.title: у нового дела нужно имя');
+    // адрес из ключа не теряется: у MR — в links.mr, у другого адреса — ссылкой сигнала (у нового дела — сигнал с ней)
+    if (link && patch.thing?.type === 'mr') patch.links = { mr: link };
+    else if (link && patch.signal && !patch.signal.link) patch.signal = { ...patch.signal, link };
+    else if (link && !exists && !patch.signal) patch.signal = { source: 'ui', at: new Date().toISOString(), link };
     return ok(await store.put(key, patch, 'me'));
   }
   if (p === '/api/desk/move') {
