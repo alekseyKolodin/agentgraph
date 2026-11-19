@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ConnectorBuildView, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ComposeView, ConnectorBuildView, DirCheck, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import type { ProfileResponse } from '@server/api-types';
@@ -23,6 +23,7 @@ export const routineKeys = {
   log: (slug: string, outcomes: string) => ['routines', 'log', slug, outcomes] as const,
   recipes: ['routines', 'recipes'] as const,
   draft: (id: string) => ['routines', 'draft', id] as const,
+  compose: (id: string) => ['routines', 'compose', id] as const,
   mcp: ['routines', 'mcp-tools'] as const,
   build: (id: string) => ['routines', 'connector-build', id] as const,
 };
@@ -127,4 +128,23 @@ export function useDraft(id: string | null) {
     enabled: Boolean(id),
     refetchInterval: (q) => (q.state.data?.state === 'working' ? 1500 : false),
   });
+}
+
+/** Рутина по описанию словами: модель собирает черновик, ничего не сохраняется. Пока она работает, опрос раз в 1.5 с. */
+export const startCompose = (description: string) => api<ComposeView>('POST', `${BASE}/compose`, { description });
+export const cancelCompose = (id: string) => api<{ ok: true }>('DELETE', `${BASE}/compose/${enc(id)}`);
+export function useCompose(id: string | null) {
+  return useQuery({
+    queryKey: routineKeys.compose(id ?? ''),
+    queryFn: () => api<ComposeView>('GET', `${BASE}/compose/${enc(id!)}`),
+    enabled: Boolean(id),
+    refetchInterval: (q) => (q.state.data?.state === 'working' ? 1500 : false),
+  });
+}
+
+/** Папка проекта рутины: есть ли, git ли. Ключ вне ['routines']: событие `routines` снимает весь префикс, а проверка папки от него не меняется. */
+export const checkDir = (path: string) => api<DirCheck>('GET', `${BASE}/check-dir?path=${enc(path)}`);
+export function useDirCheck(path: string) {
+  const p = path.trim();
+  return useQuery({ queryKey: ['routine-dir', p], queryFn: () => checkDir(p), enabled: Boolean(p), staleTime: 15_000, retry: false });
 }

@@ -224,3 +224,34 @@ test('готовые flow шаблонов: список; чужое имя — 
     t.done();
   }
 });
+
+test('рутина словами и проверка папки: POST/GET/DELETE compose, 400 без описания, 501 без модели; check-dir; имена не рутины', async () => {
+  const views = new Map<string, unknown>();
+  const compose = {
+    start: (description: string) => {
+      views.set('c1', { id: 'c1', description, state: 'working', step: 'Читаю' });
+      return views.get('c1') as never;
+    },
+    get: (id: string) => views.get(id) as never,
+    cancel: (id: string) => void views.delete(id),
+  };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
+  const engine = new RoutineEngine({ jiraHosts: () => [], store: new RoutineStore(root), kinds: () => [], startRun: async () => 'run-1', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
+  const checkDir = async (p: string) => ({ path: p, exists: true, isDir: true, git: false });
+  const call = (method: string, url: string, body?: unknown, extra: Record<string, unknown> = { compose, checkDir }) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null, ...extra });
+  try {
+    assert.equal((await call('POST', '/api/routines/compose', { description: ' ' }))?.status, 400);
+    assert.equal((await call('POST', '/api/routines/compose', { description: 'ревью моих MR' }))?.status, 201);
+    assert.equal(((await call('GET', '/api/routines/compose/c1'))?.body as { description: string }).description, 'ревью моих MR');
+    assert.deepEqual((await call('DELETE', '/api/routines/compose/c1'))?.body, { ok: true });
+    assert.equal((await call('GET', '/api/routines/compose/c1'))?.status, 404);
+    assert.equal((await call('POST', '/api/routines/compose', { description: 'x' }, { compose: null }))?.status, 501);
+    assert.equal((await call('GET', '/api/routines/check-dir'))?.status, 400);
+    assert.deepEqual((await call('GET', '/api/routines/check-dir?path=/tmp/x'))?.body, { path: '/tmp/x', exists: true, isDir: true, git: false });
+    // имена разделов API не рутины
+    assert.equal(await call('PUT', '/api/routines/compose', { spec }), undefined);
+    assert.equal(await call('PUT', '/api/routines/check-dir', { spec }), undefined);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

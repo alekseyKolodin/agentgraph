@@ -227,7 +227,7 @@ const TRANSLIT: Record<string, string> = {
   с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 /** Адреса экранов /routines/new и /routines/connect: такие слаги заняли бы маршрут. */
-const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates']);
+const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates', 'compose', 'check-dir']);
 
 /** Слаг файла из названия: [a-z0-9-], не длиннее 48, свободный среди taken («-2», «-3»…). */
 export function slugify(title: string, taken: Iterable<string> = []): string {
