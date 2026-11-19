@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import type { SessionAsk, SessionPermissionMode, SessionStatus, Space, Tag } from './api-types.js';
 import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { configDir } from './settings.js';
-import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
+import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_NOTE_TOOL, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
 import { DESK_LIST_TOOL } from './desk/tools.js';
 import { existingSpacePaths, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 import { teamsDir } from './teamwork.js';
@@ -41,6 +41,8 @@ export const TEAM_TASK_UPDATE_TOOL = 'team_task_update';
 export const TEAM_DOC_WRITE_TOOL = 'team_doc_write';
 export const TEAM_TASK_UPDATE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_TASK_UPDATE_TOOL}`;
 export const TEAM_DOC_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_DOC_WRITE_TOOL}`;
+/** Запись знания в тег (docs/desk/SPEC.md, 6.6): заметки тега уходят промптом следующим сессиям и запускам — с вопросом. */
+export const KNOWLEDGE_NOTE_FULL = `mcp__${SESSION_MCP_SERVER}__${KNOWLEDGE_NOTE_TOOL}`;
 /** Инструменты, о каждом вызове которых спрашивают человека: хук PreToolUse отвечает ask (в dontAsk — отказ с причиной). */
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
@@ -51,6 +53,7 @@ const ASK_TOOLS: Record<string, string> = {
   [FLOW_WRITE_FULL]: 'agentgraph: flow запишется в папку flow — его возьмут следующие запуски',
   [TEAM_TASK_UPDATE_FULL]: 'agentgraph: изменение задачи Teamwork уйдёт коммитом в репо команды',
   [TEAM_DOC_WRITE_FULL]: 'agentgraph: документ проекта Teamwork уйдёт коммитом в репо команды',
+  [KNOWLEDGE_NOTE_FULL]: 'agentgraph: запись в тег знаний получат промптом все следующие сессии и запуски с этим тегом',
 };
 /** С этой версии claude у HTTP-хука есть onFailure: block — сбой хука блокирует вызов, а не пропускает его. */
 export const HOOK_ON_FAILURE_SINCE = '2.1.295';

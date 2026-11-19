@@ -12,7 +12,7 @@ import { startServer, stopServer } from './server.js';
 import { LEGACY_RECORD_FILE, onSessionWaiting, SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
-import { createTag, tagDir, updateTag } from './tags.js';
+import { createTag, readTag, tagDir, updateTag } from './tags.js';
 import { createSpace, deleteSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import { desk } from './desk/index.js';
@@ -511,6 +511,46 @@ test('сессия с карточки дела: дело — в «В работ
   await store.close('own:card-session', 'тест', 'me');
 });
 
+test('знание после дела (6.6): desk_close по делу с работой предлагает knowledge_note; запись — с вопросом, плохая — отказ без вопроса', async () => {
+  const store = desk();
+  createTag('review-know', 'Ревью ключей');
+  await store.put('own:learn-work', { title: 'Ревью MR', kind: 'Ревью ключей', column: 'work', links: { sessions: ['другая-сессия'] } }, 'me');
+  await store.put('own:learn-none', { title: 'Само закрылось', kind: 'Ревью', column: 'plan' }, 'me');
+  const s = (await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], name: 'Знание' })).body;
+  const token = tokenOf(spawned.at(-1)!);
+  const tool = async (name: string, args: Record<string, unknown>) =>
+    (await call<{ result: { content: Array<{ text: string }>; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, { 'X-Agentgraph-Session': token })).body.result;
+
+  // работа по делу была — подсказка с существующим тегом вида работы (по заголовку тега)
+  const closed = await tool('desk_close', { thing: 'own:learn-work', reason: 'смержен' });
+  assert.equal(closed.isError, undefined, closed.content[0].text);
+  assert.match(closed.content[0].text, /^Дело закрыто: .*\nПо делу была работа\. .*«Ревью ключей».*knowledge_note \(tag: "review-know"\)/s);
+  // работы не было — только «закрыто»
+  const plain = await tool('desk_close', { thing: 'own:learn-none', reason: 'не нужно' });
+  assert.doesNotMatch(plain.content[0].text, /knowledge_note/);
+
+  // PreToolUse: вопрос в любом режиме — куда и что ляжет; плохой слаг и тег задачи — отказ без вопроса
+  const pre = async (input: Record<string, unknown>) =>
+    (await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__knowledge_note', permission_mode: 'auto', tool_input: input })).body.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  const ask = await pre({ tag: 'review-know', text: 'Проверять  ротацию\nключей' });
+  assert.equal(ask.permissionDecision, 'ask');
+  assert.match(ask.permissionDecisionReason, /запись в тег знаний получат промптом.*тег review-know \(«Ревью ключей»\): допишет в заметки «- \d{4}-\d{2}-\d{2} · Проверять ротацию ключей»/);
+  assert.match((await pre({ tag: 'new-kind', text: 'x', title: 'Новый вид' })).permissionDecisionReason, /новый тег знаний new-kind \(«Новый вид»\)/);
+  for (const bad of [{ tag: '../x', text: 'x' }, { tag: 'review-know', text: ' ' }, { tag: 'review-know', text: 'x', extra: 1 }]) {
+    assert.equal((await pre(bad)).permissionDecision, 'deny', JSON.stringify(bad));
+  }
+
+  // после «да» человека claude вызывает инструмент: строка в заметках тега, новый тег заводится с заголовком
+  const w = await tool('knowledge_note', { tag: 'review-know', text: 'Проверять ротацию ключей' });
+  assert.equal(w.isError, undefined, w.content[0].text);
+  assert.match(readTag('review-know')!.notes, /- \d{4}-\d{2}-\d{2} · Проверять ротацию ключей\n?$/);
+  assert.equal((await tool('knowledge_note', { tag: 'new-kind', text: 'Первое', title: 'Новый вид' })).isError, undefined);
+  assert.equal(readTag('new-kind')!.title, 'Новый вид');
+  assert.equal((await tool('knowledge_note', { tag: 'BAD', text: 'x' })).isError, true);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await call('DELETE', `/api/sessions/${s.id}`);
+});
+
 test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, пространство и тег на ходу ждут следующего шага', async () => {
   createSpace('hk-space', { title: 'Корзина', gist: 'Пустая корзина падает' });
   writeSpaceState('hk-space', 'Суть: корзина', { id: 'r0', at: '', kind: 'run' });
@@ -553,7 +593,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   // MCP того же сервера: только POST и только с токеном
   const list = await call<{ result: { tools: unknown[] } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': token });
-  assert.equal(list.body.result.tools.length, 10, "семь своих и три инструмента дел");
+  assert.equal(list.body.result.tools.length, 11, "семь своих, три инструмента дел и knowledge_note");
   assert.equal((await call('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 404);
   assert.equal((await call('GET', `/api/sessions/${s.id}/mcp`, undefined, { 'X-Agentgraph-Session': token })).status, 405);
 

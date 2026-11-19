@@ -23,7 +23,7 @@ import { parseSessionSource } from './work-links.js';
 import { APP_DIR, FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
 import { branchCache } from './git-head.js';
 import { requestProblem } from './server-guard.js';
-import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
+import { appendTagNote, knowledgeTags, listTags, planTagNote, readTag, runTagSlugs, tagsDir } from './tags.js';
 import {
   cleanLine, createSpace, existingSpacePaths, projectResolver, type ProjectResolver, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
   writeSpaceState, WRITE_DOC_EXTS, SpaceError,
@@ -35,11 +35,11 @@ import { configDir } from './settings.js';
 import {
   askText, findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
   sessionArgs, sessionEnv, childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_MAP_WRITE_FULL,
-  SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
+  KNOWLEDGE_NOTE_FULL, SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
   type SessionCtx, type WriteCall,
 } from './sessions.js';
 import {
-  mcpReply, parseFlowWriteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
+  mcpReply, parseFlowWriteArgs, parseKnowledgeNoteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
   type TeamTaskUpdateArgs,
 } from './sessions-mcp.js';
 import { bashDecision, classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, type EditScope, type EditTarget } from './session-edit.js';
@@ -53,6 +53,7 @@ import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } f
 import { desk } from './desk/index.js';
 import type { DeskApi } from './desk/types.js';
 import { branchKeyOf } from './desk/tools.js';
+import { learnHint } from './desk/learn.js';
 
 /** Открытое пространство проекта папки (projectOf по папке); закрытое или «Без проекта» — undefined. */
 function openProjectSpace(cwd: string): string | undefined {
@@ -1193,7 +1194,14 @@ export class SessionManager {
         branch: () => branchKeyOf(s.rec.cwd),
         why: `из сессии «${s.rec.name}»`,
         ...(s.rec.source?.thing ? { thing: s.rec.source.thing } : {}),
+        // по делу была работа — ответ предложит записать вывод в тег вида работы (6.6); ход сессии, без своей модели
+        afterClose: (item) => learnHint(item, listTags(), { thingKey: s.rec.source?.thing?.key }),
       }),
+      // запись знания — только после «да» человека на вопрос хука (KNOWLEDGE_NOTE_FULL в ASK_TOOLS)
+      writeNote: (a) => {
+        const tag = appendTagNote(a.tag, a.text, a.title ? { title: a.title } : {});
+        return `Записано в тег ${tag.slug}${tag.title ? ` («${tag.title}»)` : ''}. Его заметки получат следующие сессии и запуски с этим тегом.`;
+      },
       deskHint: () => {
         const thing = s.rec.source?.thing;
         const project = projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined;
@@ -1312,6 +1320,17 @@ export class SessionManager {
         return flowWriteDetail(parseFlowWriteArgs(input));
       } catch (err) {
         return { deny: `${errMsg(err)}. Flow не записан — исправь и вызови снова.` };
+      }
+    }
+    if (tool === KNOWLEDGE_NOTE_FULL) {
+      // человек видит, куда и что ляжет; не пройдёт проверку — отказ без вопроса
+      try {
+        const a = parseKnowledgeNoteArgs(input);
+        const plan = planTagNote(a.tag, a.text, a.title ? { title: a.title } : {});
+        const where = plan.exists ? `тег ${plan.slug}${plan.title ? ` («${cleanLine(plan.title, 80)}»)` : ''}` : `новый тег знаний ${plan.slug}${plan.title ? ` («${cleanLine(plan.title, 80)}»)` : ''}`;
+        return `${where}: допишет в заметки «${cleanLine(plan.line, 300)}»`;
+      } catch (err) {
+        return { deny: `${errMsg(err)}. Знание не записано — исправь и вызови снова.` };
       }
     }
     if (tool === TEAM_TASK_UPDATE_FULL || tool === TEAM_DOC_WRITE_FULL) {
