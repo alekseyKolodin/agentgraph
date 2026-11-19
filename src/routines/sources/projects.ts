@@ -28,8 +28,11 @@ export type ProjectsDeps = {
   spaces?: () => ProjectSpace[];
   /** Проект папки (слаг пространства) — для сессии без пространства. */
   projectOf?: (dir: string) => string | undefined;
-  /** Сессии с вопросом последнего хода; журнал ходов — только тем, кому нужен разбор (turnsFor). */
-  sessions?: (turnsFor?: (s: ReviewKey) => boolean) => Promise<ReviewSource[]>;
+  /**
+   * Сессии с вопросом последнего хода; журнал ходов — только тем, кому нужен разбор (turnsFor). undefined — сессий сейчас
+   * не узнать (терминал не загрузился): это «нет данных», а не «пусто» — прошлые записи сессий остаются.
+   */
+  sessions?: (turnsFor?: (s: ReviewKey) => boolean) => Promise<ReviewSource[] | undefined>;
   /** Итог разбора на сервере. */
   reviewStore?: () => ReviewStore;
   /** Разбор моделью сейчас (итог пишется на сервер); цена — в расход источника. */
@@ -40,7 +43,7 @@ export type ProjectsDeps = {
 };
 
 const MIN_POLL_MS = 5 * 60_000;
-/** Разбор моделью по умолчанию — раз в сутки (и только если в сессиях были новые ходы). */
+/** Разбор моделью — не чаще раза в час (по умолчанию выключен, см. reviewEvery). */
 const REVIEW_MIN_MS = 3_600_000;
 /** Веток одного репозитория в обходе: открытые в checkout — всегда, остальные — самые свежие. */
 export const BRANCHES_MAX = 15;
@@ -52,14 +55,17 @@ type BranchState = 'dirty' | 'unpushed' | 'no_mr';
 const BRANCH_TITLE: Record<BranchState, string> = { dirty: 'не закоммичено', unpushed: 'не отправлено', no_mr: 'без MR' };
 const KINDS = ['dirty', 'unpushed', 'no_mr', 'question', 'review'] as const;
 
-/** Курсор: когда запись впервые попала в список (время сигнала дела), и последние записи репозитория — на случай сбоя. */
-type Cursor = { first: Record<string, string>; roots: Record<string, RoutineEvent[]>; reviewTried?: string };
+/**
+ * Курсор: когда запись впервые попала в список (время сигнала дела), последние записи репозитория и сессий — на случай,
+ * когда их не прочитать (сбой git, терминал не загрузился, битый итог разбора): пропажа значила бы «стало чисто».
+ */
+type Cursor = { first: Record<string, string>; roots: Record<string, RoutineEvent[]>; sessions?: RoutineEvent[]; reviewTried?: string };
 
 function readCursor(v: unknown): Cursor {
   const o = (v && typeof v === 'object' ? v : {}) as Partial<Cursor>;
   const first = o.first && typeof o.first === 'object' ? Object.fromEntries(Object.entries(o.first).filter(([, at]) => typeof at === 'string')) : {};
   const roots = o.roots && typeof o.roots === 'object' ? Object.fromEntries(Object.entries(o.roots).filter(([, list]) => Array.isArray(list))) : {};
-  return { first, roots, ...(typeof o.reviewTried === 'string' ? { reviewTried: o.reviewTried } : {}) };
+  return { first, roots, ...(Array.isArray(o.sessions) ? { sessions: o.sessions } : {}), ...(typeof o.reviewTried === 'string' ? { reviewTried: o.reviewTried } : {}) };
 }
 
 /** «24h», «12h», «off»; пусто — без модели (разбор тратит деньги — только когда включили явно). Чаще раза в час — раз в час. */
@@ -92,6 +98,11 @@ async function branchEvents(ctx: SourceCtx, space: ProjectSpace, root: string, o
   const things: Thing[] = pick.map((b) => ({ type: 'branch', key: branchKey(root, b.name), ref: { root, branch: b.name }, title: b.name }));
   const states = await o.watcher.state(things, ctx.signal);
   const out: RoutineEvent[] = [];
+  // ветка есть, но выпала из окна обхода (16-я по свежести, без коммитов дольше BRANCH_DAYS): её не смотрели — прошлые
+  // записи остаются как есть (дело закроет сверка по вещи, когда ветка станет чистой); удалённая ветка — пропадает
+  const picked = new Set(pick.map((b) => b.name));
+  const outside = new Set(branches.filter((b) => !picked.has(b.name)).map((b) => branchKey(root, b.name)));
+  out.push(...o.prev.filter((e) => outside.has(e.things?.[0]?.key ?? '')));
   for (const t of things) {
     const st = states.get(t.key);
     // ветку снять не удалось (index.lock, таймаут git) или MR не проверить (офлайн, протух токен glab/gh) — не «стало
@@ -201,11 +212,18 @@ async function poll(ctx: SourceCtx, deps: ProjectsDeps): Promise<RoutineEvent[]>
   // пока вопрос не снят (ответил — дело закрывается): открыл сессию с карточки — дело не пропадает посреди работы.
   const sessions = await (deps.sessions ?? defaultSessions)(() => false);
   const store = (deps.reviewStore ?? defaultReviewStore)();
+  const sessionEvents: RoutineEvent[] = [];
+  // сессий не узнать — прошлые записи сессий как есть; итог разбора не прочитался — прошлые вердикты как есть
+  if (!sessions) sessionEvents.push(...(prev.sessions ?? []));
+  else if (store.broken) {
+    sessionEvents.push(...(prev.sessions ?? []).filter((e) => e.fields.kind === 'review'));
+    ctx.log('итог разбора сессий не прочитался: прошлые вердикты сохранены');
+  }
   const reviewed = new Map(store.items.map((r) => [r.id, r]));
   const current = reviewedNow(store);
   const projectOf = deps.projectOf ?? defaultProjectOf;
   const kept = (id: string, s: ReviewSource) => !s.live || (s.status === 'waiting' && id in prev.first);
-  for (const s of sessions) {
+  for (const s of sessions ?? []) {
     let project: string | undefined;
     try {
       project = s.space || projectOf(s.cwd);
@@ -219,7 +237,7 @@ async function poll(ctx: SourceCtx, deps: ProjectsDeps): Promise<RoutineEvent[]>
       const id = `ask:${s.id}@${s.ask.at}`;
       if (kept(id, s)) {
         const why = `Claude ${s.ask.kind === 'question' ? 'спросил и ждёт' : s.ask.kind === 'permission' ? 'просит разрешения' : 'ждёт ответа в форме'}: ${truncate(s.ask.text, 200)}`;
-        events.push({
+        sessionEvents.push({
           source: ctx.slug, id, at: '', title: `«${truncate(s.name, 120)}» ${ASK_TITLE[s.ask.kind]}`, text: s.ask.text,
           fields: { kind: 'question', ask: s.ask.kind, askedAt: s.ask.at, ...base }, things: [thing], ...(project ? { project } : {}), why,
         });
@@ -227,11 +245,11 @@ async function poll(ctx: SourceCtx, deps: ProjectsDeps): Promise<RoutineEvent[]>
     }
     const r = reviewed.get(s.id);
     // вердикт на текущих ходах сессии: были новые ходы — до следующего разбора записи нет
-    if (r && r.verdict !== 'done' && current(s)) {
+    if (!store.broken && r && r.verdict !== 'done' && current(s)) {
       const id = `review:${s.id}@${r.turns ?? r.activityAt}`;
       if (kept(id, s)) {
         const lines = [r.left && `Осталось: ${r.left}`, r.next && `С чего продолжить: ${r.next}`].filter(Boolean).join('\n');
-        events.push({
+        sessionEvents.push({
           source: ctx.slug, id, at: '', title: `«${truncate(s.name, 120)}»: ${VERDICT_TITLE[r.verdict]}`, text: lines || r.done,
           fields: { kind: 'review', verdict: r.verdict, done: r.done, left: r.left, next: r.next, reviewedAt: r.at, ...base },
           things: [thing], ...(project ? { project } : {}), why: truncate(r.left || r.done || VERDICT_TITLE[r.verdict], 300),
@@ -240,13 +258,15 @@ async function poll(ctx: SourceCtx, deps: ProjectsDeps): Promise<RoutineEvent[]>
     }
   }
 
+  events.push(...sessionEvents);
+
   // время записи — когда она впервые попала в список: вернулась после пропажи — новое время, дело откроется снова
   const first: Cursor['first'] = {};
   for (const e of events) {
     e.at = prev.first[e.id] ?? nowIso;
     first[e.id] = e.at;
   }
-  ctx.cursor.set({ first, roots, ...(reviewTried ? { reviewTried } : {}) } satisfies Cursor);
+  ctx.cursor.set({ first, roots, sessions: sessionEvents, ...(reviewTried ? { reviewTried } : {}) } satisfies Cursor);
   return events;
 }
 
@@ -262,8 +282,10 @@ function defaultSpaces(): ProjectSpace[] {
 const defaultProjectOf = (dir: string): string | undefined => projectOfPath(dir).space ?? undefined;
 const defaultReviewStore = (): ReviewStore => readReviewStore();
 // сессии — из менеджера сессий сервера (терминал, ws): модуль подгружается при первом обходе, а не с движком рутин
-async function defaultSessions(turnsFor?: (s: ReviewKey) => boolean): Promise<ReviewSource[]> {
-  const { sessionReviewSources } = await import('../../sessions-server.js');
+async function defaultSessions(turnsFor?: (s: ReviewKey) => boolean): Promise<ReviewSource[] | undefined> {
+  const { sessionReviewSources, sessionsAvailable } = await import('../../sessions-server.js');
+  // терминал не загрузился (node-pty, нет claude) — сессий не узнать, а не «сессий нет»
+  if (!(await sessionsAvailable().catch(() => false))) return undefined;
   return sessionReviewSources(turnsFor);
 }
 async function defaultReview(signal: AbortSignal): Promise<{ costUsd: number; error?: string }> {
@@ -273,7 +295,7 @@ async function defaultReview(signal: AbortSignal): Promise<{ costUsd: number; er
   else signal.addEventListener('abort', stop, { once: true });
   let r: Awaited<ReturnType<typeof reviewNow>>;
   try {
-    r = await reviewNow({ load: defaultSessions, hooks: { abort, log: () => {}, onEvent: () => {}, onModel: () => {}, onStage: () => {} } });
+    r = await reviewNow({ load: async (turnsFor) => (await defaultSessions(turnsFor)) ?? [], hooks: { abort, log: () => {}, onEvent: () => {}, onModel: () => {}, onStage: () => {} } });
   } finally {
     // сигнал опроса общий на весь процесс: слушатель каждого разбора снимается
     signal.removeEventListener('abort', stop);

@@ -244,3 +244,33 @@ test('обход прервали (сервер останавливается) 
   await assert.rejects(projectsKind(d).poll!(c), /прерван/);
   assert.equal(c.cursorValue(), undefined);
 });
+
+test('ветки: выпавшая из окна обхода (старая, сверх BRANCHES_MAX) держит прошлую запись; удалённая — пропадает', async () => {
+  const states = { wip: { turn: 'me' as const, why: 'без MR', facts: { upstream: 'origin/wip', ahead: 0, aheadOfBase: 3 } } };
+  const c1 = ctx();
+  const first = await projectsKind(deps({ repos: { [ROOT]: [{ name: 'wip', updated: ago(10) }] }, states })).poll!(c1);
+  assert.deepEqual(first.map((e) => e.id), ['branch:/code/app#wip@no_mr']);
+  // прошло время: ветка старше BRANCH_DAYS — её не смотрим, но и не «стала чистой»
+  const old = deps({ repos: { [ROOT]: [{ name: 'wip', updated: ago(BRANCH_DAYS + 1) }] }, states });
+  const c2 = ctx({}, c1.cursorValue());
+  assert.deepEqual((await projectsKind(old).poll!(c2)).map((e) => e.id), ['branch:/code/app#wip@no_mr']);
+  assert.ok(!old.asked.includes('wip'));
+  // ветку удалили — записи нет
+  assert.deepEqual(await projectsKind(deps({ repos: { [ROOT]: [] }, states })).poll!(ctx({}, c2.cursorValue())), []);
+});
+
+test('сессии: терминал не загрузился (сессий не узнать) — прошлые записи сессий держатся; итог разбора битый — прошлые вердикты', async () => {
+  const ask = { kind: 'question' as const, text: 'Так или иначе?', at: ago(1) };
+  const store: ReviewStore = { at: ago(0.5), costUsd: 0, items: [{ id: 's2', name: 's2', verdict: 'continue', done: 'd', left: 'l', next: 'n', at: ago(0.5), activityAt: ago(1), turns: 2 }] };
+  const list = [session('s1', { ask }), session('s2', { turnCount: 2 })];
+  const c1 = ctx();
+  const first = await projectsKind(deps({ sessions: async () => list, reviewStore: () => store })).poll!(c1);
+  assert.deepEqual(first.map((e) => e.id), [`ask:s1@${ask.at}`, 'review:s2@2']);
+  const c2 = ctx({}, c1.cursorValue());
+  assert.deepEqual((await projectsKind(deps({ sessions: async () => undefined, reviewStore: () => store })).poll!(c2)).map((e) => e.id), first.map((e) => e.id));
+  // сессии есть, итог разбора не прочитался — вопросы по сессиям как сейчас, вердикты — прошлые
+  const c3 = ctx({}, c2.cursorValue());
+  const broken = await projectsKind(deps({ sessions: async () => [session('s2', { turnCount: 2 })], reviewStore: () => ({ costUsd: 0, items: [], broken: true }) })).poll!(c3);
+  assert.deepEqual(broken.map((e) => e.id), ['review:s2@2']);
+  assert.match(c3.logs.join('\n'), /итог разбора сессий не прочитался/);
+});

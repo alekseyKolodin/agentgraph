@@ -184,3 +184,18 @@ test('снимок: сервер останавливается — опрос �
     t.done();
   }
 });
+
+test('снимок: закрывает только дела, заведённые этой рутиной; дело flow обхода и другой рутины не трогает', async () => {
+  const t = setup();
+  try {
+    // flow обхода проектов (desk_put) завёл дело о той же ветке, а рутина потом дописала сигнал
+    await t.real.put(A, { kind: 'Забытое', title: 'feat: без MR', signal: { source: 'flow', at: '2026-11-17T09:00:00.000Z' }, createdBy: { run: 'run-9' } }, 'flow');
+    await t.poll(t.ev(`${A}@dirty`, A), t.ev('ask:s1@1', S));
+    assert.equal((await t.real.get(S))?.createdBy?.routine, 'forgot');
+    await t.poll();
+    assert.equal((await t.real.get(A))?.closed, undefined);
+    assert.equal((await t.real.get(S))?.column, 'done');
+  } finally {
+    t.done();
+  }
+});

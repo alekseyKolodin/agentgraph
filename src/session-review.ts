@@ -59,22 +59,33 @@ export type StoredReviewItem = SessionReviewItem & { at: string; activityAt: str
 /** Что нужно знать о сессии, чтобы решить, разобрана ли она: без журнала ходов. */
 export type ReviewKey = { id: string; lastActivityAt: string; turnCount?: number; turns?: unknown[] };
 const turnsOf = (s: ReviewKey): number => s.turnCount ?? s.turns?.length ?? 0;
-/** Файл итога: последний разбор (когда, цена, модель) и вердикты по сессиям. */
-export type ReviewStore = { at?: string; costUsd: number; model?: string; items: StoredReviewItem[] };
+/**
+ * Файл итога: последний разбор (когда, цена, модель) и вердикты по сессиям. broken — файл есть, но не прочитался (битый,
+ * не обычный, больше потолка): это «нет данных», а не «вердиктов нет» (источник «Проекты» держит прошлые записи).
+ */
+export type ReviewStore = { at?: string; costUsd: number; model?: string; items: StoredReviewItem[]; broken?: true };
 
 export const reviewFile = (): string => path.join(configDir(), 'desk', 'session-review.json');
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
-/** Итог с диска; нет или битый — пустой (разбор начнётся заново). Строки из файла — с потолком, вердикт — из списка. */
+/**
+ * Итог с диска; нет — пустой; битый — пустой с broken (разбор начнётся заново и перепишет файл). Строки из файла — с
+ * потолком, вердикт — из списка.
+ */
 export function readReviewStore(file = reviewFile()): ReviewStore {
-  let raw: unknown;
+  let raw: unknown = null;
+  let broken = false;
   try {
-    raw = JSON.parse(readRegular(file, { max: 4 * 1024 * 1024 }) ?? 'null');
+    const text = readRegular(file, { max: 4 * 1024 * 1024 });
+    if (text !== undefined) {
+      raw = JSON.parse(text);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) broken = true;
+    }
   } catch {
-    raw = null;
+    broken = true;
   }
-  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const o = (!broken && raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const items: StoredReviewItem[] = [];
   for (const x of Array.isArray(o.items) ? o.items : []) {
     const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
@@ -86,12 +97,13 @@ export function readReviewStore(file = reviewFile()): ReviewStore {
       ...(typeof r.turns === 'number' && Number.isInteger(r.turns) && r.turns >= 0 ? { turns: r.turns } : {}),
     });
   }
-  return { ...(isStr(o.at) ? { at: o.at } : {}), costUsd: typeof o.costUsd === 'number' && o.costUsd >= 0 ? o.costUsd : 0, ...(isStr(o.model) ? { model: o.model } : {}), items };
+  return { ...(isStr(o.at) ? { at: o.at } : {}), costUsd: typeof o.costUsd === 'number' && o.costUsd >= 0 ? o.costUsd : 0, ...(isStr(o.model) ? { model: o.model } : {}), items, ...(broken ? { broken: true as const } : {}) };
 }
 
 export function writeReviewStore(s: ReviewStore, file = reviewFile()): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(file, JSON.stringify(s) + '\n');
+  const { broken: _broken, ...data } = s;
+  writeAtomic(file, JSON.stringify(data) + '\n');
 }
 
 /** Разобрана ли сессия на её текущих ходах (старый итог без числа ходов — на текущей активности): тогда журнал ей не нужен. */

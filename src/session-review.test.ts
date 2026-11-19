@@ -139,7 +139,12 @@ test('итог на сервере: файл переживает перезап
     fs.writeFileSync(file, JSON.stringify({ at: ago(1), costUsd: -1, items: [{ id: 'a', verdict: 'maybe', at: ago(1), activityAt: ago(1) }, { id: 'b', verdict: 'done', at: ago(1) }, 'x'] }));
     assert.deepEqual(readReviewStore(file), { at: ago(1), costUsd: 0, items: [] });
     fs.writeFileSync(file, '{не json');
-    assert.deepEqual(readReviewStore(file).items, []);
+    // битый файл — «нет данных», а не «вердиктов нет»; запись итога признак не сохраняет
+    assert.deepEqual(readReviewStore(file), { costUsd: 0, items: [], broken: true });
+    fs.writeFileSync(file, '[1]');
+    assert.equal(readReviewStore(file).broken, true);
+    writeReviewStore({ ...back, broken: true }, file);
+    assert.equal(readReviewStore(file).broken, undefined);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
