@@ -1,7 +1,8 @@
 // «Подключить сервис» (/routines/connect, docs/routines/design/Source.dc.html): три способа — «Описать словами» (агент
 // находит API, просит ключ, собирает проверку и показывает, что нашёл: черновик /api/routines/sources/draft), «Готовые»
 // (виды и рецепты: форма из setup вида) и «Своя команда» (команда, поля записи, ключи окружения, проверка). Сохранённый
-// источник возвращает на «Новую рутину» (?from=new) уже выбранным, иначе — к списку источников.
+// источник возвращает на «Новую рутину» (?from=new) уже выбранным, иначе — к списку источников. Шаблон может сразу открыть
+// нужный вид в «Готовых» (?mode=ready&kind=connector&service=slack — connectHref в lib/routines/templates.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -10,8 +11,11 @@ import { errorText } from '../../api';
 import { cancelDraft, draftSecret, fetchMcpTools, importRecipe, refineDraft, routineKeys, saveSource, startConnectorBuild, startDraft, testSource, useConnectorBuild, useDraft, useMcpTools, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
+import { DEFAULT_REPLY_ARGS, parseReply } from '../../lib/routines/reply';
 import { slugify } from '../../lib/routines/spec';
+import { connectParam, servicesFor } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
+import { ReplyStep } from './ReplySetup';
 import { cx, Dot, Seg } from './parts';
 import styles from './Routines.module.css';
 
@@ -21,10 +25,12 @@ export function ConnectSource() {
   const q = useRoutines();
   const [params] = useSearchParams();
   const fromNew = params.get('from') === 'new';
-  const [mode, setMode] = useState<Mode>((params.get('mode') as Mode | null) ?? 'words');
+  const kind = connectParam(params.get('kind'));
+  const service = connectParam(params.get('service'));
+  const [mode, setMode] = useState<Mode>((params.get('mode') as Mode | null) ?? (kind ? 'ready' : 'words'));
   return (
     <>
-      <Link to={fromNew ? '/routines/new' : '/routines'} className={styles.back}>‹ {fromNew ? t('Новая рутина') : t('Рутины')}</Link>
+      <Link to={fromNew ? `/routines/new${tplQuery(params).replace(/^&/, '?')}` : '/routines'} className={styles.back}>‹ {fromNew ? t('Новая рутина') : t('Рутины')}</Link>
       <header className="view-head">
         <h1>{t('Подключить сервис')}</h1>
       </header>
@@ -42,7 +48,7 @@ export function ConnectSource() {
         <div className={styles.connectMain}>
           {q.isError && <NotAvailable error={q.error} />}
           {q.data && mode === 'words' && <Words data={q.data} fromNew={fromNew} />}
-          {q.data && mode === 'ready' && <Ready data={q.data} fromNew={fromNew} />}
+          {q.data && mode === 'ready' && <Ready data={q.data} fromNew={fromNew} kind={kind} service={service} />}
           {q.data && mode === 'cmd' && <Command data={q.data} fromNew={fromNew} />}
         </div>
         <aside className={styles.aside} aria-label={t('Как это работает')}>
@@ -56,16 +62,24 @@ export function ConnectSource() {
   );
 }
 
+/** «&tpl=…» шаблона «Новой рутины», с которого пришли подключать источник; нет — ''. */
+const tplQuery = (params: URLSearchParams): string => {
+  const tpl = params.get('tpl');
+  return tpl && /^[a-z-]{1,32}$/.test(tpl) ? `&tpl=${tpl}` : '';
+};
+
 /** Сохранить источник и вернуться туда, откуда пришли. */
 function useSaveSource(data: RoutinesOverview, fromNew: boolean) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const tplBack = tplQuery(useSearchParams()[0]);
   return async (spec: SourceSpec, secrets?: Record<string, string>, slugHint?: string) => {
     const taken = data.sources.map((s) => s.slug);
     const slug = slugHint && !taken.includes(slugHint) ? slugHint : slugify(spec.title, taken);
     await saveSource(slug, spec, secrets);
     await qc.invalidateQueries({ queryKey: routineKeys.all });
-    void navigate(fromNew ? `/routines/new?source=${encodeURIComponent(slug)}` : '/routines#sources');
+    // шаблон «Новой рутины» (?tpl=) переживает подключение источника: форма откроется с ним и с новым источником
+    void navigate(fromNew ? `/routines/new?source=${encodeURIComponent(slug)}${tplBack}` : '/routines#sources');
   };
 }
 
@@ -276,10 +290,14 @@ function Words({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) 
 
 type Picked = { kind: SourceKindView } | { recipe: RecipeView };
 
-function Ready({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
+/** kind — вид, который выбрать сразу (шаблон рутины), service — подсказка сервиса для коннектора. */
+function Ready({ data, fromNew, kind, service }: { data: RoutinesOverview; fromNew: boolean; kind?: string; service?: string }) {
   const recipes = useRecipes();
   const qc = useQueryClient();
-  const [picked, setPicked] = useState<Picked | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(() => {
+    const k = kind && data.kinds.find((x) => x.kind === kind && x.kind !== 'command' && !x.recipe);
+    return k ? { kind: k } : null;
+  });
   const [yaml, setYaml] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState('');
@@ -315,7 +333,7 @@ function Ready({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) 
         {!kinds.length && !recipes.data?.length && <span className={styles.hint}>{recipes.isPending ? t('Загрузка…') : t('Готовых источников пока нет: подключи словами или своей командой.')}</span>}
       </div>
       <span className={styles.hint}>{t('Каждый источник — небольшой файл. Свой можно сохранить и отдать коллеге, он появится здесь.')}</span>
-      {picked && ('kind' in picked && picked.kind.kind === 'connector' ? <ConnectorForm key={key(picked)} data={data} fromNew={fromNew} /> : <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />)}
+      {picked && ('kind' in picked && picked.kind.kind === 'connector' ? <ConnectorForm key={key(picked)} data={data} fromNew={fromNew} service={service} /> : <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />)}
       <div>
         <button type="button" className="btn small ghost" aria-expanded={importOpen} onClick={() => setImportOpen(!importOpen)}>
           {importOpen ? '▾' : '▸'} {t('Добавить файл источника')}
@@ -357,7 +375,9 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
   const build = (): { spec: SourceSpec; secrets: Record<string, string> } => {
     if (recipe) {
       const secrets = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
-      return { spec: { ...recipe.spec, title: title.trim() || recipe.spec.title, ...(poll ? { every } : {}) }, secrets };
+      // ответ (config.reply) в рецепте от коллеги не берём: получателя сообщений человек выбирает сам, на шаге «Как отвечать»
+      const { reply: _reply, ...config } = recipe.spec.config ?? {};
+      return { spec: { ...recipe.spec, config, title: title.trim() || recipe.spec.title, ...(poll ? { every } : {}) }, secrets };
     }
     return kindSpec(kind!, values, title, poll ? every : undefined);
   };
@@ -441,7 +461,7 @@ const notReady = (s: McpServiceView): string =>
  * словами — что нужно. Модель один раз собирает скрипт, agentgraph прогоняет его без модели и показывает, что нашлось
  * и что будет выполняться; дальше проверка идёт по скрипту без модели.
  */
-function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
+function ConnectorForm({ data, fromNew, service }: { data: RoutinesOverview; fromNew: boolean; service?: string }) {
   const qc = useQueryClient();
   const q = useMcpTools();
   const [servers, setServers] = useState<string[]>([]);
@@ -455,6 +475,9 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // «Как отвечать»: пустой инструмент — источник только читает
+  const [replyTool, setReplyTool] = useState('');
+  const [replyArgs, setReplyArgs] = useState(DEFAULT_REPLY_ARGS);
   const build = useConnectorBuild(buildId);
   const save = useSaveSource(data, fromNew);
   const box = useRef<HTMLElement>(null);
@@ -470,6 +493,17 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   const v = build.data;
   const result = v?.state === 'ready' ? v : undefined;
   const working = busy || v?.state === 'working';
+  // шаблон просил сервис (Slack-ревью): отметить подключённые сервисы с этим именем, как только они появятся в списке
+  // (в т.ч. после входа в сервис и «Обновить список»); один раз и не поверх выбора руками
+  const hinted = useRef(false);
+  useEffect(() => {
+    if (hinted.current || !q.data) return;
+    const pick = servicesFor(ready, service);
+    if (!pick.length) return;
+    hinted.current = true;
+    setServers(pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data]);
 
   // поменяли сервисы, галочки или просьбу — собранный скрипт уже не про то
   const reset = () => {
@@ -477,6 +511,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
     setError('');
   };
   const toggleService = (s: McpServiceView) => {
+    hinted.current = true;
     setServers(servers.includes(s.server) ? servers.filter((x) => x !== s.server) : [...servers, s.server]);
     reset();
   };
@@ -514,10 +549,12 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   };
   const doSave = async () => {
     if (!result) return;
+    if (replyTool && !replyParsed?.ok) return;
     setBusy(true);
     setError('');
     try {
-      await save({ ...result.spec, title: title.trim() || result.spec.title, every: every || result.spec.every });
+      const config = replyParsed?.ok ? { ...result.spec.config, reply: replyParsed.reply } : result.spec.config;
+      await save({ ...result.spec, config, title: title.trim() || result.spec.title, every: every || result.spec.every });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -525,6 +562,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
     }
   };
   const loading = q.isPending || refreshing;
+  const replyParsed = replyTool ? parseReply(replyTool, replyArgs) : undefined;
   const script = result?.spec.config.script as ConnectorScript | undefined;
 
   return (
@@ -644,6 +682,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
             <input className={styles.inp} value={note} placeholder={t('Не то? Поправь словами: «только мои сообщения»')} aria-label={t('Поправка словами')} onChange={(e) => setNote(e.target.value)} />
             <button type="button" className="btn" disabled={working || !note.trim()} onClick={() => void start(note.trim())}>{t('Поправить')}</button>
           </div>
+          <ReplyStep services={services} chosen={servers} tool={replyTool} args={replyArgs} parsed={replyParsed} onTool={setReplyTool} onArgs={setReplyArgs} />
           <div className={styles.readyHead}>
             <label className={cx(styles.field, styles.grow)}>
               <span className={styles.lbl}>{t('Название')}</span>
@@ -652,7 +691,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
             <EverySelect value={every || result.spec.every || '5m'} min={result.mode === 'script' ? '1m' : '30m'} onChange={setEvery} />
           </div>
           <div className="row">
-            <button type="button" className="btn primary" disabled={working} onClick={() => void doSave()}>{t('Сохранить источник')}</button>
+            <button type="button" className="btn primary" disabled={working || Boolean(replyTool && !replyParsed?.ok)} title={replyTool && !replyParsed?.ok ? replyParsed?.error : undefined} onClick={() => void doSave()}>{t('Сохранить источник')}</button>
           </div>
         </>
       )}

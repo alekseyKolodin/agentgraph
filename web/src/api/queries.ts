@@ -99,6 +99,7 @@ export const fetchSuggestions = (refs: string[]) =>
   api<{ suggestions?: Record<string, Suggestion> }>('POST', '/api/attention/suggest', { refs });
 
 /** Источник «Запустить…»: задача, MR или ветка; attention — MR из «нужно внимание», вход соберётся с причинами. */
-export type IntakeTarget = { type: RunSource['type']; key: string; project?: string; attention?: true };
+/** item и thing — у «Запустить flow» с карточки дела: сервер кладёт их в source входа, запуск привязывается к делу. */
+export type IntakeTarget = { type: RunSource['type']; key: string; project?: string; attention?: true; item?: string; thing?: RunSource['thing'] };
 
 export const postIntake = (flow: string, target: IntakeTarget) => api<Intake>('POST', '/api/intake', { flow, ...target });

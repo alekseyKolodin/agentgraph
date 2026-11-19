@@ -1,13 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  canUpdateState, chipHint, fileUris, homeSessionMeta, homeSessions, noTranscriptWhy, osc52Text, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl,
+  askNote, canUpdateState, chipHint, endCandidates, fileUris, homeSessionMeta, homeSessions, noTranscriptWhy, osc52Text, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionSub, sessionTone, sessionWsUrl,
   shellPath, spaceChipHint, stateNote,
 } from './sessions';
 
 test('статус сессии: подписи и тон точки; выход без SessionStart — отдельный исход', () => {
   assert.deepEqual([sessionStatusLabel({ status: 'working' }), sessionTone({ status: 'working' })], ['Работает', 'live']);
-  assert.deepEqual([sessionStatusLabel({ status: 'waiting' }), sessionTone({ status: 'waiting' })], ['Ждёт тебя', 'wait']);
+  // ход за человеком без вопроса — просто закончила ход, без тревоги; с вопросом или разрешением — ждёт
+  assert.deepEqual([sessionStatusLabel({ status: 'waiting' }), sessionTone({ status: 'waiting' })], ['Ход закончен', 'idle']);
+  const at = '2026-11-04T11:00:00Z';
+  assert.deepEqual([sessionStatusLabel({ status: 'waiting', ask: { kind: 'question', text: 'Так?', at } }), sessionTone({ status: 'waiting', ask: { kind: 'question', text: 'Так?', at } })], ['Ждёт ответа', 'wait']);
+  assert.equal(sessionStatusLabel({ status: 'waiting', ask: { kind: 'permission', text: 'Bash: ls', at } }), 'Ждёт разрешения');
+  // у завершённой вопрос — в строке askNote, а статус — «Завершена»
+  assert.deepEqual([sessionStatusLabel({ status: 'ended', ask: { kind: 'question', text: 'Так?', at } }), sessionTone({ status: 'ended', ask: { kind: 'question', text: 'Так?', at } })], ['Завершена', 'off']);
   assert.deepEqual([sessionStatusLabel({ status: 'starting' }), sessionTone({ status: 'starting' })], ['Запускается', 'off']);
   assert.equal(sessionStatusLabel({ status: 'ended' }), 'Завершена');
   assert.deepEqual([sessionStatusLabel({ status: 'ended', outcome: 'untrusted' }), sessionTone({ status: 'ended', outcome: 'untrusted' })], ['Папка не доверена', 'fail']);
@@ -33,13 +39,14 @@ test('карточка завершённой: кто погасил claude сл
   assert.match(sessionEndText({ outcome: 'untrusted', exitCode: 0 }), /доверие к папке не принято/);
 });
 
-test('сессии на главной: ждущие — в «Ждёт тебя», дольше ждущие сверху; работающие и запускающиеся — в «Идут»; завершённых нет', () => {
+test('сессии на главной: с вопросом — в «Ждёт тебя», дольше ждущие сверху; работающие и запускающиеся — в «Идут»; простаивающих и завершённых нет', () => {
   const at = '2026-11-04T11:00:00Z';
-  const s = (id: string, status: 'starting' | 'working' | 'waiting' | 'ended', waitingSince?: string) => ({ id, status, live: status !== 'ended', lastActivityAt: at, ...(waitingSince ? { waitingSince } : {}) });
-  const { waiting, live } = homeSessions([s('a', 'waiting', '2026-11-04T11:50:00Z'), s('b', 'working'), s('c', 'ended'), s('d', 'waiting', '2026-11-04T11:10:00Z'), s('e', 'starting')]);
+  const ask = (when: string) => ({ ask: { kind: 'question' as const, text: 'Так?', at: when } });
+  const s = (id: string, status: 'starting' | 'working' | 'waiting' | 'ended', o: object = {}) => ({ id, status, live: status !== 'ended', lastActivityAt: at, ...o });
+  const { waiting, live } = homeSessions([s('a', 'waiting', ask('2026-11-04T11:50:00Z')), s('b', 'working'), s('c', 'ended', ask(at)), s('d', 'waiting', ask('2026-11-04T11:10:00Z')), s('e', 'starting'), s('f', 'waiting')]);
   assert.deepEqual([waiting.map((x) => x.id), live.map((x) => x.id)], [['d', 'a'], ['b', 'e']]);
-  // без waitingSince (старый сервер) — по последней активности
-  assert.deepEqual(homeSessions([s('x', 'waiting', '2026-11-04T11:30:00Z'), s('y', 'waiting')]).waiting.map((x) => x.id), ['y', 'x']);
+  // пять простаивающих сессий не дают ни одного «ждёт тебя»
+  assert.deepEqual(homeSessions(['1', '2', '3', '4', '5'].map((id) => s(id, 'waiting', { waitingSince: at }))), { waiting: [], live: [] });
   // диалог доверия к папке на экране: запускается, но ждёт тебя
   const trust = homeSessions([{ ...s('t', 'starting'), delivery: 'trust' as const }]);
   assert.deepEqual([trust.waiting.map((x) => x.id), trust.live], [['t'], []]);
@@ -48,7 +55,8 @@ test('сессии на главной: ждущие — в «Ждёт тебя�
 test('строка сессии на главной: пространство (без него — папка), сколько ждёт, ходы', () => {
   const now = Date.parse('2026-11-04T12:00:00Z');
   const base = { cwd: '/p/shop', lastActivityAt: '2026-11-04T11:00:00Z', turns: 3 };
-  assert.equal(homeSessionMeta({ ...base, space: 'press-alert', status: 'waiting', waitingSince: '2026-11-04T11:55:00Z' }, now), '◇ press-alert · ждёт 5 мин · 3 хода');
+  assert.equal(homeSessionMeta({ ...base, space: 'press-alert', status: 'waiting', waitingSince: '2026-11-04T11:40:00Z', ask: { kind: 'question', text: 'Так?', at: '2026-11-04T11:55:00Z' } }, now), '◇ press-alert · ждёт 5 мин · 3 хода');
+  assert.equal(homeSessionMeta({ ...base, status: 'waiting', waitingSince: '2026-11-04T11:55:00Z' }, now), 'shop · ход закончен · 3 хода');
   assert.equal(homeSessionMeta({ ...base, status: 'working', turns: 1 }, now), 'shop · работает · 1 ход');
   assert.equal(homeSessionMeta({ ...base, status: 'starting', turns: 0 }, now), 'shop · запускается');
   assert.equal(homeSessionMeta({ ...base, status: 'starting', delivery: 'trust', turns: 0 }, now), 'shop · ждёт: доверие к папке');
@@ -60,7 +68,8 @@ test('нет транскрипта у завершённой: не было с�
 });
 
 test('строка «Сейчас»: пространство (без него — папка) · статус · когда была активность', () => {
-  assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'shop · ждёт тебя');
+  assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting', ask: { kind: 'question', text: 'Так?', at: '' } }), 'shop · ждёт тебя');
+  assert.equal(sessionSub({ cwd: '/Users/me/proj/shop/', status: 'waiting' }), 'shop · ход закончен');
   assert.equal(sessionSub({ cwd: '/p/api', status: 'working' }), 'api · работает');
   // пространство вместо папки и время последней активности: три сессии в одной папке различимы
   const now = new Date('2026-11-04T12:00:00Z');
@@ -128,4 +137,20 @@ test('OSC 52: текст из base64 в UTF-8, любой буфер; запро
   assert.equal(osc52Text('c;'), null);
   assert.equal(osc52Text('нет-разделителя'), null);
   assert.equal(osc52Text('c;не base64!'), null);
+});
+
+test('что спросил Claude: у живой — «Спрашивает» и «Просит разрешение», у завершённой — «Закончилась на вопросе»', () => {
+  assert.equal(askNote({ live: true }), '');
+  assert.equal(askNote({ live: true, ask: { kind: 'question', text: 'Так делать?' } }), 'Спрашивает: Так делать?');
+  assert.equal(askNote({ live: true, ask: { kind: 'permission', text: 'Bash: rm -rf build' } }), 'Просит разрешение: Bash: rm -rf build');
+  assert.equal(askNote({ live: true, ask: { kind: 'elicitation', text: '' } }), 'Ждёт ответа в форме: …');
+  assert.equal(askNote({ live: false, ask: { kind: 'question', text: 'Так делать?' } }), 'Закончилась на вопросе: Так делать?');
+  assert.equal(askNote({ live: false, ask: { kind: 'permission', text: 'Bash: ls' } }), 'Закончилась на запросе разрешения: Bash: ls');
+});
+
+test('предел живых сессий: завершить предлагают простаивающие (дольше — выше), потом ждущие ответа; работающие и сама сессия — нет', () => {
+  const at = (m: number) => `2026-11-04T11:${String(m).padStart(2, '0')}:00Z`;
+  const s = (id: string, status: 'working' | 'waiting' | 'ended', since: number, asked = false) => ({ id, status, live: status !== 'ended', lastActivityAt: at(since), waitingSince: at(since), ...(asked ? { ask: { kind: 'question' as const, text: '?', at: at(since) } } : {}) });
+  const list = [s('q', 'waiting', 1, true), s('w', 'working', 2), s('i2', 'waiting', 30), s('i1', 'waiting', 10), s('e', 'ended', 0), s('me', 'waiting', 0)];
+  assert.deepEqual(endCandidates(list, 'me').map((x) => x.id), ['i1', 'i2', 'q']);
 });

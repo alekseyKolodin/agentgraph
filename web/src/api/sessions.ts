@@ -2,7 +2,7 @@
 // Список нужен сайдбару («Сейчас») и странице «Сессии»: пока есть живые сессии, он обновляется сам — статус
 // «работает / ждёт тебя» меняется хуками claude, а не действиями в этой вкладке.
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionView } from '@server/api-types';
+import type { Intake, RunSource, SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionReviewState, SessionSource, SessionView } from '@server/api-types';
 import { LS } from '../lib/storage';
 import { api } from './client';
 import type { FlowAiProgressEvent } from './flows';
@@ -32,25 +32,44 @@ export type NewSession = {
   saveState: boolean;
   /** Первое сообщение новой сессии. */
   prompt?: string;
+  /** Откуда сессия (вещь, дело, запуск, рутина). С вещью и без space сервер берёт открытое пространство проекта папки. */
+  source?: SessionSource;
   /** Начальный размер терминала: claude перерисуется под окно при подключении. */
   cols?: number;
   rows?: number;
 };
 
 export const createSession = (body: NewSession) => api<SessionView>('POST', '/api/sessions', body);
+/**
+ * Текст задачи Jira или MR для первого сообщения сессии — тот же вход, что у формы запуска (POST /api/intake без flow):
+ * ключ и ссылка снаружи, заголовок и описание — в обёртке source-data.
+ */
+export const thingIntake = (target: { type: RunSource['type']; key: string; project?: string }) => api<Intake>('POST', '/api/intake', target);
 export const fetchSession = (id: string) => api<SessionView>('GET', `/api/sessions/${enc(id)}`);
 export const setSessionTags = (id: string, tags: string[]) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/tags`, { tags });
 /** Пространство сессии: слаг или null — без пространства; живой сессии придёт со следующим шагом. */
 export const setSessionSpace = (id: string, space: string | null) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/space`, { space });
 export const renameSession = (id: string, name: string) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/name`, { name });
 export const endSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/end`);
-/** «Продолжить»: тот же разговор (--resume), если есть транскрипт, иначе новый — в той же папке с текущими пространством и тегами. */
-export const continueSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, {});
+/**
+ * «Продолжить»: тот же разговор (--resume), если есть транскрипт, иначе новый — в той же папке с текущими пространством и
+ * тегами. prompt — первое сообщение продолженного разговора (ответ на вопрос); пусто — claude ждёт тебя. Живых сессий уже
+ * предел — ApiError 409 с code limit.
+ */
+export const continueSession = (id: string, prompt?: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, prompt?.trim() ? { prompt } : {});
+/**
+ * «Flow из сессии»: новая сессия в папке кода agentgraph с /session-to-flow по транскрипту этой. Нет транскрипта — 409
+ * no_transcript, нет скилла — 501 no_skill, живых сессий предел — 409 limit.
+ */
+export const sessionToFlow = (id: string, size: { cols: number; rows: number }) => api<SessionView>('POST', `/api/sessions/${enc(id)}/to-flow`, size);
 /** «Перезапустить»: claude заново тем же разговором, папки пространства и тегов пересчитаны. */
 export const restartSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/restart`);
 /** Оценка разбора «Не доделано» до запуска: модель не зовётся. */
 export const estimateReview = () => api<SessionReviewEstimate>('POST', '/api/session-review', { estimate: true });
-/** Разбор недавних сессий моделью (sonnet) потоком; сбой — DraftError с ценой. Ничего не пишет. */
+/** Итог разбора на сервере (копится разборами — кнопкой и по расписанию источника «Проекты»); ключ под ['home'] — поток его освежает. */
+export const reviewKey = ['home', 'session-review'] as const;
+export const fetchReview = () => api<SessionReviewState>('GET', '/api/session-review');
+/** Разбор сессий с новыми ходами моделью (sonnet) потоком; итог (все вердикты) пишется на сервер; сбой — DraftError с ценой. */
 export const reviewSessions = (onEvent: (e: FlowAiProgressEvent) => void, signal: AbortSignal) => draftStream<SessionReviewReply>('/api/session-review', {}, onEvent, signal);
 /** «Обновить состояние»: ответ сразу, состояние пространства пишется в фоне (updatingState). */
 export const updateSessionState = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/state`);
@@ -84,6 +103,10 @@ export function useRenameSession(): (id: string, name: string) => Promise<void> 
   };
 }
 
+/**
+ * Подписчиков много (сайдбар, Главная, формы) — запрос один: ключ общий, интервалы выровнены, запрос, который уже идёт, не
+ * дублируется. Замер на Главной при живой сессии: 10 запросов за 30 с при LIVE_POLL_MS = 3 с. Общего таймера не нужно.
+ */
 export function useSessions(enabled: boolean) {
   return useQuery({
     queryKey: sessionKeys.list,

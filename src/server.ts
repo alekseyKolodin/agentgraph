@@ -52,10 +52,10 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowHistory, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
-import { configDir, loadSettings, updateSettings, type Settings } from './settings.js';
+import { configDir, loadSettings, profileRoute, updateSettings, type Settings } from './settings.js';
 import { requestProblem } from './server-guard.js';
 import { legacyRedirect, resolveWebFile } from './web-static.js';
 import { ARTIFACTS_DIR, isInside, type ArtifactLite, type StepDelta } from './artifacts.js';
@@ -65,7 +65,7 @@ import { draftSpec, readRunFlow, RUN_ID_RE, runFlowView, runSpec, saveRunFlow, s
 import { flowsSync, RunFixError, type FlowsFile, type FlowsSync } from './run-fix.js';
 import type { RunFix, RunFixVia, RunFlowEdit, RunNote } from './runner.js';
 import {
-  addTagAttachmentReply,
+  addTagAttachmentReply, appendTagNoteReply,
   createTagReply,
   deleteTagAttachmentReply,
   deleteTagReply,
@@ -95,6 +95,7 @@ import {
   spaceWorkOf,
   type SpaceWork,
   spaceDocReply,
+  projectResolver,
   spaceReadDirs,
   spaceReply,
   spacesListReply,
@@ -104,20 +105,29 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionToFlowSkill, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
 } from './space-draft.js';
-import type { SessionReviewEstimate, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
-import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './session-review.js';
+import type { SessionReviewEstimate, SessionReviewState, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
+import { readReviewStore, REVIEW_MODEL, reviewedNow, reviewEstimate, reviewItems, reviewNow, reviewRunning, storedReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
-import { ensureWorktree, repoRoot } from './git.js';
+import { deskStorage, deskStore } from './desk/index.js';
+import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
+import { deskCheck } from './desk/check.js';
+import { deskRoute, PROCESS_STARTED } from './desk/routes.js';
+import { trackable, watch, watcherFor, watchers } from './things/index.js';
+import type { ThingType } from './things/types.js';
+import { repoRoot } from './git.js';
+import { flowHistory, SNAPSHOT_FILES, versionYaml } from './flow-history.js';
+import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type DropWorktreesDeps, type DropWorktreesResult } from './work-links.js';
 import { findProject } from './projects.js';
 import { worktreesDir } from './settings.js';
 import { readHead } from './safe-fs.js';
+import { desk } from './desk/index.js';
 
 export type ServerOptions = {
   port: number;
@@ -150,6 +160,11 @@ export type ServerOptions = {
    * Включают CLI `ui` и десктоп.
    */
   routines?: boolean | Partial<Omit<EngineDeps, 'startRun' | 'resumeRun' | 'stopRun' | 'flowBlocks' | 'onChange'>>;
+  /**
+   * Сверка дел (src/desk/reconcile.ts): наблюдатели обходят вещи открытых дел при старте и по таймеру. Идёт вместе с
+   * фоновой работой рутин (опция routines); объект — подмена наблюдателей и интервала (тесты). Маршруты /api/desk есть всегда.
+   */
+  desk?: { watch?: WatchFn; everyMs?: number; startMs?: number };
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -195,6 +210,8 @@ type LiveRun = {
   fix?: RunFix;
   /** Идущий дочерний запуск блока-вызова: пауза, продолжение и остановка этого запуска доходят и до него. */
   child?: string;
+  /** Запуск с карточки дела: ссылка в links.runs и перенос в «В работе» (runDeskStarted); конец ждёт их, чтобы итог лёг в дело. */
+  deskLinked?: Promise<void>;
   /** Пауза этого запуска пришла от родителя (pauseRun родителя): только её снимает и «Возобновить» родителя. */
   pausedByParent?: boolean;
   /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
@@ -202,7 +219,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows' | 'routines'>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows' | 'routines' | 'desk'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -255,8 +272,18 @@ const RUN_WORKDIRS = 'workdirs';
 const runWorkdir = (id: string): string => path.join(configDir(), RUN_WORKDIRS, id);
 /** Подписка на изменения команд Teamwork: одна на процесс, снимает stopServer. */
 let teamChanges: (() => void) | null = null;
+/** Дела: подписка на изменения доски (событие desk общего потока) и сверка по таймеру; снимает stopServer. */
+let deskChanges: (() => void) | null = null;
+let deskLoop: ReconcileLoop | null = null;
+let deskLock: { held: () => boolean; release: () => void } | null = null;
 /** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
 let stopping = false;
+/**
+ * Сверка дел — по таймеру наблюдателей (src/things/index.ts): раз в самый короткий их интервал, но не чаще раза в
+ * минуту — наблюдатели MR и Jira ходят в сеть.
+ */
+const deskEveryMs = (): number => Math.max(60_000, Math.min(5 * 60_000, ...watchers().map((w) => w.everyMs)));
+
 /** Движок рутин: один на процесс, создаёт первый запрос к /api/routines или startServer с routines; снимает stopServer. */
 let routineEngine: RoutineEngine | null = null;
 /** Запуски, начатые движком рутин: только их события уходят в движок (продолжение и повтор копируют source, но не это). */
@@ -286,6 +313,8 @@ function routines(srv: ServerOptions): RoutineEngine {
       return flowBlocks(loadFlow(name)).map((b) => b.name);
     },
     onChange: () => homeBroadcast({ type: 'routines', runId: '', flow: '' }),
+    // поломка источника, ожидание рутины, неудачный конец её запуска: вкладка такие сама не показывает — системное всегда
+    notify: (n) => sendNotice(srv, n, false),
     log: extra.log ?? ((m) => console.error(`[рутины] ${m}`)),
     // приложение и agentgraph ui на одной ~/.agentgraph: фон рутин ведёт только один из них
     lock: extra.lock ?? { who: process.versions.electron ? 'desktop' : 'ui' },
@@ -295,45 +324,70 @@ function routines(srv: ServerOptions): RoutineEngine {
 
 /**
  * Запуск flow по событию рутины — тот же startRun, что у формы: пространство, папка (рабочая папка рутины, пространства
- * или сервера), новый worktree, знания, модель, бюджет; задача — run.input (или input flow) + событие в обёртке данных.
+ * или сервера), worktree, знания, модель, бюджет; задача — run.input (или input flow) + событие в обёртке данных.
+ * В источнике — и рутина (key), и вещь события (thing: MR, задача Jira). worktree у события MR с веткой — на ветке MR
+ * (существующей, как requireExisting формы; папка та же, что у формы), если origin репо — проект этого MR и в папке никто
+ * не работает; иначе новая ветка routine/… от базы и строка агенту (work-links.ts → routineWorktree).
  */
 async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promise<string> {
   const { spec: rs, event } = r;
+  if (!rs.run) throw new Error('рутине нечего запускать: у неё нет run, она только заводит дела');
   assertFlowName(rs.run.flow);
   const spec = loadFlow(rs.run.flow);
   const task = rs.run.input?.trim() || spec.input?.trim() || '';
-  spec.input = [task, r.eventBlock].filter(Boolean).join('\n\n');
   const space = rs.run.space ? readSpace(spaceSlug(rs.run.space) ?? '') : undefined;
   if (rs.run.space && !space) throw new Error(`Пространства ${rs.run.space} нет`);
   let cwd = resolveDir(rs.run.cwd || space?.cwd, srv.defaultCwd);
   if (!isDir(cwd)) throw new Error(`Рабочей папки ${cwd} нет`);
   const knowledge = rs.run.knowledge?.length ? knowledgeTags(runTagSlugs(rs.run.knowledge)).map((t) => t.slug) : [];
   if (knowledge.length) resolveKnowledge(spec, knowledge);
+  const thing = eventThing(event);
   let worktree: RunWorktree | undefined;
   // основной checkout: запуск в worktree список покажет в группе проекта
   let project: string | undefined;
+  // ветку MR выгрузить не вышло — строка для агента: он должен знать, что сидит не в ней
+  let branchNote = '';
   if (rs.run.worktree === 'new') {
     const root = await repoRoot(cwd);
     if (!root) throw new Error(`${cwd} — не git-репозиторий: новый worktree сделать не из чего`);
     const s = loadSettings();
     const cfg = findProject(s, root);
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
-    const wt = await ensureWorktree({ root, baseDir: worktreesDir(s), branch: `routine/${r.routine}-${stamp}-${event.id.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x'}`, base: cfg?.base, copyFiles: cfg?.copyFiles });
+    const wt = await routineWorktree({ root, baseDir: worktreesDir(s), base: cfg?.base, copyFiles: cfg?.copyFiles, routine: r.routine, eventId: event.id, thing, fields: event.fields }, { busy: worktreeBusy });
+    branchNote = wt.branchNote ?? '';
     cwd = wt.path;
     project = root;
     worktree = { path: wt.path, ...(wt.branch ? { branch: wt.branch } : {}) };
   }
+  spec.input = [task, branchNote, r.eventBlock].filter(Boolean).join('\n\n');
   return startRun(spec, {
     cwd,
     ...(rs.limits?.usd ? { maxBudgetUsd: rs.limits.usd } : {}),
     ...(rs.run.model ? { model: rs.run.model } : {}),
-    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}), ...(project ? { project } : {}) },
+    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}), ...(project ? { project } : {}), ...(thing ? { thing } : {}) },
     ...(worktree ? { worktree } : {}),
     ...(space ? { space: space.slug, saveState: true, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
     ...(knowledge.length ? { knowledge } : {}),
     ...(r.pauseBefore.length ? { pauseBefore: r.pauseBefore } : {}),
     routineRun: true,
   }, srv);
+}
+
+/** Кто сейчас работает в папке worktree: идущий запуск (в ней или глубже) или живая сессия; никто — undefined. */
+function worktreeBusy(dir: string): string | undefined {
+  const d = path.resolve(dir);
+  const inDir = (p: string | undefined) => Boolean(p) && isInside(path.resolve(p!), d);
+  const run = listRuns().find((r) => r.status === 'running' && (inDir(r.worktree?.path) || inDir(r.cwd)));
+  if (run) return `идёт запуск ${run.id}`;
+  return liveSessionDirs().some((c) => inDir(c)) ? 'в папке идёт сессия' : undefined;
+}
+
+/**
+ * Вещь закрыта (MR смержен, задача сделана) — убрать worktree её запусков рутины. Вызывает сверка этапа 3
+ * (src/desk/reconcile.ts); папка, где работают (запуск, живая сессия), чужой и грязный worktree остаются
+ * (work-links.ts → dropRoutineWorktrees).
+ */
+export function dropThingWorktrees(key: string, exec?: DropWorktreesDeps['exec']): Promise<DropWorktreesResult> {
+  return dropRoutineWorktrees(key, { runs: listRuns, baseDir: worktreesDir(loadSettings()), busy: worktreeBusy, ...(exec ? { exec } : {}) });
 }
 
 export function startServer(opts: ServerOptions): Promise<string> {
@@ -362,7 +416,7 @@ export function startServer(opts: ServerOptions): Promise<string> {
   sessionWaits ??= onSessionWaiting((v) => {
     const session = { id: v.id, name: v.name, ...(v.space ? { space: v.space } : {}) };
     homeBroadcast({ type: 'session', runId: '', flow: '', session });
-    notifySession(opts, session);
+    notifySession(opts, session, v.ask);
   });
   // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
   if (!teamChanges) {
@@ -375,6 +429,23 @@ export function startServer(opts: ServerOptions): Promise<string> {
   }
   // рутины: фоновая работа (опрос, расписание) — только по опции; маршруты есть всегда
   if (opts.routines) routines(opts).start();
+  // дела: любая запись доски этого процесса (рутина, сессия, flow, UI) — событие desk; сверка — вместе с фоном рутин
+  deskChanges ??= deskStore().onChange(() => homeBroadcast({ type: 'desk', runId: '', flow: '' }));
+  if (opts.routines && !deskLoop) {
+    // одна сверка на папку настроек: десктоп и `agentgraph ui` рядом не опрашивают glab/gh/Jira дважды
+    const lock = (deskLock = reconcileLock(deskStore().dir, typeof opts.routines === 'object' ? (opts.routines.lock?.who ?? 'agentgraph') : 'agentgraph'));
+    deskLoop = startReconcile({
+      // сверка — только дел хранилища: дела поставщиков (Teamwork) берут состояние из своей системы
+      store: deskStorage(),
+      watch: opts.desk?.watch ?? ((things, signal) => watch(things, signal)),
+      trackable: opts.desk?.watch ? undefined : (thing) => trackable(thing),
+      everyMs: opts.desk?.everyMs ?? deskEveryMs(),
+      // интервалы — у настоящих наблюдателей; подменённые (тесты) спрашиваются каждый проход
+      ...(opts.desk?.watch ? {} : { every: (type: ThingType) => watcherFor(type)?.everyMs }),
+      lock: lock.held,
+      ...(opts.desk?.startMs !== undefined ? { startMs: opts.desk.startMs } : {}),
+    });
+  }
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -394,6 +465,15 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   engine?.stop();
   if (engine) await Promise.race([engine.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(5_000, timeoutMs)).unref())]);
   routineEngine = null;
+  // сверка дел: идущий проход прерывается (наблюдатели получают abort)
+  const loop = deskLoop;
+  deskLoop = null;
+  loop?.stop();
+  if (loop) await Promise.race([loop.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(2_000, timeoutMs)).unref())]);
+  deskLock?.release();
+  deskLock = null;
+  deskChanges?.();
+  deskChanges = null;
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
   updater?.stop();
@@ -449,7 +529,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', 'desk-check', 'desk-week', 'tag-notes', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -495,6 +575,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     return sendJson(res, 200, { path: abs });
   }
 
+  // --- профиль «Кто я»: GET с автозаполнением, PUT
+  if (p === '/api/settings/profile') {
+    const r = await profileRoute(method, p, () => readJson(req));
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
   // --- Jira, проекты GitLab, мои MR с причинами, вход из задачи/MR/ветки, worktree
   if (p.startsWith('/api/integrations') || p.startsWith('/api/jira/') || p.startsWith('/api/projects') || p.startsWith('/api/attention') || p === '/api/intake' || p === '/api/worktrees') {
     const r = await integrationsRoute(method, url, () => readJson(req), {
@@ -505,6 +591,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       },
       flows: listFlows,
     });
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
+  // --- дела: список с итогом сверки, put/move/close/link с карточки (src/desk/routes.ts)
+  if (p === '/api/desk' || p.startsWith('/api/desk/')) {
+    // сверка «N из N»: итоги источников рутин (движок читает их с диска) и наблюдателей; на остановке — только наблюдатели
+    const check = stopping
+      ? undefined
+      : () => {
+          const eng = routines(opts);
+          return deskCheck({ sources: eng.sourceViews(), arrivals: (s) => eng.store.checks(s).arrivals, watcher: deskStore().readCheck(), startedAt: PROCESS_STARTED });
+        };
+    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore(), ...(check ? { check } : {}) });
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -587,6 +686,45 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию; папка в клоне команды — 400 (resolveDir)
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
     return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
+  }
+
+  // Статистика и версии flow для его экрана: запуски за 30 дней, последний, версии из снимков flow.yaml запусков (flow-history.ts)
+  if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/history$/)) && method === 'GET') {
+    let currentYaml: string | undefined;
+    try {
+      currentYaml = readFlowYaml(m[1]);
+    } catch {
+      // файла нет (удалили или переименовали): история его запусков всё равно есть
+    }
+    return sendJson(res, 200, flowHistory(m[1], listRuns(), { runsDir: RUNS_DIR, currentYaml }) satisfies FlowHistory);
+  }
+
+  // Версия flow из снимка запуска — для «В редактор» на вкладке «Версии»: задача запуска заменена задачей файла flow
+  if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/version$/)) && method === 'GET') {
+    const runId = url.searchParams.get('run') ?? '';
+    const file = url.searchParams.get('file') ?? '';
+    if (!RUN_ID_RE.test(runId) || !(SNAPSHOT_FILES as readonly string[]).includes(file)) return sendJson(res, 400, { error: 'Нужны run и file (flow.yaml или flow.0.yaml)' });
+    const r = readReport(runId);
+    if (!r || r.flow !== m[1] || r.adhoc) return sendJson(res, 404, { error: `У flow ${m[1]} нет запуска ${runId}` });
+    const opened = openRunFile(path.join(RUNS_DIR, runId), file);
+    if (!opened) return sendJson(res, 404, { error: 'Снимка flow нет' });
+    let snapshot: string;
+    try {
+      snapshot = fs.readFileSync(opened.fd, 'utf8');
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+    let currentYaml: string | undefined;
+    try {
+      currentYaml = readFlowYaml(m[1]);
+    } catch {
+      // файла flow нет: версия без задачи
+    }
+    try {
+      return sendJson(res, 200, { yaml: versionYaml(snapshot, currentYaml) });
+    } catch (err) {
+      return sendJson(res, 400, { error: errMsg(err) });
+    }
   }
 
   if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/folder$/)) && method === 'PUT') {
@@ -764,7 +902,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       spaceDrafts.delete('groups');
     }
   }
-  // «Не доделано» на главной: недавние сессии разбирает модель (sonnet без инструментов); ничего не пишет
+  // «Не доделано» на главной: сессии разбирает модель (sonnet без инструментов); итог копится на сервере
+  // (session-review.ts), тот же разбор по расписанию ведёт источник рутин «Проекты». GET — итог без модели.
+  if (method === 'GET' && p === '/api/session-review') {
+    const store = readReviewStore();
+    const all = await sessionReviewSources(() => false).catch(() => []);
+    return sendJson(res, 200, { reply: storedReply(store, all) ?? null, running: reviewRunning() } satisfies SessionReviewState);
+  }
   if (method === 'POST' && p === '/api/session-review') {
     const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
     let model: ReturnType<typeof draftModel>;
@@ -773,15 +917,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     } catch (err) {
       return sendJson(res, 400, { error: errMsg(err) });
     }
-    const { items, skipped } = reviewItems(await sessionReviewSources().catch(() => []));
-    if (body?.estimate === true) return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
-    if (spaceDrafts.has('review')) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
-    spaceDrafts.add('review');
-    try {
-      return await respondFlowAi(req, res, generations, (ai) => reviewReply(items, skipped, model, ai, draftDeps(opts)));
-    } finally {
-      spaceDrafts.delete('review');
+    if (body?.estimate === true) {
+      const store = readReviewStore();
+      const done = reviewedNow(store);
+      const { items, skipped } = reviewItems(await sessionReviewSources((s) => !done(s)).catch(() => []), store);
+      return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
     }
+    if (reviewRunning()) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
+    return await respondFlowAi(req, res, generations, (ai) => reviewNow({ load: (turnsFor) => sessionReviewSources(turnsFor).catch(() => []), model, hooks: ai, deps: draftDeps(opts) }));
   }
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {
@@ -807,6 +950,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (method === 'DELETE') return reply(res, deleteTagReply(slug));
   }
   if (method === 'POST' && (m = p.match(/^\/api\/tags\/([^/]+)\/attachments$/))) return reply(res, addTagAttachmentReply(m[1], await readJson(req)));
+  // знание по виду работы после дела (SPEC 6.6): строка в конец заметок, тег по виду заводится сам
+  if (method === 'POST' && (m = p.match(/^\/api\/tags\/([^/]+)\/notes$/))) return reply(res, appendTagNoteReply(m[1], (await readJson(req)) as { text?: unknown; title?: unknown }));
   if (method === 'DELETE' && (m = p.match(/^\/api\/tags\/([^/]+)\/attachments\/([^/]+)$/))) {
     let name: string;
     try {
@@ -958,6 +1103,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       ...(knowledge.length ? { knowledge } : {}),
       ...(autoSpace ? { autoSpace } : {}),
     }, opts);
+    // запуск с карточки дела: доска, на которую вернутся, уже видит перенос (как у сессий)
+    await live.get(id)?.deskLinked;
     const autoSpaceReply = autoSpace && (autoSpace.slug ? { slug: autoSpace.slug, ...(autoSpace.title ? { title: autoSpace.title } : {}) } : { error: autoSpace.error });
     return sendJson(res, 201, { id, ...(autoSpaceReply ? { autoSpace: autoSpaceReply } : {}) } satisfies RunStarted);
   }
@@ -1247,6 +1394,8 @@ function startRun(
     maxBudgetUsd?: number;
     model?: string;
     continueFrom?: Continuation;
+    /** Продолжение: id первого запуска цепочки (chainRoot) — в run.json → root. */
+    root?: string;
     source?: RunSource;
     /** Связь с Teamwork (черновик документа проекта или задача): в run.json; по задаче — статусы задачи на старте и в конце (teamwork-status.ts). */
     teamwork?: RunTeamworkLink;
@@ -1343,6 +1492,8 @@ function launchRun(
     notes: [],
   };
   live.set(id, lr);
+  // запуск начат с карточки дела (SPEC 3.2): дело — в «В работе», запуск — в его ссылках. Дочерний — не запуск по делу
+  if (!parent && opts.source?.item) lr.deskLinked = runDeskStarted(opts.source.item, id, spec.name);
 
   const control: RunControl = {
     checkpoint: async () => {
@@ -1417,9 +1568,12 @@ function launchRun(
         costUsd: e.type === 'end' ? e.report.totalCostUsd : e.type === 'title' || e.type === 'digest' ? e.totalCostUsd : undefined,
         title: e.type === 'title' ? e.title : undefined,
         parent: e.type === 'end' ? e.report.parent : undefined,
+        // конец запуска рутины объявляет движок рутин (по событию, и только не «готово»): вкладка его пропускает
+        routine: e.type === 'end' && !parent && routineRuns.has(id) ? (opts.source?.key ?? 'routine') : undefined,
       });
-      // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя
-      if (e.type === 'question' || (e.type === 'end' && !parent)) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
+      // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя; конец запуска рутины —
+      // движок рутин (routines → notify): заголовком событие, успешный конец молчит
+      if (e.type === 'question' || (e.type === 'end' && !parent && !routineRuns.has(id))) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
     // рутины: пауза перед блоком (pauseBefore) — карточка ожидания, конец — журнал, ответ и очередь
@@ -1432,7 +1586,7 @@ function launchRun(
       } else if (e.type === 'end') {
         routineRuns.delete(id);
         const context = routineContext(e.report);
-        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}) });
+        toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}), ...(e.report.error ? { error: e.report.error } : {}), ...(e.report.desk ? { desk: { created: e.report.desk.created, signals: e.report.desk.signals } } : {}) });
       }
     }
     if (e.type === 'end') {
@@ -1443,6 +1597,18 @@ function launchRun(
       // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
       // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
       // (автоматика уже снята остановкой сервера — конец опоздавшего запуска просто не записывается)
+      // дела, к которым привязан запуск: колонка та же, why — итог (SPEC 3.2 «Запуск по делу закончился»)
+      // продолжение — новый id, а в links лежит первый запуск цепочки (root); остановка руками и выключение — не падение
+      if (!parent) {
+        const st = e.report.status;
+        const outcome = st === 'done' ? 'ok' : st === 'aborted' || st === 'interrupted' ? 'stopped' : 'failed';
+        const ids = [id, ...(e.report.root && e.report.root !== id ? [e.report.root] : [])];
+        // запуск с карточки мог кончиться раньше, чем ссылка легла в дело: сначала она
+        const summary = (outcome === 'ok' ? e.report.digest?.text : e.report.error) || e.report.title;
+        void Promise.resolve(lr.deskLinked)
+          .then(() => deskStore().runEnded(ids, outcome, summary))
+          .catch((err) => console.error(`[дела] ${errMsg(err)}`));
+      }
       if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
   };
@@ -1467,7 +1633,8 @@ function launchRun(
       if (lr.child === c.id) delete lr.child;
     });
   };
-  const done = deps.runFlow(spec, { ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
+  // дела: у этапов — desk_put/desk_close/desk_list, хранилище общее (откроется при первом вызове)
+  const done = deps.runFlow(spec, { desk, ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
     const report: RunReport = lr.report ?? {
       id,
       flow: spec.name,
@@ -1494,6 +1661,7 @@ function launchRun(
       ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
       ...(opts.title ? { title: opts.title } : {}),
       ...(opts.parent ? { parent: opts.parent } : {}),
+      ...(opts.continueFrom ? { continuedFrom: opts.continueFrom.runId, ...(opts.root ? { root: opts.root } : {}) } : {}),
     };
     report.status = 'failed';
     report.error = errMsg(err);
@@ -1503,6 +1671,22 @@ function launchRun(
     return report;
   });
   return { id, done };
+}
+
+/**
+ * Запуск по делу начался (как deskStarted у сессий): ссылка в links.runs и перенос в «В работе» от 'flow'. «Почему твой
+ * ход» не затираем. Дела нет или сбой — только лог: запуск идёт и без дела.
+ */
+async function runDeskStarted(itemId: string, run: string, flow: string): Promise<void> {
+  try {
+    const api = deskStore();
+    const item = (await api.list()).find((i) => i.id === itemId);
+    if (!item) return;
+    await api.put(item.key, { links: { runs: [run] } }, 'flow');
+    if (item.column !== 'work') await api.move(item.key, 'work', 'flow', item.why ? undefined : `запуск flow «${flow}»`);
+  } catch (err) {
+    console.error(`[дела] запуск ${run}: дело ${itemId} не обновилось —`, errMsg(err));
+  }
 }
 
 /**
@@ -1872,6 +2056,8 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     maxBudgetUsd: o.maxBudgetUsd,
     model: o.model,
     continueFrom: cont,
+    // ключ run:<id первого> у всей цепочки один: дело, привязанное к упавшему запуску, найдёт и продолжение
+    root: chainRoot(prev, readReport),
     source: prev.source,
     ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
     worktree: prev.worktree,
@@ -2203,13 +2389,21 @@ function notifyPause(srv: ServerOptions, id: string, flow: string, r: PauseReaso
   sendNotice(srv, { title: `${flow}: «${r.phase}» ждёт решения`, body, path: `/run/${id}`, group: id, sound: true }, tabNotifies());
 }
 
+/** Текст уведомления о сессии: что спрашивает (вопрос) или что просит разрешить; без вопроса — закончила ход. */
+export function sessionNoticeBody(s: Pick<HomeSessionWait, 'space'>, ask?: Pick<SessionAsk, 'kind' | 'text'>): string {
+  const text = ask?.text.replace(/\s+/g, ' ').trim();
+  const head = !text ? '' : ask!.kind === 'permission' ? `Просит разрешения: ${text}` : `Спрашивает: ${text}`;
+  const space = s.space ? `◇ ${s.space}` : '';
+  return [head, space].filter(Boolean).join(' · ') || 'Claude закончил ход';
+}
+
 /**
  * Сессия терминала закончила ход и ждёт тебя. Системное — строже, чем у вопроса: только когда UI не открыт вовсе. Открытая
  * вкладка сама знает, на виду ли она, а сервер — нет: без разрешения браузера уведомление приходило бы после каждого хода,
  * пока человек сидит в этом терминале.
  */
-function notifySession(srv: ServerOptions, s: HomeSessionWait): void {
-  sendNotice(srv, { title: `Сессия «${s.name}» ждёт тебя`, body: s.space ? `◇ ${s.space}` : 'Claude закончил ход', path: `/sessions/${encodeURIComponent(s.id)}`, group: `session:${s.id}` }, homeClients.size > 0);
+function notifySession(srv: ServerOptions, s: HomeSessionWait, ask?: SessionAsk): void {
+  sendNotice(srv, { title: `Сессия «${s.name}» ждёт тебя`, body: sessionNoticeBody(s, ask), path: `/sessions/${encodeURIComponent(s.id)}`, group: `session:${s.id}` }, homeClients.size > 0);
 }
 
 /** Общий поток без переигрывания: при (пере)подключении UI сам забирает состояние из /api/home и /api/runs. */
@@ -2233,6 +2427,7 @@ const liveStatus = (lr: LiveRun): string => (lr.pending.size > 0 ? 'waiting' : l
 /** Идущие запуски для главной, с открытыми вопросами. От новых к старым. */
 function liveRuns(): HomeRun[] {
   const out: HomeRun[] = [];
+  const proj = projectResolver();
   for (const lr of live.values()) {
     const r = lr.report;
     if (!r) continue;
@@ -2259,9 +2454,15 @@ function liveRuns(): HomeRun[] {
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
       ...(r.parent ? { parent: r.parent } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
+      projectRef: runProject(proj, r),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+}
+
+/** Проект запуска: явное пространство, иначе — папка (запуск в worktree — его основной checkout). */
+function runProject(proj: ReturnType<typeof projectResolver>, r: Pick<RunReport, 'worktree' | 'source' | 'cwd' | 'space' | 'tags'>) {
+  return proj.of({ space: reportSpace(r), path: (r.worktree && worktreeProjectOf(r)) || r.cwd });
 }
 
 /**
@@ -2293,10 +2494,13 @@ function feed(): FeedItem[] {
   const ids = new Set(fs.readdirSync(RUNS_DIR).filter((d) => RUN_ID_RE.test(d)).sort().slice(-FEED_RUNS));
   for (const id of live.keys()) ids.add(id);
   const items: FeedItem[] = [];
+  const proj = projectResolver();
   for (const id of ids) {
     const lr = live.get(id);
     const r = lr?.report ?? readReport(id);
-    if (r) items.push(...reportFeed(id, r, lr && { pending: (qid) => lr.pending.has(qid) }));
+    if (!r) continue;
+    const projectRef = runProject(proj, r);
+    items.push(...reportFeed(id, r, lr && { pending: (qid) => lr.pending.has(qid) }).map((x) => ({ ...x, projectRef })));
   }
   return mergeFeed(items);
 }
@@ -2324,6 +2528,7 @@ function worktreeProjectOf(r: Pick<RunReport, 'worktree' | 'source'>): string | 
 function listRuns(): RunSummary[] {
   if (!fs.existsSync(RUNS_DIR)) return [];
   const out: RunSummary[] = [];
+  const proj = projectResolver();
   for (const dir of fs.readdirSync(RUNS_DIR)) {
     if (!RUN_ID_RE.test(dir)) continue;
     const r = readReport(dir);
@@ -2342,9 +2547,11 @@ function listRuns(): RunSummary[] {
       cwd: r.cwd,
       hidden: Boolean(r.hidden),
       source: r.source,
+      ...(r.root ? { root: r.root } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       worktree: r.worktree,
       ...(r.worktree && worktreeProjectOf(r) ? { project: worktreeProjectOf(r) } : {}),
+      projectRef: runProject(proj, r),
       addDirs: r.addDirs,
       ...(r.adhoc ? { adhoc: r.adhoc } : {}),
       ...(reportSpace(r) ? { space: reportSpace(r) } : {}),
@@ -2452,11 +2659,14 @@ async function draftResolveDeps(body: unknown): Promise<DraftResolveDeps> {
  */
 async function groupSources(): Promise<GroupSource[]> {
   const out: GroupSource[] = [];
+  // только «Без проекта»: работа в привязанном репозитории или в папке пространства уже в проекте
+  const proj = projectResolver();
   for (const s of await spacelessSessions().catch(() => [])) {
+    if (proj.path(s.cwd).space) continue;
     if (s.first.trim()) out.push({ kind: 'session', id: s.id, name: s.name, cwd: s.cwd, at: s.lastActivityAt, text: s.first });
   }
   for (const r of listRuns()) {
-    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running') continue;
+    if (r.space || r.legacyTags || r.parent || r.hidden || r.status === 'running' || r.projectRef?.space) continue;
     const cwd = r.worktree?.path ?? r.cwd;
     out.push({ kind: 'run', id: r.id, name: r.title ?? r.flow, flow: r.flow, ...(cwd ? { cwd } : {}), at: r.startedAt, text: r.input });
   }

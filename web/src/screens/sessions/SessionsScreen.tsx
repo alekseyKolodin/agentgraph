@@ -1,32 +1,37 @@
 // Страница «Сессии» /sessions (system.md → Sessions): новая сессия — пространство (первым: его рабочая папка
 // подставляется в «Папку» с подписью «из пространства»), папка, теги знаний, «Дополнительно» (название, модель, режим
-// разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху. ?space=x — форма
+// разрешений, состояние при выходе) и «Открыть терминал»; ниже — все сессии таблицей, живые сверху, с поиском (название,
+// папка, ветка), фильтром по проекту и группами по проекту (логика — lib/session-table.ts). ?space=x — форма
 // открыта с этим пространством, его рабочую папку подставит список пространств (кнопка «Новая сессия» на странице
 // пространства); &cwd= — с этой папкой, её выбор пространства не затирает («Сессия в папке»); ?tags=a,b — с тегами знаний;
 // ?new=1 — форма открыта («Настроить…» быстрой сессии). Выбор пространства подставляет его теги знаний и папки чтения;
 // папки чтения, изменённые здесь, сохраняются в пространстве (набор как шаблон), а без пространства — заводят новое.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionPermissionMode, SessionView } from '@server/api-types';
 import { ApiError, createSpace, errorText, fetchTag, keys, saveSpace, useConfig, useFeature, useRecentDirs, useSpaces, useTags } from '../../api';
-import { continueSession, createSession, defaultSessionCwd, putSession, SESSION_CWD_KEY, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
+import { createSession, defaultSessionCwd, putSession, SESSION_CWD_KEY, sessionKeys, updateSessionState, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { SpaceBadge, TagBadge } from '../../components/Badge';
 import { PickDirButton } from '../../components/PickDirButton';
 import { ModelPreview } from '../../components/ModelPreview';
 import { SpacePicker } from '../../components/SpacePicker';
 import { TagInput } from '../../components/TagInput';
+import { useMemoryState } from '../../components/useMemoryState';
+import { closedWork, closedWorkStore } from '../../lib/closed-work';
 import { baseName, feedTime } from '../../lib/format';
 import { MODELS } from '../../lib/flow/tools';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { recentChips, TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone } from '../../lib/sessions';
+import { askNote, canUpdateState, sessionExitTitle, sessionStatusLabel, sessionTone, termSize } from '../../lib/sessions';
 import { dirLines, folderPlan, pickWorkdir, slugFor, SPACE_SLUG_RE, spaceTags, spaceWorkdir, swapSpaceTags, workdirHint, type CwdState } from '../../lib/spaces';
+import { sessionTable, type SessionProject, type SessionTableGroup } from '../../lib/session-table';
 import { LS } from '../../lib/storage';
 import { RENAME_HOST, SessionName } from './SessionName';
 import { Loading } from './Loading';
+import { useContinue } from './useContinue';
 import styles from './Sessions.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -82,7 +87,7 @@ export function SessionsScreen() {
           </div>
         )}
         {sessions.length > 0 ? (
-          <SessionTable sessions={sessions} />
+          <AllSessions sessions={sessions} />
         ) : list.isSuccess ? (
           <p className="muted small">{t('Сессий ещё не было: открой первую формой выше.')}</p>
         ) : (
@@ -200,8 +205,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         ...(model ? { model } : {}),
         ...(mode ? { permissionMode: mode } : {}),
         saveState,
-        cols: Math.max(80, Math.floor((window.innerWidth - 380) / 8)),
-        rows: Math.max(24, Math.floor((window.innerHeight - 190) / 17)),
+        ...termSize(window.innerWidth, window.innerHeight),
       });
       LS.setRaw(SESSION_CWD_KEY, s.cwd);
       qc.setQueryData(sessionKeys.one(s.id), s);
@@ -332,16 +336,97 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   );
 }
 
-function SessionTable({ sessions }: { sessions: SessionView[] }) {
+/**
+ * Поиск, фильтр и группы над таблицей. Фильтр по проекту и «по проектам» запоминаются, запрос — пока открыта вкладка.
+ * Сессии закрытых дел (closed-work.ts) уходят с глаз со строкой «убрано N · показать».
+ */
+function AllSessions({ sessions }: { sessions: SessionView[] }) {
+  useSyncExternalStore(closedWorkStore.subscribe, closedWorkStore.version);
+  const [query, setQuery] = useMemoryState('sessions.query', '');
+  const [project, setProjectState] = useState<SessionProject>(() => LS.get<SessionProject>('agentgraph.sessionsProject', null));
+  const [grouped, setGroupedState] = useState(() => LS.get('agentgraph.sessionsGrouped', true));
+  const [showClosed, setShowClosed] = useMemoryState('sessions.showClosed', false);
+  const setProject = (v: SessionProject) => {
+    setProjectState(v);
+    LS.set('agentgraph.sessionsProject', v);
+  };
+  const setGrouped = (v: boolean) => {
+    setGroupedState(v);
+    LS.set('agentgraph.sessionsGrouped', v);
+  };
+  const view = sessionTable(sessions, { query, project, grouped, closed: closedWork().session, showClosed });
+  // значение select: '*' — все проекты, '-' — без проекта, иначе слаг
+  const selValue = project === null ? '*' : project === '' ? '-' : project;
+  const total = view.projects.reduce((n, p) => n + p.count, 0);
+  return (
+    <>
+      <div className={styles.toolbar}>
+        <input
+          className={styles.search}
+          type="search"
+          aria-label={t('Найти сессию')}
+          placeholder={t('Найти сессию…')}
+          autoComplete="off"
+          spellCheck={false}
+          title={t('Все слова должны найтись в названии, папке, ветке, проекте, тегах или id сессии. Esc — очистить')}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape' || !query) return;
+            e.preventDefault();
+            setQuery('');
+          }}
+        />
+        {/* проектов один — выбирать не из чего, но выбранный раньше фильтр должен сниматься */}
+        {(view.projects.length > 1 || project !== null) && (
+          <select
+            className={styles.projectPick}
+            aria-label={t('Проект')}
+            title={t('Показать сессии одного проекта — пространства, как у запусков')}
+            value={selValue}
+            onChange={(e) => setProject(e.target.value === '*' ? null : e.target.value === '-' ? '' : e.target.value)}
+          >
+            <option value="*">{t('Все проекты')} · {total}</option>
+            {view.projects.map((p) => <option key={p.space || '-'} value={p.space || '-'}>{p.label} · {p.count}</option>)}
+          </select>
+        )}
+        {project === null && view.projects.length > 1 && (
+          <button
+            type="button"
+            className={cx('chip', grouped && 'on')}
+            aria-pressed={grouped}
+            title={t('Группировать сессии по проекту — пространству, как запуски')}
+            onClick={() => setGrouped(!grouped)}
+          >
+            {t('по проектам')}
+          </button>
+        )}
+        {(query || project !== null) && <span className={cx('muted small', styles.found)}>{t('показано {n} из {total}', { n: view.shown, total: sessions.length })}</span>}
+      </div>
+      {view.groups.length > 0 ? <SessionTable groups={view.groups} /> : <p className="muted small">{view.empty}</p>}
+      {view.closedCount > 0 && (
+        <button type="button" className={cx('link-btn', styles.closedToggle)} onClick={() => setShowClosed(!showClosed)}>
+          {showClosed ? t('убрать сессии закрытых дел') : t('показать сессии закрытых дел: {n}', { n: view.closedCount })}
+        </button>
+      )}
+    </>
+  );
+}
+
+function SessionTable({ groups }: { groups: SessionTableGroup<SessionView>[] }) {
   const home = useConfig().data?.home;
   const qc = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState('');
-  const run = async (id: string, fn: () => Promise<SessionView>, open: boolean) => {
+  // «Продолжить» при пределе живых сессий — диалог «кого завершить»; закрыли его — undefined, никуда не переходим
+  const cont = useContinue();
+  const run = async (id: string, fn: () => Promise<SessionView | undefined>, open: boolean) => {
     setBusy(id);
     try {
-      putSession(qc, await fn());
+      const v = await fn();
+      if (!v) return;
+      putSession(qc, v);
       if (open) void navigate(`/sessions/${id}`);
     } catch (err) {
       toast(errorText(err));
@@ -365,17 +450,35 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
             <th scope="col" className={styles.colAct}><span className={styles.sr}>{t('Действия')}</span></th>
           </tr>
         </thead>
-        <tbody>
-          {sessions.map((s) => {
+        {groups.map((g) => (
+        <tbody key={g.key}>
+          {/* подпись группы — строкой таблицы: ширины колонок общие для всех проектов. Ячейки — по колонкам: объединённая
+              ячейка поверх колонок, которые узкая таблица прячет, сбила бы их ширины */}
+          {g.label && (
+            <tr className={styles.groupRow}>
+              <th scope="rowgroup" colSpan={3} title={g.title}>
+                {g.space ? <Link to={`/spaces/${encodeURIComponent(g.space)}`}>{g.label}</Link> : g.label}
+                <span className={styles.count}>{g.sessions.length}</span>
+              </th>
+              <td className={styles.colDir} />
+              <td className={styles.colNum} />
+              <td className={styles.colWhen} />
+              <td />
+            </tr>
+          )}
+          {g.sessions.map((s) => {
             const update = canUpdateState(s);
             const dir = tildePath(s.cwd, home);
+            const ask = askNote(s);
             return (
               <tr key={s.id} className={cx(!s.live && styles.ended, RENAME_HOST)}>
                 <td><span className={cx(styles.status, styles[sessionTone(s)])} title={sessionExitTitle(s) || undefined}><span className={styles.dot} aria-hidden="true" /><span className={styles.statusText}>{sessionStatusLabel(s)}</span></span></td>
                 <td className={styles.name}>
                   <SessionName s={s} to={`/sessions/${s.id}`} title={s.name} />
                   {/* имя по умолчанию — та же папка: второй строкой её не повторяем */}
-                  {baseName(s.cwd) !== s.name && <span className={styles.nameDir} title={dir}>{baseName(s.cwd)}</span>}
+                  {(baseName(s.cwd) !== s.name || s.branch) && <span className={styles.nameDir} title={dir}>{[baseName(s.cwd) !== s.name && baseName(s.cwd), s.branch].filter(Boolean).join(' · ')}</span>}
+                  {/* на чём остановилась: живая спрашивает, завершённая — закончилась на вопросе (видно и после перезапуска) */}
+                  {ask && <span className={styles.ask} title={ask}>{ask}</span>}
                   {/* пометка и её действие — рядом: «Обновить состояние» нужно только такой сессии */}
                   {s.statePending && (
                     <span className={styles.pending}>
@@ -394,14 +497,17 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
                     {s.chips.filter((c) => c.state !== 'removed').map((c) => <TagBadge key={c.slug} slug={c.slug} kind="knowledge" />)}
                   </span>
                 </td>
-                <td className={cx(styles.dir, styles.colDir)} title={dir}>{baseName(s.cwd)}</td>
+                <td className={cx(styles.dir, styles.colDir)} title={[dir, s.branch && t('ветка {branch}', { branch: s.branch })].filter(Boolean).join('\n')}>
+                  {baseName(s.cwd)}
+                  {s.branch && <span className={styles.branch}>{s.branch}</span>}
+                </td>
                 <td className={cx(styles.num, styles.colNum)}>{s.turns}</td>
                 <td className={cx(styles.when, styles.colWhen)}>{s.status === 'working' ? t('сейчас') : feedTime(s.lastActivityAt)}</td>
                 <td className={styles.act}>
                   {s.live ? (
                     <Link to={`/sessions/${s.id}`}>{t('Открыть')}</Link>
                   ) : (
-                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => continueSession(s.id), true)}>
+                    <button type="button" className="btn small" disabled={busy === s.id} title={s.resumable ? t('Тот же разговор (claude --resume) с текущими пространством и тегами') : t('Новый разговор в той же папке')} onClick={() => void run(s.id, () => cont.resume(s.id), true)}>
                       {t('Продолжить')}
                     </button>
                   )}
@@ -410,7 +516,9 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
             );
           })}
         </tbody>
+        ))}
       </table>
+      {cont.dialog}
     </div>
   );
 }

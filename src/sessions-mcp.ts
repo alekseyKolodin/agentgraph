@@ -5,18 +5,23 @@
 // space_state_write (состояние), space_settings (заголовок, папки чтения, рабочая папка — space.json); flow_write —
 // flow в папке flow (проверка схемой до записи); session_new — открыть рядом новую сессию agentgraph; у сессии из задачи
 // Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий её задачи, и team_doc_write — документ проекта
-// команды. Кроме knowledge_read ничего нет в allowedTools, и хук PreToolUse велит claude спрашивать пользователя о
-// каждом вызове (не прошедший проверку — отклоняет без вопроса). Слаги и пространство берутся в момент вызова:
-// выбранное на ходу доступно сразу.
+// команды; дела на доске «Мои дела» — desk_put, desk_close, desk_list (src/desk/tools.ts: сессия, проект и ветка
+// подставляются сами, сигнал — от 'session'; ответ desk_close после работы по делу предлагает записать вывод) и
+// knowledge_note — строка в заметки тега знаний вида работы (docs/desk/SPEC.md, 6.6). Кроме knowledge_read и desk_list
+// ничего нет в allowedTools; о записи пространства, flow, знания, новой сессии и задачи Teamwork хук PreToolUse велит
+// claude спрашивать пользователя при каждом
+// вызове (не прошедший проверку — отклоняет без вопроса), о desk_put и desk_close спрашивает сам claude по режиму
+// разрешений. Слаги и пространство берутся в момент вызова: выбранное на ходу доступно сразу.
 import type { SessionView, TeamTaskStatus } from './api-types.js';
 import { knowledgeReadText } from './knowledge-tools.js';
-import { KNOWLEDGE_READ_TOOL } from './tags.js';
+import { KNOWLEDGE_NOTE_TOOL, KNOWLEDGE_READ_TOOL, TAG_NOTE_MAX } from './tags.js';
 import { DOCS_DIR, MAP_FILE, META_FILE, SPACE_DIRS_MAX, SPACE_DOC_TEXT_MAX, SPACE_MAP_MAX, SPACE_STATE_MAX, SPACE_WRITE_TOOL, STATE_FILE, WRITE_DOC_EXTS } from './spaces.js';
 import {
   FLOW_WRITE_TOOL, SESSION_NEW_TOOL, SPACE_MAP_WRITE_TOOL, SPACE_SETTINGS_TOOL, SPACE_STATE_WRITE_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL,
 } from './sessions.js';
 import { TASK_STATUSES } from './teamwork.js';
 import { FLOW_RUNS_NOTE } from './session-edit.js';
+import { deskCall, deskInputSchemas, deskToolDescriptions, DESK_CLOSE_TOOL, DESK_LIST_TOOL, DESK_PUT_TOOL, DESK_TOOLS, type DeskCallCtx, type DeskHint } from './desk/tools.js';
 
 /**
  * Что у сессии на момент вызова: пространство (слаг и папка), теги знаний, папка flow и задача Teamwork, если сессия
@@ -32,6 +37,9 @@ export type TeamTaskUpdateArgs = { status?: TeamTaskStatus; pr?: string; comment
 
 /** Параметры space_settings: что задано — меняется (dirs — список целиком; cwd: null или "" — снять), что нет — остаётся. */
 export type SpaceSettingsArgs = { title?: string; dirs?: string[]; cwd?: string | null };
+
+/** Параметры knowledge_note: слаг тега знаний, строка вывода и заголовок нового тега. */
+export type KnowledgeNoteArgs = { tag: string; text: string; title?: string };
 
 /** Параметры flow_write: имя файла, YAML целиком и папка первого уровня для нового flow. */
 export type FlowWriteArgs = { name: string; yaml: string; folder?: string };
@@ -54,6 +62,18 @@ export type McpCtx = {
   teamTask?: (args: TeamTaskUpdateArgs) => Promise<string>;
   /** Документ проекта Teamwork (architecture, design, docs/<имя>.md); ответ — путь файла в клоне. Нет у сессии без задачи. */
   teamDoc?: (name: string, text: string) => Promise<string>;
+  /**
+   * Дела: что подставляется само (хранилище, сессия, проект, ветка) — в момент вызова инструмента; хранилище открывается
+   * только при вызове. Нет — инструментов дел у сессии нет.
+   */
+  desk?: () => DeskCallCtx;
+  /** Вещь и проект сессии для описаний desk_*: на момент tools/list. */
+  deskHint?: () => DeskHint;
+  /**
+   * Запись знания в тег (knowledge_note, всегда с вопросом человеку): строка в конец заметок тега знаний, тега нет —
+   * заводится; ответ — что записано. Нет — инструмента у сессии нет.
+   */
+  writeNote?: (args: KnowledgeNoteArgs) => string;
 };
 
 export type McpReply = { status: number; body?: unknown };
@@ -62,7 +82,7 @@ const PROTOCOL_FALLBACK = '2025-06-18';
 
 const str = (description: string) => ({ type: 'string', description });
 
-function tools(scope: ReturnType<McpScope>) {
+function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
   const space = scope.space ? ` (${scope.space})` : ' (у сессии сейчас нет пространства — вызов вернёт ошибку)';
   const file = (name: string) => (scope.spaceDir ? `${scope.spaceDir}/${name}` : name);
   const ask = 'Пользователь подтверждает вызов.';
@@ -212,7 +232,54 @@ function tools(scope: ReturnType<McpScope>) {
           },
         ]
       : []),
+    // дела — личная доска пользователя: в конце списка, после инструментов задачи
+    ...(desk ? deskTools(desk) : []),
+    ...(note ? [knowledgeNoteTool()] : []),
   ];
+}
+
+/** knowledge_note: вывод после дела — в заметки тега вида работы (desk_close подскажет тег). */
+function knowledgeNoteTool() {
+  return {
+    name: KNOWLEDGE_NOTE_TOOL,
+    description:
+      'Записать знание одной строкой в конец заметок тега знаний agentgraph: вывод после дела, который пригодится в следующий раз в такой же работе. ' +
+      'Заметки тега получат промптом все следующие сессии и запуски с этим тегом. Тег по виду работы подскажет ответ desk_close; тега нет — заведётся (дай title). ' +
+      'Вызывай, только когда человек согласился записать: текст — его вывод, а не пересказ дела. Пользователь подтверждает вызов.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tag: str('Слаг тега знаний: строчные латинские буквы, цифры и дефис'),
+        text: str(`Одна мысль, не длиннее ${TAG_NOTE_MAX} знаков; перенос строк станет пробелом`),
+        title: str('Заголовок нового тега (вид работы). У существующего тега не меняется'),
+      },
+      required: ['tag', 'text'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  };
+}
+
+/** Аргументы knowledge_note: tag и text — строки, title — по желанию; лишнего нет. */
+export function parseKnowledgeNoteArgs(args: Record<string, unknown>): KnowledgeNoteArgs {
+  const extra = Object.keys(args).filter((k) => k !== 'tag' && k !== 'text' && k !== 'title');
+  if (extra.length) throw new Error(`Лишние параметры: ${extra.join(', ')}. Есть только tag, text и title`);
+  if (typeof args.tag !== 'string' || typeof args.text !== 'string') throw new Error('Нужны параметры tag и text — строки');
+  if (args.title !== undefined && typeof args.title !== 'string') throw new Error('title — строка');
+  const title = typeof args.title === 'string' ? args.title.replace(CONTROL_RE, ' ').trim().slice(0, 80) : '';
+  return { tag: args.tag.trim(), text: args.text, ...(title ? { title } : {}) };
+}
+
+const DESK_ANNOTATIONS: Record<(typeof DESK_TOOLS)[number], Record<string, boolean>> = {
+  [DESK_PUT_TOOL]: { readOnlyHint: false, destructiveHint: false },
+  [DESK_CLOSE_TOOL]: { readOnlyHint: false, destructiveHint: false },
+  [DESK_LIST_TOOL]: { readOnlyHint: true },
+};
+
+function deskTools(hint: DeskHint) {
+  const d = deskToolDescriptions('session', hint);
+  const schemas = deskInputSchemas();
+  return DESK_TOOLS.map((name) => ({ name, description: d[name], inputSchema: schemas[name], annotations: DESK_ANNOTATIONS[name] }));
 }
 
 const NEW_KEYS = ['prompt', 'space', 'tags', 'cwd', 'name', 'model'];
@@ -362,6 +429,12 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
       const file = await ctx.teamDoc(args.name.replace(CONTROL_RE, '').trim(), args.text);
       return { content: [{ type: 'text', text: `Документ записан: ${file}. Коммит в репо команды уйдёт участникам.` }] };
     }
+    if (name === KNOWLEDGE_NOTE_TOOL && ctx.writeNote) {
+      return { content: [{ type: 'text', text: ctx.writeNote(parseKnowledgeNoteArgs(args)) }] };
+    }
+    if (ctx.desk && (DESK_TOOLS as readonly unknown[]).includes(name)) {
+      return { content: [{ type: 'text', text: (await deskCall(name, args, ctx.desk()))! }] };
+    }
     throw new Error(`Нет инструмента ${String(name)}`);
   } catch (err) {
     return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
@@ -386,7 +459,7 @@ async function one(msg: RpcMessage, ctx: McpCtx): Promise<unknown> {
     case 'ping':
       return result({});
     case 'tools/list':
-      return result({ tools: tools(ctx.scope()) });
+      return result({ tools: tools(ctx.scope(), ctx.desk ? (ctx.deskHint?.() ?? {}) : undefined, Boolean(ctx.writeNote)) });
     case 'tools/call':
       return result(await call(params.name, params.arguments, ctx));
     default:

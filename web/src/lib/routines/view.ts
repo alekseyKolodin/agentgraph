@@ -4,8 +4,12 @@ import type { CatchUp, Feedback, HistoryCheck, LogEntry, LogOutcome, RoutineView
 import { usd } from '../format';
 import { plural, t } from '../i18n';
 
-/** Состояние рутины в списке (States → «Состояния рутины в списке»). */
-export type RoutineState = 'waiting' | 'running' | 'source_error' | 'needs_secret' | 'problem' | 'paused' | 'draft' | 'ok';
+/**
+ * Состояние рутины в списке (States → «Состояния рутины в списке»). source_error — источник не отвечает (статус
+ * переживает перезапуск), source_empty — отвечает, но новых записей нет дольше обычного, unchecked — источник ещё ни
+ * разу не проверялся.
+ */
+export type RoutineState = 'waiting' | 'running' | 'source_error' | 'source_empty' | 'unchecked' | 'needs_secret' | 'problem' | 'paused' | 'draft' | 'ok';
 /** Тон точки: цвет — только смысл (system.md → Signals). off — пустой кружок. */
 export type Tone = 'ok' | 'live' | 'wait' | 'fail' | 'off' | 'muted';
 
@@ -28,24 +32,95 @@ export function routineState(r: RoutineView, sources: SourceView[], waits: Routi
   if (src?.status === 'error') return 'source_error';
   if (r.problems.length) return 'problem';
   if (r.recent.some((e) => e.outcome === 'started' && e.runId && LIVE.has(runs.get(e.runId) ?? ''))) return 'running';
+  if (src?.status === 'empty') return 'source_empty';
+  if (src?.status === 'unchecked') return 'unchecked';
   return 'ok';
 }
 
 export function stateTone(s: RoutineState): Tone {
-  return { waiting: 'wait', running: 'live', source_error: 'fail', needs_secret: 'wait', problem: 'fail', paused: 'off', draft: 'muted', ok: 'ok' }[s] as Tone;
+  return { waiting: 'wait', running: 'live', source_error: 'fail', source_empty: 'wait', unchecked: 'muted', needs_secret: 'wait', problem: 'fail', paused: 'off', draft: 'muted', ok: 'ok' }[s] as Tone;
 }
 
 export function stateLabel(s: RoutineState): string {
   return {
     waiting: t('Ждёт тебя'),
     running: t('Идёт запуск'),
-    source_error: t('Источник молчит'),
+    source_error: t('Источник не отвечает'),
+    source_empty: t('Источник молчит дольше обычного'),
+    unchecked: t('Источник ещё не проверялся'),
     needs_secret: t('Нет ключа'),
     problem: t('Есть ошибки'),
     paused: t('На паузе'),
     draft: t('Черновик'),
     ok: t('Включена'),
   }[s];
+}
+
+/** Подпись к рутине в списке после «·»: что с её источником или правилом; нечего сказать — null. */
+export function routineNote(st: RoutineState, r: Pick<RoutineView, 'problems'>, src: SourceView | undefined, now: Date = new Date()): { text: string; tone: Tone } | null {
+  switch (st) {
+    case 'source_error':
+      return { text: src?.error || t('источник не отвечает'), tone: 'fail' };
+    case 'source_empty':
+      return { text: emptyText(src?.check?.emptySince, now), tone: 'wait' };
+    case 'unchecked':
+      return { text: t('источник ещё не проверялся'), tone: 'muted' };
+    case 'needs_secret':
+      return { text: t('нет ключа {names}', { names: src?.missingSecrets.join(', ') ?? '' }), tone: 'wait' };
+    case 'problem':
+      return { text: r.problems[0] ?? '', tone: 'fail' };
+    default:
+      return null;
+  }
+}
+
+/** «нет новых записей с 15.11 — дольше обычного». */
+function emptyText(since: string | undefined, now: Date): string {
+  return since ? t('нет новых записей с {when} — дольше обычного', { when: logTime(since, now) }) : t('нет новых записей дольше обычного');
+}
+
+/** Источник в списке источников: тон точки и подпись после «·» (что не так); всё хорошо — без подписи. */
+export function sourceState(s: SourceView, now: Date = new Date()): { tone: Tone; label: string; note?: string } {
+  if (s.missingSecrets.length || s.status === 'needs_secret') return { tone: 'wait', label: t('Нет ключа'), note: t('нет ключа {names}', { names: s.missingSecrets.join(', ') }) };
+  switch (s.status) {
+    case 'error':
+      return { tone: 'fail', label: t('Не отвечает'), note: s.error || t('не отвечает') };
+    case 'empty':
+      return { tone: 'wait', label: t('Молчит дольше обычного'), note: emptyText(s.check?.emptySince, now) };
+    case 'unchecked':
+      return { tone: 'muted', label: t('Ещё не проверялся'), note: t('ещё не проверялся') };
+    case 'idle':
+      return { tone: 'off', label: t('Не используется') };
+    default:
+      return { tone: 'ok', label: t('Отвечает') };
+  }
+}
+
+/** Подпись расхода опроса источника моделью: «опрос моделью: сегодня $0.12 · 7 дней $0.80»; не тратит — ''. */
+export function pollCostText(s: Pick<SourceView, 'pollCostUsd'>): string {
+  const c = s.pollCostUsd;
+  return c ? t('опрос моделью: сегодня {today} · 7 дней {week}', { today: usd(c.today), week: usd(c.week) }) : '';
+}
+
+/**
+ * Сломанные источники для главной — строка над ожиданиями рутин: не отвечает, молчит дольше обычного, нет ключа.
+ * Только те, на которые смотрят рутины; сначала сломанные, потом молчащие.
+ */
+export type BrokenSource = { slug: string; tone: Tone; text: string; detail: string; routines: number };
+
+export function brokenSources(sources: SourceView[], now: Date = new Date(), routines?: Array<Pick<RoutineView, 'slug' | 'spec'>>): BrokenSource[] {
+  const out: BrokenSource[] = [];
+  // рутина на паузе или черновик источник не читает: из-за неё на главной ничего не горит
+  const off = new Set((routines ?? []).filter((r) => r.spec.enabled === false).map((r) => r.slug));
+  for (const src of sources) {
+    const s = off.size ? { ...src, usedBy: src.usedBy.filter((slug) => !off.has(slug)) } : src;
+    if (!s.usedBy.length) continue;
+    const name = s.spec.title || s.slug;
+    if (s.status === 'error') out.push({ slug: s.slug, tone: 'fail', text: t('Источник «{name}» не отвечает', { name }), detail: s.error || t('проверка не прошла'), routines: s.usedBy.length });
+    else if (s.missingSecrets.length || s.status === 'needs_secret') out.push({ slug: s.slug, tone: 'wait', text: t('Источнику «{name}» не хватает ключа', { name }), detail: s.missingSecrets.join(', '), routines: s.usedBy.length });
+    else if (s.status === 'empty') out.push({ slug: s.slug, tone: 'wait', text: t('Источник «{name}» молчит', { name }), detail: emptyText(s.check?.emptySince, now), routines: s.usedBy.length });
+  }
+  return out.sort((a, b) => Number(b.tone === 'fail') - Number(a.tone === 'fail'));
 }
 
 /** Пилюля в шапке редактора и журнала. */
@@ -71,6 +146,8 @@ export function tickOf(e: LogEntry, runs: RunStatuses = new Map()): Tick {
       return startedTick(e, runs);
     case 'waiting':
       return 'w';
+    case 'task':
+      return 'o';
     case 'error':
       return 'e';
     default:
@@ -97,7 +174,7 @@ export type LogChip = 'all' | 'wait' | 'run' | 'skip' | 'error';
 
 export function chipOf(o: LogOutcome): Exclude<LogChip, 'all'> {
   if (o === 'waiting') return 'wait';
-  if (o === 'started') return 'run';
+  if (o === 'started' || o === 'task') return 'run';
   if (o === 'error') return 'error';
   return 'skip';
 }
@@ -109,7 +186,7 @@ export function chipLabel(c: LogChip): string {
 /** Исходы на сервер для фильтра (?outcome=a,b). */
 export function chipOutcomes(c: LogChip): LogOutcome[] | undefined {
   if (c === 'all') return undefined;
-  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
+  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
   return all.filter((o) => chipOf(o) === c);
 }
 
@@ -143,6 +220,8 @@ export function verdict(e: LogEntry, runs: RunStatuses = new Map()): { text: str
       return { text: t('не то'), tone: 'muted' };
     case 'missed':
       return { text: t('простой'), tone: 'muted' };
+    case 'task':
+      return { text: t('дело'), tone: 'ok' };
     case 'error':
       return { text: t('ошибка'), tone: 'fail' };
   }
@@ -168,6 +247,8 @@ export function logDetail(e: LogEntry): string {
   // почему подошло (ответ проверки словами) — у запуска и ожидания, где своей причины нет
   else if (e.why) parts.push(e.why.trim().replace(/([^.!?…])$/, '$1.'));
   if (e.replied) parts.push(t('Ответ ушёл: «{text}».', { text: e.replied.text }));
+  if (e.desk?.created) parts.push(t('Запуск завёл {n} {w}.', { n: e.desk.created, w: plural(e.desk.created, 'дело', 'дела', 'дел') }));
+  if (e.desk?.signals) parts.push(t('Дописал в дела сигналов: {n}.', { n: e.desk.signals }));
   if (e.costUsd) parts.push(t('Потрачено {usd}.', { usd: usd(e.costUsd) }));
   if (!parts.length) parts.push(e.outcome === 'started' ? t('Запуск начат.') : t('Подробностей нет.'));
   return parts.join(' ');
@@ -190,11 +271,14 @@ export function weekCost(entries: LogEntry[], now: Date = new Date()): number {
   return entries.filter((e) => new Date(e.at).getTime() >= from).reduce((s, e) => s + (e.costUsd ?? 0), 0);
 }
 
-/** Шапка списка: «сегодня 3 запуска · $2.40» — запуски из stats.today, деньги — по строкам журнала за сегодня. */
-export function overviewMeta(routines: RoutineView[], now: Date = new Date()): string {
+/**
+ * Шапка списка: «сегодня 3 запуска · $2.40» — запуски из stats.today, деньги — по строкам журнала за сегодня (запуски и
+ * проверка словами) и опрос источников моделью за сегодня (каждый источник — один раз, сколько бы рутин его ни читали).
+ */
+export function overviewMeta(routines: RoutineView[], now: Date = new Date(), sources: SourceView[] = []): string {
   const runs = routines.reduce((s, r) => s + r.stats.today, 0);
   const today = now.toDateString();
-  const cost = routines.flatMap((r) => r.recent).filter((e) => new Date(e.at).toDateString() === today).reduce((s, e) => s + (e.costUsd ?? 0), 0);
+  const cost = routines.flatMap((r) => r.recent).filter((e) => new Date(e.at).toDateString() === today).reduce((s, e) => s + (e.costUsd ?? 0), 0) + sources.reduce((s, x) => s + (x.pollCostUsd?.today ?? 0), 0);
   const head = t('сегодня {n} {w}', { n: runs, w: plural(runs, 'запуск', 'запуска', 'запусков') });
   return cost ? `${head} · ${usd(cost)}` : head;
 }
@@ -203,7 +287,7 @@ export function overviewMeta(routines: RoutineView[], now: Date = new Date()): s
 export function routineSub(r: RoutineView, sources: SourceView[], scheduleText: (cron: string) => string): string {
   const w = r.spec.when;
   const from = 'schedule' in w ? `${t('Расписание')} · ${scheduleText(w.schedule)}` : (sources.find((s) => s.slug === w.source)?.spec.title ?? w.source);
-  return `${from} → ${r.spec.run.flow}`;
+  return `${from} → ${r.spec.run ? r.spec.run.flow : t('дело «{kind}»', { kind: r.spec.task?.kind ?? '' })}`;
 }
 
 /**
@@ -220,15 +304,26 @@ export function waitButtons(w: Pick<RoutineWait, 'question' | 'kind'>): { run: s
   return { run, later: t('Не сейчас'), reject };
 }
 
+/** Ожидание рутины с task (3.8): это дело в «Новом» — запуск по нему ещё не начат. */
+export const isDeskWait = (w: Pick<RoutineWait, 'kind' | 'deskKey'>): boolean => w.kind === 'suggest' && Boolean(w.deskKey);
+
+/**
+ * Дела, по ожиданию которых решение уже принято (ждёт отправки или ушло): карточка до перечитывания доски не показывает
+ * кнопок — ни решения, ни «В план / Не моё». Отменили или не ушло — строки решения нет, кнопки вернулись.
+ */
+export const decidedDeskKeys = (lines: ReadonlyArray<{ state: string; deskKey?: string }>): Set<string> =>
+  new Set(lines.filter((l) => l.state !== 'failed' && l.deskKey).map((l) => l.deskKey!));
+
 /** Строка после решения по карточке. */
-export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft'>, replied: boolean): string {
+export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft' | 'deskKey'>, replied: boolean): string {
   const where = w.replyDraft?.where;
   if (w.kind === 'reply') return action === 'run' ? t('Ответ ушёл: {where}.', { where: where ?? '' }) : action === 'reject' ? t('Ответ не отправлен.') : t('Отложено. Ответ ждёт в срабатываниях рутины.');
   const tail = !w.replyDraft ? '' : replied ? t(' Ответ ушёл: {where}.', { where: where ?? '' }) : t(' Наружу ничего не ушло.');
   if (action === 'run') return (w.kind === 'pause' ? t('Запуск продолжен.') : t('Запуск начат.')) + tail;
   // «Не сейчас» ответ не отправляет: сервер только откладывает ожидание
-  if (action === 'later') return t('Отложено. Запуск ждёт в срабатываниях рутины.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
-  return t('Закрыто как «не то». Рутина учтёт это в следующий раз.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  // ожидание-дело (3.8): «Не сейчас» — дело в план, «Не то» — дело закрыто
+  if (action === 'later') return (isDeskWait(w) ? t('Дело — в план. Запуск ждёт в срабатываниях рутины.') : t('Отложено. Запуск ждёт в срабатываниях рутины.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  return (isDeskWait(w) ? t('Дело закрыто как «не то». Рутина учтёт это в следующий раз.') : t('Закрыто как «не то». Рутина учтёт это в следующий раз.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
 }
 
 /** Ушёл ли ответ вместе с решением: «Ответ готов» — только «Отправить»; иначе — галочка, кроме «Не сейчас» и отказа. */
@@ -313,4 +408,16 @@ export function historyVerdict(e: HistoryCheck['events'][number]): { text: strin
     ? [{ match: t('Ты отметил это как подходящее, правило пропустило.'), no_match: t('Ты отметил это как неподходящее, правило запустило бы.'), not_duplicate: t('Ты отметил, что это не повтор, правило отсеяло как дубль.') }[e.past!], e.reason ?? ''].filter(Boolean).join(' ')
     : (e.reason ?? '');
   return { text, run, disagrees, why };
+}
+
+/**
+ * Строка «Проверки на истории» о деле (рутина с task): «дело» — новое дело, «в план» — то же дело вернулось в план,
+ * «то же дело» — колонка та же (on_repeat: keep), «закрыто» — дело по этой вещи уже закрыто. Нет task — undefined.
+ */
+export function taskVerdict(task: HistoryCheck['events'][number]['task']): { text: string; why: string } | undefined {
+  if (!task) return undefined;
+  if (task.action === 'new') return { text: t('дело'), why: task.note ?? '' };
+  if (task.action === 'plan') return { text: t('в план'), why: task.note ?? t('то же дело: вернулось в план') };
+  if (task.action === 'same') return { text: t('то же дело'), why: task.note ?? t('то же дело: колонка та же') };
+  return { text: t('закрыто'), why: task.note ?? t('дело по этой вещи уже закрыто') };
 }

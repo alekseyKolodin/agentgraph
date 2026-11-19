@@ -9,12 +9,13 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { HomeEvent, SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { LEGACY_RECORD_FILE, SessionError, SessionManager, sessionManager } from './sessions-server.js';
+import { LEGACY_RECORD_FILE, onSessionWaiting, SessionError, SessionManager, sessionManager } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
-import { createTag, tagDir, updateTag } from './tags.js';
+import { createTag, readTag, tagDir, updateTag } from './tags.js';
 import { createSpace, deleteSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
+import { desk } from './desk/index.js';
 
 class FakePty implements PtyProcess {
   pid = 4242;
@@ -153,6 +154,48 @@ const until = async (cond: () => boolean | Promise<boolean>, ms = 2000) => {
 test('фича sessions есть в /api/config, когда pty загрузился', async () => {
   const r = await call<{ features: string[] }>('GET', '/api/config');
   assert.ok(r.body.features.includes('sessions'));
+});
+
+test('«Flow из сессии»: новая сессия в папке кода agentgraph с /session-to-flow по транскрипту; без транскрипта — 409, без скилла — 501', async () => {
+  const { APP_DIR } = await import('./paths.js');
+  assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('session-to-flow'));
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), name: 'Чинили корзину' });
+  const token = tokenOf(spawned.at(-1)!);
+  // без единого сообщения и транскрипта — делать не из чего
+  const empty = await call<{ code: string }>('POST', `/api/sessions/${s.id}/to-flow`, {});
+  assert.deepEqual([empty.status, empty.body.code], [409, 'no_transcript']);
+  const dir = path.join(root, 'claude projects');
+  fs.mkdirSync(dir, { recursive: true });
+  const tp = path.join(dir, `${s.id}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id, transcript_path: tp });
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt: 'почини корзину' });
+  const r = await call<SessionView>('POST', `/api/sessions/${s.id}/to-flow`, { cols: 120, rows: 40 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const p = spawned.at(-1)!;
+  assert.equal(p.opts.cwd, APP_DIR);
+  assert.deepEqual([p.opts.cols, p.opts.rows], [120, 40]);
+  assert.deepEqual(p.args.slice(-2), ['--', `/session-to-flow "${tp}"`]);
+  assert.deepEqual([r.body.name, r.body.cwd, r.body.live], ['Flow из «Чинили корзину»', APP_DIR, true]);
+  // транскрипт — недоверенный текст, папка — код agentgraph: режим manual, а не из настроек пользователя
+  assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'manual');
+  // путь с кавычкой дописал бы к команде свой текст — отказ
+  const evil = path.join(root, 'x" и ещё текст');
+  fs.mkdirSync(evil, { recursive: true });
+  const etp = path.join(evil, `${s.id}.jsonl`);
+  fs.writeFileSync(etp, '{}\n');
+  await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'resume', session_id: s.id, transcript_path: etp });
+  const bad = await call<{ code: string }>('POST', `/api/sessions/${s.id}/to-flow`, {});
+  assert.deepEqual([bad.status, bad.body.code], [409, 'no_transcript']);
+  // папка кода без скилла (сборка без .claude/skills) — 501, новой сессии нет
+  const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-noskill'), appDir: path.join(root, 'proj') });
+  await assert.rejects(mgr.toFlow(s.id, 0), (e: unknown) => e instanceof SessionError && e.status === 501);
+  // убрать за собой: разбор сессий ниже считает недавние сессии
+  for (const id of [s.id, r.body.id]) {
+    await call('POST', `/api/sessions/${id}/end`);
+    await until(async () => !(await view(id)).live);
+    await call('DELETE', `/api/sessions/${id}`);
+  }
 });
 
 test('создание: claude без shell в папке проекта, окружение без маркеров хоста; новое пространство заводится, его папка — в --add-dir, контекст ждёт SessionStart', async () => {
@@ -419,6 +462,95 @@ test('ошибки создания: нет папки, лишний режим,
   assert.equal(spawned.length, before);
 });
 
+test('сессия из вещи: источник в записи и ответе, пространство проекта по папке; выбранное или «без пространства» — как выбрали; плохой источник — 400', async () => {
+  const shop = path.join(root, 'shop');
+  fs.mkdirSync(shop, { recursive: true });
+  createSpace('shop', { title: 'Магазин', cwd: shop });
+  const thing = { type: 'jira', key: 'jira:jira.example.com/PAY-7', ref: { host: 'jira.example.com', key: 'PAY-7' }, url: 'https://jira.example.com/browse/PAY-7', title: 'Падает оплата' };
+  const r = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [], prompt: 'Задача Jira PAY-7', source: { thing } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.source, { thing });
+  assert.equal(r.body.space, 'shop');
+  const rec = JSON.parse(fs.readFileSync(path.join(root, 'sessions', r.body.id, 'session.json'), 'utf8'));
+  assert.deepEqual(rec.source, { thing });
+  assert.deepEqual((await view(r.body.id)).source, { thing });
+  // без пространства явно (space: null) — без него; без источника папка пространство не выбирает
+  const none = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [], space: null, source: { thing } });
+  assert.equal(none.status, 201, JSON.stringify(none.body));
+  assert.equal(none.body.space, undefined);
+  const plain = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [] });
+  assert.deepEqual([plain.body.space, plain.body.source], [undefined, undefined]);
+  for (const id of [r.body.id, none.body.id, plain.body.id]) await call('POST', `/api/sessions/${id}/end`);
+  const before = spawned.length;
+  const bad = await call<{ error: string }>('POST', '/api/sessions', { cwd: shop, source: { thing: { type: 'jira', key: 'mr:x/y/1' } } });
+  assert.deepEqual([bad.status, /thing.key/.test(bad.body.error)], [400, true]);
+  assert.equal(spawned.length, before);
+});
+
+test('сессия с карточки дела: дело — в «В работе» от session, сессия — в его ссылках; чужой id дела ничего не трогает', async () => {
+  const store = desk();
+  const item = await store.put('own:card-session', { title: 'Позвонить в банк', column: 'plan' }, 'me');
+  const r = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], name: 'Банк', source: { item: item.id } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const after = (await store.get('own:card-session'))!;
+  assert.deepEqual([after.column, after.movedBy, after.links.sessions, after.why], ['work', 'session', [r.body.id], 'сессия «Банк»']);
+  // у дела есть «почему» — остаётся
+  const why = await store.put('own:card-why', { title: 'Отчёт', column: 'plan', why: 'автор ответил' }, 'me');
+  const w = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], source: { item: why.id } });
+  assert.deepEqual([(await store.get('own:card-why'))!.column, (await store.get('own:card-why'))!.why], ['work', 'автор ответил']);
+  await call('POST', `/api/sessions/${w.body.id}/end`);
+  await call('DELETE', `/api/sessions/${w.body.id}`);
+  await store.close('own:card-why', 'тест', 'me');
+  const other = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], source: { item: 'nope' } });
+  assert.equal(other.status, 201);
+  assert.deepEqual((await store.get('own:card-session'))!.links.sessions, [r.body.id]);
+  for (const id of [r.body.id, other.body.id]) {
+    await call('POST', `/api/sessions/${id}/end`);
+    await call('DELETE', `/api/sessions/${id}`);
+  }
+  await store.close('own:card-session', 'тест', 'me');
+});
+
+test('знание после дела (6.6): desk_close по делу с работой предлагает knowledge_note; запись — с вопросом, плохая — отказ без вопроса', async () => {
+  const store = desk();
+  createTag('review-know', 'Ревью ключей');
+  await store.put('own:learn-work', { title: 'Ревью MR', kind: 'Ревью ключей', column: 'work', links: { sessions: ['другая-сессия'] } }, 'me');
+  await store.put('own:learn-none', { title: 'Само закрылось', kind: 'Ревью', column: 'plan' }, 'me');
+  const s = (await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], name: 'Знание' })).body;
+  const token = tokenOf(spawned.at(-1)!);
+  const tool = async (name: string, args: Record<string, unknown>) =>
+    (await call<{ result: { content: Array<{ text: string }>; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, { 'X-Agentgraph-Session': token })).body.result;
+
+  // работа по делу была — подсказка с существующим тегом вида работы (по заголовку тега)
+  const closed = await tool('desk_close', { thing: 'own:learn-work', reason: 'смержен' });
+  assert.equal(closed.isError, undefined, closed.content[0].text);
+  assert.match(closed.content[0].text, /^Дело закрыто: .*\nПо делу была работа\. .*«Ревью ключей».*knowledge_note \(tag: "review-know"\)/s);
+  // работы не было — только «закрыто»
+  const plain = await tool('desk_close', { thing: 'own:learn-none', reason: 'не нужно' });
+  assert.doesNotMatch(plain.content[0].text, /knowledge_note/);
+
+  // PreToolUse: вопрос в любом режиме — куда и что ляжет; плохой слаг и тег задачи — отказ без вопроса
+  const pre = async (input: Record<string, unknown>) =>
+    (await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__knowledge_note', permission_mode: 'auto', tool_input: input })).body.hookSpecificOutput as { permissionDecision: string; permissionDecisionReason: string };
+  const ask = await pre({ tag: 'review-know', text: 'Проверять  ротацию\nключей' });
+  assert.equal(ask.permissionDecision, 'ask');
+  assert.match(ask.permissionDecisionReason, /запись в тег знаний получат промптом.*тег review-know \(«Ревью ключей»\): допишет в заметки «- \d{4}-\d{2}-\d{2} · Проверять ротацию ключей»/);
+  assert.match((await pre({ tag: 'new-kind', text: 'x', title: 'Новый вид' })).permissionDecisionReason, /новый тег знаний new-kind \(«Новый вид»\)/);
+  for (const bad of [{ tag: '../x', text: 'x' }, { tag: 'review-know', text: ' ' }, { tag: 'review-know', text: 'x', extra: 1 }]) {
+    assert.equal((await pre(bad)).permissionDecision, 'deny', JSON.stringify(bad));
+  }
+
+  // после «да» человека claude вызывает инструмент: строка в заметках тега, новый тег заводится с заголовком
+  const w = await tool('knowledge_note', { tag: 'review-know', text: 'Проверять ротацию ключей' });
+  assert.equal(w.isError, undefined, w.content[0].text);
+  assert.match(readTag('review-know')!.notes, /- \d{4}-\d{2}-\d{2} · Проверять ротацию ключей\n?$/);
+  assert.equal((await tool('knowledge_note', { tag: 'new-kind', text: 'Первое', title: 'Новый вид' })).isError, undefined);
+  assert.equal(readTag('new-kind')!.title, 'Новый вид');
+  assert.equal((await tool('knowledge_note', { tag: 'BAD', text: 'x' })).isError, true);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await call('DELETE', `/api/sessions/${s.id}`);
+});
+
 test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, пространство и тег на ходу ждут следующего шага', async () => {
   createSpace('hk-space', { title: 'Корзина', gist: 'Пустая корзина падает' });
   writeSpaceState('hk-space', 'Суть: корзина', { id: 'r0', at: '', kind: 'run' });
@@ -461,7 +593,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   // MCP того же сервера: только POST и только с токеном
   const list = await call<{ result: { tools: unknown[] } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': token });
-  assert.equal(list.body.result.tools.length, 7);
+  assert.equal(list.body.result.tools.length, 11, "семь своих, три инструмента дел и knowledge_note");
   assert.equal((await call('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 404);
   assert.equal((await call('GET', `/api/sessions/${s.id}/mcp`, undefined, { 'X-Agentgraph-Session': token })).status, 405);
 
@@ -536,7 +668,7 @@ test('session_new: новая сессия из терминала — папк�
   for (const v of (await call<{ sessions: SessionView[] }>('GET', '/api/sessions')).body.sessions.filter((x) => x.live)) await call('POST', `/api/sessions/${v.id}/end`);
 });
 
-test('сессия закончила ход: в общем потоке — событие session с именем и пространством, у сессии — с какого момента ждёт; запуск ходом не считается', async () => {
+test('сессия закончила ход вопросом: в общем потоке — событие session с именем и пространством, у сессии — с какого момента ждёт; простой конец хода и запуск не в счёт', async () => {
   const events: HomeEvent[] = [];
   const stream = new AbortController();
   const res = await fetch(`${base}/api/events`, { signal: stream.signal });
@@ -571,7 +703,11 @@ test('сессия закончила ход: в общем потоке — с�
     await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'почини', session_id: s.id });
     v = await view(s.id);
     assert.deepEqual([v.status, v.waitingSince], ['working', undefined]);
+    // просто закончил ход — ход за тобой, но без события: тревоги нет
     await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    assert.ok((await view(s.id)).waitingSince);
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'и коммит', session_id: s.id });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово, пушить?' });
     await until(() => sessionEvents().length > 0);
     assert.deepEqual(sessionEvents().map((e) => [e.runId, e.flow, e.session]), [['', '', { id: s.id, name: 'Корзина', space: 'wait-space' }]]);
     assert.ok((await view(s.id)).waitingSince);
@@ -582,7 +718,7 @@ test('сессия закончила ход: в общем потоке — с�
     await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'compact', session_id: s.id });
     await hook(s.id, token, { hook_event_name: 'PostToolBatch', session_id: s.id });
     assert.equal(sessionEvents().length, 1);
-    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: s.id, last_assistant_message: 'готово. Пушить?' });
     await until(() => sessionEvents().length === 2);
     // «Перезапустить» посреди хода: новый процесс начинает с SessionStart — события нет
     await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', prompt: 'ещё', session_id: s.id });
@@ -764,6 +900,96 @@ test('«Продолжить»: транскрипта нет — новый р�
   p.exit(0);
   await until(async () => !(await view(s.id)).live);
   assert.deepEqual([(await view(s.id)).exitCode, (await view(s.id)).endedBy], [0, undefined]);
+});
+
+test('«Продолжить» с первым сообщением: оно уходит в продолженный разговор последним аргументом; не строка — 400, сессия не запускается', async () => {
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+  let p = spawned.at(-1)!;
+  const tp = path.join(root, `${uuid(7)}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, tokenOf(p), { hook_event_name: 'SessionStart', session_id: uuid(7), transcript_path: tp });
+  p.exit(0);
+  await until(async () => (await view(s.id)).resumable === true);
+  const count = spawned.length;
+  const bad = await call<{ error: string }>('POST', `/api/sessions/${s.id}/continue`, { prompt: 42 });
+  assert.deepEqual([bad.status, spawned.length, (await view(s.id)).live], [400, count, false]);
+  assert.equal((await call('POST', `/api/sessions/${s.id}/continue`, { prompt: '  да, коммить  ' })).status, 200);
+  p = spawned.at(-1)!;
+  assert.equal(p.args[0], `--resume=${uuid(7)}`);
+  assert.deepEqual(p.args.slice(-2), ['--', 'да, коммить']);
+  await call('POST', `/api/sessions/${s.id}/end`);
+  await until(async () => !(await view(s.id)).live);
+  // разговор без транскрипта начинается заново: вопрос прошлого не переносится
+  const fresh = (await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') })).body;
+  await hook(fresh.id, tokenOf(spawned.at(-1)!), { hook_event_name: 'Stop', last_assistant_message: 'Так?' });
+  assert.equal((await view(fresh.id)).ask?.text, 'Так?');
+  spawned.at(-1)!.exit(0);
+  await until(async () => !(await view(fresh.id)).live);
+  await call('POST', `/api/sessions/${fresh.id}/continue`, {});
+  assert.equal((await view(fresh.id)).ask, undefined);
+  await call('POST', `/api/sessions/${fresh.id}/end`);
+  // пустое сообщение — как без него: claude ждёт пользователя
+  await call('POST', `/api/sessions/${s.id}/continue`, { prompt: '   ' });
+  assert.ok(!spawned.at(-1)!.args.includes('--'));
+  await call('POST', `/api/sessions/${s.id}/end`);
+});
+
+test('«ждёт ответа»: вопрос в ответе — в записи сессии и в ленте; простой конец хода — без вопроса и без события; ответ снимает вопрос', async () => {
+  const waits: string[] = [];
+  const off = onSessionWaiting((v) => waits.push(v.id));
+  try {
+    const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj') });
+    const token = tokenOf(spawned.at(-1)!);
+    const file = path.join(root, 'sessions', s.id, 'session.json');
+    await hook(s.id, token, { hook_event_name: 'SessionStart', session_id: uuid(8) });
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'почини тест' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: uuid(8), last_assistant_message: 'Починил, тесты зелёные.' });
+    const idle = await view(s.id);
+    assert.deepEqual([idle.status, idle.ask, waits.length], ['waiting', undefined, 0]);
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'а теперь миграцию' });
+    await hook(s.id, token, { hook_event_name: 'Stop', session_id: uuid(8), last_assistant_message: 'Есть два пути.\n\nМигрировать сразу или по флагу?' });
+    const asked = await view(s.id);
+    assert.deepEqual([asked.status, asked.ask?.kind, asked.ask?.text, waits], ['waiting', 'question', 'Мигрировать сразу или по флагу?', [s.id]]);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).ask.text, 'Мигрировать сразу или по флагу?');
+    await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: uuid(8), prompt: 'по флагу' });
+    assert.equal((await view(s.id)).ask, undefined);
+    assert.equal('ask' in JSON.parse(fs.readFileSync(file, 'utf8')), false);
+    // запрос разрешения посреди хода — тоже ждёт ответа
+    await hook(s.id, token, { hook_event_name: 'PermissionRequest', session_id: uuid(8), tool_name: 'Bash', tool_input: { command: 'rm -rf build' } });
+    const perm = await view(s.id);
+    assert.deepEqual([perm.status, perm.ask?.kind, perm.ask?.text, waits.length], ['waiting', 'permission', 'Bash: rm -rf build', 2]);
+    await call('POST', `/api/sessions/${s.id}/end`);
+    // завершённая — «закончилась на вопросе»: вопрос остаётся
+    await until(async () => !(await view(s.id)).live);
+    assert.equal((await view(s.id)).ask?.text, 'Bash: rm -rf build');
+  } finally {
+    off();
+  }
+});
+
+test('«ждёт ответа» переживает закрытие приложения: после перезапуска сервера завершённая сессия — с вопросом и временем; испорченный вопрос в файле отбрасывается', async () => {
+  const dir = path.join(root, 'sessions-ask');
+  const deps = { ...sessionManager().deps, dir };
+  const mgr = new SessionManager(deps);
+  await mgr.available();
+  const v = await mgr.create({ cwd: path.join(root, 'proj'), saveState: false }, port, root);
+  const live = mgr.sessions.get(v.id)!;
+  const res = { once: () => res } as unknown as Parameters<SessionManager['hook']>[2];
+  mgr.hook(live, { hook_event_name: 'SessionStart', session_id: uuid(9) }, res);
+  mgr.hook(live, { hook_event_name: 'UserPromptSubmit', session_id: uuid(9), prompt: 'сделай' }, res);
+  mgr.hook(live, { hook_event_name: 'Stop', session_id: uuid(9), last_assistant_message: 'Так делать или иначе?' }, res);
+  const at = mgr.view(live).ask?.at;
+  assert.ok(at);
+  await mgr.stopAll(1000);
+  const broken = uuid(10);
+  fs.mkdirSync(path.join(dir, broken));
+  fs.writeFileSync(path.join(dir, broken, 'session.json'), JSON.stringify({ id: broken, name: 'x', cwd: root, tags: [], saveState: false, claudeSessionIds: [], createdAt: at, lastActivityAt: at, endedAt: at, turns: 1, ask: { kind: 'boom', text: 1 } }));
+  const next = new SessionManager(deps);
+  await next.available();
+  const list = next.list().sessions;
+  const back = list.find((x) => x.id === v.id)!;
+  assert.deepEqual([back.live, back.status, back.endedBy, back.ask], [false, 'ended', 'app', { kind: 'question', text: 'Так делать или иначе?', at }]);
+  assert.equal(list.find((x) => x.id === broken)!.ask, undefined);
 });
 
 test('«Перезапустить»: старый процесс — SIGHUP, новый — тот же разговор с пересчитанными папками (пространство на ходу — в --add-dir), состояние не пишется', async () => {

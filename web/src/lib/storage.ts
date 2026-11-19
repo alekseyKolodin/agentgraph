@@ -32,4 +32,24 @@ export const LS = {
       /* приватный режим */
     }
   },
+  remove(key: string): void {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* приватный режим */
+    }
+  },
+  /** Ключи с этим началом: для уборки черновиков, которые копятся по ключу на запуск. */
+  keys(prefix: string): string[] {
+    try {
+      const out: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix)) out.push(k);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  },
 };

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  childPermissionMode, contextDelta, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, readSessionCtx,
+  ASK_TEXT_MAX, childPermissionMode, contextDelta, CONTEXT_BUDGET, findClaude, handleHook, idleAgents, launchDirs, parseClaudeVersion, parseHookInput, permissionReply, questionOf, readSessionCtx,
   resumeTarget, safeRealpath, sessionArgs, sessionContext, sessionDirs, sessionEnv, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_PROMPT_MAX,
   sessionSettings, versionAtLeast, type HookDeps, type HookState, type SessionLaunch, type WriteCall,
 } from './sessions.js';
@@ -49,7 +49,7 @@ const launch = (o: Partial<SessionLaunch> = {}): SessionLaunch => ({
 
 const flagValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 /** Инструменты agentgraph с вопросом в любом режиме — порядок как в sessionSettings. */
-const ASK_FULL = ['session_new', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'team_task_update', 'team_doc_write'].map((t) => `mcp__agentgraph__${t}`);
+const ASK_FULL = ['session_new', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'team_task_update', 'team_doc_write', 'knowledge_note'].map((t) => `mcp__agentgraph__${t}`);
 
 test('sessionArgs: новый разговор — --session-id, название через =, хуки и MCP одним JSON, без модели и режима', () => {
   const args = sessionArgs(launch({ name: '-dash name' }));
@@ -57,7 +57,7 @@ test('sessionArgs: новый разговор — --session-id, названи�
   assert.ok(!args.includes('--model') && !args.includes('--permission-mode'));
   assert.ok(!args.some((a) => a.includes('append-system-prompt') || a === '--bare' || a === '--strict-mcp-config'));
   // без подтверждения — только чтение тегов знаний: space_write и session_new спрашивают человека
-  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read');
+  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read,mcp__agentgraph__desk_list');
   assert.deepEqual(args.flatMap((a, i) => (a === '--add-dir' ? [args[i + 1]] : [])), ['/data/tags/a', '/files']);
 
   const settings = JSON.parse(flagValue(args, '--settings'));
@@ -72,8 +72,8 @@ test('sessionArgs: новый разговор — --session-id, названи�
   // PreToolUse — на инструменты agentgraph, которые пишут, на запись файлов и на Bash (сверка в bypassPermissions):
   // остальные инструменты хук не задерживает
   assert.deepEqual(settings.hooks.PreToolUse.map((h: { matcher: string }) => h.matcher), [...ASK_FULL, 'Edit|Write|MultiEdit|NotebookEdit', 'Bash']);
-  // PostToolUse — только запись файлов: проверка записанного и событие для UI
-  assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher: string }) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
+  // PostToolUse — на любой инструмент: снять «ждёт разрешения»; запись файлов — ещё и проверка записанного и событие для UI
+  assert.deepEqual(settings.hooks.PostToolUse.map((h: { matcher?: string }) => h.matcher), [undefined]);
   // //путь — абсолютный путь в правилах разрешений
   // Edit закрывает и Write: правило Write(путь) claude не применяет; сама папка — отдельным правилом
   assert.deepEqual(settings.permissions.deny, ['Edit(//data/tags)', 'Edit(//data/tags/**)', 'Edit(//data/tags/a)', 'Edit(//data/tags/a/**)']);
@@ -568,6 +568,130 @@ test('хуки: Stop и StopFailure — ждёт тебя, Notification об о�
   assert.equal(handleHook(state({ status: 'working' }), { hook_event_name: 'Notification', notification_type: 'auth_success' }, deps()).patch.status, undefined);
   const end = handleHook(state({ status: 'waiting', claudeSessionIds: ['s1'] }), { hook_event_name: 'SessionEnd', reason: 'clear', session_id: 's1' }, deps());
   assert.deepEqual([end.reply, end.patch], [{}, {}]);
+});
+
+test('вопрос в конце ответа: последний абзац кончается «?» — вопрос, иначе просто конец хода', () => {
+  assert.equal(questionOf('Готово, закоммитил.'), undefined);
+  assert.equal(questionOf(''), undefined);
+  assert.equal(questionOf('Поправил корзину.\n\nТак делать или иначе?'), 'Так делать или иначе?');
+  // разметка и хвост после знака не мешают; в тексте — без звёздочек и решёток
+  assert.equal(questionOf('Сделал.\n\n**Продолжить с миграцией?**'), 'Продолжить с миграцией?');
+  assert.equal(questionOf('## Что дальше?'), 'Что дальше?');
+  assert.equal(questionOf('Можно так (вариант A)?\r\n'), 'Можно так (вариант A)?');
+  // абзац склеивается в одну строку
+  assert.equal(questionOf('Итог.\n\nЕсть два пути.\nКакой берём?'), 'Есть два пути. Какой берём?');
+  // вопрос в середине, а кончается утверждением — не ждёт ответа
+  assert.equal(questionOf('Нужен ли кэш? Сделал без него, тесты зелёные.'), undefined);
+  assert.equal(questionOf('Что выбрать?\n\nСделал оба варианта.'), undefined);
+  // блок кода в конце — не вопрос, даже если в коде «?»
+  assert.equal(questionOf('Вот так?\n\n```ts\nconst a = b ?? c?\n```'), undefined);
+});
+
+test('вопрос в конце ответа: список вариантов после вопроса — тоже вопрос; список без вопроса — нет', () => {
+  assert.equal(questionOf('Как сделать?\n\n1. Через A\n2. Через B'), 'Как сделать? 1. Через A 2. Через B');
+  assert.equal(questionOf('Нашёл две причины.\n\nКакой вариант берём?\n- **A**: быстрее\n- B: надёжнее'), 'Какой вариант берём? - A: быстрее - B: надёжнее');
+  assert.equal(questionOf('Сделал:\n\n- тесты\n- миграцию'), undefined);
+  assert.equal(questionOf('- тесты\n- миграцию'), undefined);
+  // после списка снова текст — последний абзац уже не список
+  assert.equal(questionOf('Как?\n\n- A\n- B\n\nВыбрал A.'), undefined);
+});
+
+test('вопрос в конце ответа: заголовок-вопрос над списком, цитата чужого вопроса и код с отступом — не вопрос; «(y/n)» и цитата-вопрос — вопрос', () => {
+  assert.equal(questionOf('## Почему падало?\n\n- гонка в кэше\n- таймаут'), undefined);
+  assert.equal(questionOf('**Что изменилось?**\n- поправил кэш\n- добавил тест'), undefined);
+  assert.equal(questionOf('Исправил по твоему вопросу «почему тест падает?»'), undefined);
+  assert.equal(questionOf('Пример:\n\n    const x = a ?? b?'), undefined);
+  assert.equal(questionOf('Всё готово. Want me to commit? (y/n)'), 'Всё готово. Want me to commit? (y/n)');
+  assert.equal(questionOf('> Нужен ли кэш?'), 'Нужен ли кэш?');
+});
+
+test('вопрос в конце ответа: длинный абзац режется с начала, вопрос остаётся', () => {
+  const q = questionOf(`${'очень длинное объяснение '.repeat(50)}так делаем?`)!;
+  assert.ok(q.length <= ASK_TEXT_MAX, String(q.length));
+  assert.ok(q.startsWith('…') && q.endsWith('так делаем?'), q);
+});
+
+test('хуки: «ждёт ответа» — только после вопроса, запроса разрешения или формы; простой конец хода вопроса не ставит', () => {
+  const at = '2026-11-18T10:00:00.000Z';
+  const d = { ...deps(), now: () => at };
+  const stop = (answer: string, o: Partial<HookState> = {}) => handleHook(state({ status: 'working', ...o }), { hook_event_name: 'Stop', last_assistant_message: answer }, d).patch;
+  assert.deepEqual(stop('Сделал.\n\nКоммитить?'), { status: 'waiting', ask: { kind: 'question', text: 'Коммитить?', at } });
+  assert.deepEqual(stop('Готово.'), { status: 'waiting' });
+  // прошлый вопрос не залипает: новый ход кончился без вопроса — снят
+  const old = { kind: 'question' as const, text: 'Коммитить?', at: '2026-11-17T10:00:00.000Z' };
+  assert.deepEqual(stop('Готово.', { ask: old }), { status: 'waiting', ask: null });
+  assert.equal(handleHook(state({ status: 'working', ask: old }), { hook_event_name: 'StopFailure' }, d).patch.ask, null);
+  const note = (type: string, o: Partial<HookState> = {}) => handleHook(state({ status: 'working', ...o }), { hook_event_name: 'Notification', notification_type: type, message: 'Claude needs your permission to use Bash' }, d).patch;
+  assert.deepEqual(note('permission_prompt').ask, { kind: 'permission', text: 'Claude needs your permission to use Bash', at });
+  assert.equal(note('elicitation_dialog').ask?.kind, 'elicitation');
+  // простой — ход за человеком, но вопроса нет
+  assert.deepEqual([note('idle_prompt').status, 'ask' in note('idle_prompt')], ['waiting', false]);
+  // разрешение уже записал PermissionRequest — уведомление его не затирает
+  const perm = { kind: 'permission' as const, text: 'Bash: npm test', at };
+  assert.equal('ask' in note('permission_prompt', { ask: perm }), false);
+});
+
+test('хуки: PermissionRequest, который решает человек, — сессия ждёт ответа с инструментом и аргументом; AskUserQuestion — вопрос', () => {
+  const at = '2026-11-18T10:00:00.000Z';
+  const d = { ...deps(), now: () => at };
+  const req = (tool: string, input: Record<string, unknown>) => handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input }, d);
+  const bash = req('Bash', { command: 'npm test', description: 'тесты' });
+  assert.deepEqual([bash.reply, bash.patch], [{}, { status: 'waiting', ask: { kind: 'permission', text: 'Bash: npm test', at, tool: 'Bash' } }]);
+  assert.deepEqual(req('AskUserQuestion', { questions: [{ question: 'Какую базу берём?', options: [] }, { question: 'Нужны миграции?' }] }).patch.ask, { kind: 'question', text: 'Какую базу берём? · Нужны миграции?', at, tool: 'AskUserQuestion' });
+  assert.equal(req('WebFetch', {}).patch.ask?.text, 'WebFetch');
+});
+
+test('хуки: разрешения просит сабагент — шаги другого сабагента вопрос не снимают, его собственный шаг — снимает', () => {
+  const at = '2026-11-18T10:00:00.000Z';
+  const d = { ...deps(), now: () => at };
+  const req = handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', agent_id: 'a', tool_name: 'Bash', tool_input: { command: 'make' } }, d).patch;
+  assert.deepEqual(req.ask, { kind: 'permission', text: 'Bash: make', at, agent: 'a', tool: 'Bash' });
+  const asked = state({ status: 'waiting', injected: { tags: [] }, ask: req.ask! });
+  assert.deepEqual(handleHook(asked, { hook_event_name: 'PostToolBatch', agent_id: 'b' }, d).patch, {});
+  assert.deepEqual(handleHook(asked, { hook_event_name: 'PostToolBatch', agent_id: 'a' }, d).patch, { ask: null, status: 'working' });
+  // вопрос основного разговора сабагент тоже не снимает
+  const main = state({ status: 'waiting', ask: { kind: 'permission', text: 'Bash: ls', at } });
+  assert.deepEqual(handleHook(main, { hook_event_name: 'PostToolBatch', agent_id: 'b' }, d).patch, {});
+});
+
+test('хуки: PostToolUse разрешённого инструмента снимает «ждёт разрешения» — по вызову, а чужой вызов не снимает', () => {
+  const at = '2026-11-18T10:00:00.000Z';
+  const d = { ...deps(), now: () => at };
+  const asked = handleHook(state({ status: 'working' }), { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'sleep 90' }, tool_use_id: 'tu-1' }, d).patch;
+  assert.equal(asked.ask?.toolUseId, 'tu-1');
+  const waiting = state({ status: 'waiting', ask: asked.ask! });
+  // параллельный вызов другого инструмента закончился — разрешения всё ещё ждёт Bash
+  assert.deepEqual(handleHook(waiting, { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'tu-2' }, d).patch, {});
+  assert.deepEqual(handleHook(waiting, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'tu-1' }, d).patch, { ask: null, status: 'working' });
+  // хук без id вызова: совпадение по инструменту
+  const noId = state({ status: 'waiting', ask: { kind: 'permission', text: 'Bash: ls', at, tool: 'Bash' } });
+  assert.deepEqual(handleHook(noId, { hook_event_name: 'PostToolUse', tool_name: 'Bash' }, d).patch, { ask: null, status: 'working' });
+  // вопрос сабагента снимает только его шаг
+  assert.deepEqual(handleHook(state({ status: 'waiting', ask: { ...noId.ask!, agent: 'a' } }), { hook_event_name: 'PostToolUse', tool_name: 'Bash' }, d).patch, {});
+});
+
+test(
+  'хуки: чтение, пропущенное без вопроса, ожидания не ставит; ответ и шаг модели снимают вопрос, /clear — тоже, «Продолжить» — нет',
+  withConfigDir((root) => {
+    const specs = path.join(root, 'specs');
+    fs.mkdirSync(specs);
+    createTag('k');
+    updateTag('k', { dirs: [specs] });
+    const read = handleHook(state({ tags: ['k'], injected: { tags: ['k'] }, status: 'working' }), { hook_event_name: 'PermissionRequest', tool_name: 'Read', tool_input: { file_path: path.join(specs, 'a.md') } }, deps(root));
+    assert.deepEqual(read.patch, {});
+    const ask = { kind: 'question' as const, text: 'Коммитить?', at: '2026-11-17T10:00:00.000Z' };
+    const after = (input: Parameters<typeof handleHook>[1]) => handleHook(state({ status: 'waiting', injected: { tags: [] }, ask }), input, deps()).patch;
+    assert.equal(after({ hook_event_name: 'UserPromptSubmit', prompt: 'да' }).ask, null);
+    assert.equal(after({ hook_event_name: 'PostToolBatch' }).ask, null);
+    assert.equal(after({ hook_event_name: 'SessionStart', source: 'clear' }).ask, null);
+    assert.equal('ask' in after({ hook_event_name: 'SessionStart', source: 'resume' }), false);
+    // без вопроса снимать нечего: в правке поля нет
+    assert.equal('ask' in handleHook(state({ status: 'waiting' }), { hook_event_name: 'UserPromptSubmit', prompt: 'x' }, deps()).patch, false);
+  }),
+);
+
+test('parseHookInput: текст уведомления (message) берётся', () => {
+  assert.equal(parseHookInput({ hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'нужно разрешение' })?.message, 'нужно разрешение');
 });
 
 test(

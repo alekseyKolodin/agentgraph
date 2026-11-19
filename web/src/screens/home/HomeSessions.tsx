@@ -1,10 +1,11 @@
 // Главная: живые сессии терминала строками — как идущие запуски (HomeRuns), но короче: имя, пространство (без него —
-// папка), «ждёт N мин» или «работает», «Открыть». Ждущие стоят в «Ждёт тебя», работающие — в «Идут».
+// папка), «ждёт N мин» или «работает», «Открыть». Ждущие ответа (вопрос, разрешение) стоят в «Ждёт тебя» — второй
+// строкой что спросил Claude; работающие — в «Идут». Закончившие ход без вопроса здесь не стоят.
 import type { MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { SessionView } from '@server/api-types';
 import { t } from '../../lib/i18n';
-import { homeSessionMeta, sessionTone } from '../../lib/sessions';
+import { askNote, homeSessionMeta, sessionTone } from '../../lib/sessions';
 import styles from './Home.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -16,6 +17,7 @@ export function HomeSessions({ sessions, now }: { sessions: SessionView[]; now: 
       {sessions.map((s) => {
         const to = `/sessions/${encodeURIComponent(s.id)}`;
         const tone = sessionTone(s);
+        const ask = s.status === 'waiting' ? askNote(s) : '';
         // клик по строке мимо ссылок — тот же переход; ссылки (Cmd+клик — в новой вкладке) переходят сами
         const open = (e: MouseEvent) => {
           if (!(e.target as HTMLElement).closest('a')) void navigate(to);
@@ -30,6 +32,7 @@ export function HomeSessions({ sessions, now }: { sessions: SessionView[]; now: 
                 <Link to={to} className={styles.hrunTitle} title={s.name} tabIndex={-1}>{s.name}</Link>
                 <span className={styles.hrunMeta} title={s.cwd}>{homeSessionMeta(s, now)}</span>
               </div>
+              {ask && <div className={styles.hrunSum} title={ask}>{ask}</div>}
             </div>
             <span className={styles.hrunActs}>
               <Link to={to} className="btn small" aria-label={t('Открыть сессию «{name}»', { name: s.name })}>{t('Открыть')}</Link>

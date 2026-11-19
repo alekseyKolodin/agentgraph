@@ -1,7 +1,7 @@
 // Проверка словами (подменённая сессия) и вид command: разбор вывода, map, ключи в env, таймаут.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkEvent, checkPrompt, parseCheck, REJECTED_EXAMPLES } from './check.js';
+import { checkEvent, checkPrompt, eventText, parseCheck, REJECTED_EXAMPLES } from './check.js';
 import { commandKind, mapItems, parseOutput, runCommand } from './command.js';
 import type { SessionRequest, SessionResult } from '../agent.js';
 import type { SourceCtx } from './kind.js';
@@ -93,4 +93,83 @@ test('map без at: время подставлено agentgraph и помеч�
   const [a, b] = mapItems([{ id: 1 }, { id: 2, ts: '2026-11-17T10:00:00Z' }], { id: 'id', at: 'ts' }, 'src');
   assert.equal(isStampedAt(a), true);
   assert.equal(isStampedAt(b), false);
+});
+
+const meeting = (extra: Partial<RoutineEvent> = {}): RoutineEvent => ({
+  source: 'ff',
+  id: 't1',
+  at: '2026-11-10T10:00:00.000Z',
+  title: 'Billing sync',
+  text: 'Итог: договорились по счетам',
+  fields: { summary: { action_items: '**Борис Иванов**\nПодготовить отчёт до пятницы\n**Анна**\nПроверить деплой' } },
+  ...extra,
+});
+const me = { names: ['Борис Иванов'], emails: [] };
+
+test('встреча: в событии дата встречи (от неё сроки) и мои пункты по профилю', () => {
+  const t = eventText(meeting(), { profile: me });
+  assert.match(t, /Пункты действий: дата встречи 2026-11-10T10:00:00\.000Z; сроки вроде «до пятницы» или «завтра» считай от неё/);
+  assert.match(t, /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+  assert.ok(!/- Проверить деплой/.test(t.split('Поля:')[0]), 'чужой пункт в блоке «мои» не попадает');
+});
+
+test('встреча: нет моих пунктов и пустой профиль — об этом сказано, а не молча', () => {
+  assert.match(eventText(meeting(), { profile: { names: ['Пётр Сидоров'], emails: [] } }), /Мои пункты: среди пунктов нет подписанных или названных по профилю \(Пётр Сидоров\)/);
+  assert.match(eventText(meeting(), { profile: { names: [], emails: [] } }), /Профиль «кто я» не заполнен/);
+});
+
+test('не встреча — текст события без изменений, профиль не читается', () => {
+  const t = eventText(ev('1'), {
+    profile: () => {
+      throw new Error('профиль читать не нужно');
+    },
+  });
+  assert.ok(!t.includes('Пункты действий'));
+  assert.ok(!t.includes('Мои пункты'));
+});
+
+test('встреча: пункты в полях — и summary.action_items, и action_items; «Next steps» в тексте MR или задачи Jira встречей событие не делает', () => {
+  const noProfile = { profile: () => { throw new Error('профиль читать не нужно'); } };
+  const mr = meeting({ source: 'gitlab', fields: { iid: 7 }, text: 'Правки по биллингу\n\n## Next steps\n**Борис Иванов**\nПодготовить отчёт до пятницы' });
+  assert.ok(!/Пункты действий|Мои пункты/.test(eventText(mr, noProfile)), 'описание MR с «Next steps» — не встреча');
+  const jira = meeting({ source: 'jira', fields: { key: 'ABC-1', summary: 'Заголовок задачи' }, text: 'Action items\nБорис Иванов: сделать' });
+  assert.ok(!/Пункты действий|Мои пункты/.test(eventText(jira, noProfile)), 'summary-строка Jira — не summary.action_items');
+  const flat = meeting({ fields: { action_items: ['**Борис Иванов**', 'Подготовить отчёт до пятницы'] } });
+  assert.match(eventText(flat, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+});
+
+test('встреча: у записи с разделом «Action items» только в тексте пункты попадают в поля при получении — тогда блок встречи есть; у MR с тем же разделом полей нет', async () => {
+  const { withActionItems } = await import('./sources/connector.js');
+  const text = 'Итог: договорились\n\n## Action items\n**Борис Иванов**\nПодготовить отчёт до пятницы';
+  const rec = withActionItems(meeting({ fields: { channel: 'ff' }, text }));
+  assert.equal(rec.fields?.action_items, '**Борис Иванов**\nПодготовить отчёт до пятницы');
+  assert.equal(rec.fields?.channel, 'ff', 'остальные поля на месте');
+  assert.match(eventText(rec, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+  // уже есть в полях — не трогаем; раздела нет — поля не появляются
+  const done = meeting();
+  assert.equal(withActionItems(done).fields, done.fields);
+  assert.equal(withActionItems(meeting({ fields: {}, text: 'Обсудили action items позже' })).fields?.action_items, undefined);
+});
+
+test('встреча: профиль только с почтой Jira — не «пустой», в подписи названа почта, а не undefined', () => {
+  const jiraOnly = { names: [], emails: [], jiraEmail: 'boris@example.com' };
+  const withMine = meeting({ fields: { action_items: 'Отправить акт boris@example.com до пятницы' } });
+  const t = eventText(withMine, { profile: jiraOnly });
+  assert.match(t, /Мои пункты \(по профилю boris@example\.com\):\n- Отправить акт boris@example\.com до пятницы/);
+  const none = eventText(meeting(), { profile: jiraOnly });
+  assert.match(none, /Мои пункты: среди пунктов нет подписанных или названных по профилю \(boris@example\.com\)/);
+  assert.ok(!/undefined/.test(t + none));
+  assert.ok(!/Профиль «кто я» не заполнен/.test(none));
+  // логин GitLab, GitHub — то же самое
+  assert.match(eventText(meeting(), { profile: { names: [], emails: [], gitlab: 'bivanov' } }), /\(bivanov\)/);
+});
+
+test('проверка словами: у повторяющейся встречи с тем же названием другая дата — не дубль (правило в промпте), даты видны модели', async () => {
+  let req: SessionRequest | undefined;
+  const earlier = meeting({ id: 't0', at: '2026-11-03T10:00:00.000Z' });
+  await checkEvent({ condition: 'встреча с обещаниями', event: meeting(), recent: [earlier], rejected: [], profile: me }, { session: async (q) => ((req = q), result({ structured: { match: true, duplicate: false, reason: 'другая встреча' } })) });
+  assert.match(req!.system ?? '', /recurring meeting, report or stand-up with the same title but another date is NOT a duplicate/);
+  assert.ok(req!.prompt.includes('2026-11-03T10:00:00.000Z') && req!.prompt.includes('2026-11-10T10:00:00.000Z'));
+  // недавние события сравниваются кратко: блок встречи (мои пункты) повторяется только у самого события
+  assert.equal((req!.prompt.match(/Мои пункты/g) ?? []).length + (req!.prompt.match(/Профиль «кто я»/g) ?? []).length, 1);
 });

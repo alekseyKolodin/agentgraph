@@ -289,9 +289,9 @@ export const teamwork: Record<string, string> = {
   'не сохранено: {word} {list}': 'not saved: {word} {list}',
   // --- finish (волна 4): «Мои задачи» на главной, запуск по задаче на главной и странице запуска, подписи черновиков
   'Мои задачи': 'My tasks',
-  'Ваши задачи в активных спринтах всех команд': 'Your tasks in active sprints of all teams',
-  'Все ваши задачи в активных спринтах готовы.': 'All your tasks in active sprints are done.',
-  'В активных спринтах задач на вас нет.': 'No tasks are assigned to you in active sprints.',
+  'Ваши задачи во всех командах: в спринтах и в бэклоге': 'Your tasks in all teams: in sprints and in the backlog',
+  'Все ваши задачи готовы.': 'All your tasks are done.',
+  'Задач на вас нет.': 'No tasks are assigned to you.',
   'К команде': 'Open the team',
   'К командам': 'Open teams',
   'Уже готово: ещё {n} {tasks}.': 'Already done: {n} more {tasks}.',

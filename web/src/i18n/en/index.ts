@@ -17,5 +17,8 @@ import { space } from './space';
 import { teamwork } from './teamwork';
 import { routines } from './routines';
 import { kinds } from './kinds';
+import { sources } from './sources';
+import { deskTop } from './desk-top';
+import { deskMonth } from './desk-month';
 
-export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines };
+export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...sources, ...deskTop, ...deskMonth };

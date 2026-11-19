@@ -260,11 +260,13 @@ export class TeamService {
   }
 
   /**
-   * «Мои задачи» на главной (spec §11): задачи активных спринтов всех команд, где исполнитель — я по git config клона,
-   * одним ответом; фонового pull не тянет (главную открывают часто, клоны и так получают по таймеру). Папки репо кода —
-   * как у проекта: local.json, иначе один обход проектов дашборда на все ссылки.
+   * «Мои задачи» на главной (spec §11) и поставщик дел (src/desk/providers/teamwork.ts, docs/desk/SPEC.md 4.3): все мои
+   * незакрытые задачи всех команд — в активном и запланированных спринтах и в бэклоге, где исполнитель — я по git config
+   * клона, плюс «Готово» активного спринта (строка «уже готово»); архивные проекты не входят. Одним ответом; фонового
+   * pull не тянет (главную открывают часто, клоны и так получают по таймеру). Папки репо кода — как у проекта: local.json,
+   * иначе один обход проектов дашборда на все ссылки; locate: false — только local.json (поставщику дел хватает).
    */
-  async mine(): Promise<TeamMine> {
+  async mine(o: { locate?: boolean } = {}): Promise<TeamMine> {
     const out: TeamMine = { teams: [], projects: [], tasks: [] };
     const wanted = new Map<TeamMineProject, ProjectRepo[]>();
     const repoPaths = new Map<TeamMineProject, Record<string, string>>();
@@ -290,12 +292,16 @@ export class TeamService {
         } catch {
           continue; // битый project.yaml виден на экране команды
         }
-        const active = pc.status === 'active' ? this.readSprints(repo, p).find((s) => s.status === 'active') : undefined;
-        if (!active) continue;
+        if (pc.status !== 'active') continue;
+        const active = this.readSprints(repo, p).find((s) => s.status === 'active');
         const tasks = this.readTasks(repo, p);
-        const mine = tasks.filter((x) => !x.error && x.sprint === active.number && x.assignee?.toLowerCase() === me);
+        // «Готово» — только активного спринта: закрытые спринты и бэклог уже не «мои дела»
+        const mine = tasks.filter((x) => !x.error && x.assignee?.toLowerCase() === me && (x.status !== 'done' || (active && x.sprint === active.number)));
         if (!mine.length) continue;
-        const project: TeamMineProject = { team: slug, slug: p, title: pc.title, sprint: { number: active.number, title: active.title }, repos: [] };
+        const space = repo.local().projectSpaces[p];
+        const project: TeamMineProject = {
+          team: slug, slug: p, title: pc.title, ...(active ? { sprint: { number: active.number, title: active.title } } : {}), ...(space ? { space } : {}), repos: [],
+        };
         out.projects.push(project);
         wanted.set(project, pc.repos);
         repoPaths.set(project, repo.local().repoPaths);
@@ -307,7 +313,7 @@ export class TeamService {
       }
     }
     const own = (p: TeamMineProject, url: string) => (Object.hasOwn(repoPaths.get(p)!, url) ? repoPaths.get(p)![url] : undefined);
-    const auto = await this.findLocals([...new Set([...wanted].flatMap(([p, repos]) => repos.filter((r) => !own(p, r.url)).map((r) => r.url)))]);
+    const auto = o.locate === false ? new Map<string, string>() : await this.findLocals([...new Set([...wanted].flatMap(([p, repos]) => repos.filter((r) => !own(p, r.url)).map((r) => r.url)))]);
     for (const [p, repos] of wanted) {
       p.repos = repos.map((r) => {
         const found = own(p, r.url) ?? auto.get(r.url);
@@ -1547,6 +1553,23 @@ let service: TeamService | undefined;
 export function teamService(deps?: TeamServiceDeps): TeamService {
   service ??= new TeamService(deps);
   return service;
+}
+
+/** Свой сервис поставщика дел в процессе без сервера (CLI `agentgraph desk`): без таймеров, процесс не держит. */
+let deskOwn: TeamService | undefined;
+
+/**
+ * Сервис команд для поставщика дел (src/desk/providers/teamwork.ts): сервер уже завёл общий — он (одна очередь записи
+ * на клон); нет — свой без таймеров. Общий в этом случае не заводится: сервер, если стартует позже, заведёт его со своими
+ * зависимостями, и поставщик перейдёт на него со следующего обращения.
+ */
+export function deskTeamService(): TeamService {
+  return service ?? (deskOwn ??= new TeamService({ timers: false }));
+}
+
+/** Идёт ли общий сервис команд (процесс сервера): только он пишет в репо команды с доски дел — CLI-процесс не отправляет. */
+export function teamServiceRunning(): boolean {
+  return service !== undefined;
 }
 
 /** Остановить сервис команд (stopServer): таймеры снимаются, текущая операция дожидается. */

@@ -104,6 +104,33 @@ export type RunSource = {
   url?: string;
   /** Корень проекта (основной checkout). */
   project?: string;
+  /**
+   * Вещь, о которой запуск (src/things/types.ts): у запуска рутины — MR или задача Jira из события, рядом с рутиной в key.
+   * По её ключу «Код» и дела находят свои запуски.
+   */
+  thing?: Thing;
+  /**
+   * Id дела (src/desk), с карточки которого начат запуск («Запустить flow»): на старте запуск — в links.runs дела и дело —
+   * в «В работе», конец пишет итог в why (SPEC 3.2).
+   */
+  item?: string;
+};
+
+/** Вещь (src/things/types.ts) — здесь только ссылкой на тип: файл без импортов. */
+export type Thing = import('./things/types.js').Thing;
+
+/**
+ * Откуда сессия (session.json → source): вещь (MR, задача Jira), дело, запуск или рутина. Пишет POST /api/sessions
+ * с source; у сессий без источника поля нет.
+ */
+export type SessionSource = {
+  thing?: Thing;
+  /** Id дела (этап 3, src/desk). */
+  item?: string;
+  /** Id запуска, из которого открыта сессия. */
+  run?: string;
+  /** Слаг рутины. */
+  routine?: string;
 };
 
 export type RunWorktree = { path: string; branch?: string };
@@ -130,6 +157,8 @@ export type RunSummary = {
   worktree?: RunWorktree;
   /** Запуск в worktree: основной checkout проекта — список группирует по нему, а не по папке worktree. */
   project?: string;
+  /** Проект запуска (пространство): явное пространство, иначе по папке — список группирует и подписывает по нему. */
+  projectRef?: ProjectRef;
   /** Доп. директории запуска: из них и из cwd собираются недавние пути формы запуска. */
   addDirs?: string[];
   /** Разовый запуск: пометка в списке, вместо «Открыть flow» — «Сохранить как flow». */
@@ -142,6 +171,8 @@ export type RunSummary = {
   knowledge?: string[];
   /** Дочерний запуск блока-вызова: список показывает его под родителем. */
   parent?: RunParent;
+  /** Продолжение: id первого запуска цепочки (ключ run:<root> не меняется от продолжения к продолжению). */
+  root?: string;
 };
 
 /** Идущий этап: у параллельной группы их несколько. */
@@ -179,6 +210,8 @@ export type HomeRun = {
   parent?: RunParent;
   /** Запуск по задаче или черновик Teamwork (run.json → teamwork): строка на главной ссылается на задачу. */
   teamwork?: RunTeamworkLink;
+  /** Проект запуска — как у RunSummary. */
+  projectRef?: ProjectRef;
 };
 
 export type HomeResponse = { runs: HomeRun[] };
@@ -197,6 +230,8 @@ export type HomeEvent<T extends string = string> = {
   title?: string;
   /** Только у end дочернего запуска блока-вызова: о его конце не уведомляют — скажет конец родителя. */
   parent?: RunParent;
+  /** Только у end запуска рутины: слаг рутины. О таком конце вкладка не уведомляет — движок рутин скажет сам, если нужно. */
+  routine?: string;
   /** Только у session: сессия терминала закончила ход и ждёт тебя; runId и flow у него пустые. */
   session?: HomeSessionWait;
   /** Только у team: в клоне команды что-то поменялось (запись или pull); runId и flow пустые. UI сбрасывает кэш команды и перечисленных проектов (пусто — менялся корень репо). */
@@ -236,6 +271,8 @@ export type FeedItem = {
   open?: boolean;
   status?: string;
   costUsd?: number;
+  /** Проект запуска — как у RunSummary. */
+  projectRef?: ProjectRef;
 };
 
 export type FeedResponse = { items: FeedItem[] };
@@ -279,6 +316,42 @@ export type FlowSummary = {
 
 /** Элемент GET /api/flows: сводка flow (у невалидного — только имя, папка и ошибка). */
 export type FlowListItem = FlowSummary;
+
+/**
+ * Версия flow — одинаковые по содержимому снимки flow.yaml его запусков (src/flow-history.ts). Версия запуска — та, с
+ * которой он начался (после правки на ходу — flow.0.yaml).
+ */
+export type FlowVersion = {
+  /** Отпечаток содержимого (12 hex). */
+  id: string;
+  /** Номер по времени появления: 1 — самая старая известная. */
+  n: number;
+  /** Совпадает с файлом flow сейчас. */
+  current: boolean;
+  /** Запусков с этой версией. */
+  runs: number;
+  firstAt: string;
+  lastAt: string;
+  /** Последний запуск с этой версией и его файл снимка (GET /api/runs/:id/file?path=…). */
+  runId: string;
+  file: string;
+};
+
+/** GET /api/flows/:name/history: как flow используют и какие версии были у его запусков (разовые не в счёт). */
+export type FlowHistory = {
+  name: string;
+  /** Всех запусков flow, с дочерними и от рутин. */
+  total: number;
+  /** Запусков за последние 30 дней. */
+  runs30d: number;
+  last?: { id: string; startedAt: string; status: string; title?: string };
+  /** От свежих к старым, не больше 30. */
+  versions: FlowVersion[];
+  /** Запусков без снимка flow.yaml (папку чистили): в версиях их нет. */
+  noSnapshot: number;
+  /** Файл flow сейчас ни с одним запуском не запускался (поправили после последнего). */
+  currentUnrun?: true;
+};
 
 /** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
 export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
@@ -360,6 +433,12 @@ export type SpaceUpdate = { id: string; at: string; kind: 'run' | 'session'; flo
 /** Документ пространства (docs/): имя файла, размер, время правки; title — первый заголовок «# …» текстового файла. */
 export type SpaceDoc = { name: string; size: number; mtimeMs: number; text: boolean; title?: string };
 
+/**
+ * Проект — пространство (docs/desk/SPEC.md, раздел 2). Запуски, сессии, MR и ветки получают его на сервере
+ * (projectOfPath и projectResolver в src/spaces.ts); UI показывает готовый, а не вычисляет по папке.
+ */
+export type ProjectRef = { space: string; title: string } | { space: null; title: 'Без проекта' };
+
 export type SpaceMeta = {
   slug: string;
   title?: string;
@@ -373,6 +452,13 @@ export type SpaceMeta = {
   cwd?: string;
   /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства (их можно снять). */
   tags?: string[];
+  /**
+   * Привязанные репозитории — корни git (основной checkout, не worktree): работа в них без явного пространства — проект
+   * этого пространства. Нет поля — ещё не перенесено: при первом чтении заполняется из cwd и dirs ([] — перенесено, пусто).
+   */
+  repos?: string[];
+  /** Пространство закрыто (ISO-время закрытия): его нет в выборе пространства и в срезах, в списке — отдельной группой. */
+  closedAt?: string;
   /** Последние запуски и сессии, обновившие состояние, свежие сверху. */
   history: SpaceUpdate[];
   /**
@@ -401,6 +487,12 @@ export type SpaceListItem = {
   dirs?: string[];
   /** Теги знаний пространства: формы сессии и запуска подставляют их при выборе пространства. */
   tags?: string[];
+  /** Привязанные репозитории (корни git). */
+  repos?: string[];
+  /** Закрыто: не в выборе и не в срезах. */
+  closedAt?: string;
+  /** Когда переписано состояние (mtime STATE.md): дата у превью. */
+  stateMtimeMs?: number;
   /**
    * Что подставят формы сессии и запуска: заданная рабочая папка (space) или папка последней сессии или запуска в нём —
    * не в worktree, не дочернего и не внутри папки настроек agentgraph или папки запусков («Сессия в папке» не в счёт).
@@ -436,7 +528,15 @@ export type LegacySummary = { path: string; text: string; mtimeMs: number };
  * looseSessions — сессии без пространства, открытые в тех же папках, что сессии и запуски пространства (или в его рабочей
  * папке): их можно добавить в пространство одной кнопкой (у перенесённого — сессии той же работы без тега задачи).
  */
-export type SpaceDetail = Space & { runs: SpaceRun[]; sessions: SpaceSession[]; workdir?: SpaceWorkdir; legacySummary?: LegacySummary; looseSessions?: SpaceSession[] };
+export type SpaceDetail = Space & {
+  runs: SpaceRun[];
+  sessions: SpaceSession[];
+  workdir?: SpaceWorkdir;
+  legacySummary?: LegacySummary;
+  looseSessions?: SpaceSession[];
+  /** Куда относится работа в каждом привязанном репозитории: другое пространство — репо привязан и к нему, и оно главнее. */
+  repoProjects?: Record<string, ProjectRef>;
+};
 
 // ---------- черновики пространств от модели (src/space-draft.ts): ничего не записано, сохраняет человек
 
@@ -563,6 +663,23 @@ export type SessionTagChip = { slug: string; state: 'on' | 'pending' | 'removed'
 /** memory — карта этого пространства в памяти идущего claude (запущен с ним); выбранное на ходу — строкой «прочитай» до «Перезапустить». */
 export type SessionSpaceChip = { slug: string; state: 'on' | 'pending' | 'removed'; missing?: true; memory?: true };
 
+/**
+ * Сессия ждёт ответа, а не просто закончила ход: question — последний абзац ответа Claude кончается вопросом (или
+ * инструмент AskUserQuestion), permission — запрос разрешения, elicitation — форма MCP. text — сам вопрос (или что просят
+ * разрешить), at — когда спросили. Лежит в записи сессии и переживает закрытие приложения; снимается следующим
+ * сообщением пользователя или шагом модели.
+ */
+export type SessionAsk = {
+  kind: 'question' | 'permission' | 'elicitation';
+  text: string;
+  at: string;
+  /** Разрешения просит сабагент (agent_id хука): шаги других сабагентов вопрос не снимают. */
+  agent?: string;
+  /** Инструмент и вызов, который ждёт разрешения: PostToolUse этого же вызова снимает вопрос. */
+  tool?: string;
+  toolUseId?: string;
+};
+
 /** Последнее обновление состояния пространства по сессии: когда, куда, ошибка, стоимость. */
 export type SessionStateUpdate = { at: string; space: string; ok: boolean; error?: string; costUsd: number };
 
@@ -611,10 +728,21 @@ export type SessionView = {
   statePending?: 'app-closed';
   /** Завершённая: «Продолжить» откроет тот же разговор (--resume); false — транскрипта нет, будет новый разговор. */
   resumable?: boolean;
-  /** Живая, статус waiting: с какого момента ждёт тебя (главная — «ждёт N мин»). */
+  /** Живая, статус waiting: с какого момента ход за человеком (главная — «ждёт N мин»). */
   waitingSince?: string;
+  /**
+   * Последний ход кончился вопросом или запросом разрешения: только такая сессия «ждёт тебя» (без ask статус waiting —
+   * просто закончила ход). У завершённой — «закончилась на вопросе».
+   */
+  ask?: SessionAsk;
   /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
   teamwork?: RunTeamworkLink;
+  /** Откуда сессия: вещь, дело, запуск, рутина («Начать сессию» в «Коде»). */
+  source?: SessionSource;
+  /** Проект сессии (пространство): явное пространство, иначе по папке; есть в списке GET /api/sessions. */
+  projectRef?: ProjectRef;
+  /** Ветка, на которой сейчас стоит папка сессии (HEAD, без вызова git); только в списке GET /api/sessions — поиск по ветке. */
+  branch?: string;
 };
 
 /**
@@ -624,9 +752,18 @@ export type SessionView = {
  */
 export type SessionReviewVerdict = 'continue' | 'wrap' | 'done';
 /** Сессия в разборе: что сделано, что осталось, с чего продолжить — одной строкой каждое. */
-export type SessionReviewItem = { id: string; name: string; space?: string; verdict: SessionReviewVerdict; done: string; left: string; next: string };
-/** Ответ разбора: reviewed — сколько сессий видела модель, skipped — сколько не вошло (старые сверх лимита). */
+export type SessionReviewItem = {
+  id: string; name: string; space?: string; verdict: SessionReviewVerdict; done: string; left: string; next: string;
+  /** Когда сессию разобрали (итог на сервере копится разборами) и на какой её активности (lastActivityAt): позже были ходы — разбор мог устареть. */
+  at?: string;
+  activityAt?: string;
+  /** На скольких ходах сессии получен разбор: ходов стало больше — разбор мог устареть. */
+  turns?: number;
+};
+/** Итог разбора (POST и GET /api/session-review): вердикты по сессиям; reviewed — сколько их, skipped — сколько ещё ждёт разбора (новые ходы сверх лимита). */
 export type SessionReviewReply = { items: SessionReviewItem[]; reviewed: number; skipped: number; at: string; costUsd: number; model?: string; durationMs: number };
+/** GET /api/session-review: итог разбора на сервере (не было — null) и идёт ли разбор сейчас. */
+export type SessionReviewState = { reply: SessionReviewReply | null; running: boolean };
 /** Оценка цены разбора до запуска модели. */
 export type SessionReviewEstimate = { model: SpaceDraftModel; sessions: number; skipped: number; low: number; high: number; ceiling: number };
 
@@ -680,6 +817,8 @@ export type ProjectInfo = {
   /** Где origin: gitlab — MR через glab, github — PR через gh. */
   forge?: 'gitlab' | 'github';
   webUrl?: string;
+  /** Пространство, к которому относится репозиторий (projectOfPath). */
+  projectRef?: ProjectRef;
 };
 
 /** GET /api/integrations. */
@@ -728,6 +867,8 @@ export type AttentionItem = {
   /** Корень проекта (основной checkout) и его имя на главной. */
   project: string;
   projectName: string;
+  /** Проект (пространство) репозитория MR — подпись на главной. */
+  projectRef?: ProjectRef;
   reasons: AttentionReasons;
 };
 
@@ -1057,6 +1198,8 @@ export type RunReport = {
   hidden?: boolean;
   /** Id запуска, который этот продолжает: его done-блоки пропущены, их выводы подставлены. */
   continuedFrom?: string;
+  /** Id первого запуска цепочки продолжений (у самого первого поля нет): ключ вещи run:<root> у всей цепочки один. */
+  root?: string;
   /** Разовый запуск: flow берётся из снимка flow.yaml в папке запуска, а не из flows/ по имени. У обычных поля нет. */
   adhoc?: true;
   source?: RunSource;
@@ -1103,7 +1246,15 @@ export type RunReport = {
   flowEdits?: RunFlowEdit[];
   /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
   parent?: RunParent;
+  /** Дела, которые запуск завёл или дополнил инструментом desk_put (вместе с вызванными flow). Нет вызовов — поля нет. */
+  desk?: RunDesk;
 };
+
+/**
+ * Дела запуска (src/desk/tools.ts): created — заведено новых, signals — сигналов к уже существующим делам, keys — ключи
+ * всех тронутых дел по порядку, без повторов (не больше 100). Журнал рутины показывает created.
+ */
+export type RunDesk = { created: number; signals: number; keys: string[] };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };
@@ -1613,15 +1764,19 @@ export type TeamDetail = TeamSummary & {
  */
 export type TeamMineTeam = Pick<TeamDetail, 'slug' | 'title' | 'prefix' | 'flows'> & { columns?: TeamColumns; defaultFlow?: string; me?: string; readonly?: true; error?: string };
 
-/** Проект с моими задачами: активный спринт и репо кода с моими папками (как TeamProject.repos). */
-export type TeamMineProject = { team: string; slug: string; title: string; sprint: { number: number; title: string }; repos: TeamRepoRef[] };
+/**
+ * Проект с моими задачами: активный спринт (нет — у проекта его сейчас нет), пространство проекта из local.json →
+ * projectSpaces (есть только у привязанного) и репо кода с моими папками (как TeamProject.repos).
+ */
+export type TeamMineProject = { team: string; slug: string; title: string; sprint?: { number: number; title: string }; space?: string; repos: TeamRepoRef[] };
 
-/** Моя задача активного спринта; waiting — номера предшественников, которые ещё не в «Готово». */
+/** Моя задача; waiting — номера предшественников, которые ещё не в «Готово». */
 export type TeamMineTask = { team: string; project: string; task: TeamTask; waiting: string[] };
 
 /**
- * GET /api/teams/mine — блок «Мои задачи» на главной (spec §11): задачи активных спринтов, где исполнитель я (email git config
- * клона), во всех командах, одним запросом; архивные проекты не входят. teams — все мои команды: пусто — блока нет.
+ * GET /api/teams/mine — блок «Мои задачи» на главной (spec §11) и поставщик дел (docs/desk/SPEC.md 4.3): все мои незакрытые
+ * задачи (исполнитель — я по email git config клона) во всех командах — в спринтах и в бэклоге — и «Готово» активного
+ * спринта, одним запросом; архивные проекты не входят. teams — все мои команды: пусто — блока нет.
  */
 export type TeamMine = { teams: TeamMineTeam[]; projects: TeamMineProject[]; tasks: TeamMineTask[] };
 
@@ -1985,3 +2140,9 @@ export type TeamTaskIntake = {
 
 /** POST …/tasks/:id/worktree { repo? }: worktree репо кода на ветке задачи (spec §8.8 п. 2); ветка и репо записаны в задачу. */
 export type TeamTaskWorktree = WorktreeResult & { branch: string; repo: TeamRepoRef; task: TeamTask };
+
+/** Кто я (SPEC 3.3): по профилю отличают «обращено ко мне», «мои обещания», «моя реплика» и свои сообщения в источниках. */
+export type Profile = { names: string[]; emails: string[]; gitlab?: string; github?: string; slackUserId?: string; jiraEmail?: string };
+
+/** GET/PUT /api/settings/profile: профиль и поля, которые заполнены автоматически (glab, gh, git config, Jira). */
+export type ProfileResponse = { profile: Profile; auto: (keyof Profile)[] };

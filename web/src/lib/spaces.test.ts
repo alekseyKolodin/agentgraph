@@ -5,7 +5,9 @@ import {
   dirLines, docLine, docSize, filterSpaces, itemsCount, newSpaceBody, pickerRows, spaceFieldNote, spaceFormOf, spaceItems, spaceLabel, spaceMetaLine,
   modelSummary, pickWorkdir, spacePatch, folderPlan, slugFor, spaceTags, swapSpaceTags, spacePreview, spacesNoneText, spaceSnapshot, spaceWorkdir, stateByText, updateLine, workdirHint, workdirNote,
   type CwdState,
+  projectHint, projectKeyOf, projectLabel, projectOrFolder, spaceStateAt, splitClosed,
 } from './spaces';
+import { homeSessionMeta, sessionSub } from './sessions';
 
 const item = (slug: string, title = '', preview = '') => ({ slug, title, preview, updatedAt: '', docs: 0, hasMap: false, hasState: false });
 const space = (over: Partial<Space> = {}): Space => ({
@@ -190,4 +192,35 @@ test('набор папок формы сессии: сохранить в су�
   assert.deepEqual(folderPlan({ target: '', dirs: ['/x'], cwd: '/p' }), { kind: 'none' });
   // уже заведено этой формой, а список ещё старый — сохранить, а не завести (409)
   assert.deepEqual(folderPlan({ target: 'new', dirs: ['/x'], cwd: '/p', created: 'new' }), { kind: 'save', slug: 'new', dirs: ['/x'] });
+});
+
+test('подпись проекта одна: «◇ заголовок»; без проекта — «Без проекта», в тесной строке — папка', () => {
+  const shop = { space: 'shop', title: 'Магазин' } as const;
+  const none = { space: null, title: 'Без проекта' } as const;
+  assert.equal(projectLabel(shop), '◇ Магазин');
+  assert.equal(projectLabel(none), 'Без проекта');
+  assert.equal(projectLabel(undefined), 'Без проекта');
+  assert.equal(projectOrFolder(shop, '/code/app'), '◇ Магазин');
+  assert.equal(projectOrFolder(none, '/code/app'), 'app');
+  assert.equal(projectOrFolder(none, undefined), 'Без проекта');
+  assert.equal(projectKeyOf(shop), 'shop');
+  assert.equal(projectKeyOf(none), '');
+  assert.equal(projectHint(shop), 'Проект — пространство shop');
+  // сессия на Главной и в «Сейчас» — той же подписью, что запуски и MR; без projectRef — как раньше
+  const s = { cwd: '/code/app', status: 'working' as const, lastActivityAt: '2026-11-04T11:55:00Z', turns: 0 };
+  assert.equal(homeSessionMeta({ ...s, projectRef: shop }), '◇ Магазин · работает');
+  assert.equal(homeSessionMeta({ ...s, space: 'shop' }), '◇ shop · работает');
+  assert.match(sessionSub({ ...s, projectRef: none }, new Date('2026-11-04T12:00:00Z')), /^app · работает · /);
+});
+
+test('закрытые пространства: отдельно в списке, нет в выборе (и слаг закрытого — не «новое»); дата состояния у превью', () => {
+  const a = { ...item('a'), updatedAt: '2026-11-02' };
+  const c = { ...item('closed-one'), updatedAt: '2026-11-03', closedAt: '2026-11-10T00:00:00Z' };
+  assert.deepEqual(splitClosed([a, c]), { open: [a], closed: [c] });
+  const kinds = (rows: ReturnType<typeof pickerRows>) => rows.map((r) => (r.kind === 'space' ? r.s.slug : r.kind));
+  assert.deepEqual(kinds(pickerRows('', [a, c])), ['a', 'none']);
+  assert.deepEqual(kinds(pickerRows('closed-one', [a, c])), ['none']);
+  const now = new Date('2026-11-18T12:00:00Z');
+  assert.equal(spaceStateAt({ stateMtimeMs: Date.parse('2026-11-18T11:50:00Z') }, now), '10 мин назад');
+  assert.equal(spaceStateAt({}, now), '');
 });

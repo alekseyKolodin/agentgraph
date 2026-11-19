@@ -150,7 +150,7 @@ test('запуск: своё пространство и папка flow — в 
     assert.equal(write.hooks[0].onFailure, b.includes('new') ? 'block' : undefined);
     // Bash — последним и без onFailure: block: сбой сервера не останавливает каждую команду
     assert.deepEqual([st.hooks.PreToolUse.at(-1)!.matcher, st.hooks.PreToolUse.at(-1)!.hooks[0].onFailure], ['Bash', undefined]);
-    assert.deepEqual(st.hooks.PostToolUse.map((h) => h.matcher), ['Edit|Write|MultiEdit|NotebookEdit']);
+    assert.deepEqual(st.hooks.PostToolUse.map((h) => h.matcher), [undefined]);
     // версия — от claude --version этого бинарника: новый спрашивает и в bypassPermissions, старый там отказывает
     const doc = path.join(spaceDir('cart'), 'docs', 'a.md');
     assert.equal((await s.pre('Write', { file_path: doc, content: 'x' }, { permission_mode: 'bypassPermissions' })).permissionDecision, b.includes('new') ? 'ask' : 'deny', b);

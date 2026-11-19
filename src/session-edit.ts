@@ -333,7 +333,15 @@ function metaDiff(prev: SpaceMeta | undefined, next: SpaceMeta): string {
   const tagsRemoved = tagsWas.filter((x) => !tagsNow.includes(x));
   if (tagsAdded.length) out.push(`добавит теги знаний, которые получат сессии и запуски пространства: ${tagsAdded.join(', ')}`);
   if (tagsRemoved.length) out.push(`снимет теги знаний: ${tagsRemoved.join(', ')}`);
-  return out.length ? `${out.join('; ')}` : 'Заголовок, папки, рабочая папка и теги знаний не меняются';
+  // репозитории — подпись проекта: работа в них без явного пространства станет работой этого пространства
+  const reposWas = prev?.repos ?? [];
+  const reposNow = next.repos ?? reposWas;
+  const reposAdded = reposNow.filter((x) => !reposWas.includes(x));
+  const reposRemoved = reposWas.filter((x) => !reposNow.includes(x));
+  if (reposAdded.length) out.push(`привяжет репозитории (их работа станет работой пространства): ${reposAdded.join(', ')}`);
+  if (reposRemoved.length) out.push(`отвяжет репозитории: ${reposRemoved.join(', ')}`);
+  if (Boolean(prev?.closedAt) !== Boolean(next.closedAt)) out.push(next.closedAt ? 'закроет пространство (уйдёт из выбора и срезов)' : 'откроет пространство снова');
+  return out.length ? `${out.join('; ')}` : 'Заголовок, папки, рабочая папка, теги знаний, репозитории и закрытие не меняются';
 }
 
 function askText(t: EditTarget): string {

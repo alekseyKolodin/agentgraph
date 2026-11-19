@@ -28,10 +28,44 @@ export function reportFeed(runId: string, r: RunReport, live?: FeedLive): FeedIt
     const open = Boolean(live && r.pauseReason?.at === pz.at);
     out.push({ ...run, id: `${runId}:pause:${pz.at}`, kind: 'pause', at: pz.at, title: pz.phase, text: truncate(pz.text, TEXT_MAX), doneAt: pz.resumedAt, open });
   }
-  if (r.finishedAt && r.status !== 'running') {
-    out.push({ ...run, id: `${runId}:end`, kind: 'end', at: r.finishedAt, status: r.status, costUsd: r.totalCostUsd, text: r.error ? truncate(r.error, TEXT_MAX) : undefined });
+  // прерванный запуск (running без процесса) finishedAt не имеет: концом считаем его последнее известное время
+  const endAt = r.finishedAt ?? (r.status === 'interrupted' ? lastKnownAt(r) : undefined);
+  if (endAt && r.status !== 'running') {
+    out.push({ ...run, id: `${runId}:end`, kind: 'end', at: endAt, status: r.status, costUsd: r.totalCostUsd, text: endText(r) });
   }
   return out;
+}
+
+/** Текст конца: у оборвавшегося запуска отчёт говорит про адрес API — человеку это пишем словами. */
+function endText(r: RunReport): string | undefined {
+  if (r.status === 'interrupted' && (!r.error || /\/continue\b/.test(r.error))) return 'прерван: приложение закрылось во время работы, можно продолжить';
+  return r.error ? truncate(r.error, TEXT_MAX) : undefined;
+}
+
+/**
+ * Когда запуск шёл по этапам: старт плюс их длительности (этапы параллельной группы идут вместе — берётся самый долгий).
+ * У блоков и этапов своих меток времени нет, а длительность известна точно; больше этого запуск не работал.
+ */
+function workedUntil(r: RunReport): string | undefined {
+  let ms = 0;
+  const groups = new Map<string, number>();
+  for (const p of r.phases ?? []) {
+    if (!p.durationMs) continue;
+    if (!p.group) ms += p.durationMs;
+    else {
+      const k = `${p.block}\n${p.iteration}\n${p.group}`;
+      groups.set(k, Math.max(groups.get(k) ?? 0, p.durationMs));
+    }
+  }
+  for (const v of groups.values()) ms += v;
+  const start = Date.parse(r.startedAt);
+  return ms > 0 && Number.isFinite(start) ? new Date(start + ms).toISOString() : undefined;
+}
+
+/** Последнее время, которое отчёт знает о запуске: вопросы, паузы, работа этапов, старт. Стабильно между вызовами, лента не прыгает. */
+function lastKnownAt(r: RunReport): string {
+  const times = [r.startedAt, workedUntil(r), ...(r.questions ?? []).flatMap((q) => [q.askedAt, q.answeredAt]), ...(r.pauses ?? []).flatMap((p) => [p.at, p.resumedAt])];
+  return times.filter((t): t is string => Boolean(t)).sort().pop() ?? r.startedAt;
 }
 
 /** От новых к старым, не больше max. */

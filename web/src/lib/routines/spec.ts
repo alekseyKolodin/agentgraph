@@ -1,6 +1,6 @@
 // Сборка RoutineSpec из шагов «Новой рутины» и обратно — для редактора: источник или расписание, условия и проверка
 // словами, flow с пространством, папкой и «ждать меня», ответ наружу (шаг 4), лимиты. Слаг файла — из названия.
-import type { MatchField, ReplySpec, RoutineMode, RoutineSpec, WhenSchedule, WhenSource } from '@server/routines/types';
+import type { MatchField, ReplySpec, RoutineMode, RoutineSpec, TaskRule, WhenSchedule, WhenSource } from '@server/routines/types';
 import { buildMatch, parseMatch, type Condition } from './match';
 import { fromCron, toCron, type ScheduleChoice, DEFAULT_TIME } from './schedule';
 
@@ -39,7 +39,20 @@ export type RoutineDraft = {
   parallel: string;
   model: string;
   knowledge: string[];
+  /** Шаг «Дело»: рутина заводит дела (блок task). Без flow при taskOn — только заводит дела. */
+  taskOn: boolean;
+  taskKind: string;
+  taskColumn: 'new' | 'plan';
+  taskFrom: 'event' | 'flow';
+  /** '' — само: вещь, если распознана, иначе нить, иначе событие. */
+  taskSame: '' | 'thing' | 'thread' | 'event';
+  taskRepeat: 'plan' | 'keep';
+  /** 'thing' | 'never' | условие словами. */
+  taskClose: string;
 };
+
+/** Закрытие дела условием словами: в форме — отдельное поле (taskClose хранит сам текст). */
+export const isCloseText = (close: string): boolean => close !== 'thing' && close !== 'never';
 
 export function emptyDraft(): RoutineDraft {
   return {
@@ -65,8 +78,33 @@ export function emptyDraft(): RoutineDraft {
     parallel: '',
     model: '',
     knowledge: [],
+    taskOn: false,
+    taskKind: '',
+    taskColumn: 'new',
+    taskFrom: 'event',
+    taskSame: '',
+    taskRepeat: 'plan',
+    taskClose: 'thing',
   };
 }
+
+/** Шаг «Дело» → блок task. Значения по умолчанию не пишутся; проект — пространство формы, если flow нет (иначе run.space). */
+export function taskRule(d: RoutineDraft): TaskRule | undefined {
+  if (!d.taskOn) return undefined;
+  const close = d.taskClose.trim();
+  return {
+    kind: d.taskKind.trim(),
+    ...(d.taskColumn !== 'new' ? { column: d.taskColumn } : {}),
+    ...(d.taskFrom === 'flow' ? { from: 'flow' as const } : {}),
+    ...(d.taskSame ? { same: d.taskSame } : {}),
+    ...(d.taskRepeat !== 'plan' ? { on_repeat: d.taskRepeat } : {}),
+    ...(close && close !== 'thing' ? { close } : {}),
+    ...(!draftRuns(d) && d.space ? { project: d.space } : {}),
+  };
+}
+
+/** Рутина запускает flow: без шага «Дело» — всегда, с ним — если flow выбран (или дела заводит flow). */
+export const draftRuns = (d: Pick<RoutineDraft, 'taskOn' | 'taskFrom' | 'flow'>): boolean => !d.taskOn || d.taskFrom === 'flow' || Boolean(d.flow);
 
 export const isSchedule = (d: Pick<RoutineDraft, 'source'>): boolean => d.source === SCHEDULE;
 
@@ -98,24 +136,29 @@ export function buildSpec(d: RoutineDraft, fields: MatchField[]): RoutineSpec {
   const mode = d.mode;
   const limits = { usd: num(d.usd), per_day: num(d.perDay), parallel: num(d.parallel) };
   const hasLimits = Object.values(limits).some((v) => v !== undefined);
+  const task = taskRule(d);
+  const runs = draftRuns(d);
+  const run: RoutineSpec['run'] = {
+    flow: d.flow,
+    ...(d.input.trim() ? { input: d.input.trim() } : {}),
+    ...(d.space ? { space: d.space } : {}),
+    ...(d.cwd.trim() ? { cwd: d.cwd.trim() } : {}),
+    ...(d.worktree === 'new' ? { worktree: 'new' as const } : {}),
+    ...(mode === 'until_pause' && d.pauseBefore.length ? { pause_before: d.pauseBefore } : {}),
+    ...(d.knowledge.length ? { knowledge: d.knowledge } : {}),
+    ...(d.model.trim() ? { model: d.model.trim() } : {}),
+  };
   return {
     title: d.title.trim(),
     enabled: d.enabled,
     ...(d.draft && !d.enabled ? { draft: true } : {}),
     when,
-    run: {
-      flow: d.flow,
-      ...(d.input.trim() ? { input: d.input.trim() } : {}),
-      ...(d.space ? { space: d.space } : {}),
-      ...(d.cwd.trim() ? { cwd: d.cwd.trim() } : {}),
-      ...(d.worktree === 'new' ? { worktree: 'new' as const } : {}),
-      ...(mode === 'until_pause' && d.pauseBefore.length ? { pause_before: d.pauseBefore } : {}),
-      ...(d.knowledge.length ? { knowledge: d.knowledge } : {}),
-      ...(d.model.trim() ? { model: d.model.trim() } : {}),
-    },
+    ...(runs ? { run } : {}),
     mode,
-    reply: replySpec(d.reply, d.replyTo, d.replyOn),
+    // без flow отвечать в источник нечему: ответ уходит на старт, паузу и конец запуска
+    reply: runs ? replySpec(d.reply, d.replyTo, d.replyOn) : { to: 'none' },
     ...(hasLimits ? { limits: Object.fromEntries(Object.entries(limits).filter(([, v]) => v !== undefined)) } : {}),
+    ...(task ? { task } : {}),
   };
 }
 
@@ -126,6 +169,8 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
   const d = emptyDraft();
   const w = spec.when;
   const sched = 'schedule' in w;
+  const run = spec.run;
+  const task = spec.task;
   return {
     ...d,
     title: spec.title,
@@ -136,12 +181,12 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
     check: sched ? '' : (w.check ?? ''),
     schedule: sched ? fromCron(w.schedule) : d.schedule,
     missed: sched ? (w.missed ?? 'ask') : 'ask',
-    flow: spec.run.flow,
-    input: spec.run.input ?? '',
-    space: spec.run.space ?? '',
-    cwd: spec.run.cwd ?? '',
-    worktree: spec.run.worktree === 'new' ? 'new' : 'none',
-    pauseBefore: spec.run.pause_before ?? [],
+    flow: run?.flow ?? '',
+    input: run?.input ?? '',
+    space: run?.space ?? task?.project ?? '',
+    cwd: run?.cwd ?? '',
+    worktree: run?.worktree === 'new' ? 'new' : 'none',
+    pauseBefore: run?.pause_before ?? [],
     mode: spec.mode,
     reply: replyChoice(spec.reply),
     replyTo: spec.reply && spec.reply.to !== 'none' ? spec.reply.to : 'source',
@@ -149,17 +194,31 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
     usd: str(spec.limits?.usd),
     perDay: str(spec.limits?.per_day),
     parallel: str(spec.limits?.parallel),
-    model: spec.run.model ?? '',
-    knowledge: spec.run.knowledge ?? [],
+    model: run?.model ?? '',
+    knowledge: run?.knowledge ?? [],
+    ...(task
+      ? {
+          taskOn: true,
+          taskKind: task.kind,
+          taskColumn: task.column ?? 'new',
+          taskFrom: task.from ?? 'event',
+          taskSame: task.same ?? '',
+          taskRepeat: task.on_repeat ?? 'plan',
+          taskClose: task.close ?? 'thing',
+        }
+      : {}),
   };
 }
 
-/** Чего не хватает, чтобы сохранить: источник, flow, блок у «перед блоком». */
-export function draftMissing(d: RoutineDraft): Array<'source' | 'flow' | 'block'> {
-  const out: Array<'source' | 'flow' | 'block'> = [];
+/** Чего не хватает, чтобы сохранить: источник, flow (не нужен, если рутина только заводит дела), блок у «перед блоком», вид дела, условие закрытия. */
+export function draftMissing(d: RoutineDraft): Array<'source' | 'flow' | 'block' | 'kind' | 'close'> {
+  const out: Array<'source' | 'flow' | 'block' | 'kind' | 'close'> = [];
   if (!d.source) out.push('source');
-  if (!d.flow) out.push('flow');
-  if (d.mode === 'until_pause' && !d.pauseBefore.length) out.push('block');
+  if (!d.flow && (!d.taskOn || d.taskFrom === 'flow')) out.push('flow');
+  if (d.flow && d.mode === 'until_pause' && !d.pauseBefore.length) out.push('block');
+  if (d.taskOn && !d.taskKind.trim()) out.push('kind');
+  // «условие словами» выбрано, а условия нет — иначе молча сохранилось бы закрытие по вещи
+  if (d.taskOn && d.taskFrom === 'event' && !d.taskClose.trim()) out.push('close');
   return out;
 }
 
@@ -168,7 +227,7 @@ const TRANSLIT: Record<string, string> = {
   с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 /** Адреса экранов /routines/new и /routines/connect: такие слаги заняли бы маршрут. */
-const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes']);
+const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates']);
 
 /** Слаг файла из названия: [a-z0-9-], не длиннее 48, свободный среди taken («-2», «-3»…). */
 export function slugify(title: string, taken: Iterable<string> = []): string {

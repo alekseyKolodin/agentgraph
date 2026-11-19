@@ -139,6 +139,38 @@ export async function worktreeList(root: string, x: Exec = exec): Promise<Worktr
   return list;
 }
 
+// ---------- состояние ветки и checkout (для наблюдателя ветки)
+
+export type CheckoutStatus = {
+  /** Сколько файлов в `git status --porcelain`: изменённых, удалённых и новых (по файлам, не по папкам). */
+  total: number;
+  untracked: number;
+  /** Файлы с конфликтом слияния. */
+  conflicted: number;
+};
+
+const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+
+/** Грязный ли checkout: `git status --porcelain` в папке (корень репозитория или worktree). */
+export async function checkoutStatus(dir: string, x: Exec = exec): Promise<CheckoutStatus> {
+  const out = await git(dir, ['status', '--porcelain', '--untracked-files=all'], x, 20_000);
+  const lines = out.split('\n').filter((l) => l.length > 3);
+  return { total: lines.length, untracked: lines.filter((l) => l.startsWith('??')).length, conflicted: lines.filter((l) => CONFLICT_CODES.has(l.slice(0, 2))).length };
+}
+
+export type AheadBehind = { ahead: number; behind: number };
+
+/** Сколько коммитов в ветке сверх ref (ahead) и в ref сверх ветки (behind): ref — upstream или база. Нет ref — undefined. */
+export async function aheadBehind(root: string, branch: string, ref: string, x: Exec = exec): Promise<AheadBehind | undefined> {
+  try {
+    const out = await git(root, ['rev-list', '--left-right', '--count', `refs/heads/${branch}...${ref}`], x, 15_000);
+    const [ahead, behind] = out.trim().split(/\s+/).map(Number);
+    return Number.isFinite(ahead) && Number.isFinite(behind) ? { ahead, behind } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------- GitLab и GitHub
 
 export type Forge = 'gitlab' | 'github';
@@ -226,6 +258,27 @@ export async function getMergeRequest(remote: Remote, iid: number, x: Exec = exe
   if (forgeOf(remote.host) === 'github') return getPull(remote, iid, x);
   const raw = JSON.parse(await x('glab', ['api', '--hostname', remote.host, `projects/${encodeURIComponent(remote.path)}/merge_requests/${iid}`], { timeoutMs: 30_000 })) as RawMr;
   return toMr(raw);
+}
+
+/** MR/PR по ветке: открытый важнее смерженного, смерженный — закрытого. */
+export type BranchMr = { iid: number; url: string; title: string; state: 'opened' | 'merged' | 'closed' };
+
+const MR_RANK: Record<BranchMr['state'], number> = { opened: 0, merged: 1, closed: 2 };
+
+/** Есть ли MR с этой исходной веткой (любого состояния). Нет — undefined; ошибка forge (нет доступа, нет glab) — исключение. */
+export async function findBranchMr(remote: Remote, branch: string, x: Exec = exec): Promise<BranchMr | undefined> {
+  const found: BranchMr[] = [];
+  if (forgeOf(remote.host) === 'github') {
+    const owner = remote.path.split('/')[0];
+    const raw = await ghApi<(RawPull & { state?: string; merged_at?: string | null })[]>(remote.host, [`repos/${remote.path}/pulls?state=all&per_page=10&head=${encodeURIComponent(`${owner}:${branch}`)}`], x);
+    for (const p of raw) found.push({ iid: p.number, url: p.html_url, title: p.title ?? '', state: p.merged_at ? 'merged' : p.state === 'open' ? 'opened' : 'closed' });
+  } else {
+    const q = new URLSearchParams({ source_branch: branch, state: 'all', per_page: '10', order_by: 'updated_at' });
+    const raw = JSON.parse(await x('glab', ['api', '--hostname', remote.host, `projects/${encodeURIComponent(remote.path)}/merge_requests?${q}`], { timeoutMs: 30_000 })) as (RawMr & { state?: string })[];
+    for (const m of raw) found.push({ iid: m.iid, url: m.web_url, title: m.title ?? '', state: m.state === 'merged' ? 'merged' : m.state === 'opened' ? 'opened' : 'closed' });
+  }
+  // sort стабилен: внутри состояния порядок «свежие сверху» от forge сохраняется
+  return found.sort((a, b) => MR_RANK[a.state] - MR_RANK[b.state])[0];
 }
 
 export type Discussion = { resolvable: boolean; resolved: boolean; notes: { author: string; system: boolean }[] };

@@ -4,10 +4,11 @@ import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/rout
 import { buildMatch, conditionText, matchFields, opsFor, parseMatch } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
 import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
+import { logDetail as detailOf, taskVerdict } from './view';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
-  catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, routineState, strip, verdict,
-  waitButtons, weekCost,
+  brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decidedDeskKeys, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
+  sourceState, stateLabel, stateTone, strip, verdict, waitButtons, weekCost,
 } from './view';
 import { commandSpec, everyLabel, everyOptions, foundRow, foundText, kindSpec, missingFields } from './source';
 
@@ -126,6 +127,47 @@ test('сборка RoutineSpec: расписание с задачей, без �
   assert.deepEqual(draftMissing({ ...d, mode: 'until_pause' }), ['block']);
 });
 
+test('шаг «Дело»: без flow рутина только заводит дела — run и ответа нет, умолчания не пишутся', () => {
+  const d = { ...emptyDraft(), title: 'Ревью из GitLab', source: 'gitlab', taskOn: true, taskKind: 'Ревью' };
+  const spec = buildSpec(d, []);
+  assert.deepEqual(spec, { title: 'Ревью из GitLab', enabled: false, when: { source: 'gitlab' }, mode: 'suggest', reply: { to: 'none' }, task: { kind: 'Ревью' } });
+  assert.deepEqual(draftMissing(d), []);
+  const back = draftFromSpec(spec);
+  assert.equal(back.taskOn, true);
+  assert.equal(back.flow, '');
+  assert.deepEqual(buildSpec(back, []), spec);
+  // дела из flow без flow заводить некому; вид дела обязателен
+  assert.deepEqual(draftMissing({ ...d, taskFrom: 'flow' }), ['flow']);
+  assert.deepEqual(draftMissing({ ...d, taskKind: ' ' }), ['kind']);
+  // «условие словами» без условия не сохраняется молча как «вещь закрыта»
+  assert.deepEqual(draftMissing({ ...d, taskClose: '' }), ['close']);
+  // без flow пространство формы — проект дела; с flow — пространство запуска
+  assert.equal(buildSpec({ ...d, space: 'billing' }, []).task?.project, 'billing');
+  assert.equal(draftFromSpec(buildSpec({ ...d, space: 'billing' }, [])).space, 'billing');
+  assert.equal(buildSpec({ ...d, space: 'billing', flow: 'review' }, []).task?.project, undefined);
+});
+
+test('шаг «Дело» с flow: все поля блока task туда и обратно', () => {
+  const d = { ...emptyDraft(), title: 'Ревью', source: 'slack', flow: 'review', taskOn: true, taskKind: 'Ревью', taskColumn: 'plan' as const, taskSame: 'thread' as const, taskRepeat: 'keep' as const, taskClose: 'в треде ответили «готово»' };
+  const spec = buildSpec(d, []);
+  assert.equal(spec.run?.flow, 'review');
+  assert.deepEqual(spec.task, { kind: 'Ревью', column: 'plan', same: 'thread', on_repeat: 'keep', close: 'в треде ответили «готово»' });
+  assert.deepEqual(buildSpec(draftFromSpec(spec), []), spec);
+  // «закрою сам» пишется, «когда вещь закрыта» — умолчание
+  assert.equal(buildSpec({ ...d, taskClose: 'never' }, []).task?.close, 'never');
+  assert.equal(buildSpec({ ...d, taskClose: 'thing' }, []).task?.close, undefined);
+  // шаг выключен — блока task нет, run на месте
+  assert.equal(buildSpec({ ...d, taskOn: false }, []).task, undefined);
+});
+
+test('проверка на истории: строка о деле — дело, в план, то же дело, закрыто', () => {
+  assert.equal(taskVerdict(undefined), undefined);
+  assert.equal(taskVerdict({ action: 'new', key: 'mr:a/b/1' })?.text, 'дело');
+  assert.equal(taskVerdict({ action: 'plan', key: 'mr:a/b/1' })?.text, 'в план');
+  assert.equal(taskVerdict({ action: 'same', key: 'mr:a/b/1' })?.text, 'то же дело');
+  assert.deepEqual(taskVerdict({ action: 'closed', key: 'mr:a/b/1', note: 'MR смержен' }), { text: 'закрыто', why: 'MR смержен' });
+});
+
 test('slugify: транслит, без занятых и зарезервированных', () => {
   assert.equal(slugify('Баг в #bugs → таска и фикс'), 'bag-v-bugs-taska-i-fiks');
   assert.equal(slugify('Утренняя сводка', ['utrennyaya-svodka']), 'utrennyaya-svodka-2');
@@ -163,7 +205,7 @@ const view = (p: Partial<RoutineView> = {}): RoutineView => ({
   recent: [],
   ...p,
 });
-const src = (p: Partial<SourceView> = {}): SourceView => ({ slug: 'slack', spec: { title: 'Slack', kind: 'slack', config: {} }, status: 'ok', missingSecrets: [], usedBy: [], ...p });
+const src = (p: Partial<SourceView> = {}): SourceView => ({ slug: 'slack', spec: { title: 'Slack', kind: 'slack', config: {} }, status: 'ok', missingSecrets: [], usedBy: [], canReply: false, ...p });
 
 test('состояние рутины: черновик, пауза, ждёт, источник, идёт, включена', () => {
   assert.equal(routineState(view({ spec: { ...view().spec, enabled: false, draft: true } }), [], []), 'draft');
@@ -313,4 +355,75 @@ test('отложенное решение: уходит через 5 с, отм�
   assert.deepEqual(sent, ['w2:reject', 'w3:run']);
   assert.equal(d.has('w3'), false);
   assert.ok(changes >= 6);
+});
+
+test('состояние рутины по источнику: не отвечает, молчит дольше обычного, ещё не проверялся — понятными словами', () => {
+  const now = new Date(2026, 10, 17, 12, 0);
+  const on = view({ spec: { ...view().spec, mode: 'auto' } });
+  const check = { at: now.toISOString(), ok: true, total: 3, fresh: 0, emptySince: new Date(2026, 10, 14, 9, 0).toISOString() };
+  assert.equal(routineState(on, [src({ status: 'empty', check })], []), 'source_empty');
+  assert.equal(routineState(on, [src({ status: 'unchecked' })], []), 'unchecked');
+  assert.equal(routineState(on, [src({ status: 'error', error: '401' })], []), 'source_error');
+  assert.equal(stateLabel('source_error'), 'Источник не отвечает');
+  assert.equal(stateLabel('source_empty'), 'Источник молчит дольше обычного');
+  assert.equal(stateLabel('unchecked'), 'Источник ещё не проверялся');
+  assert.deepEqual([stateTone('source_error'), stateTone('source_empty'), stateTone('unchecked')], ['fail', 'wait', 'muted']);
+  assert.deepEqual(routineNote('source_empty', on, src({ status: 'empty', check }), now), { text: 'нет новых записей с 14.11 — дольше обычного', tone: 'wait' });
+  assert.deepEqual(routineNote('source_error', on, src({ status: 'error', error: '401 токен отозван' })), { text: '401 токен отозван', tone: 'fail' });
+  assert.equal(routineNote('ok', on, src()), null);
+});
+
+test('источник в списке: тон и подпись по статусу; расход опроса моделью', () => {
+  assert.deepEqual(sourceState(src({ status: 'error', error: 'нет сети' })), { tone: 'fail', label: 'Не отвечает', note: 'нет сети' });
+  assert.equal(sourceState(src({ status: 'unchecked' })).tone, 'muted');
+  assert.equal(sourceState(src({ status: 'empty' })).note, 'нет новых записей дольше обычного');
+  assert.equal(sourceState(src({ status: 'needs_secret', missingSecrets: ['SLACK_TOKEN'] })).note, 'нет ключа SLACK_TOKEN');
+  assert.deepEqual(sourceState(src()), { tone: 'ok', label: 'Отвечает' });
+  assert.equal(pollCostText(src({ pollCostUsd: { today: 0.12, week: 0.8 } })), 'опрос моделью: сегодня $0.12 · 7 дней $0.80');
+  assert.equal(pollCostText(src()), '');
+});
+
+test('главная: сломанные источники рутин — сначала не отвечающие; неиспользуемые и исправные не показываются', () => {
+  const list = brokenSources([
+    src({ slug: 'a', status: 'empty', usedBy: ['r1'], spec: { title: 'Почта', kind: 'email', config: {} } }),
+    src({ slug: 'b', status: 'error', error: '401 токен отозван', usedBy: ['r1', 'r2'] }),
+    src({ slug: 'c', status: 'error', error: 'нет сети', usedBy: [] }),
+    src({ slug: 'd', status: 'ok', usedBy: ['r3'] }),
+    src({ slug: 'e', status: 'needs_secret', missingSecrets: ['TOKEN'], usedBy: ['r4'] }),
+  ]);
+  assert.deepEqual(list.map((b) => [b.slug, b.tone]), [['b', 'fail'], ['a', 'wait'], ['e', 'wait']]);
+  assert.equal(list[0]!.text, 'Источник «Slack» не отвечает');
+  assert.equal(list[0]!.detail, '401 токен отозван');
+  assert.equal(list[0]!.routines, 2);
+  assert.equal(list[1]!.text, 'Источник «Почта» молчит');
+});
+
+test('главная: источник, который читают только рутины на паузе, не горит; хоть одна включённая — горит', () => {
+  const sources = [src({ slug: 'b', status: 'error', error: 'нет сети', usedBy: ['p', 'q'] })];
+  const r = (slug: string, enabled: boolean) => view({ slug, spec: { ...view().spec, enabled } });
+  assert.deepEqual(brokenSources(sources, new Date(), [r('p', false), r('q', false)]), []);
+  const one = brokenSources(sources, new Date(), [r('p', false), r('q', true)]);
+  assert.deepEqual(one.map((b) => [b.slug, b.routines]), [['b', 1]]);
+});
+
+test('шапка списка: расход опроса источников за сегодня входит в деньги дня', () => {
+  const meta = overviewMeta([view({ stats: { today: 1, started: 1, waiting: 0, costUsd: 1 }, recent: [entry({ outcome: 'started', at: new Date().toISOString(), costUsd: 1 })] })], new Date(), [src({ pollCostUsd: { today: 0.5, week: 2 } })]);
+  assert.equal(meta, 'сегодня 1 запуск · $1.50');
+});
+
+test('строка журнала: сколько дел завёл запуск', () => {
+  const e = { id: '1', at: '2026-11-17T10:00:00.000Z', routine: 'r', event: { source: 's', id: 'e', title: 'x', at: '2026-11-17T10:00:00.000Z' }, outcome: 'started' as const, desk: { created: 2, signals: 1 } };
+  assert.match(detailOf(e), /Запуск завёл 2 дела\. Дописал в дела сигналов: 1\./);
+});
+
+test('решение по ожиданию дела: пока оно в пути, карточка без кнопок; не ушло или отменено — кнопки вернулись', () => {
+  const lines = [
+    { state: 'pending', deskKey: 'mr:gitlab.com/a/b/1' },
+    { state: 'sent', deskKey: 'mr:gitlab.com/a/b/2' },
+    { state: 'failed', deskKey: 'mr:gitlab.com/a/b/3' },
+    // решение по ожиданию без дела (чинить баг, пауза запуска): карточки нет — прятать нечего
+    { state: 'pending' },
+  ];
+  assert.deepEqual([...decidedDeskKeys(lines)], ['mr:gitlab.com/a/b/1', 'mr:gitlab.com/a/b/2']);
+  assert.equal(decidedDeskKeys([]).size, 0);
 });

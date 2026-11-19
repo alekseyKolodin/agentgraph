@@ -14,7 +14,7 @@ import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '..
 import { panelForPath, railClick, validPanel, type SidePanel } from '../../lib/side-panel';
 import { useNow } from '../useNow';
 import { getLang, saveLang, t } from '../../lib/i18n';
-import { sessionSub } from '../../lib/sessions';
+import { asksNow, sessionSub } from '../../lib/sessions';
 import { RENAME_HOST, SessionName } from '../../screens/sessions/SessionName';
 import { isOpen, setOpen, useFold } from './fold';
 import { FlowList, FlowSectionActions } from './FlowList';
@@ -102,8 +102,8 @@ function LiveSection({ all }: { all: SessionView[] }) {
 }
 
 /**
- * Живые сессии терминала в «Сейчас» — под запусками и не в счётчике «ждут»: сессия в простое ждёт человека всегда,
- * и счётчик горел бы без конца. Точка: работает — синяя с ореолом, ждёт тебя — янтарная, запускается — серая.
+ * Живые сессии терминала в «Сейчас» — под запусками и не в счётчике «ждут» раздела. Точка: работает — синяя с ореолом,
+ * ждёт тебя (вопрос или разрешение) — янтарная, закончила ход без вопроса и запускается — серая: простой — не тревога.
  */
 function LiveSessions({ sessions }: { sessions: SessionView[] }) {
   const activeId = useMatch('/sessions/:id')?.params.id;
@@ -115,7 +115,7 @@ function LiveSessions({ sessions }: { sessions: SessionView[] }) {
       {sessions.map((s) => (
         <li
           key={s.id}
-          className={[styles.lrun, s.status === 'waiting' ? styles.wait : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : '', RENAME_HOST].filter(Boolean).join(' ')}
+          className={[styles.lrun, asksNow(s) ? styles.wait : '', s.status === 'waiting' && !s.ask ? styles.sessionIdle : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : '', RENAME_HOST].filter(Boolean).join(' ')}
         >
           <span className={styles.lrunDot} aria-hidden="true" />
           <span className={styles.lrunMain}>
@@ -228,8 +228,9 @@ export function Sidebar({ id, className, drawerOpen = false, onClose, ref }: Sid
   const routinesOn = useFeature('routines');
   // ожидания рутин — тоже «ждёт тебя» на главной: в счётчике значка вместе с вопросами агентов
   const routineWaits = activeWaits(useRoutines(routinesOn).data?.waits ?? []).length;
-  const questions = inboxCount(useHome().data?.runs ?? []) + routineWaits;
   const allSessions = useAllSessions();
+  // сессии, где Claude спросил и ждёт ответа, — тоже: простаивающие без вопроса в счёт не идут
+  const questions = inboxCount(useHome().data?.runs ?? []) + routineWaits + allSessions.filter(asksNow).length;
   const ended = allSessions.filter((s) => !s.live);
   const saved = usePanel();
   const narrow = useNarrow();

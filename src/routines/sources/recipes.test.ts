@@ -61,7 +61,7 @@ test('parseRecipe: причина отказа понятна', () => {
 
 test('builtinKinds: все виды-сервисы на месте, у каждого русские подписи и поля условий', () => {
   const kinds = builtinKinds();
-  assert.deepEqual(kinds.map((k) => k.kind), ['slack', 'telegram', 'gitlab', 'github', 'jira', 'rss', 'folder', 'email', 'connector']);
+  assert.deepEqual(kinds.map((k) => k.kind), ['slack', 'telegram', 'gitlab', 'github', 'jira', 'rss', 'folder', 'email', 'connector', 'projects']);
   for (const k of kinds) {
     assert.ok(/[а-яa-z]/i.test(k.title) && /[а-я]/i.test(k.summary), k.kind);
     assert.ok(k.setup.length > 0 && k.setup.every((f) => f.key && /[а-я]/i.test(f.label)), k.kind);
@@ -72,7 +72,10 @@ test('builtinKinds: все виды-сервисы на месте, у кажд�
   }
   const by = Object.fromEntries(kinds.map((k) => [k.kind, k]));
   for (const k of ['slack', 'telegram', 'gitlab', 'github', 'jira']) assert.ok(by[k].reply, `${k} умеет отвечать`);
-  for (const k of ['rss', 'folder', 'email', 'connector']) assert.equal(by[k].reply, undefined);
+  for (const k of ['rss', 'folder', 'email', 'projects']) assert.equal(by[k].reply, undefined);
+  // «Сервис через Claude» отвечает без модели, но только если в источнике выбран инструмент ответа
+  assert.ok(by.connector.reply && by.connector.canReplyFor);
+  assert.equal(by.connector.canReplyFor!({ title: 't', kind: 'connector', config: {} }), false);
   // скрипт без модели — обычный опрос; без скрипта минимум 30 минут даёт minEveryFor
   assert.equal(by.connector.delivery, 'poll');
   assert.equal(by.slack.delivery, 'live');
@@ -103,4 +106,25 @@ test('github-notifications: ссылки ведут на существующи�
     'https://github.com/o/r/actions',
     'https://github.com/o/r',
   ]);
+});
+
+test('рецепт Fireflies: итог и пункты действий в запросе, без фильтра по дате встречи, время события — дата встречи', async () => {
+  const { mapItems } = await import('../command.js');
+  const r = loadRecipes({ templates: templatesDir(), user: '/nonexistent-recipes' }).find((x) => x.id === 'fireflies')!;
+  const cmd = String(r.spec.config.command);
+  assert.match(cmd, /summary \{ overview action_items \}/);
+  assert.match(cmd, /participants/);
+  assert.ok(!/fromDate|toDate/.test(cmd), 'встречу могут обработать позже её даты: фильтра по дате нет');
+  assert.match(cmd, /limit: 50/);
+  const items = mapItems(
+    { data: { transcripts: [
+      { id: 'a1', title: 'Billing sync', date: 1762768800000, transcript_url: 'https://app.fireflies.ai/view/a1', organizer_email: 'lead@example.com', summary: { overview: 'Итог встречи', action_items: '**Борис**\nСделать отчёт' } },
+      { id: 'a2', title: 'Billing sync', date: 1763373600000, transcript_url: 'https://app.fireflies.ai/view/a2', summary: { overview: 'Итог 2', action_items: null } },
+    ] } },
+    r.spec.map,
+    'ff',
+  );
+  assert.deepEqual(items.map((e) => [e.id, e.title, e.at]), [['a1', 'Billing sync', '2025-11-10T10:00:00.000Z'], ['a2', 'Billing sync', '2025-11-17T10:00:00.000Z']]);
+  assert.equal(items[0].text, 'Итог встречи');
+  assert.deepEqual((items[0].fields.summary as { action_items: string }).action_items, '**Борис**\nСделать отчёт');
 });

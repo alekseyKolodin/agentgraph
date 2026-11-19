@@ -198,10 +198,21 @@
 .run-filter .st:global(.on.waiting), .run-filter .st:global(.on.max_iterations) { background: color-mix(in srgb, var(--st-wait) 18%, transparent); border-color: var(--st-wait); }
 .run-filter .st:global(.on.done) { background: color-mix(in srgb, var(--st-ok) 18%, transparent); border-color: var(--st-ok); }
 .run-filter .st:global(.on.failed), .run-filter .st:global(.on.budget_exceeded), .run-filter .st:global(.on.aborted), .run-filter .st:global(.on.interrupted) { background: color-mix(in srgb, var(--st-fail) 16%, transparent); border-color: var(--st-fail); }
+/* «вручную / от рутин» — те же чипы, что у фильтра статуса, тише и над ним */
+.run-origin { display: flex; gap: 4px; margin: 0 6px 4px; }
+.run-origin :global(.chip) { flex: none; white-space: nowrap; padding: 1px 8px; font-size: var(--fs-meta); }
+.run-origin :global(.chip) .n { opacity: .7; font-weight: 400; }
+/* «готовое старше [N] убрано: 42 · показать» — тихая строка под списком, как «показать скрытые» */
+.old-runs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; padding: 6px 8px 0; font-size: var(--fs-meta); color: var(--ink-3); }
+.old-runs .more-btn { display: inline; width: auto; padding: 0; }
+.old-days { width: auto; padding: 0 2px; border: 0; border-bottom: 1px dashed var(--line); border-radius: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: var(--fs-meta); cursor: pointer; }
+.old-days:focus-visible { outline: none; box-shadow: var(--focus); }
 
 /* сессии терминала в «Сейчас»: работает — синяя точка с ореолом, запускается — серая; ждёт тебя — общий тон .wait */
 .lrun.session-working .lrun-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
 .lrun.session-starting .lrun-dot { background: var(--ink-3); }
+/* закончила ход без вопроса: жива, но без тревоги («ждёт тебя» — только с вопросом) */
+.lrun.session-idle .lrun-dot { background: var(--ink-3); }
 
 /* завершённые сессии (SessionList.tsx): строка — имя с переименованием на месте и мета; группы по пространству — как
    проекты запусков */

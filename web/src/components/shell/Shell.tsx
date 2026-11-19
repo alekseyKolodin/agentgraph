@@ -18,6 +18,7 @@ import { useDocRunTitle } from './docTitle';
 import { QuickSession } from './QuickSession';
 import { Sidebar } from './Sidebar';
 import { useHomeEvents } from './useHomeEvents';
+import { useClosedWorkFeed } from './closedWorkFeed';
 import styles from './Shell.module.css';
 
 /** Пауза перед «Загружаю…»: быстрый ответ не мигает надписью. */
@@ -97,6 +98,7 @@ function Offline({ error, busy, retry }: { error: string; busy: boolean; retry: 
 
 function Ready() {
   useHomeEvents();
+  useClosedWorkFeed();
   const questions = inboxCount(useHome().data?.runs ?? []);
   const run = useDocRunTitle();
   useEffect(() => {

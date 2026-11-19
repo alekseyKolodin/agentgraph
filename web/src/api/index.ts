@@ -5,7 +5,7 @@ export {
   setRunStreamOpen, useFeature, useFeed, useFlows, useHome, useRuns, type IntakeTarget,
 } from './queries';
 export {
-  blankFlow, checkFlow, deleteFlow, editFlow, fetchConnectors, fetchFlow, generateFlow, moveFlow, saveFlowSpec, saveFlowYaml, useTags,
+  blankFlow, checkFlow, deleteFlow, editFlow, fetchConnectors, fetchFlow, fetchFlowVersion, generateFlow, moveFlow, saveFlowSpec, saveFlowYaml, useFlowHistory, useTags,
   type FlowAiProgressEvent, type FlowDetail, type FlowEdited, type FlowGenerated, type FlowSaved,
 } from './flows';
 export {

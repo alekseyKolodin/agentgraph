@@ -5,7 +5,8 @@ import type { SessionRequest, SessionResult } from '../../agent.js';
 import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { SourceSpec, SourceTestResult } from '../types.js';
-import { BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, plainText, sampleProblem, scriptOf, textItems } from './connector.js';
+import { actionItemsByOwner, actionItemsOf, BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, myActionItems, plainText, recordId, runScript, sampleProblem, scriptOf, textItems, withActionItems } from './connector.js';
+import { isStampedAt } from '../kind.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
@@ -288,4 +289,228 @@ test('сборка: ответ модели → spec; битые аргумен�
   assert.equal(a.ok, true);
   if (a.ok) assert.deepEqual((a.spec.config.script as { steps: unknown[] }).steps, [{ tool: READ, args: {}, say: 'Читает', text: { split: '^---', id: 'id: (\\S+)' } }]);
   assert.deepEqual(buildSpecOf({ ok: true, steps: [] }, { tools: [READ], request: 'r' }), { ok: false, error: 'Сессия не вернула шагов скрипта', retry: true });
+});
+
+test('connector без скрипта: стоимость опроса моделью уходит в ctx.cost один раз — и когда записей нет, и когда сессия не удалась', async () => {
+  const spent: number[] = [];
+  const ctx = { ...makeCtx({ config: { tool: TOOL } }), cost: (usd: number) => void spent.push(usd) };
+  const many = connectorKind({ session: async () => ok({ records: [{ id: 'a' }, { id: 'b' }] }) });
+  assert.equal((await many.poll!(ctx)).length, 2);
+  await connectorKind({ session: async () => ok({ records: [] }) }).poll!(ctx);
+  const failed = connectorKind({ session: async () => ({ ...ok(undefined), ok: false, subtype: 'error_max_turns', errors: ['долго'], costUsd: 0.03 }) });
+  await assert.rejects(() => failed.poll!(ctx), /долго/);
+  assert.deepEqual(spent, [0.01, 0.01, 0.03]);
+});
+
+test('connector без скрипта: сессия бросила исключение с расходом — он всё равно уходит в ctx.cost, ошибка не теряется', async () => {
+  const spent: number[] = [];
+  const ctx = { ...makeCtx({ config: { tool: TOOL } }), cost: (usd: number) => void spent.push(usd) };
+  const boom = connectorKind({ session: async () => { throw Object.assign(new Error('соединение оборвалось'), { costUsd: 0.04 }); } });
+  await assert.rejects(() => boom.poll!(ctx), /соединение оборвалось/);
+  assert.deepEqual(spent, [0.04]);
+});
+
+test('isSelf коннектора: автор совпал с профилем (имя, почта, id Slack) — не событие', () => {
+  const profile = { names: ['Иван Петров'], emails: ['me@corp.test'], slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({ records: [] }), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', author, fields });
+  assert.equal(k.isSelf!(ctx, ev('иван петров')), true);
+  assert.equal(k.isSelf!(ctx, ev('Ваня <ME@corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('', { user: 'UME' })), true);
+  assert.equal(k.isSelf!(ctx, ev('Анна')), false);
+  assert.equal(k.isSelf!(ctx, ev('Анна, Иван Петров')), false, 'участники встречи — не моя реплика');
+  const empty = connectorKind({ session: async () => ok({}), profile: () => ({ names: [], emails: [] }) });
+  assert.equal(empty.isSelf!(ctx, ev('')), false, 'пустой профиль никого не считает своим');
+});
+
+test('isSelf коннектора: без автора, регистр, «@логин», «Имя <почта>» и скобки', () => {
+  const profile = { names: ['Иван  Петров'], emails: ['me@corp.test'], gitlab: 'ipet', slackUserId: 'UME' };
+  const k = connectorKind({ session: async () => ok({}), profile: () => profile });
+  const ctx = makeCtx({ kind: 'connector' });
+  const ev = (author?: string, fields: Record<string, unknown> = {}) => ({ source: 's', id: 'x', at: '', title: '', text: '', ...(author === undefined ? {} : { author }), fields });
+  assert.equal(k.isSelf!(ctx, ev()), false, 'без автора — не свой');
+  assert.equal(k.isSelf!(ctx, ev(undefined, { user: 'U-other' })), false);
+  assert.equal(k.isSelf!(ctx, ev('@IPet')), true);
+  assert.equal(k.isSelf!(ctx, ev('  иван петров ')), true);
+  assert.equal(k.isSelf!(ctx, ev('"Петров И." <Me@Corp.test>')), true);
+  assert.equal(k.isSelf!(ctx, ev('Петров И. <other@corp.test>')), false);
+  assert.equal(k.isSelf!(ctx, ev('@anna')), false);
+  assert.equal(k.isSelf!(ctx, ev('Иван')), false, 'часть имени — не совпадение');
+});
+
+// ---------------------------------------------------------------- нить разговора (thread/channel)
+
+test('скрипт: нить и канал по FieldMap — сообщение и ответ в треде дают одну нить; без пути нити — нити нет', async () => {
+  const f = fakeMcp({
+    [READ]: textOf({
+      channel: 'C01',
+      messages: [
+        { ts: '1731920000.1', thread_ts: '1731920000.1', text: 'глянь MR https://gitlab.test/g/app/-/merge_requests/3', ch: 'C01' },
+        { ts: '1731920100.2', thread_ts: '1731920000.1', text: 'поправил, глянь', ch: 'C01' },
+        { ts: '1731920200.3', text: 'вне треда', ch: 'C01' },
+      ],
+    }),
+  });
+  const kind = connectorKind({ session: async () => assert.fail('модель не нужна'), mcp: f.mcp });
+  const steps = [{ tool: READ, args: {}, say: 'Читает канал', json: { items: 'messages', id: 'ts', text: 'text', thread: 'thread_ts', channel: 'ch' } }];
+  const events = await kind.poll!(makeCtx({ slug: 'sl', config: scriptSpec(steps).config }));
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, { source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+  // времени у записей нет — отметка «время подставлено» не теряется вместе с нитью (иначе простой не уйдёт в «догнать»)
+  assert.ok(events.every((e) => isStampedAt(e)));
+  // правило без нити — как раньше
+  const plain = await connectorKind({ session: async () => assert.fail(), mcp: f.mcp }).poll!(makeCtx({ slug: 'sl', config: scriptSpec([{ ...steps[0], json: { items: 'messages', id: 'ts' } }]).config }));
+  assert.ok(plain.every((e) => e.thread === undefined));
+  // scriptOf пропускает новые пути, а не теряет их
+  assert.deepEqual(scriptOf(scriptSpec(steps))!.steps[0].json, { items: 'messages', id: 'ts', text: 'text', thread: 'thread_ts', channel: 'ch' });
+});
+
+test('скрипт: нить и канал регулярками из текстового ответа', () => {
+  const text = '### Anna [C01] thread:1731920000.1\nглянь\n### Boris [C01]\nвне треда';
+  const events = textItems(text, { split: '^### ', id: '^(\\S+)', channel: '\\[(\\w+)\\]', thread: 'thread:(\\S+)' }, 'sl');
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+});
+
+test('connector без скрипта: нить и канал из ответа модели; в подсказке модели — что это', async () => {
+  const reqs: SessionRequest[] = [];
+  const kind = connectorKind({
+    session: async (req) => {
+      reqs.push(req);
+      return ok({ records: [{ id: 'm1', title: 'глянь', thread: '1731920000.1', channel: 'C01' }, { id: 'm2', title: 'без нити', thread: '', channel: 'C01' }] });
+    },
+  });
+  const events = await kind.poll!(makeCtx({ slug: 'sl', config: { tool: READ, request: 'Сообщения #review' } }));
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+  assert.match(reqs[0].system!, /thread — id нити/);
+});
+
+test('сборка: map_thread и map_channel из ответа модели попадают в скрипт; подсказка сборщику о чатах', async () => {
+  const a = buildSpecOf({ ok: true, steps: [{ tool: READ, args_json: '{}', say: 'Читает канал', format: 'json', map_items: 'messages', map_id: 'ts', map_thread: 'thread_ts', map_channel: 'channel' }] }, { tools: [READ], request: 'ревью в #review' });
+  assert.ok(a.ok);
+  if (a.ok) assert.deepEqual((a.spec.config.script as { steps: Array<{ json: unknown }> }).steps[0].json, { items: 'messages', id: 'ts', thread: 'thread_ts', channel: 'channel' });
+  const reqs: SessionRequest[] = [];
+  const builds = createConnectorBuilds({
+    session: async (req) => {
+      reqs.push(req);
+      return ok({ ok: false, reason: 'нет' });
+    },
+    testSource: async () => ({ ok: true, sample: [], found: 0 }) as unknown as SourceTestResult,
+    newId: () => 'b1',
+  });
+  builds.start({ tools: [READ], request: 'ревью' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(reqs[0].system!, /map_thread — id нити/);
+  assert.match(JSON.stringify(reqs[0].outputSchema), /map_thread/);
+});
+
+const FF_ITEMS = `**Борис Иванов**
+Подготовить отчёт по биллингу до пятницы (12:03)
+- Отправить счёт клиенту (15:20)
+
+**Анна**
+Проверить деплой (20:11)
+
+**Борис**
+Обновить документацию`;
+
+test('пункты встречи: разбор по подписям, «Имя: пункт» и маркеры', () => {
+  assert.deepEqual(actionItemsByOwner(FF_ITEMS), [
+    { owner: 'Борис Иванов', item: 'Подготовить отчёт по биллингу до пятницы (12:03)' },
+    { owner: 'Борис Иванов', item: 'Отправить счёт клиенту (15:20)' },
+    { owner: 'Анна', item: 'Проверить деплой (20:11)' },
+    { owner: 'Борис', item: 'Обновить документацию' },
+  ]);
+  assert.deepEqual(actionItemsByOwner('Анна: позвонить клиенту\n- Борис Иванов: выслать КП'), [
+    { owner: 'Анна', item: 'позвонить клиенту' },
+    { owner: 'Борис Иванов', item: 'выслать КП' },
+  ]);
+  assert.deepEqual(actionItemsByOwner('### Анна\n1. Первое\n2) Второе'), [{ owner: 'Анна', item: 'Первое' }, { owner: 'Анна', item: 'Второе' }]);
+});
+
+test('мои пункты — по профилю: полное имя, одно слово имени, почта, логин; чужие и пустой профиль — нет', () => {
+  const me = { names: ['Борис Иванов'], emails: ['boris@example.com'], gitlab: 'bivanov' };
+  assert.deepEqual(myActionItems(FF_ITEMS, me), ['Подготовить отчёт по биллингу до пятницы (12:03)', 'Отправить счёт клиенту (15:20)', 'Обновить документацию']);
+  assert.deepEqual(myActionItems('**boris@example.com**\nСделать A\n**@bivanov**\nСделать B\n**Иванов**\nСделать C', me), ['Сделать A', 'Сделать B', 'Сделать C']);
+  // «Анна» — не я, а «Борис Петров» с другим именем целиком — тоже не я
+  assert.deepEqual(myActionItems('**Анна**\nСделать A\n**Борис Петров**\nСделать B', me), []);
+  assert.deepEqual(myActionItems(FF_ITEMS, { names: [], emails: [] }), []);
+  // пункт без владельца, но назвавший меня по имени
+  assert.deepEqual(myActionItems('Борис Иванов сверит цифры\nАнна напишет письмо', me), ['Борис Иванов сверит цифры']);
+});
+
+test('пункты действий из записи: summary.action_items, action_items, список строк', () => {
+  assert.equal(actionItemsOf({ summary: { action_items: 'a\nb' } }), 'a\nb');
+  assert.equal(actionItemsOf({ action_items: ['a', 'b'] }), 'a\nb');
+  assert.equal(actionItemsOf({ summary: { action_items: '  ' }, actionItems: 'x' }), 'x');
+  assert.equal(actionItemsOf({ summary: { overview: 'o' } }), undefined);
+  assert.equal(actionItemsOf(undefined), undefined);
+});
+
+test('повторяющаяся встреча без id и ссылки: id — название и время, а не одно название', async () => {
+  assert.equal(recordId('Billing sync', '2026-11-10T10:00:00Z'), 'Billing sync@2026-11-10T10:00');
+  assert.notEqual(recordId('Billing sync', '2026-11-10T10:00:00Z'), recordId('Billing sync', '2026-11-17T10:00:00Z'));
+  assert.equal(recordId('Billing sync', ''), 'Billing sync');
+  assert.equal(recordId('', '2026-11-10T10:00:00Z'), '');
+  const kind = connectorKind({
+    session: async () => ok({ records: [{ title: 'Billing sync', at: '2026-11-10T10:00:00Z' }, { title: 'Billing sync', at: '2026-11-17T10:00:00Z' }] }),
+  });
+  const events = await kind.poll!(makeCtx({ config: { tools: [TOOL], request: 'встречи' } }));
+  assert.equal(events.length, 2);
+  assert.notEqual(events[0].id, events[1].id);
+});
+
+test('запись встречи с разделом «Action items» только в тексте: пункты ещё и в поле action_items (опрос моделью и текстовый скрипт); без раздела и с пунктами в полях — поля прежние', async () => {
+  const text = 'Итог: договорились\n\n## Action items\n**Анна**\nПроверить деплой';
+  const kind = connectorKind({
+    session: async () => ok({ records: [{ id: 'm1', title: 'Планёрка', text }, { id: 'm2', title: 'Без раздела', text: 'Обсудили action items позже' }, { id: 'm3', title: 'В полях', text, action_items: 'Свои пункты' }] }),
+  });
+  const events = await kind.poll!(makeCtx({ config: { tools: [TOOL], request: 'встречи' } }));
+  assert.deepEqual(events.map((e) => e.fields?.action_items), ['**Анна**\nПроверить деплой', undefined, 'Свои пункты']);
+
+  const script = { steps: [{ tool: READ, args: {}, say: 'Читает', text: { split: '^Запись ', id: '^(\\d+)', at: 'Дата: (\\S+)' } }] };
+  const { mcp } = fakeMcp({ [READ]: textOf('Запись 1\nДата: 2026-11-10\n## Action items\nСделать A\n\nЗапись 2\nДата: 2026-11-11\nбез пунктов') });
+  const out = await runScript(script as never, mcp(), new Date('2026-11-01T00:00:00Z'), 'ff');
+  assert.deepEqual(out.map((e) => [e.id, e.fields?.action_items]), [['1', 'Сделать A'], ['2', undefined]]);
+});
+
+test('пункты действий из текста записи не усекаются: пункт человека в конце длинного раздела не теряется; «Next steps: …» в середине фразы разделом не считается', () => {
+  const long = Array.from({ length: 120 }, (_, i) => `Общий пункт номер ${i + 1}: проверить, что отчёт отправлен`).join('\n');
+  const e = withActionItems({ source: 's', id: '1', at: '2026-11-10T10:00:00.000Z', title: 'Встреча', fields: {}, text: `Итог\n\n## Action items\n${long}\n**Борис Иванов**\nПодготовить отчёт` });
+  const items = e.fields?.action_items as string;
+  assert.ok(items.length > 2000);
+  assert.deepEqual(myActionItems(items, { names: ['Борис Иванов'], emails: [] }), ['Подготовить отчёт']);
+  for (const text of ['Письмо\n\nNext steps: ждём ревью дизайна\nПозвоните в пятницу', 'Дальше — next steps и сроки', 'Action items — обсудим позже\nпункт']) {
+    assert.equal(withActionItems({ source: 's', id: '2', at: '2026-11-10T10:00:00.000Z', title: 'Письмо', fields: {}, text }).fields?.action_items, undefined, text);
+  }
+  for (const head of ['Action items', 'Action items:', '## Пункты действий:', '**Следующие шаги**', 'Action items (3)']) assert.equal(actionItemsOf({}, `Итог\n\n${head}\n- Сделать A`), '- Сделать A', head);
+});
+
+test('сборщик: подсказка не фильтровать по дате записи, id — из сервиса, at — дата события', async () => {
+  let system = '';
+  const builds = createConnectorBuilds({
+    testSource: async () => ({ ok: true, request: '', sample: [], total: 0 }),
+    session: async (req) => {
+      system = req.system ?? '';
+      return ok({ ok: false, reason: 'нет' });
+    },
+    newId: () => 'b1',
+  });
+  builds.start({ tools: [TOOL], request: 'встречи' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(system, /не фильтруй по \{\{since\}\} против даты самой записи/);
+  assert.match(system, /а не её название/);
+  assert.match(system, /когда событие произошло \(дата встречи/);
+});
+
+test('пункты встречи: «Важно: …» под заголовком — пункт, а не новый владелец; двоеточие в **Имя:** не мешает; «Имя: пункт» без заголовков работает', () => {
+  const me = { names: ['Борис Иванов'], emails: [] };
+  assert.deepEqual(myActionItems('**Борис Иванов:**\nВажно: подготовить отчёт\nОбновить документацию: разделы 1–3\nОтправить письма клиентам:', me), ['Важно: подготовить отчёт', 'Обновить документацию: разделы 1–3', 'Отправить письма клиентам:']);
+  assert.deepEqual(myActionItems('Анна: позвонить клиенту\nБорис Иванов: выслать КП', me), ['выслать КП']);
+});
+
+test('пункты действий из текста записи: раздел «Action items» / «Пункты действий», без раздела — нет', () => {
+  assert.equal(actionItemsOf({}, 'Итог\n\n**Action items**\n**Анна**\nСделать'), '**Анна**\nСделать');
+  assert.equal(actionItemsOf({}, '# Итог\n\n### Пункты действий:\n- Сделать A'), '- Сделать A');
+  assert.equal(actionItemsOf({}, 'Обсудили action items позже'), undefined);
+  assert.equal(actionItemsOf({}, 'Action items'), undefined);
 });

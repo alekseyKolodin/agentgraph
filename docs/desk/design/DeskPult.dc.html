@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Мои дела — доска в стиле приложения</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,a:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3);position:relative}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.ri .b{position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--wait)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg a{font-size:13px;color:var(--ink-2);border-right:1px solid var(--line);padding:5px 12px;line-height:20px}
+.seg a:last-child{border-right:0}
+.seg a.on{background:var(--raised);color:var(--ink);font-weight:500}
+.kd{font-size:11px;font-weight:600;line-height:18px;padding:0 7px;border-radius:4px;white-space:nowrap;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
+.rev{--c:#b48cf2}.jira{--c:#4fc1d6}.meet{--c:#a3c56a}.bug{--c:#f07fb0}.lost{--c:#f2b136}.own{--c:#a3a9b3}
+.pj{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-2);white-space:nowrap}
+.sq{width:8px;height:8px;border-radius:2px;display:inline-block;flex:none}
+.col{background:var(--well);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.colh{display:flex;gap:8px;align-items:baseline;padding:2px 4px 2px;font-size:13px;font-weight:600}
+.colh .n{font-size:12px;font-weight:400;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:7px}
+.card:hover{border-color:var(--line-strong)}
+.top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.id{font:12px var(--mono);color:var(--ink-3)}
+.ttl{font-size:14px;font-weight:600;line-height:1.4}
+.why{font-size:12px;color:var(--ink-2)}
+.agn{font-size:12px;line-height:1.45;color:var(--ink-2);background:var(--well);border-radius:6px;padding:6px 9px}
+.agn b{color:var(--ink);font-weight:500}
+.ft{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--ink-2)}
+.no{width:18px;height:18px;border-radius:50%;background:var(--ink);color:var(--deck);font-size:11px;font-weight:700;display:grid;place-items:center;flex:none}
+.bar{height:4px;border-radius:2px;background:var(--well);overflow:hidden}
+.bar span{display:block;height:100%;background:var(--live);border-radius:2px}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+.tc{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-2);white-space:nowrap}
+.fl{display:inline-flex;gap:6px;align-items:center;font-size:13px;padding:4px 11px;border-radius:999px;border:1px solid var(--line-strong);color:var(--ink-2)}
+.fl.on{background:var(--select);color:var(--ink);font-weight:500}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 1040px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri on" href="DeskPult.dc.html" aria-label="Мои дела" title="Мои дела" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg><span class="b"></span></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Flow" title="Flow"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Знания" title="Знания"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M7 3 5.5 15M12.5 3 11 15M3.5 6.5h12M3 11.5h12"/></svg></a>
+    <a class="ri" href="#" aria-label="Код" title="Код"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6.5 5-4 4 4 4M11.5 5l4 4-4 4"/></svg></a>
+    <a class="ri" href="RulePult.dc.html" aria-label="Рутины" title="Рутины"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 24px 28px 32px; display: flex; flex-direction: column; gap: 18px">
+    <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+      <div>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">Мои дела</h1>
+        <p style="margin: 0; font-size: 13px; color: var(--ink-2)">среда, 18 ноября · 13 дел, 4 новых</p>
+      </div>
+      <span style="flex: 1"></span>
+      <div class="seg" role="group" aria-label="Вид">
+        <a class="on" href="DeskPult.dc.html" aria-current="page">Доска</a>
+        <a href="#">Таблица</a>
+        <a href="#">Проекты</a>
+      </div>
+      <button type="button" class="btn p">Своё дело</button>
+    </div>
+
+    <section aria-label="С чего начать" style="border: 1px solid rgba(242,177,54,.45); background: color-mix(in srgb, #f2b136 6%, #181b20); border-radius: 8px; padding: 16px 18px; display: flex; gap: 18px; align-items: center; flex-wrap: wrap">
+      <div style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 5px">
+        <span style="font-size: 12px; font-weight: 500; color: var(--wait)">Начни с этого</span>
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+          <span class="kd rev">Ревью</span>
+          <span style="font-size: 18px; font-weight: 600">!1287 Retry для вебхуков</span>
+        </div>
+        <span style="color: var(--ink-2)">Автор ответил на твои комментарии и ждёт со вчера. Этот MR держит релиз 2.4.</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start">
+        <a class="btn p" href="#">Открыть MR</a>
+        <span style="font-size: 12px; color: var(--ink-2)">дальше: дата релиза, AG-498</span>
+      </div>
+    </section>
+
+    <div style="display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap">
+      <span style="font-size: 12px; color: var(--ink-3)">Проверено 2 минуты назад</span>
+      <a class="tc" href="RulePult.dc.html"><span class="dot" style="background: var(--ok)"></span>GitLab 3 из 3</a>
+      <a class="tc" href="RulePult.dc.html"><span class="dot" style="background: var(--ok)"></span>Jira 3 из 3</a>
+      <a class="tc" href="RulePult.dc.html"><span class="dot" style="background: var(--ok)"></span>Slack 1 из 1</a>
+      <a class="tc" href="#"><span class="dot" style="background: var(--ok)"></span>Проекты 5 из 5</a>
+      <a class="tc" href="RulePult.dc.html" style="color: var(--fail)"><span class="dot" style="background: var(--fail)"></span>Встречи не проверяются со вчера</a>
+      <button type="button" class="btn s">Починить</button>
+      <span style="flex: 1"></span>
+      <a class="fl on" href="#" aria-current="true">Все 13</a>
+      <a class="fl" href="#"><span class="sq" style="background: #7aa7ff"></span>Оплаты 8</a>
+      <a class="fl" href="#"><span class="sq" style="background: #f2955c"></span>Мобильное 2</a>
+      <a class="fl" href="#"><span class="sq" style="background: #4cc38a"></span>Инфраструктура 3</a>
+    </div>
+
+    <div style="overflow-x: auto">
+      <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; min-width: 1200px; align-items: start">
+
+        <section class="col" aria-label="Новое">
+          <div class="colh"><span>Новое</span><span class="n">4</span></div>
+          <article class="card">
+            <div class="top"><span class="kd rev">Ревью</span><span class="id">!1302</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #f2955c"></span>Мобильное</span></div>
+            <a class="ttl" href="#">Кэш профиля</a>
+            <div class="agn"><b>Агент посмотрел первым:</b> 3 замечания, черновики готовы</div>
+            <div class="acts"><button type="button" class="btn s">В план</button><button type="button" class="btn s g">Не моё</button></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd jira">Jira</span><span class="id">AG-512</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Экспорт выписки в CSV</a>
+            <div class="ft"><span style="color: var(--ink); font-weight: 500">высокий</span><span>до 27 ноября</span></div>
+            <div class="acts"><button type="button" class="btn s">В план</button><button type="button" class="btn s g">Не моё</button></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd meet">Встреча</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Написать ТЗ на повторные вебхуки</a>
+            <div class="ft"><span>обещал на дейлике</span><span>до четверга</span></div>
+            <div class="acts"><button type="button" class="btn s">В план</button><button type="button" class="btn s g">Не моё</button></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd lost">Забытое</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #4cc38a"></span>Инфраструктура</span></div>
+            <a class="ttl" href="#">Ветка fix/cert-rotate</a>
+            <div class="why">3 файла не закоммичены 9 дней, MR нет</div>
+            <div class="acts"><button type="button" class="btn s">В план</button><button type="button" class="btn s g">Не нужно</button></div>
+          </article>
+        </section>
+
+        <section class="col" aria-label="В плане">
+          <div class="colh"><span>В плане</span><span class="n">4</span></div>
+          <article class="card">
+            <div class="top"><span class="no">1</span><span class="kd rev">Ревью</span><span class="id">!1287</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Retry для вебхуков</a>
+            <div class="why">Автор ответил на 2 твоих комментария</div>
+            <div class="agn"><b>Агент сверил правки:</b> один вопрос остался спорным</div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="no">2</span><span class="kd meet">Встреча</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Согласовать с Ириной дату релиза 2.4</a>
+            <div class="ft"><span style="color: var(--wait)">сегодня</span></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="no">3</span><span class="kd jira">Jira</span><span class="id">AG-498</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Лимит на повторные списания</a>
+            <div class="ft"><span>3 дня без движения</span><span>до 27 ноября</span></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="no">4</span><span class="kd own">Своё</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #4cc38a"></span>Инфраструктура</span></div>
+            <a class="ttl" href="#">Продлить сертификат стейджа</a>
+            <div class="ft"><span style="color: var(--wait)">сегодня</span></div>
+          </article>
+        </section>
+
+        <section class="col" aria-label="В работе">
+          <div class="colh"><span class="dot" style="background: var(--live)"></span><span>В работе</span><span class="n">3</span></div>
+          <article class="card">
+            <div class="top"><span class="kd bug">Баг</span><span class="id">AG-447</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Заказ висит в pending после оплаты «Мир»</a>
+            <div class="why" style="color: var(--live)">агент чинит, этап 2 из 4</div>
+            <div class="bar" role="img" aria-label="Готово 2 этапа из 4"><span style="width: 50%"></span></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd own">Долг</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #f2955c"></span>Мобильное</span></div>
+            <a class="ttl" href="#">Перевести с moment на date-fns</a>
+            <div class="why" style="color: var(--live)">агент, 3 файла из 8</div>
+            <div class="bar" role="img" aria-label="Готово 3 файла из 8"><span style="width: 37%"></span></div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd jira">Jira</span><span class="id">AG-503</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Отчёт по возвратам</a>
+            <div class="ft"><span>делаешь сам, сессия открыта</span><span>до пятницы</span></div>
+          </article>
+        </section>
+
+        <section class="col" aria-label="Ждёт других">
+          <div class="colh"><span>Ждёт других</span><span class="n">2</span></div>
+          <article class="card">
+            <div class="top"><span class="kd rev">Ревью</span><span class="id">!1290</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#">Логи платежей</a>
+            <div class="why">Ждём автора 2 дня. Ответит — вернётся в план</div>
+          </article>
+          <article class="card">
+            <div class="top"><span class="kd own">Своё</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #4cc38a"></span>Инфраструктура</span></div>
+            <a class="ttl" href="#">Доступ к проду для выгрузки</a>
+            <div class="why">Ждём Пашу, спросил во вторник</div>
+          </article>
+        </section>
+
+        <section class="col" aria-label="Готово">
+          <div class="colh"><span class="dot" style="background: var(--ok)"></span><span>Готово</span><span class="n">сегодня 2</span></div>
+          <article class="card" style="background: transparent">
+            <div class="top"><span class="kd jira">Jira</span><span class="id">AG-431</span><span style="flex: 1"></span><span class="pj"><span class="sq" style="background: #7aa7ff"></span>Оплаты</span></div>
+            <a class="ttl" href="#" style="color: var(--ink-2)">Дубли платежей</a>
+            <div class="why">MR смержен, закрылось само</div>
+          </article>
+          <article class="card" style="background: transparent">
+            <div class="top"><span class="kd own">Рутина</span></div>
+            <a class="ttl" href="#" style="color: var(--ink-2)">Сводка по MR за утро</a>
+            <div class="why">сделано без тебя в 09:30</div>
+          </article>
+        </section>
+
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

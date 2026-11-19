@@ -1,22 +1,27 @@
-# Рецепт: новые записи встреч в Fireflies.ai (GraphQL API). Ключ: Fireflies → Settings → Developer Settings → API Key.
+# Рецепт: новые записи встреч в Fireflies.ai (GraphQL API) — с итогом и пунктами действий. Ключ: Fireflies → Settings → Developer Settings → API Key.
+# Записи берутся без фильтра по дате встречи: транскрипт готов через десятки минут после неё, и запись, обработанная позже
+# прошлой проверки, при фильтре по дате потерялась бы. Повторы отсеивает движок по id транскрипта (а не по названию: у
+# еженедельной встречи название одно). Время события — дата встречи: от неё считаются сроки пунктов («до пятницы»).
+# Итог — в тексте события, пункты действий и участники — в полях (fields.summary.action_items, fields.participants).
 id: fireflies
-summary: Новые записи встреч в Fireflies.ai
+summary: Новые записи встреч в Fireflies.ai — итог и пункты действий
 spec:
   title: Fireflies.ai · записи встреч
   kind: command
   every: 5m
-  description: Новая запись встречи в Fireflies.ai
+  description: Новая запись встречи в Fireflies.ai — с итогом и пунктами действий
   secrets: [FIREFLIES_API_KEY]
   config:
     command: |-
       curl -sS --max-time 30 https://api.fireflies.ai/graphql \
         -H "Authorization: Bearer $FIREFLIES_API_KEY" \
         -H 'Content-Type: application/json' \
-        -d '{"query":"{ transcripts(limit: 20) { id title date duration transcript_url organizer_email } }"}'
+        -d '{"query":"{ transcripts(limit: 50) { id title date duration transcript_url organizer_email participants summary { overview action_items } } }"}'
   map:
     items: data.transcripts
     id: id
     title: title
+    text: summary.overview
     link: transcript_url
     at: date
     author: organizer_email

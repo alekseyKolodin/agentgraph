@@ -7,20 +7,32 @@ export type FetchFn = typeof fetch;
 /** Поиск в Jira Cloud: старый /search снят, новый отдаёт issues + nextPageToken. */
 export const JIRA_SEARCH_PATH = '/rest/api/3/search/jql';
 
+/** «Назначено на меня»: один запрос для «Кода» (пресет mine) и источника Jira в рутинах (запрос по умолчанию). */
+export const ASSIGNED_TO_ME_JQL = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC';
+
 export const JQL_PRESETS = {
   sprint: 'assignee = currentUser() AND sprint in openSprints() ORDER BY updated DESC',
-  mine: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC',
+  mine: ASSIGNED_TO_ME_JQL,
 } as const;
 export type JqlPreset = keyof typeof JQL_PRESETS;
 
 /** Без явных fields поиск вернёт только id. */
 export const LIST_FIELDS = ['summary', 'status', 'issuetype', 'priority', 'updated', 'parent'];
-const ISSUE_FIELDS = [...LIST_FIELDS, 'description', 'subtasks', 'issuelinks', 'labels'];
+const ISSUE_FIELDS = [...LIST_FIELDS, 'description', 'subtasks', 'issuelinks', 'labels', 'assignee', 'created'];
 
 // задача в списке — общая с UI: src/api-types.ts
 export type { JiraIssueBrief } from './api-types.js';
 
+export type JiraPerson = { accountId: string; displayName: string; email?: string };
+
+/** Одно изменение поля задачи из истории (changelog). */
+export type JiraChange = { at: string; author: string; field: string; from: string; to: string };
+
 export type JiraIssue = JiraIssueBrief & {
+  /** Исполнитель; нет — задача не назначена. email Jira Cloud часто скрывает. */
+  assignee?: JiraPerson;
+  /** Когда задачу создали (ISO). */
+  created?: string;
   description: string;
   labels: string[];
   subtasks: { key: string; title: string; status: string }[];
@@ -31,6 +43,8 @@ export type JiraClient = {
   myself(): Promise<{ accountId: string; displayName: string }>;
   search(jql: string, max?: number): Promise<JiraIssueBrief[]>;
   issue(key: string): Promise<JiraIssue>;
+  /** История изменений задачи, старые сверху; при длинной истории — последние max записей. */
+  changelog(key: string, max?: number): Promise<JiraChange[]>;
 };
 
 export class JiraError extends Error {
@@ -111,6 +125,8 @@ export function jiraClient(cfg: JiraSettings, token: string, fetchFn: FetchFn = 
       const f = raw.fields ?? {};
       return {
         ...brief(raw),
+        created: f.created,
+        assignee: f.assignee?.accountId ? { accountId: f.assignee.accountId, displayName: f.assignee.displayName ?? '', email: f.assignee.emailAddress || undefined } : undefined,
         description: adfToMarkdown(f.description).trim(),
         labels: f.labels ?? [],
         subtasks: (f.subtasks ?? []).map((s) => ({ key: s.key, title: s.fields?.summary ?? '', status: s.fields?.status?.name ?? '' })),
@@ -121,6 +137,18 @@ export function jiraClient(cfg: JiraSettings, token: string, fetchFn: FetchFn = 
           return [{ relation, key: other.key, title: other.fields?.summary ?? '' }];
         }),
       };
+    },
+    async changelog(key, max = 100) {
+      if (!KEY_RE.test(key)) throw new JiraError(`Не ключ задачи Jira: ${key}`);
+      const path = (startAt: number) => `/rest/api/3/issue/${encodeURIComponent(key)}/changelog?startAt=${startAt}&maxResults=${max}`;
+      let page = await call<RawChangelog>('GET', path(0));
+      // Jira отдаёт историю от старых к новым: за последними изменениями идём на последнюю страницу
+      const total = page.total ?? 0;
+      const got = page.values?.length ?? 0;
+      if (!page.isLast && total > got) page = await call<RawChangelog>('GET', path(Math.max(0, total - max)));
+      return (page.values ?? []).flatMap((h) =>
+        (h.items ?? []).map((i) => ({ at: h.created ?? '', author: h.author?.displayName ?? '', field: i.field ?? '', from: i.fromString ?? '', to: typeof i.toString === 'string' ? i.toString : '' })),
+      );
     },
   };
 }
@@ -138,6 +166,12 @@ async function httpError(res: Response): Promise<string> {
   return `Jira ответила ${res.status}${hint}${detail ? `: ${detail}` : ''}`;
 }
 
+type RawChangelog = {
+  isLast?: boolean;
+  total?: number;
+  values?: { created?: string; author?: { displayName?: string }; items?: { field?: string; fromString?: string | null; toString?: string | null }[] }[];
+};
+
 type RawIssueRef = { key: string; fields?: { summary?: string; status?: { name?: string } } };
 type RawIssue = {
   key: string;
@@ -147,7 +181,9 @@ type RawIssue = {
     issuetype?: { name?: string };
     priority?: { name?: string };
     updated?: string;
+    created?: string;
     parent?: RawIssueRef;
+    assignee?: { accountId?: string; displayName?: string; emailAddress?: string } | null;
     description?: unknown;
     labels?: string[];
     subtasks?: RawIssueRef[];

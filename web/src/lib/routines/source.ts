@@ -36,7 +36,7 @@ export const MAP_KEYS: Array<keyof FieldMap> = ['items', 'id', 'title', 'text', 
 
 /** Подпись поля записи в форме «Своей команды». */
 export function mapLabel(k: keyof FieldMap): string {
-  return { items: t('Список записей'), id: 'id', title: t('название'), text: t('текст'), link: t('ссылка'), at: t('время'), author: t('автор') }[k];
+  return { items: t('Список записей'), id: 'id', title: t('название'), text: t('текст'), link: t('ссылка'), at: t('время'), author: t('автор'), thread: t('тред'), channel: t('канал') }[k];
 }
 
 /** Название по умолчанию из команды: первое слово-программа и следующее («gh api»). */

@@ -6,6 +6,7 @@ import { assertSlug, freeSlug, parseSourceYaml, SLUG_RE } from './schema.js';
 import { getMcpServers, type McpServer } from '../connectors.js';
 import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
+import { ensureTemplateFlow, flowTemplates, NoFlowTemplate } from './flow-templates.js';
 import type { LogOutcome, McpServicesView, WaitAction } from './types.js';
 
 export type Reply = { status: number; body: unknown };
@@ -14,9 +15,9 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
-export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools']);
+export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates']);
 
-const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
+const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
 
 export type RoutinesRouteDeps = {
   engine: RoutineEngine;
@@ -106,6 +107,17 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       }
     }
     if ((m = p.match(/^\/api\/routines\/sources\/connector-build\/([A-Za-z0-9_-]+)$/)) && method === 'GET') return found(builds(deps).get(m[1]), 'Сборка не найдена');
+
+    // --- готовые flow шаблонов рутин (templates/flows): список и копия к flow пользователя, если такого ещё нет
+    if (p === '/api/routines/flow-templates' && method === 'GET') return ok(flowTemplates());
+    if ((m = p.match(/^\/api\/routines\/flow-templates\/([a-z0-9-]+)$/)) && method === 'POST') {
+      try {
+        const r = ensureTemplateFlow(m[1]);
+        return ok({ flow: r.flow, copied: r.copied });
+      } catch (e) {
+        return bad((e as Error).message, e instanceof NoFlowTemplate ? 404 : 500);
+      }
+    }
 
     // --- подключение словами
     if (p === '/api/routines/sources/draft' || p.startsWith('/api/routines/sources/draft/')) {

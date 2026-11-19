@@ -1,33 +1,39 @@
 // Рутины на главной (docs/routines/design/Home.dc.html): карточка ожидания — рутина ждёт решения («Чинить: …?»): событие,
 // где стоит запуск, черновик ответа наружу с галочкой (уходит вместе с решением), «Чинить / Не сейчас / Это не баг».
 // Над кнопками — что агент уже сделал (context: тикет, критерии, причина). Решение уходит через 5 секунд: до этого строка
-// решения и всплывашка с «Отменить» (routineDecisions.ts). Строка «догнать»: что пришло, пока приложение было закрыто.
+// решения и всплывашка с «Отменить» (routineDecisions.ts). Ожидание рутины с task — это дело в «Новом» (метка «Дело · вид»):
+// «Не сейчас» уносит дело в план, «Не то» — закрывает. Строка «догнать»: что пришло, пока приложение было закрыто.
+// Над карточками — сломанные источники рутин (не отвечает, молчит дольше обычного, нет ключа): рутины их не видят.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { CatchUp, RoutineWait } from '@server/routines/types';
+import type { CatchUp, RoutineView, RoutineWait, SourceView } from '@server/routines/types';
 import { errorText } from '../../api';
 import { answerCatchUp, routineKeys } from '../../api/routines';
 import { MdText } from '../../components/MdText';
 import { useToast } from '../../components/Toast';
 import { ago, clock, excerpt } from '../../lib/format';
-import { t } from '../../lib/i18n';
-import { catchUpLine, catchUpRunLabel, catchUpText, decisionText, replySent, waitButtons } from '../../lib/routines/view';
+import { plural, t } from '../../lib/i18n';
+import { brokenSources, catchUpLine, catchUpRunLabel, catchUpText, decisionText, isDeskWait, replySent, waitButtons, type BrokenSource } from '../../lib/routines/view';
 import { bindDecisions, decide, dismiss, isSent, undo, useDecisions } from './routineDecisions';
 import styles from './RoutineWaits.module.css';
 
-export function RoutineHome({ waits, catchUp, now }: { waits: RoutineWait[]; catchUp: CatchUp[]; now: number }) {
+export function RoutineHome({ waits, catchUp, sources = [], routines = [], now }: { waits: RoutineWait[]; catchUp: CatchUp[]; sources?: SourceView[]; routines?: RoutineView[]; now: number }) {
   const qc = useQueryClient();
   const toast = useToast();
   useEffect(() => bindDecisions(qc, toast), [qc, toast]);
   const { lines, hidden } = useDecisions();
   // решённые карточки прячем сразу: решение ждёт 5 секунд или уже ушло
   const shown = waits.filter((w) => !hidden.has(w.id));
-  if (!shown.length && !lines.length && !catchUp.length) return null;
+  const broken = brokenSources(sources, new Date(now), routines);
+  if (!shown.length && !lines.length && !catchUp.length && !broken.length) return null;
   return (
     <div className={styles.routines}>
+      {broken.map((b) => (
+        <BrokenRow key={b.slug} b={b} />
+      ))}
       {shown.map((w) => (
-        <WaitCard key={w.id} w={w} now={now} />
+        <WaitCard key={w.id} w={w} now={now} kind={routines.find((r) => r.slug === w.routine)?.spec.task?.kind} />
       ))}
       {lines.map((d) => (
         <div key={d.id} className={styles.decided} role="status">
@@ -46,7 +52,25 @@ export function RoutineHome({ waits, catchUp, now }: { waits: RoutineWait[]; cat
   );
 }
 
-function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
+/** Источник рутин сломан: строка с причиной и переходом к источникам — пока он не починен, рутины его событий не видят. */
+function BrokenRow({ b }: { b: BrokenSource }) {
+  const fail = b.tone === 'fail';
+  return (
+    <div className={`${styles.broken} ${fail ? styles.brokenFail : ''}`} role="status">
+      <span className={`${styles.dot} ${fail ? styles.fail : styles.wait}`} aria-hidden="true" />
+      <span className={styles.brokenText}>
+        <span className={styles.brokenName}>{b.text}</span>
+        {b.detail && <span className={styles.brokenDetail}> · {b.detail}</span>}
+      </span>
+      <span className={styles.brokenMeta} title={t('Рутины на этом источнике не получают событий, пока его не починить')}>
+        {b.routines} {plural(b.routines, 'рутина', 'рутины', 'рутин')}
+      </span>
+      <Link className="btn small ghost" to="/routines" title={t('Открыть рутины и источники')}>{t('Источники')}</Link>
+    </div>
+  );
+}
+
+function WaitCard({ w, now, kind }: { w: RoutineWait; now: number; /** Вид дела рутины (task.kind) — для метки ожидания-дела. */ kind?: string }) {
   const toast = useToast();
   const [reply, setReply] = useState(true);
   const [draft, setDraft] = useState(w.replyDraft?.text ?? '');
@@ -63,10 +87,16 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
     });
   };
   const said = excerpt(e.text, 400);
+  const desk = isDeskWait(w);
   return (
     <section className={styles.card} aria-label={t('Ждёт тебя')}>
       <div className={styles.head}>
         <Link className={styles.src} to={`/routines/${encodeURIComponent(w.routine)}/log`} title={t('Открыть срабатывания рутины')}>↯ {w.routineTitle}</Link>
+        {desk && (
+          <span className={styles.desk} title={t('Это дело в «Новом»: «Не сейчас» перенесёт его в план, «Не то» — закроет')}>
+            {kind ? t('Дело · {kind}', { kind }) : t('Дело')}
+          </span>
+        )}
         <span className={styles.gap} />
         <span className={styles.waited}>{t('ждёт {t}', { t: ago(w.at, now) })}</span>
       </div>
@@ -122,8 +152,8 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
       )}
       <div className="row">
         <button type="button" className="btn primary" onClick={() => choose('run')}>{b.run}</button>
-        <button type="button" className="btn" title={t('Запуск подождёт в срабатываниях рутины')} onClick={() => choose('later')}>{b.later}</button>
-        <button type="button" className="btn ghost" title={t('Рутина запомнит и учтёт в проверке словами')} onClick={() => choose('reject')}>{b.reject}</button>
+        <button type="button" className="btn" title={desk ? t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины') : t('Запуск подождёт в срабатываниях рутины')} onClick={() => choose('later')}>{b.later}</button>
+        <button type="button" className="btn ghost" title={desk ? t('Дело закроется; рутина запомнит и учтёт в проверке словами') : t('Рутина запомнит и учтёт в проверке словами')} onClick={() => choose('reject')}>{b.reject}</button>
       </div>
     </section>
   );

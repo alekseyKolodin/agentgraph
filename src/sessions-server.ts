@@ -13,17 +13,19 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  RunTeamworkLink, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
+  RunTeamworkLink, SessionAsk, SessionList, SessionSource, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
   SpaceEditPart, SpaceSession, TeamTask, TeamTaskWork,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { nothingToName, pickSessionTitle } from './session-title.js';
 import type { RunTitleReport } from './run-title.js';
-import { FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
+import { parseSessionSource } from './work-links.js';
+import { APP_DIR, FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
+import { branchCache } from './git-head.js';
 import { requestProblem } from './server-guard.js';
-import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
+import { appendTagNote, knowledgeTags, listTags, planTagNote, readTag, runTagSlugs, tagsDir } from './tags.js';
 import {
-  cleanLine, createSpace, existingSpacePaths, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
+  cleanLine, createSpace, existingSpacePaths, projectResolver, type ProjectResolver, MAP_FILE, queueSpaceState, readSpace, readSpaceMeta, spacesDir, spaceSlug, SPACE_MAP_MAX, SPACE_STATE_MAX, STATE_FILE, updateSpace, writeSpaceDoc,
   writeSpaceState, WRITE_DOC_EXTS, SpaceError,
 } from './spaces.js';
 import { dropRunPaths, parseSpaceState, sessionStateRequest, type SessionTurn } from './space-state.js';
@@ -31,13 +33,13 @@ import { isInside } from './artifacts.js';
 import { dedupeNames, validateAttachments } from './attachments.js';
 import { configDir } from './settings.js';
 import {
-  findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
+  askText, findClaude, FLOW_WRITE_FULL, handleHook, idleAgents, launchDirs, LIVE_SESSIONS_MAX, parseClaudeVersion, parseHookInput, readSessionCtx, resumeTarget, safeRealpath,
   sessionArgs, sessionEnv, childPermissionMode, sessionDirs, sessionFlags, sessionName, sessionPrompt, sessionReadTargets, SESSION_NEW_FULL, SESSION_TOKEN_HEADER, SPACE_MAP_WRITE_FULL,
-  SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
+  KNOWLEDGE_NOTE_FULL, SPACE_SETTINGS_FULL, SPACE_STATE_WRITE_FULL, SPACE_WRITE_FULL, TEAM_DOC_WRITE_FULL, TEAM_TASK_UPDATE_FULL, TRUST_PROMPT_RE, type Delivered, type HookState,
   type SessionCtx, type WriteCall,
 } from './sessions.js';
 import {
-  mcpReply, parseFlowWriteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
+  mcpReply, parseFlowWriteArgs, parseKnowledgeNoteArgs, parseSessionNewArgs, parseSpaceSettingsArgs, parseTeamTaskArgs, parseTextArg, type FlowWriteArgs, type McpReply, type SessionNewArgs, type SpaceSettingsArgs,
   type TeamTaskUpdateArgs,
 } from './sessions-mcp.js';
 import { bashDecision, classifyEdit, cwdSpace, editDecision, flowWriteDetail, recheckEdit, spaceSettingsDetail, type EditScope, type EditTarget } from './session-edit.js';
@@ -46,8 +48,23 @@ import { parseTeamworkLink } from './teamwork-status.js';
 import { teamsCwdProblem } from './teamwork-trust.js';
 import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
-import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
+import type { ReviewKey, ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
+import { desk } from './desk/index.js';
+import type { DeskApi } from './desk/types.js';
+import { branchKeyOf } from './desk/tools.js';
+import { learnHint } from './desk/learn.js';
+
+/** Открытое пространство проекта папки (projectOf по папке); закрытое или «Без проекта» — undefined. */
+function openProjectSpace(cwd: string): string | undefined {
+  const slug = projectResolver().path(cwd).space;
+  if (!slug) return undefined;
+  try {
+    return readSpaceMeta(slug)?.closedAt ? undefined : slug;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
 export type SessionRecord = {
@@ -95,6 +112,13 @@ export type SessionRecord = {
   statePending?: 'app-closed';
   /** Сессия открыта из задачи Teamwork (spec §8.9): инструменты задачи в MCP, старт и конец — в статусы задачи. */
   teamwork?: RunTeamworkLink;
+  /** Откуда сессия: вещь (MR, задача Jira — «Начать сессию» в «Коде»), дело, запуск, рутина. */
+  source?: SessionSource;
+  /**
+   * Открытый вопрос человеку: последний ход кончился вопросом, запросом разрешения или формой MCP (handleHook). Остаётся
+   * после выхода claude и перезапуска сервера — «закончилась на вопросе»; снимается сообщением пользователя или шагом модели.
+   */
+  ask?: SessionAsk;
 };
 
 /**
@@ -197,6 +221,10 @@ export type SessionDeps = {
    * (parseRunTitle): одна строка до TITLE_MAX знаков — его присваивают как есть.
    */
   title: (text: string, signal: AbortSignal) => Promise<RunTitleReport>;
+  /** Хранилище дел для desk_* сессии; по умолчанию — общее (desk()). Шов для тестов. */
+  desk?: () => DeskApi;
+  /** Папка кода agentgraph: там скилл session-to-flow («Flow из сессии»); нет — APP_DIR. */
+  appDir?: string;
 };
 
 const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -309,13 +337,26 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.pty?.alive).length;
   }
 
+  /** Папки живых сессий: уборка worktree рутины не снимает папку из-под claude. */
+  liveCwds(): string[] {
+    return [...this.sessions.values()].filter((s) => s.pty?.alive).map((s) => s.rec.cwd);
+  }
+
   /** Названия живых сессий: десктоп спрашивает подтверждение выхода. */
   liveNames(): string[] {
     return [...this.sessions.values()].filter((s) => s.pty?.alive).map((s) => s.rec.name);
   }
 
   list(): SessionList {
-    const views = [...this.sessions.values()].map((s) => this.view(s));
+    // проект — по одному снимку пространств на весь список
+    const proj = projectResolver();
+    // ветка папки — для поиска на странице «Сессии»; у многих сессий папка одна, HEAD читается один раз
+    const branchOf = branchCache();
+    const views = [...this.sessions.values()].map((s) => {
+      const v = this.view(s, proj);
+      const branch = branchOf(v.cwd);
+      return branch ? { ...v, branch } : v;
+    });
     views.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivityAt.localeCompare(a.lastActivityAt));
     return { sessions: views, max: LIVE_SESSIONS_MAX };
   }
@@ -342,10 +383,12 @@ export class SessionManager {
     return { id: r.id, name: r.name, cwd: r.cwd, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, turns: readTurns(this.turnsFile(r.id)) };
   }
 
-  /** Сессии для разбора моделью (session-review.ts): статус, кто завершил и ходы из журнала. */
-  reviewSources(now = Date.now()): ReviewSource[] {
+  /**
+   * Сессии для разбора моделью и источника «Проекты» (session-review.ts): статус, кто завершил, вопрос последнего хода и
+   * ходы из журнала. turnsFor — кому журнал нужен (не разобранные на текущей активности); нет — всем, у кого есть ходы.
+   */
+  reviewSources(turnsFor: (s: ReviewKey) => boolean = () => true): ReviewSource[] {
     this.load();
-    const since = new Date(now - REVIEW_DAYS * 86_400_000).toISOString();
     return [...this.sessions.values()].map((s) => {
       const v = this.view(s);
       return {
@@ -357,8 +400,9 @@ export class SessionManager {
         status: v.status,
         ...(v.endedBy ? { endedBy: v.endedBy } : {}),
         lastActivityAt: v.lastActivityAt,
-        // журнал читаем только у тех, что войдут в разбор по дате: остальным он не нужен
-        turns: v.turns > 0 && v.lastActivityAt >= since ? readTurns(this.turnsFile(v.id)) : [],
+        ...(v.ask ? { ask: v.ask } : {}),
+        turnCount: v.turns,
+        turns: v.turns > 0 && turnsFor({ id: v.id, lastActivityAt: v.lastActivityAt, turnCount: v.turns }) ? readTurns(this.turnsFile(v.id)) : [],
       };
     });
   }
@@ -389,7 +433,8 @@ export class SessionManager {
     return s;
   }
 
-  view(s: Live): SessionView {
+  /** proj — снимок пространств для проекта сессии (список передаёт один на все); нет — свой. */
+  view(s: Live, proj: ProjectResolver = projectResolver()): SessionView {
     const r = s.rec;
     const live = Boolean(s.pty?.alive);
     const got = s.injected;
@@ -429,6 +474,10 @@ export class SessionManager {
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
       ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
+      ...(r.source ? { source: r.source } : {}),
+      ...(r.ask ? { ask: r.ask } : {}),
+      // проект: явное пространство, иначе папка — та же подпись в каждом ответе (список, переименование, WS)
+      projectRef: proj.of({ space: r.space, path: r.cwd }),
     };
   }
 
@@ -474,6 +523,7 @@ export class SessionManager {
     let flags: ReturnType<typeof sessionFlags>;
     let prompt: string | undefined;
     let teamwork: RunTeamworkLink | undefined;
+    let source: SessionSource | undefined;
     try {
       if (body.saveTag !== undefined) throw new Error('Теги задач заменены пространствами: space и saveState вместо тега задачи и saveTag');
       // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
@@ -484,9 +534,12 @@ export class SessionManager {
       prompt = sessionPrompt(body.prompt);
       if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
       teamwork = parseTeamworkLink(body.teamwork);
+      source = parseSessionSource(body.source);
     } catch (err) {
       throw new SessionError(400, errMsg(err));
     }
+    // сессия из вещи без выбранного пространства — в пространстве проекта её папки (открытом), как подпись проекта
+    if (source?.thing && body.space === undefined) space = openProjectSpace(cwd);
     // связь с задачей Teamwork: команда, проект и задача должны быть — до запуска claude (их коды: 404, 400)
     if (teamwork) {
       if (!teamworkHooks) throw new SessionError(501, 'Teamwork недоступен в этом сервере');
@@ -519,6 +572,7 @@ export class SessionManager {
       turns: 0,
       ...(space ? { turnSpaces: [{ from: 0, space, ...(at ? { at } : {}) }] } : {}),
       ...(teamwork ? { teamwork } : {}),
+      ...(source ? { source } : {}),
     };
     if (typeof body.name !== 'string' || !body.name.trim()) rec.defaultName = rec.name;
     const s = newLive(rec, 'starting');
@@ -532,7 +586,24 @@ export class SessionManager {
     // сессия начата из задачи (spec §10): «К работе» → «В работе», исполнитель, запись в local.json. В фоне, как у
     // запусков: очередь репо команды может быть занята pull по сети; доска обновится событием team. Сбой — в лог внутри started
     if (teamwork?.task && teamworkHooks) void teamworkHooks.started(teamwork, { kind: 'session', id, status: s.status, title: rec.name });
+    // сессия начата с карточки дела (SPEC 3.2): дело — в «В работе», сессия — в его ссылках. До ответа (замок хранилища
+    // держит до нескольких секунд): доска, на которую вернутся, уже видит перенос
+    if (source?.item) await this.deskStarted(source.item, id, rec.name);
     return this.view(s);
+  }
+
+  /** Сессия по делу началась: ссылка в links.sessions и перенос в «В работе» от 'session'. Дела нет или сбой — только лог. */
+  private async deskStarted(itemId: string, session: string, name: string): Promise<void> {
+    try {
+      const api = (this.deps.desk ?? desk)();
+      const item = (await api.list()).find((i) => i.id === itemId);
+      if (!item) return;
+      await api.put(item.key, { links: { sessions: [session] } }, 'session');
+      // «почему твой ход» не затираем: что сессия открыта, карточка и так показывает
+      if (item.column !== 'work') await api.move(item.key, 'work', 'session', item.why ? undefined : `сессия «${name}»`);
+    } catch (err) {
+      console.error(`[дела] сессия ${session}: дело ${itemId} не обновилось —`, errMsg(err));
+    }
   }
 
   /** Новый процесс claude для сессии: новый токен, папки и запреты по текущим пространству и тегам знаний. */
@@ -743,26 +814,55 @@ export class SessionManager {
   }
 
   /**
-   * «Продолжить»: новый процесс claude в той же папке с текущими пространством и тегами (папки и запреты — заново). Транскрипт последнего
-   * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же.
+   * «Flow из сессии»: новая сессия в папке кода agentgraph (там лежит скилл session-to-flow и flows/ рядом) с первым
+   * сообщением «/session-to-flow <транскрипт>». Источник — транскрипт последнего разговора этой сессии; нет его (не было
+   * сообщений, файл удалён) — 409. Нет скилла (сборка без .claude/skills) — 501. Лимит живых сессий — как у create.
    */
-  async resume(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
+  async toFlow(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
+    const root = this.deps.appDir ?? APP_DIR;
+    if (!sessionToFlowSkill(root)) throw new SessionError(501, `Скилла session-to-flow нет в ${root}/${SESSION_TO_FLOW_SKILL}`, 'no_skill');
+    const s = this.get(id);
+    const transcript = resumeTarget(s.rec) ? s.rec.transcriptPath : undefined;
+    if (!transcript) {
+      throw new SessionError(409, s.rec.turns ? 'Транскрипт разговора этой сессии удалён: flow делать не из чего' : 'В сессии ещё не было ни одного сообщения: flow делать не из чего', 'no_transcript');
+    }
+    // путь пришёл хуком сессии — он в первое сообщение: кавычки и управляющие символы дописали бы к команде свой текст
+    if (!path.isAbsolute(transcript) || !transcript.endsWith('.jsonl') || /["\\\u0000-\u001f\u007f]/.test(transcript)) {
+      throw new SessionError(409, `Путь транскрипта не подходит для команды: ${JSON.stringify(transcript)}`, 'no_transcript');
+    }
+    // транскрипт — недоверенный текст (вывод страниц, файлов, MR), а папка — код agentgraph: режим всегда manual, а не
+    // defaultMode из настроек пользователя (как session_new в другой папке). Путь — в кавычках: в нём бывают пробелы
+    const from = s.rec.name.length > 60 ? `${s.rec.name.slice(0, 59)}…` : s.rec.name;
+    return this.create({ cwd: root, name: `Flow из «${from}»`, prompt: `/session-to-flow "${transcript}"`, permissionMode: 'manual', ...(size ?? {}) }, port, root);
+  }
+
+  /**
+   * «Продолжить»: новый процесс claude в той же папке с текущими пространством и тегами (папки и запреты — заново). Транскрипт последнего
+   * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же. prompt —
+   * первое сообщение продолженного разговора (ответ на вопрос, «с чего продолжить»): claude отправит его сам.
+   */
+  async resume(id: string, port: number, size?: { cols: number; rows: number }, prompt?: string): Promise<SessionView> {
     const s = this.get(id);
     if (s.pty?.alive) throw new SessionError(409, 'Сессия ещё идёт');
     const kit = await this.deps.kit();
     if (!kit) throw new SessionError(501, `Терминал недоступен: node-pty не загрузился (${ptyKitError()})`, 'no_pty');
     if (this.stopping) throw new SessionError(503, 'Сервер останавливается');
-    if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     if (!fs.statSync(s.rec.cwd, { throwIfNoEntry: false })?.isDirectory()) throw new SessionError(400, `Папки сессии больше нет: ${s.rec.cwd}`);
     // сессия, заведённая до запрета с рабочей папкой в клоне команды, там не продолжается (spec §14)
     const inTeams = teamsCwdProblem(s.rec.cwd);
     if (inTeams) throw new SessionError(400, inTeams);
     const bin = this.deps.findClaude();
     if (!bin) throw new SessionError(400, 'claude не найден: установи Claude Code (claude.ai/code) и проверь, что он есть в PATH', 'no_claude');
+    // предел — после проверок, которые не зависят от других сессий: экран предлагает завершить одну из ждущих, и 409
+    // limit значит, что после этого «Продолжить» пройдёт
+    if (this.liveCount() >= LIVE_SESSIONS_MAX) throw new SessionError(409, `Живых сессий уже ${LIVE_SESSIONS_MAX}: заверши одну из них`, 'limit');
     await this.knownVersion(bin);
     const target = resumeTarget(s.rec);
+    // транскрипта нет — новый разговор: вопрос прошлого он не увидит и ответа на него не ждёт
+    if (!target) delete s.rec.ask;
     try {
-      this.spawn(s, kit, bin, port, target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false }, size ?? s.screen ?? DEFAULT_SIZE);
+      const conv = target ? { claudeSessionId: target, resume: true } : { claudeSessionId: randomUUID(), resume: false };
+      this.spawn(s, kit, bin, port, { ...conv, ...(prompt ? { prompt } : {}) }, size ?? s.screen ?? DEFAULT_SIZE);
     } catch (err) {
       throw new SessionError(500, `claude не запустился: ${errMsg(err)}`);
     }
@@ -951,6 +1051,7 @@ export class SessionManager {
       turns: s.rec.turns,
       permissionMode: s.mode,
       ...(s.rec.preSpacesTags?.length ? { preSpacesTags: s.rec.preSpacesTags } : {}),
+      ...(s.rec.ask ? { ask: s.rec.ask } : {}),
     };
     const r = handleHook(state, input, {
       readCtx: (space, tags) => readSessionCtx(space, tags, { space: readSpace, tag: readTag }),
@@ -973,6 +1074,10 @@ export class SessionManager {
     if (p.started) s.started = true;
     if (p.permissionMode) s.mode = p.permissionMode;
     if (p.status && s.pty?.alive) s.status = p.status;
+    // вопрос — на диск сразу: признак «ждёт ответа» переживает закрытие приложения
+    const asked = p.ask !== undefined;
+    if (p.ask) s.rec.ask = p.ask;
+    else if (p.ask === null) delete s.rec.ask;
     s.lastHookAt = Date.now();
     s.rec.lastActivityAt = new Date().toISOString();
     if (r.delivered) {
@@ -984,7 +1089,7 @@ export class SessionManager {
     }
     if (r.turn) this.appendTurn(s, r.turn);
     if (r.turn && 'prompt' in r.turn) this.nameFrom(s, r.turn.prompt);
-    if (reinstanced || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
+    if (reinstanced || asked || p.claudeSessionIds || p.turns !== undefined || p.transcriptPath) this.save(s);
     // SessionStart ставит «ждёт тебя» и посреди хода (сжатие контекста, source: compact): это не конец хода
     this.changed(s, input.hook_event_name !== 'SessionStart');
     return r.reply;
@@ -1079,6 +1184,29 @@ export class SessionManager {
         return file;
       },
       ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args, s.rec.id), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
+      // дела: сессия, проект (явное пространство, иначе по папке) и ветка папки — сами, в момент вызова
+      desk: () => ({
+        api: (this.deps.desk ?? desk)(),
+        by: 'session',
+        source: 'session',
+        session: s.rec.id,
+        project: () => projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined,
+        branch: () => branchKeyOf(s.rec.cwd),
+        why: `из сессии «${s.rec.name}»`,
+        ...(s.rec.source?.thing ? { thing: s.rec.source.thing } : {}),
+        // по делу была работа — ответ предложит записать вывод в тег вида работы (6.6); ход сессии, без своей модели
+        afterClose: (item) => learnHint(item, listTags(), { thingKey: s.rec.source?.thing?.key }),
+      }),
+      // запись знания — только после «да» человека на вопрос хука (KNOWLEDGE_NOTE_FULL в ASK_TOOLS)
+      writeNote: (a) => {
+        const tag = appendTagNote(a.tag, a.text, a.title ? { title: a.title } : {});
+        return `Записано в тег ${tag.slug}${tag.title ? ` («${tag.title}»)` : ''}. Его заметки получат следующие сессии и запуски с этим тегом.`;
+      },
+      deskHint: () => {
+        const thing = s.rec.source?.thing;
+        const project = projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined;
+        return { ...(thing ? { thing: { key: thing.key, ...(thing.title ? { title: thing.title } : {}) } } : {}), ...(project ? { project } : {}) };
+      },
     });
   }
 
@@ -1194,6 +1322,17 @@ export class SessionManager {
         return { deny: `${errMsg(err)}. Flow не записан — исправь и вызови снова.` };
       }
     }
+    if (tool === KNOWLEDGE_NOTE_FULL) {
+      // человек видит, куда и что ляжет; не пройдёт проверку — отказ без вопроса
+      try {
+        const a = parseKnowledgeNoteArgs(input);
+        const plan = planTagNote(a.tag, a.text, a.title ? { title: a.title } : {});
+        const where = plan.exists ? `тег ${plan.slug}${plan.title ? ` («${cleanLine(plan.title, 80)}»)` : ''}` : `новый тег знаний ${plan.slug}${plan.title ? ` («${cleanLine(plan.title, 80)}»)` : ''}`;
+        return `${where}: допишет в заметки «${cleanLine(plan.line, 300)}»`;
+      } catch (err) {
+        return { deny: `${errMsg(err)}. Знание не записано — исправь и вызови снова.` };
+      }
+    }
     if (tool === TEAM_TASK_UPDATE_FULL || tool === TEAM_DOC_WRITE_FULL) {
       const link = s.rec.teamwork;
       if (!link?.task || !teamworkHooks) return 'Сессия не открыта из задачи Teamwork: вызов вернёт ошибку';
@@ -1305,16 +1444,17 @@ export class SessionManager {
   }
 
   /**
-   * Статус сменился с прошлого changed: время начала «ждёт тебя»; переход «работает → ждёт тебя» — подписчикам
-   * onSessionWaiting. Не в счёт: запуск («запускается → ждёт тебя»), SessionStart (announce: false) и хуки, пришедшие,
-   * пока claude гасят («Завершить», «Перезапустить», остановка сервера): окно, может быть, уже закрыто, а ждать некого.
+   * Статус сменился с прошлого changed: время начала «ход за тобой»; переход «работает → ждёт ответа» (с вопросом или
+   * запросом разрешения — ask) — подписчикам onSessionWaiting. Просто закончила ход — без ленты и уведомления. Не в счёт:
+   * запуск («запускается → ждёт»), SessionStart (announce: false) и хуки, пришедшие, пока claude гасят («Завершить»,
+   * «Перезапустить», остановка сервера): окно, может быть, уже закрыто, а ждать некого.
    */
   private noteStatus(s: Live, announce: boolean): void {
     const prev = s.seenStatus;
     if (prev === s.status) return;
     s.seenStatus = s.status;
     s.waitingSince = s.status === 'waiting' ? new Date().toISOString() : undefined;
-    if (!announce || prev !== 'working' || s.status !== 'waiting' || !waitSubs.size) return;
+    if (!announce || prev !== 'working' || s.status !== 'waiting' || !s.rec.ask || !waitSubs.size) return;
     if (s.ending || s.restarting || s.appClosed || this.stopping) return;
     const v = this.view(s);
     for (const fn of waitSubs) {
@@ -1633,7 +1773,8 @@ export function readRecord(file: string, id: string): { rec: SessionRecord; lega
     return undefined;
   }
   if (!raw || raw.id !== id || typeof raw.cwd !== 'string' || typeof raw.createdAt !== 'string') return undefined;
-  const { saveTag, summary, summaryPending, ...rest } = raw;
+  const { saveTag, summary, summaryPending, ask: rawAsk, ...rest } = raw;
+  const ask = askOf(rawAsk);
   const tags = strings(raw.tags);
   const legacy = raw.saveState === undefined && saveTag !== undefined;
   const task = legacy ? tags.filter((t) => !isKnowledge(t)) : strings(raw.legacyTaskTags);
@@ -1666,8 +1807,19 @@ export function readRecord(file: string, id: string): { rec: SessionRecord; lega
     turns: Number.isFinite(raw.turns) ? Number(raw.turns) : 0,
     ...(state ? { stateUpdate: state } : {}),
     ...(raw.statePending === 'app-closed' || summaryPending === 'app-closed' ? { statePending: 'app-closed' as const } : {}),
+    ...(ask ? { ask } : {}),
   };
   return { rec, legacy, ended: typeof raw.endedAt === 'string' };
+}
+
+const ASK_KINDS: SessionAsk['kind'][] = ['question', 'permission', 'elicitation'];
+
+/** Вопрос из session.json: испорченный (правили руками, чужая версия) — без вопроса, а не битая сессия. */
+function askOf(raw: unknown): SessionAsk | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const a = raw as Record<string, unknown>;
+  if (!ASK_KINDS.includes(a.kind as SessionAsk['kind']) || typeof a.text !== 'string' || typeof a.at !== 'string') return undefined;
+  return { kind: a.kind as SessionAsk['kind'], text: askText(a.text), at: a.at, ...(typeof a.agent === 'string' ? { agent: a.agent } : {}), ...(typeof a.tool === 'string' ? { tool: a.tool } : {}), ...(typeof a.toolUseId === 'string' ? { toolUseId: a.toolUseId } : {}) };
 }
 
 /** Итог саммари старой сессии как итог состояния её пространства (тег задачи с тем же слагом). */
@@ -1793,7 +1945,17 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/state$/)) && method === 'POST') return done(202, mgr.startState(m[1]) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/continue$/)) && method === 'POST') {
       const body = asObject(await ctx.readJson());
-      return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
+      let prompt: string | undefined;
+      try {
+        prompt = sessionPrompt(body.prompt);
+      } catch (err) {
+        throw new SessionError(400, errMsg(err));
+      }
+      return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined, prompt)) satisfies SessionView);
+    }
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/to-flow$/)) && method === 'POST') {
+      const body = asObject(await ctx.readJson());
+      return done(201, (await mgr.toFlow(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
     }
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/restart$/)) && method === 'POST') return done(200, (await mgr.restart(m[1], req.socket.localPort ?? 0)) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'DELETE') {
@@ -1806,6 +1968,10 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     return done(err.status, { error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 }
+
+/** Скилл «Flow из сессии» в папке кода agentgraph (.claude/skills — в checkout, в сборке приложения его может не быть). */
+export const SESSION_TO_FLOW_SKILL = '.claude/skills/session-to-flow/SKILL.md';
+export const sessionToFlowSkill = (root: string = sessionManager().deps.appDir ?? APP_DIR): boolean => fs.existsSync(path.join(root, SESSION_TO_FLOW_SKILL));
 
 /** Есть ли фича sessions: для features в /api/config. */
 export const sessionsAvailable = () => sessionManager().available();
@@ -1823,9 +1989,9 @@ export async function sessionDraftSource(id: string): Promise<DraftSession | und
   return (await mgr.available()) ? mgr.draftSource(id) : undefined;
 }
 /** Сессии для разбора «Не доделано» на главной. */
-export async function sessionReviewSources(): Promise<ReviewSource[]> {
+export async function sessionReviewSources(turnsFor?: (s: ReviewKey) => boolean): Promise<ReviewSource[]> {
   const mgr = sessionManager();
-  return (await mgr.available()) ? mgr.reviewSources() : [];
+  return (await mgr.available()) ? mgr.reviewSources(turnsFor) : [];
 }
 /** Сессии без пространства для «Предложить пространства». */
 export async function spacelessSessions(): Promise<ReturnType<SessionManager['spacelessSessions']>> {
@@ -1845,10 +2011,12 @@ export function onSessionEdit(fn: (e: SessionEdit) => void): () => void {
   editSubs.add(fn);
   return () => void editSubs.delete(fn);
 }
-/** Работавшая сессия закончила ход (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
+/** Работавшая сессия закончила ход вопросом (или claude спросил разрешения) и ждёт тебя; возвращает отписку. */
 export function onSessionWaiting(fn: (v: SessionView) => void): () => void {
   waitSubs.add(fn);
   return () => void waitSubs.delete(fn);
 }
 /** Названия живых сессий: подтверждение выхода в десктопе. */
 export const liveSessionNames = () => (manager ? manager.liveNames() : []);
+/** Папки живых сессий (без менеджера — нет). */
+export const liveSessionDirs = () => (manager ? manager.liveCwds() : []);

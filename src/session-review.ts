@@ -1,10 +1,14 @@
-// Разбор сессий моделью для главной («Не доделано»): недавние сессии терминала — их последние ходы — модель читает и по
-// каждой говорит, доведена ли работа: продолжить, остался последний шаг или готово, — и с чего продолжить. Только по
-// кнопке, цена — заранее (оценка). Модель без инструментов и в нейтральной папке: ходы сессий — недоверенный текст, он
-// идёт только данными в source-data, ответ разбирается кодом (ссылки — только на переданные сессии, строки — чистятся).
-// Ничего не пишет: результат показывает главная, решает человек.
+// Разбор сессий моделью («Не доделано» на главной и источник рутин «Проекты»): последние ходы сессий терминала модель
+// читает и по каждой говорит, доведена ли работа: продолжить, остался последний шаг или готово, — и с чего продолжить.
+// Запускается кнопкой на главной (цена — заранее) и по расписанию источника «Проекты» (src/routines/sources/projects.ts).
+// Итог — на сервере (<configDir()>/desk/session-review.json): по каждой сессии вердикт и на какой её активности он
+// получен. Разбираются только сессии с новыми ходами с прошлого разбора — без границы по давности, свежие первыми.
+// Модель без инструментов и в нейтральной папке: ходы сессий — недоверенный текст, он идёт только данными в
+// source-data, ответ разбирается кодом (ссылки — только на переданные сессии, строки — чистятся). Сессий не трогает.
+import fs from 'node:fs';
 import os from 'node:os';
-import type { SessionReviewEstimate, SessionReviewItem, SessionReviewReply, SessionReviewVerdict, SpaceDraftModel } from './api-types.js';
+import path from 'node:path';
+import type { SessionAsk, SessionReviewEstimate, SessionReviewItem, SessionReviewReply, SessionReviewVerdict, SpaceDraftModel } from './api-types.js';
 import type { SessionRequest, SessionResult } from './agent.js';
 import type { FlowAiHooks, FlowAiReply } from './flow-ai.js';
 import { replyIn, taskLang } from './lang.js';
@@ -12,6 +16,8 @@ import { turnsDigest, type SessionTurn } from './space-state.js';
 import {
   approxTokens, DraftModelError, estimateCost, failure, runDraftSession, sessionFailure, START_BARE, type DraftDeps,
 } from './space-draft.js';
+import { readRegular, writeAtomic } from './safe-fs.js';
+import { configDir } from './settings.js';
 import { cleanLine, wrapModelData } from './spaces.js';
 
 /** Решение «продолжать или нет» по нескольким сессиям — по смыслу разговора, а не классификация: sonnet. */
@@ -19,9 +25,7 @@ export const REVIEW_MODEL: SpaceDraftModel = 'sonnet';
 /** Потолок цены одного разбора (maxBudgetUsd сессии). */
 export const REVIEW_CEILING: Record<SpaceDraftModel, number> = { haiku: 0.25, sonnet: 0.6, opus: 1.2 };
 export const REVIEW_TIMEOUT_MS = 3 * 60_000;
-/** Сессии за две недели: старше — уже не «забыл», а бросил; их можно найти в списке сессий. */
-export const REVIEW_DAYS = 14;
-/** Сессий в одном разборе: свежие сверху. */
+/** Сессий в одном разборе: свежие сверху; остальные — в следующий разбор. */
 export const REVIEW_MAX = 15;
 /** Ходов одной сессии в промпте (последние целиком, ранние — счётчиком). */
 const DIGEST_PER_SESSION = 3_000;
@@ -39,16 +43,117 @@ export type ReviewSource = {
   status: 'starting' | 'working' | 'waiting' | 'ended';
   endedBy?: 'button' | 'app';
   lastActivityAt: string;
+  /** Журнал ходов; у сессии, которую разбирать не нужно (разобрана на этих ходах), может быть пустым. */
   turns: SessionTurn[];
+  /** Сколько ходов в журнале (SessionView.turns) — без чтения журнала; нет — turns.length. */
+  turnCount?: number;
+  /** Последний ход кончился вопросом или запросом разрешения (SessionRecord.ask) — для «Забытого» источника «Проекты». */
+  ask?: SessionAsk;
 };
 
-/** Что разбирать: с ходами, не идущие сейчас, за REVIEW_DAYS; свежие сверху, не больше REVIEW_MAX. */
-export function reviewItems(all: ReviewSource[], now = Date.now()): { items: ReviewSource[]; skipped: number } {
-  const since = new Date(now - REVIEW_DAYS * 86_400_000).toISOString();
+/**
+ * Итог разбора одной сессии на сервере: на скольких ходах (turns) и какой активности он получен. Новые ходы — разобрать
+ * снова; активность без ходов (закрыли терминал или приложение) — нет: платить второй раз не за что.
+ */
+export type StoredReviewItem = SessionReviewItem & { at: string; activityAt: string };
+/** Что нужно знать о сессии, чтобы решить, разобрана ли она: без журнала ходов. */
+export type ReviewKey = { id: string; lastActivityAt: string; turnCount?: number; turns?: unknown[] };
+const turnsOf = (s: ReviewKey): number => s.turnCount ?? s.turns?.length ?? 0;
+/**
+ * Файл итога: последний разбор (когда, цена, модель) и вердикты по сессиям. broken — файл есть, но не прочитался (битый,
+ * не обычный, больше потолка): это «нет данных», а не «вердиктов нет» (источник «Проекты» держит прошлые записи).
+ */
+export type ReviewStore = { at?: string; costUsd: number; model?: string; items: StoredReviewItem[]; broken?: true };
+
+export const reviewFile = (): string => path.join(configDir(), 'desk', 'session-review.json');
+
+const isStr = (v: unknown): v is string => typeof v === 'string';
+
+/**
+ * Итог с диска; нет — пустой; битый — пустой с broken (разбор начнётся заново и перепишет файл). Строки из файла — с
+ * потолком, вердикт — из списка.
+ */
+export function readReviewStore(file = reviewFile()): ReviewStore {
+  let raw: unknown = null;
+  let broken = false;
+  try {
+    const text = readRegular(file, { max: 4 * 1024 * 1024 });
+    if (text !== undefined) {
+      raw = JSON.parse(text);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) broken = true;
+    }
+  } catch {
+    broken = true;
+  }
+  const o = (!broken && raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const items: StoredReviewItem[] = [];
+  for (const x of Array.isArray(o.items) ? o.items : []) {
+    const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+    if (!isStr(r.id) || !r.id || !isStr(r.at) || !isStr(r.activityAt) || !VERDICTS.includes(r.verdict as SessionReviewVerdict)) continue;
+    const line = (v: unknown) => cleanLine(isStr(v) ? v : '', LINE_MAX);
+    items.push({
+      id: r.id, name: cleanLine(isStr(r.name) ? r.name : r.id, 200), ...(isStr(r.space) && r.space ? { space: r.space } : {}), verdict: r.verdict as SessionReviewVerdict,
+      done: line(r.done), left: line(r.left), next: line(r.next), at: r.at, activityAt: r.activityAt,
+      ...(typeof r.turns === 'number' && Number.isInteger(r.turns) && r.turns >= 0 ? { turns: r.turns } : {}),
+    });
+  }
+  return { ...(isStr(o.at) ? { at: o.at } : {}), costUsd: typeof o.costUsd === 'number' && o.costUsd >= 0 ? o.costUsd : 0, ...(isStr(o.model) ? { model: o.model } : {}), items, ...(broken ? { broken: true as const } : {}) };
+}
+
+export function writeReviewStore(s: ReviewStore, file = reviewFile()): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const { broken: _broken, ...data } = s;
+  writeAtomic(file, JSON.stringify(data) + '\n');
+}
+
+/** Разобрана ли сессия на её текущих ходах (старый итог без числа ходов — на текущей активности): тогда журнал ей не нужен. */
+export function reviewedNow(store: ReviewStore): (s: ReviewKey) => boolean {
+  const by = new Map(store.items.map((x) => [x.id, x]));
+  return (s) => {
+    const x = by.get(s.id);
+    if (!x) return false;
+    return x.turns !== undefined ? x.turns === turnsOf(s) : x.activityAt === s.lastActivityAt;
+  };
+}
+
+/**
+ * Что разбирать: с ходами, не идущие сейчас, ещё не разобранные на текущей активности (новые ходы с прошлого разбора
+ * или разбора не было); свежие сверху, не больше REVIEW_MAX — остальные (skipped) уйдут в следующий разбор.
+ */
+export function reviewItems(all: ReviewSource[], store: ReviewStore = { costUsd: 0, items: [] }): { items: ReviewSource[]; skipped: number } {
+  const done = reviewedNow(store);
   const fit = all
-    .filter((s) => s.turns.length > 0 && s.status !== 'working' && s.status !== 'starting' && s.lastActivityAt >= since)
+    .filter((s) => turnsOf(s) > 0 && s.status !== 'working' && s.status !== 'starting' && !done(s))
     .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   return { items: fit.slice(0, REVIEW_MAX), skipped: Math.max(0, fit.length - REVIEW_MAX) };
+}
+
+/**
+ * Итог после разбора: вердикты разобранных — с активностью, на которой они получены; сессий, которых больше нет, — нет.
+ * Сессия, которую модель пропустила, не записывается: её возьмёт следующий разбор.
+ */
+export function mergeReview(store: ReviewStore, reply: SessionReviewReply, items: ReviewSource[], all: Pick<ReviewSource, 'id'>[]): ReviewStore {
+  const by = new Map(items.map((s) => [s.id, s]));
+  const fresh = new Map<string, StoredReviewItem>();
+  for (const x of reply.items) {
+    const s = by.get(x.id);
+    if (s) fresh.set(x.id, { ...x, at: reply.at, activityAt: s.lastActivityAt, turns: turnsOf(s) });
+  }
+  const alive = new Set(all.map((s) => s.id));
+  const kept = store.items.filter((x) => alive.has(x.id) && !fresh.has(x.id));
+  return { at: reply.at, costUsd: reply.costUsd, ...(reply.model ? { model: reply.model } : {}), items: [...fresh.values(), ...kept] };
+}
+
+/** Итог для главной: вердикты живых сессий, свежие сверху; skipped — сколько ещё ждёт разбора. Разбора не было — undefined. */
+export function storedReply(store: ReviewStore, all: ReviewSource[]): SessionReviewReply | undefined {
+  if (!store.at) return undefined;
+  const by = new Map(all.map((s) => [s.id, s]));
+  const items = store.items
+    .filter((x) => by.has(x.id))
+    .sort((a, b) => by.get(b.id)!.lastActivityAt.localeCompare(by.get(a.id)!.lastActivityAt))
+    .map(({ at, activityAt, ...x }): SessionReviewItem => ({ ...x, at, activityAt }));
+  const { items: pending, skipped } = reviewItems(all, store);
+  return { items, reviewed: items.length, skipped: pending.length + skipped, at: store.at, costUsd: store.costUsd, ...(store.model ? { model: store.model } : {}), durationMs: 0 };
 }
 
 const SYSTEM =
@@ -176,5 +281,44 @@ export async function reviewReply(items: ReviewSource[], skipped: number, model:
     return { status: 200, body, ...(res.model ? { model: res.model } : {}), durationMs };
   } catch (err) {
     return failure(err, started);
+  }
+}
+
+/** Разбор идёт: кнопка главной и расписание источника «Проекты» не запускают второй. */
+let running = false;
+export const reviewRunning = (): boolean => running;
+
+/**
+ * Разбор с итогом на сервере: сессии грузит load (журнал ходов — только тем, кого разбирать: turnsFor), модель смотрит
+ * не больше REVIEW_MAX с новыми ходами, итог дописывается в файл. 200 — итог целиком (все вердикты, цена этого разбора);
+ * разбирать нечего — итог без модели; 409 busy — разбор уже идёт; 502 — сбой с ценой (итог не меняется).
+ */
+export async function reviewNow(o: {
+  load: (turnsFor: (s: ReviewKey) => boolean) => Promise<ReviewSource[]>;
+  model?: SpaceDraftModel;
+  hooks: FlowAiHooks;
+  deps?: DraftDeps;
+  file?: string;
+}): Promise<FlowAiReply> {
+  if (running) return { status: 409, body: { error: 'Разбор сессий уже идёт', code: 'busy' }, durationMs: 0 };
+  running = true;
+  try {
+    const store = readReviewStore(o.file);
+    const done = reviewedNow(store);
+    const all = await o.load((s) => !done(s));
+    const { items, skipped } = reviewItems(all, store);
+    if (!items.length) {
+      const body: SessionReviewReply = storedReply(store, all) ?? { items: [], reviewed: 0, skipped, at: new Date().toISOString(), costUsd: 0, durationMs: 0 };
+      return { status: 200, body: { ...body, costUsd: 0, durationMs: 0 }, durationMs: 0 };
+    }
+    const r = await reviewReply(items, skipped, o.model ?? REVIEW_MODEL, o.hooks, o.deps);
+    if (r.status !== 200) return r;
+    const reply = r.body as SessionReviewReply;
+    const next = mergeReview(store, reply, items, all);
+    writeReviewStore(next, o.file);
+    const body = storedReply(next, all)!;
+    return { ...r, body: { ...body, costUsd: reply.costUsd, durationMs: reply.durationMs } };
+  } finally {
+    running = false;
   }
 }

@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { configDir } from './settings.js';
 import type {
-  DenialReason, LegacySummary, Space, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
+  DenialReason, LegacySummary, ProjectRef, Space, SpaceDetail, SpaceDoc, SpaceDocText, SpaceListItem, SpaceMeta, SpaceUpdate, SpaceWorkdir, Tag, TagRun,
 } from './api-types.js';
 import { wrapData } from './intake.js';
 import { ARTIFACTS_DIR, nodeProbe } from './artifact-store.js';
@@ -41,6 +41,8 @@ export const SPACE_GIST_MAX = 300;
 export const SPACE_TITLE_MAX = 120;
 /** Папок у пространства не больше: каждая уходит --add-dir сессии и доп. директорией этапов. */
 export const SPACE_DIRS_MAX = 20;
+/** Привязанных репозиториев у пространства не больше. */
+export const SPACE_REPOS_MAX = 20;
 /** Тегов знаний у пространства: их строки уходят в контекст каждой сессии и этапа. */
 export const SPACE_TAGS_MAX = 10;
 /** Документов не больше: их список идёт в контекст. */
@@ -151,6 +153,9 @@ export function parseSpaceMeta(slug: string, text: string): SpaceMeta {
   const dirs = strList(raw.dirs).filter((d) => path.isAbsolute(d));
   const cwd = typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined;
   const tags = [...new Set(strList(raw.tags).filter((t) => TAG_SLUG_RE.test(t)))].slice(0, SPACE_TAGS_MAX);
+  // [] — перенос уже был (репозиториев нет), поля нет — переносить при первом чтении (withRepos)
+  const repos = Array.isArray(raw.repos) ? [...new Set(strList(raw.repos).filter((d) => path.isAbsolute(d)))].slice(0, SPACE_REPOS_MAX) : undefined;
+  const closedAt = typeof raw.closedAt === 'string' && Number.isFinite(Date.parse(raw.closedAt)) ? raw.closedAt : undefined;
   const from = raw.migratedFrom as { tag?: unknown; at?: unknown; summaryMtimeMs?: unknown; runs?: unknown } | undefined;
   const fromRuns = strList(from?.runs).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
   return {
@@ -162,6 +167,8 @@ export function parseSpaceMeta(slug: string, text: string): SpaceMeta {
     ...(dirs.length ? { dirs } : {}),
     ...(cwd ? { cwd } : {}),
     ...(tags.length ? { tags } : {}),
+    ...(repos ? { repos } : {}),
+    ...(closedAt ? { closedAt } : {}),
     history: readUpdates(raw.history),
     ...(from && typeof from.tag === 'string' && typeof from.at === 'string'
       ? { migratedFrom: { tag: from.tag, at: from.at, ...(Number.isFinite(from.summaryMtimeMs) ? { summaryMtimeMs: Number(from.summaryMtimeMs) } : {}), ...(fromRuns.length ? { runs: fromRuns } : {}) } }
@@ -222,8 +229,9 @@ export function listDocs(slug: string): SpaceDoc[] {
 
 export function readSpace(slug: string): Space | undefined {
   migrateTaskTags();
-  const raw = readSpaceMeta(slug);
-  if (!raw) return undefined;
+  const found = readSpaceMeta(slug);
+  if (!found) return undefined;
+  const raw = withRepos(found);
   // тег знаний удалили после того, как его привязали: формы его не подставят (сессия с ним не открылась бы — 400)
   const { tags: _tags, ...rest } = raw;
   const tags = liveKnowledgeTags(raw.tags);
@@ -271,6 +279,9 @@ export function listSpaces(): SpaceListItem[] {
       ...(s.cwd ? { cwd: s.cwd } : {}),
       ...(s.dirs?.length ? { dirs: s.dirs } : {}),
       ...(s.tags?.length ? { tags: s.tags } : {}),
+      ...(s.repos?.length ? { repos: s.repos } : {}),
+      ...(s.closedAt ? { closedAt: s.closedAt } : {}),
+      ...(s.stateMtimeMs !== undefined && s.state.trim() ? { stateMtimeMs: s.stateMtimeMs } : {}),
       ...(s.migratedFrom ? { migratedFrom: s.migratedFrom } : {}),
     });
   }
@@ -377,7 +388,9 @@ export function createSpace(slug: string, o: NewSpace = {}): Space {
   const gist = o.gist?.trim().replace(/\s*\n\s*/g, ' ').slice(0, SPACE_GIST_MAX) ?? '';
   const dirs = o.dirs ?? [];
   const now = new Date().toISOString();
-  writeMeta({ slug, ...(title ? { title, ...(o.autoTitle ? { autoTitle: true as const } : {}) } : {}), createdAt: now, updatedAt: now, ...(dirs.length ? { dirs } : {}), ...(o.cwd ? { cwd: o.cwd } : {}), history: [] });
+  // репозиторий нового пространства — только корень рабочей папки: папки чтения — справочные, их работу не забираем
+  const repos = o.cwd ? reposFromFolders({ cwd: o.cwd }) : [];
+  writeMeta({ slug, ...(title ? { title, ...(o.autoTitle ? { autoTitle: true as const } : {}) } : {}), createdAt: now, updatedAt: now, ...(dirs.length ? { dirs } : {}), ...(o.cwd ? { cwd: o.cwd } : {}), repos, history: [] });
   // заголовок модели в карту не идёт: он придуман по недоверенному тексту
   const map = initialMap(o.autoTitle ? undefined : title || undefined, gist || undefined, dirs);
   if (map) writeAtomic(mapFile(slug), map);
@@ -469,7 +482,13 @@ export class SpaceError extends Error {
  * mtimeMs файла, с которого начали правку (0 — файла не было): файл с тех пор изменился (сессия в папке пространства,
  * сессия состояния) — 409, правка не пишется.
  */
-export type SpacePatch = { title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; tags?: unknown; mapBase?: unknown; stateBase?: unknown; legacySummary?: unknown; keepTitle?: unknown };
+export type SpacePatch = {
+  title?: unknown; map?: unknown; state?: unknown; dirs?: unknown; cwd?: unknown; tags?: unknown; mapBase?: unknown; stateBase?: unknown; legacySummary?: unknown; keepTitle?: unknown;
+  /** Привязанные репозитории целиком: новые пути сворачиваются к корню git (checkSpaceRepos). */
+  repos?: unknown;
+  /** true — закрыть пространство, false — открыть снова. */
+  closed?: unknown;
+};
 
 export function updateSpace(slug: string, patch: SpacePatch): Space | undefined {
   const meta = readSpaceMeta(slug);
@@ -491,7 +510,10 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
   let dirs: string[] | undefined;
   let cwd: string | undefined;
   let tags: string[] | undefined;
+  let repos: string[] | undefined;
+  if (patch.closed !== undefined && typeof patch.closed !== 'boolean') throw new SpaceError(400, 'closed — true или false');
   try {
+    repos = patch.repos === undefined ? meta.repos : checkSpaceRepos(patch.repos, meta.repos ?? []);
     dirs = patch.dirs === undefined ? meta.dirs : checkSpaceDirs(patch.dirs);
     cwd = patch.cwd === undefined ? meta.cwd : checkSpaceCwd(patch.cwd);
     tags = patch.tags === undefined ? meta.tags : checkSpaceTags(patch.tags);
@@ -515,14 +537,28 @@ export function updateSpace(slug: string, patch: SpacePatch): Space | undefined 
   }
   // переписанный руками заголовок — уже текст пользователя; keepTitle — «оставить как есть» без правки текста
   const autoTitle = meta.autoTitle && title === meta.title && patch.keepTitle !== true;
-  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, tags: _g, migratedFrom, ...rest } = meta;
+  const { title: _t, autoTitle: _a, dirs: _d, cwd: _c, tags: _g, repos: _r, closedAt: prevClosed, migratedFrom, ...rest } = meta;
   const from = migratedFrom && legacy ? { ...migratedFrom, summaryMtimeMs: legacy.mtimeMs } : migratedFrom;
-  writeMeta({ ...rest, ...(title ? { title } : {}), ...(autoTitle ? { autoTitle: true as const } : {}), ...(dirs?.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), ...(tags?.length ? { tags } : {}), ...(from ? { migratedFrom: from } : {}), updatedAt: new Date().toISOString() });
+  const now = new Date().toISOString();
+  // повторное «закрыть» не сдвигает дату закрытия
+  const closedAt = patch.closed === undefined ? prevClosed : patch.closed ? prevClosed ?? now : undefined;
+  writeMeta({
+    ...rest,
+    ...(title ? { title } : {}),
+    ...(autoTitle ? { autoTitle: true as const } : {}),
+    ...(dirs?.length ? { dirs } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(tags?.length ? { tags } : {}),
+    ...(repos ? { repos } : {}),
+    ...(closedAt ? { closedAt } : {}),
+    ...(from ? { migratedFrom: from } : {}),
+    updatedAt: now,
+  });
   return readSpace(slug)!;
 }
 
 /** Поля space.json: что пишет writeMeta. Лишний ключ — опечатка («dir» вместо «dirs»), а не новое поле. */
-const META_KEYS = ['slug', 'title', 'autoTitle', 'createdAt', 'updatedAt', 'dirs', 'cwd', 'tags', 'history', 'migratedFrom'];
+const META_KEYS = ['slug', 'title', 'autoTitle', 'createdAt', 'updatedAt', 'dirs', 'cwd', 'tags', 'repos', 'closedAt', 'history', 'migratedFrom'];
 /**
  * Поля, которые API не даёт менять: history и migratedFrom открывают артефакты своих запусков всем сессиям и этапам
  * пространства (spaceArtifactDirs), createdAt — экземпляр пространства (заведённое заново — другое).
@@ -532,7 +568,8 @@ const META_FIXED = ['createdAt', 'history', 'migratedFrom'] as const;
 /**
  * Текст space.json, который пишет не API (сессия терминала правит файл): та же проверка, что у PUT /api/spaces —
  * меняются только заголовок, теги знаний (checkSpaceTags), папки чтения (checkSpaceDirs: абсолютные, не шире разумного — они станут --add-dir всех
- * сессий пространства) и рабочая папка (checkSpaceCwd), — и сверх неё то, что API гарантирует сам: JSON-объект, слаг —
+ * сессий пространства), рабочая папка (checkSpaceCwd), привязанные репозитории (абсолютные пути: это подпись проекта, не
+ * доступ) и закрытие, — и сверх неё то, что API гарантирует сам: JSON-объект, слаг —
  * имя папки, типы полей, без лишних ключей. Ошибки — все сразу одним SpaceError 400 (модель исправит за один заход).
  * prev — space.json до правки: неизменённые папки не перепроверяются (как у API, который проверяет только переданные
  * поля — удалённая рабочая папка не мешает поправить заголовок), а createdAt, history и migratedFrom должны остаться
@@ -560,13 +597,16 @@ export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta 
     if (r[k] !== undefined && (typeof r[k] !== 'string' || !Number.isFinite(Date.parse(r[k] as string)))) problems.push(`${k} — дата ISO строкой`);
   }
   if (r.history !== undefined && !Array.isArray(r.history)) problems.push('history — список');
+  if (r.repos !== undefined && (!Array.isArray(r.repos) || r.repos.some((d) => typeof d !== 'string' || !path.isAbsolute(d)))) problems.push('repos — список абсолютных путей к корням git');
+  if (Array.isArray(r.repos) && r.repos.length > SPACE_REPOS_MAX) problems.push(`репозиториев больше ${SPACE_REPOS_MAX}`);
+  if (r.closedAt !== undefined && (typeof r.closedAt !== 'string' || !Number.isFinite(Date.parse(r.closedAt)))) problems.push('closedAt — дата ISO строкой');
   if (r.migratedFrom !== undefined && (!r.migratedFrom || typeof r.migratedFrom !== 'object' || Array.isArray(r.migratedFrom))) problems.push('migratedFrom — объект');
   const next = parseSpaceMeta(slug, text);
   if (prev !== undefined) {
     // служебные поля — как были (нормализованные так же, как их читает agentgraph)
     const base: Partial<SpaceMeta> = prev ?? { history: [] };
     const changed = META_FIXED.filter((k) => (k !== 'createdAt' || prev) && JSON.stringify(next[k] ?? null) !== JSON.stringify(base[k] ?? null));
-    if (changed.length) problems.push(`${changed.join(', ')} ведёт agentgraph: их не меняют (меняются title, dirs, cwd, tags)`);
+    if (changed.length) problems.push(`${changed.join(', ')} ведёт agentgraph: их не меняют (меняются title, dirs, cwd, tags, repos, closedAt)`);
   }
   const sameDirs = prev && JSON.stringify(r.dirs ?? []) === JSON.stringify(prev.dirs ?? []);
   const sameCwd = prev && (r.cwd ?? undefined) === prev.cwd;
@@ -586,6 +626,14 @@ export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta 
       problems.push((err as Error).message);
     }
   }
+  let repos = Array.isArray(r.repos) ? (r.repos as string[]) : undefined;
+  if (r.repos !== undefined && !(prev && JSON.stringify(r.repos) === JSON.stringify(prev.repos ?? []))) {
+    try {
+      repos = checkSpaceRepos(r.repos, prev?.repos ?? []);
+    } catch (err) {
+      problems.push((err as Error).message);
+    }
+  }
   if (r.tags !== undefined && !(prev && JSON.stringify(r.tags) === JSON.stringify(prev.tags ?? []))) {
     try {
       checkSpaceTags(r.tags);
@@ -594,8 +642,8 @@ export function checkSpaceMetaText(slug: string, text: string, prev?: SpaceMeta 
     }
   }
   if (problems.length) throw new SpaceError(400, `${META_FILE} не пройдёт проверку agentgraph: ${problems.join('; ')}`);
-  const { dirs: _d, cwd: _c, ...rest } = next;
-  return { ...rest, ...(dirs.length ? { dirs } : {}), ...(cwd ? { cwd } : {}) };
+  const { dirs: _d, cwd: _c, repos: _r, ...rest } = next;
+  return { ...rest, ...(dirs.length ? { dirs } : {}), ...(cwd ? { cwd } : {}), ...(repos ? { repos } : {}) };
 }
 
 /** Длина карты и состояния, записанных мимо API: те же пределы, что у PUT /api/spaces и сессии состояния. */
@@ -1214,6 +1262,206 @@ export function inheritRun(prev: { space?: string; tags?: string[]; saveState?: 
   return { input, space: space.slug, saveState: (prev.space ? prev.saveState : prev.saveTag) !== false, spaceDirs: spaceReadDirs(space, runsDir) };
 }
 
+// --- проект = пространство (docs/desk/SPEC.md, раздел 2): репозитории пространства и проект по папке
+
+export const NO_PROJECT = { space: null, title: 'Без проекта' } as const satisfies ProjectRef;
+
+/** Пути, которые проектом не бывают: домашняя папка-репозиторий (dotfiles) и корень диска забрали бы всю работу. */
+const tooWideRoot = (dir: string): boolean => dir === path.parse(dir).root || dir === path.resolve(os.homedir()) || dir === realOrResolved(os.homedir());
+
+/** Ближайший существующий предок пути — настоящим путём (realpath: /tmp и /private/tmp — одно); нет — сам путь. */
+function realOrResolved(p: string): string {
+  let cur = path.resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(cur), ...rest.reverse());
+    } catch {
+      const up = path.dirname(cur);
+      if (up === cur) return path.resolve(p);
+      rest.push(path.basename(cur));
+      cur = up;
+    }
+  }
+}
+
+/**
+ * Корень git для папки — без вызова git (на каждый запуск в списке): ближайший предок с .git. Папка .git — корень; файл
+ * .git worktree («gitdir: <repo>/.git/worktrees/<имя>») сворачивается к основному checkout, у подмодуля корень — его папка.
+ * Несуществующая папка (удалённый worktree, стёртый каталог) ищется от ближайшего существующего предка. Домашняя папка
+ * и корень диска корнем не считаются. Как repoRoot в git.ts, только синхронно.
+ */
+export function gitRootOf(p: string): string | undefined {
+  if (!p || !path.isAbsolute(p)) return undefined;
+  for (let dir = realOrResolved(p); ; ) {
+    const git = path.join(dir, '.git');
+    let st: fs.Stats | undefined;
+    try {
+      // stat, а не lstat: .git ссылкой на папку git тоже принимает
+      st = fs.statSync(git, { throwIfNoEntry: false });
+    } catch {
+      // путь — файл (ENOTDIR) или нет прав: ищем выше
+    }
+    if (st?.isDirectory()) return tooWideRoot(dir) ? undefined : dir;
+    if (st?.isFile()) {
+      const head = readHead(git, 4096) ?? '';
+      const m = /^gitdir:\s*(.+?)\s*$/m.exec(head);
+      const gitdir = m ? path.resolve(dir, m[1]) : '';
+      const wt = /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+$/.exec(gitdir);
+      const root = wt ? realOrResolved(wt[1]) : dir;
+      return tooWideRoot(root) ? undefined : root;
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+}
+
+/**
+ * Репозитории из формы пространства: список абсолютных путей. Уже привязанные (prev) остаются как есть, даже если их нет
+ * на диске (отвязать — убрать из списка); новые сворачиваются к корню git, не git — ошибка.
+ */
+export function checkSpaceRepos(raw: unknown, prev: string[] = []): string[] {
+  if (!Array.isArray(raw) || raw.some((d) => typeof d !== 'string')) throw new Error('repos — список путей');
+  const out: string[] = [];
+  for (const d of (raw as string[]).map((x) => x.trim()).filter(Boolean)) {
+    if (/[\u0000-\u001f]/.test(d)) throw new Error('В пути репозитория управляющие символы');
+    const expanded = d === '~' || d.startsWith('~/') ? path.join(os.homedir(), d.slice(1)) : d;
+    if (!path.isAbsolute(expanded)) throw new Error(`Репозиторий — абсолютный путь: ${d}`);
+    if (prev.includes(expanded)) {
+      out.push(expanded);
+      continue;
+    }
+    if (!fs.existsSync(expanded)) throw new Error(`Папки ${expanded} нет`);
+    const root = gitRootOf(expanded);
+    if (!root) throw new Error(`${expanded} — не git-репозиторий`);
+    out.push(root);
+  }
+  const repos = [...new Set(out)];
+  if (repos.length > SPACE_REPOS_MAX) throw new Error(`Репозиториев у пространства больше ${SPACE_REPOS_MAX}`);
+  return repos;
+}
+
+/** Корни git рабочей папки и папок чтения пространства: так старое пространство получает репозитории без потерь. */
+export function reposFromFolders(meta: Pick<SpaceMeta, 'cwd' | 'dirs'>): string[] {
+  const roots: string[] = [];
+  for (const d of [meta.cwd, ...(meta.dirs ?? [])]) {
+    if (!d || !fs.existsSync(d)) continue;
+    const root = gitRootOf(d);
+    if (root && !roots.includes(root)) roots.push(root);
+  }
+  return roots.slice(0, SPACE_REPOS_MAX);
+}
+
+/**
+ * Перенос: у пространства без поля repos (заведено до привязки репозиториев) оно заполняется из cwd и dirs и пишется
+ * в space.json один раз — cwd и dirs не трогаются, updatedAt тоже (порядок списка). Не записалось — вернётся
+ * посчитанное, перенос повторится при следующем чтении.
+ */
+const repoMigrationFailed = new Set<string>();
+
+export function withRepos(meta: SpaceMeta): SpaceMeta {
+  if (meta.repos) return meta;
+  const next = { ...meta, repos: reposFromFolders(meta) };
+  // запись уже падала (папка пространства — ссылка и подобное) — не пишем и не шумим на каждом чтении списка
+  if (repoMigrationFailed.has(meta.slug)) return next;
+  try {
+    writeMeta(next);
+  } catch (err) {
+    repoMigrationFailed.add(meta.slug);
+    console.error(`пространство ${meta.slug}: репозитории не записались —`, err instanceof Error ? err.message : err);
+  }
+  return next;
+}
+
+/** Что нужно о пространстве, чтобы отнести к нему папку. */
+type ProjectSpace = { ref: ProjectRef & { space: string }; createdAt: string; closed: boolean; repos: string[]; folders: string[]; readFolders: string[] };
+
+function projectSpaces(): ProjectSpace[] {
+  migrateTaskTags();
+  let names: string[];
+  try {
+    names = fs.readdirSync(spacesDir());
+  } catch {
+    return [];
+  }
+  const out: ProjectSpace[] = [];
+  for (const slug of names) {
+    if (!SPACE_SLUG_RE.test(slug)) continue;
+    let meta: SpaceMeta | undefined;
+    try {
+      meta = readSpaceMeta(slug);
+    } catch {
+      continue;
+    }
+    if (!meta) continue;
+    meta = withRepos(meta);
+    const folders = [spaceDir(slug), ...(meta.cwd ? [meta.cwd] : [])].map(realOrResolved);
+    const readFolders = (meta.dirs ?? []).map(realOrResolved);
+    // repos могли записать мимо API (правка space.json): к корню git, без корня диска и домашней папки
+    const repos = (meta.repos ?? []).map((r) => gitRootOf(r) ?? realOrResolved(r)).filter((r) => !tooWideRoot(r));
+    out.push({ ref: { space: slug, title: meta.title || slug }, createdAt: meta.createdAt, closed: Boolean(meta.closedAt), repos, folders, readFolders });
+  }
+  // правило «главного»: из нескольких подходящих — самое старое (createdAt, затем слаг), проект не скачет от новых
+  return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.ref.space.localeCompare(b.ref.space));
+}
+
+/** Проект по папке и по явному пространству; снимок пространств — один на вызов (на весь список запусков). */
+export type ProjectResolver = {
+  /** Проект папки: projectOfPath. */
+  path: (p: string | undefined) => ProjectRef;
+  /** Проект работы: явное пространство (если оно есть, закрытое тоже), иначе — по папке. */
+  of: (w: { space?: string; path?: string }) => ProjectRef;
+  /** Пространство по слагу; нет такого — undefined. */
+  space: (slug: string | undefined) => ProjectRef | undefined;
+};
+
+/**
+ * Правило проекта по папке (docs/desk/plan-1.md, контракт):
+ * 1. Корень git папки (worktree — основной checkout) привязан к пространству → это пространство. Привязан к нескольким —
+ *    самое старое из них (по createdAt): у репозитория один «дом», а пространства-фичи на том же репо выбирают явно.
+ * 2. Иначе — пространство, чья папка содержит путь: папка самого пространства и рабочая папка, а папки чтения — только
+ *    для пути вне git (справочный репозиторий в папках чтения фичи — не её работа; папка документов — её); самая глубокая
+ *    из подходящих, при равной глубине — старшее пространство.
+ * 3. Иначе — «Без проекта».
+ * Закрытые пространства уступают открытым на каждом шаге: репозиторий закрытого, привязанный и к открытому, — работа
+ * открытого; не привязан больше никуда — работа так и подписана закрытым (история не теряет проект, в выбор и срезы
+ * закрытое не попадает — это решают их списки по closedAt).
+ */
+export function projectResolver(spaces: ProjectSpace[] = projectSpaces()): ProjectResolver {
+  // открытые — первыми: из подходящих берётся первое открытое, закрытое — только если открытого нет
+  const tiers = [spaces.filter((s) => !s.closed), spaces.filter((s) => s.closed)];
+  const cache = new Map<string, ProjectRef>();
+  const bySlug = new Map(spaces.map((s) => [s.ref.space, s.ref]));
+  const byPath = (p: string | undefined): ProjectRef => {
+    if (!p || !path.isAbsolute(p)) return NO_PROJECT;
+    const hit = cache.get(p);
+    if (hit) return hit;
+    const real = realOrResolved(p);
+    const root = gitRootOf(p);
+    // корня нет (репозиторий стёрли с диска) — привязанный репозиторий, внутри которого путь
+    const byRepo = (list: ProjectSpace[]) => list.find((s) => s.repos.some((r) => (root ? r === root : isInside(real, r))));
+    const byFolder = (list: ProjectSpace[]) => {
+      let best: { s: ProjectSpace; len: number } | undefined;
+      for (const s of list) {
+        for (const f of root ? s.folders : [...s.folders, ...s.readFolders]) if (isInside(real, f) && (!best || f.length > best.len)) best = { s, len: f.length };
+      }
+      return best?.s;
+    };
+    const owner = byRepo(tiers[0]!) ?? byRepo(tiers[1]!) ?? byFolder(tiers[0]!) ?? byFolder(tiers[1]!);
+    const ref: ProjectRef = owner?.ref ?? NO_PROJECT;
+    cache.set(p, ref);
+    return ref;
+  };
+  const space = (slug: string | undefined) => (slug ? bySlug.get(slug) : undefined);
+  return { path: byPath, space, of: (w) => space(w.space) ?? byPath(w.path) };
+}
+
+/** Проект папки: корень git → привязанное пространство; иначе пространство, чья папка содержит путь; иначе «Без проекта». */
+export function projectOfPath(p: string | undefined): ProjectRef {
+  return projectResolver().path(p);
+}
+
 // --- API: тонкие обёртки для server.ts
 
 const bad = (err: unknown): ApiReply =>
@@ -1275,8 +1523,11 @@ export function spacesListReply(work: Map<string, SpaceWorkSum> = new Map()): Ap
 export function spaceReply(slug: string, extra: (s: Space) => Pick<SpaceDetail, 'runs' | 'sessions' | 'workdir' | 'looseSessions'> = () => ({ runs: [], sessions: [] })): ApiReply {
   try {
     const s = readSpace(slug);
-    const legacySummary = s ? legacySummaryOf(s) : undefined;
-    return s ? { status: 200, body: { ...s, ...extra(s), ...(legacySummary ? { legacySummary } : {}) } satisfies SpaceDetail } : notFound(slug);
+    if (!s) return notFound(slug);
+    const legacySummary = legacySummaryOf(s);
+    const proj = projectResolver();
+    const repoProjects = Object.fromEntries((s.repos ?? []).map((r) => [r, proj.path(r)]));
+    return { status: 200, body: { ...s, ...extra(s), ...(legacySummary ? { legacySummary } : {}), ...(s.repos?.length ? { repoProjects } : {}) } satisfies SpaceDetail };
   } catch (err) {
     return bad(err);
   }

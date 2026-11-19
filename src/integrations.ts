@@ -9,9 +9,10 @@ import { addProjectRoot, autodetectProjects, describeProjects, findProject, proj
 import { branchIntake, jiraIntake, mrIntake } from './intake.js';
 import type { RunSource } from './intake.js';
 import type { RunWorktree } from './runner.js';
+import { parseSessionSource } from './work-links.js';
 import { attentionReasons, collectAttention, lastAttention, suggestFlows, type SuggestDeps } from './attention.js';
 import type { FlowSummary } from './flows.js';
-import type { AttentionResult, BranchView, IntegrationsInfo, JiraIssueBrief, MergeRequestView, Suggestion } from './api-types.js';
+import type { AttentionResult, BranchView, Intake, IntegrationsInfo, JiraIssueBrief, MergeRequestView, Suggestion } from './api-types.js';
 
 export type Reply = { status: number; body: unknown };
 
@@ -117,7 +118,10 @@ export async function integrationsRoute(method: string, url: URL, readBody: () =
     // --- мои MR, которым нужно внимание
     if (p === '/api/attention' && method === 'GET') {
       const projects = await describeProjects(loadSettings(), x);
-      return ok((await collectAttention(projects, { force: url.searchParams.get('force') === '1', exec: x })) satisfies AttentionResult);
+      const res = await collectAttention(projects, { force: url.searchParams.get('force') === '1', exec: x });
+      // подпись проекта MR — пространство его репозитория (выдача кэшируется, поэтому — здесь, по свежему снимку)
+      const refs = new Map(projects.map((q) => [q.path, q.projectRef]));
+      return ok({ ...res, items: res.items.map((i) => ({ ...i, ...(refs.get(i.project) ? { projectRef: refs.get(i.project) } : {}) })) } satisfies AttentionResult);
     }
     if (p === '/api/attention/suggest' && method === 'POST') {
       const b = (await readBody()) as { refs?: unknown };
@@ -129,13 +133,27 @@ export async function integrationsRoute(method: string, url: URL, readBody: () =
 
     // --- вход флоу и worktree
     if (p === '/api/intake' && method === 'POST') {
-      const b = (await readBody()) as { flow?: string; type?: string; key?: string; project?: string; attention?: boolean };
+      const b = (await readBody()) as { flow?: string; type?: string; key?: string; project?: string; attention?: boolean; item?: unknown; thing?: unknown };
       const template = b.flow ? deps.flowInput(b.flow) : undefined;
+      // «Запустить flow» с карточки дела: id дела и вещь едут в source входа, форма запуска отдаёт их в POST /api/runs
+      // кривой id дела — 400; вещь, что не прошла проверку, просто не едет (запуск найдёт дело по id)
+      let desk: Pick<RunSource, 'item' | 'thing'>;
+      try {
+        desk = parseSessionSource({ item: b.item }) ?? {};
+      } catch (err) {
+        return bad(err instanceof Error ? err.message : String(err));
+      }
+      try {
+        Object.assign(desk, parseSessionSource({ thing: b.thing }) ?? {});
+      } catch {
+        /* без вещи */
+      }
+      const okIntake = (v: Intake): Reply => ok({ ...v, source: { ...v.source, ...desk } });
       const projectPath = b.project ? (await projectByPath(b.project, x)).path : undefined;
       if (b.type === 'jira') {
         const key = parseIssueKey(String(b.key ?? ''));
         if (!key) return bad('Не ключ и не ссылка задачи Jira');
-        return ok(jiraIntake(await jira(deps).client.issue(key), template, projectPath));
+        return okIntake(jiraIntake(await jira(deps).client.issue(key), template, projectPath));
       }
       if (b.type === 'mr') {
         const proj = await projectInfo(b.project ?? '', x);
@@ -146,13 +164,13 @@ export async function integrationsRoute(method: string, url: URL, readBody: () =
         const reasons = b.attention === true
           ? attentionReasons(mr, mr.notesCount ? await mrDiscussions(remote, mr.iid, x) : [], await forgeUser(remote.host, x))
           : undefined;
-        return ok(mrIntake(mr, template, proj.path, reasons));
+        return okIntake(mrIntake(mr, template, proj.path, reasons));
       }
       if (b.type === 'branch') {
         if (!projectPath) return bad('Не выбран проект');
         const br = (await localBranches(projectPath, x)).find((q) => q.name === b.key);
         if (!br) return bad(`Локальной ветки ${b.key} нет`, 404);
-        return ok(branchIntake(br.name, br.subject, template, projectPath));
+        return okIntake(branchIntake(br.name, br.subject, template, projectPath));
       }
       return bad('type: jira | mr | branch');
     }
@@ -198,7 +216,7 @@ async function overview(deps: IntegrationDeps, x: Exec): Promise<IntegrationsInf
 function jira(deps: IntegrationDeps) {
   const s = loadSettings();
   const token = readJiraToken();
-  if (!s.jira || !token) throw new JiraError('Jira не подключена: открой «Подключения» на главной');
+  if (!s.jira || !token) throw new JiraError('Jira не подключена: открой «Подключения» в разделе «Код»');
   return { s, client: jiraClient(s.jira, token, deps.fetch) };
 }
 
@@ -207,7 +225,7 @@ async function projectByPath(dir: string, x: Exec) {
   const s = loadSettings();
   const root = dir && fs.existsSync(dir) ? await repoRoot(dir, x) : undefined;
   const proj = root ? findProject(s, root) : undefined;
-  if (!proj) throw new Error('Проект не найден: добавь его на главной');
+  if (!proj) throw new Error('Проект не найден: добавь его в «Подключения» (раздел «Код»)');
   return proj;
 }
 
@@ -229,6 +247,14 @@ export function runLinks(body: { source?: unknown; worktree?: unknown }, cwd: st
   if (src && (src.type === 'jira' || src.type === 'mr' || src.type === 'branch') && typeof src.key === 'string' && src.key) {
     const str = (v: unknown, n: number) => (typeof v === 'string' && v ? v.slice(0, n) : undefined);
     out.source = { type: src.type, key: src.key.slice(0, 200), title: str(src.title, 300) ?? '', url: str(src.url, 500), project: str(src.project, 500) };
+    // дело и вещь — по тем же правилам, что у сессии (ключ в каноне keys.ts, id дела); кривые — без них, запуск идёт
+    for (const part of [{ item: src.item }, { thing: src.thing }]) {
+      try {
+        Object.assign(out.source, parseSessionSource(part) ?? {});
+      } catch {
+        /* без этой привязки */
+      }
+    }
   }
   const wt = body.worktree as Partial<RunWorktree> | undefined;
   if (wt && typeof wt.path === 'string') {

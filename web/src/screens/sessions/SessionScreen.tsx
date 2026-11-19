@@ -1,9 +1,11 @@
 // Экран сессии терминала /sessions/:id (макеты Main и Ended): шапка — назад, название с правкой, статус, папка,
-// «Обновить состояние», «Завершить» или «Продолжить», меню (перезапуск, удаление); строка контекста — чип пространства
+// «Обновить состояние», «Завершить» или «Продолжить», «Flow из сессии» (новая сессия со скиллом session-to-flow по
+// транскрипту этой), меню (перезапуск, удаление); строка контекста — чип пространства
 // (смена и снятие, в том числе у завершённой — со следующим «Продолжить») и чипы тегов знаний со снятием и «+ тег»;
 // выбранное на ходу помечено «придёт со следующим шагом», справа — состояние пространства; терминал на всю оставшуюся
-// высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала.
-import { useEffect, useRef, useState } from 'react';
+// высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала. Завершённая на вопросе
+// показывает вопрос в карточке, «Продолжить» берёт первое сообщение (ответ); предел живых сессий — диалог useContinue.
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionSpaceChip, SessionTagChip, SessionView } from '@server/api-types';
@@ -11,7 +13,7 @@ import { api, ApiError, errorText, keys, useConfig, useFeature, useSpaces, useTa
 import { ModelPreview } from '../../components/ModelPreview';
 import { SpacePicker } from '../../components/SpacePicker';
 import {
-  continueSession, deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState,
+  deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, sessionToFlow, setSessionSpace, setSessionTags, updateSessionState,
 } from '../../api/sessions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { setDocRunTitle } from '../../components/shell/docTitle';
@@ -21,12 +23,13 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { canUpdateState, chipHint, noTranscriptWhy, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
+import { askNote, canUpdateState, chipHint, termSize, noTranscriptWhy, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
 import { SPACE_SLUG_ERROR, SPACE_SLUG_RE } from '../../lib/spaces';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { SessionName } from './SessionName';
 import { ICON } from './icons';
 import { Loading } from './Loading';
+import { useContinue } from './useContinue';
 import styles from './Session.module.css';
 
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
@@ -53,17 +56,22 @@ export function SessionScreen() {
   return <Session key={q.data.id} s={q.data} />;
 }
 
-/** Действия сессии: каждое отдаёт свежее состояние сессии; пока идёт одно, остальные кнопки ждут. */
-function useActions(s: SessionView, setS: (v: SessionView) => void) {
+/**
+ * Действия сессии: каждое отдаёт свежее состояние сессии (undefined — отменили диалог предела); пока идёт одно, остальные
+ * кнопки ждут. prompt — первое сообщение «Продолжить» из карточки завершённой.
+ */
+function useActions(s: SessionView, setS: (v: SessionView) => void, prompt: string) {
   const qc = useQueryClient();
   const toast = useToast();
   const navigate = useNavigate();
   const { askConfirm } = useConfirm();
+  const cont = useContinue();
   const [busy, setBusy] = useState(false);
-  const run = async (fn: () => Promise<SessionView>) => {
+  const run = async (fn: () => Promise<SessionView | undefined>) => {
     setBusy(true);
     try {
-      setS(await fn());
+      const v = await fn();
+      if (v) setS(v);
     } catch (err) {
       toast(errorText(err));
     } finally {
@@ -72,10 +80,26 @@ function useActions(s: SessionView, setS: (v: SessionView) => void) {
   };
   return {
     busy,
+    dialog: cont.dialog,
     end: () => run(() => endSession(s.id)),
-    resume: () => run(() => continueSession(s.id)),
+    resume: () => run(() => cont.resume(s.id, prompt)),
     restart: () => run(() => restartSession(s.id)),
     state: () => run(() => updateSessionState(s.id)),
+    /** Новая сессия со скиллом session-to-flow — после подтверждения; открывается на её экране. */
+    toFlow: async () => {
+      if (!(await askConfirm(t('Сделать flow из сессии «{name}»?\nОткроется новая сессия Claude в папке agentgraph со скиллом session-to-flow: он прочитает транскрипт этой сессии, разберёт рабочий путь и грабли и предложит flow. Записать flow в flows/ он спросит разрешения.', { name: s.name }), { ok: t('Открыть сессию') }))) return;
+      setBusy(true);
+      try {
+        const v = await sessionToFlow(s.id, termSize(window.innerWidth, window.innerHeight));
+        qc.setQueryData(sessionKeys.one(v.id), v);
+        void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
+        void navigate(`/sessions/${encodeURIComponent(v.id)}`);
+      } catch (err) {
+        toast(errorText(err));
+      } finally {
+        setBusy(false);
+      }
+    },
     remove: async () => {
       if (!(await askConfirm(t('Удалить сессию «{name}» из agentgraph? Журнал ходов и перетащенные файлы удалятся; транскрипт Claude останется.', { name: s.name }), { ok: t('Удалить'), danger: true }))) return;
       try {
@@ -102,11 +126,18 @@ function Session({ s }: { s: SessionView }) {
     toast(t('Claude открыл сессию «{name}» — нажми, чтобы перейти', { name: v.name }), () => void navigate(`/sessions/${encodeURIComponent(v.id)}`));
   };
   const home = useConfig().data?.home;
-  const act = useActions(s, setS);
+  // первое сообщение «Продолжить»: поле — в карточке завершённой, кнопка в шапке берёт его же
+  const [prompt, setPrompt] = useState('');
   const [screenOnly, setScreenOnly] = useState(false);
+  // карточка завершённой на виду: главная кнопка — в ней, в шапке те же действия вторичные; карточку скрыли — поле
+  // первого сообщения не видно, и «Продолжить» в шапке его не шлёт
+  const card = !s.live && !screenOnly;
+  const act = useActions(s, setS, card ? prompt : '');
   // сессию продолжили — следующее завершение снова покажет карточку
   useEffect(() => {
-    if (s.live) setScreenOnly(false);
+    if (!s.live) return;
+    setScreenOnly(false);
+    setPrompt('');
   }, [s.live]);
   // имя сессии — в заголовке вкладки, как имя запуска; переименование видно и там
   useEffect(() => {
@@ -124,14 +155,13 @@ function Session({ s }: { s: SessionView }) {
   }, [stateAt]);
   const tone = sessionTone(s);
   const update = canUpdateState(s);
-  // карточка завершённой на виду: главная кнопка — в ней, в шапке те же действия вторичные
-  const card = !s.live && !screenOnly;
+  const toFlowOn = useFeature('session-to-flow');
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
         <Link to="/sessions" className={styles.back} title={t('Все сессии')}>{ICON.back}{t('Сессии')}</Link>
         <SessionName s={s} as="h1" pencil="always" className={styles.title} title={s.name} />
-        <span className={cx(styles.status, styles[tone], s.status === 'working' && styles.pulse)} title={sessionExitTitle(s) || undefined}>
+        <span className={cx(styles.status, styles[tone], s.status === 'working' && styles.pulse)} title={[askNote(s), sessionExitTitle(s)].filter(Boolean).join('\n') || undefined}>
           <span className={styles.dot} aria-hidden="true" />
           {sessionStatusLabel(s)}
         </span>
@@ -146,6 +176,17 @@ function Session({ s }: { s: SessionView }) {
           {update.show && (
             <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>
               {ICON.refresh}{t('Обновить состояние')}
+            </button>
+          )}
+          {toFlowOn && s.turns > 0 && (
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={act.busy || (!s.live && s.resumable === false)}
+              title={!s.live && s.resumable === false ? t('Транскрипта этой сессии нет: flow делать не из чего') : t('Сделать flow из этой сессии: новая сессия со скиллом session-to-flow разберёт её транскрипт — рабочий путь в этапы, грабли в промпты')}
+              onClick={() => void act.toFlow()}
+            >
+              {t('Flow из сессии')}
             </button>
           )}
           {s.live && (
@@ -164,9 +205,10 @@ function Session({ s }: { s: SessionView }) {
           live={s.live}
           onState={setS}
           onOpened={opened}
-          overlay={card && <Ended s={s} act={act} onHide={() => setScreenOnly(true)} />}
+          overlay={card && <Ended s={s} act={act} prompt={prompt} onPrompt={setPrompt} onHide={() => setScreenOnly(true)} />}
         />
       </section>
+      {act.dialog}
       <footer className={styles.foot}>
         {s.live
           ? [t('Ctrl-C дважды — выйти из Claude'), t('Shift+Enter — новая строка'), t('{key}+мышь — выделение терминала', { key: SELECT_KEY }), t('перезагрузка страницы сессию не прерывает'), ...(s.claudeVersion ? [`claude ${s.claudeVersion}`] : [])].join(' · ')
@@ -395,16 +437,39 @@ function Menu({ s, act }: { s: SessionView; act: Actions }) {
   );
 }
 
-/** Карточка поверх последнего экрана завершённой сессии: что случилось, что с саммари, «Продолжить». */
-function Ended({ s, act, onHide }: { s: SessionView; act: Actions; onHide: () => void }) {
+/**
+ * Карточка поверх последнего экрана завершённой сессии: что случилось, что с саммари, на каком вопросе закончилась,
+ * первое сообщение и «Продолжить» (Cmd/Ctrl+Enter в поле — то же).
+ */
+function Ended({ s, act, prompt, onPrompt, onHide }: { s: SessionView; act: Actions; prompt: string; onPrompt: (v: string) => void; onHide: () => void }) {
   const text = sessionEndText(s);
   const note = stateNote(s);
   const update = canUpdateState(s);
+  const onKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || act.busy) return;
+    e.preventDefault();
+    void act.resume();
+  };
   return (
     <div className={styles.overlay}>
       <div className={styles.endCard} role="status">
         <h2>{s.outcome === 'untrusted' ? t('Папка не доверена') : t('Сессия завершена')}</h2>
         <p className="muted" title={sessionExitTitle(s) || undefined}>{text}{note ? ` ${note.text}` : ''}</p>
+        {s.ask && (
+          <p className={styles.ask} title={t('Спросил {time}', { time: clock(s.ask.at) })}>
+            <span className={styles.askLabel}>{s.ask.kind === 'permission' ? t('Закончилась на запросе разрешения') : t('Закончилась на вопросе')}</span>
+            {s.ask.text || '…'}
+          </p>
+        )}
+        <textarea
+          className={styles.prompt}
+          value={prompt}
+          onChange={(e) => onPrompt(e.target.value)}
+          onKeyDown={onKey}
+          aria-label={t('Первое сообщение продолженного разговора')}
+          placeholder={s.ask ? t('Ответ — уйдёт первым сообщением (необязательно)') : t('Первое сообщение — необязательно')}
+          title={t('Claude получит его сразу после «Продолжить»; пусто — откроется и будет ждать тебя. Cmd/Ctrl+Enter — продолжить')}
+        />
         <div className="row">
           <button type="button" className="btn primary" disabled={act.busy} onClick={() => void act.resume()}>{t('Продолжить')}</button>
           {update.show && <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>{t('Обновить состояние')}</button>}

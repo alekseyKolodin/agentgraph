@@ -98,3 +98,29 @@ test('AGENTGRAPH_NOTIFY=off — молчит и хост: переменная �
     delete process.env.AGENTGRAPH_NOTIFY;
   }
 });
+
+test('конец запуска рутины: заголовком событие, а не flow; общего «запуск завершён» нет', async () => {
+  const before = notices.length;
+  const put = await fetch(`${base}/api/routines/nightly`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec: { title: 'Ночная сверка', when: { schedule: '0 3 * * *' }, run: { flow: 'demo', cwd: proj }, mode: 'auto' } }) });
+  assert.equal(put.status, 200, await put.clone().text());
+  const run = await fetch(`${base}/api/routines/nightly/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(run.status, 200, await run.clone().text());
+  const { runId } = (await run.json()) as { runId: string };
+  const until = Date.now() + 5000;
+  while (notices.length === before && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 50));
+  const mine = notices.slice(before);
+  assert.equal(mine.length, 1, JSON.stringify(mine));
+  // раннер-подделка падает: «не готово» — уведомление есть, с событием в заголовке и путём запуска
+  assert.equal(mine[0].title, 'Ночная сверка — по расписанию — ошибка');
+  assert.equal(mine[0].path, `/run/${runId}`);
+  assert.match(mine[0].body, /Ночная сверка · \$0\.00 · поддельный раннер/);
+});
+
+test('уведомление о сессии: вопрос — «Спрашивает: …», разрешение — «Просит разрешения: …», без вопроса — закончила ход', async () => {
+  const { sessionNoticeBody } = await import('./server.js');
+  assert.equal(sessionNoticeBody({}, { kind: 'question', text: 'Какую  базу\nберём?' }), 'Спрашивает: Какую базу берём?');
+  assert.equal(sessionNoticeBody({ space: 'cart' }, { kind: 'permission', text: 'Bash: npm test' }), 'Просит разрешения: Bash: npm test · ◇ cart');
+  assert.equal(sessionNoticeBody({ space: 'cart' }), '◇ cart');
+  assert.equal(sessionNoticeBody({}), 'Claude закончил ход');
+});

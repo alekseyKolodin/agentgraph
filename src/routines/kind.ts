@@ -17,6 +17,10 @@ export type SourceCtx = {
   cursor: { get: () => unknown; set: (v: unknown) => void };
   log: (msg: string) => void;
   signal: AbortSignal;
+  /** Опрос движка по расписанию; у «Проверки на истории» и пробной проверки нет — дорогое по расписанию (разбор моделью) там не запускать. */
+  scheduled?: boolean;
+  /** Сколько стоила проверка ($): опрос моделью — движок суммирует в расход источника. У пробной проверки нет. */
+  cost?: (usd: number) => void;
 };
 
 export type SourceKind = {
@@ -30,12 +34,20 @@ export type SourceKind = {
   minEveryFor?: (spec: SourceSpec) => number;
   setup: KindField[];
   match: MatchField[];
+  /**
+   * Источник-снимок: poll возвращает весь текущий список (грязные ветки, сессии на вопросе), а не только новое. Запись,
+   * которой больше нет в списке, движок забывает (вернётся — придёт новой) и закрывает её дело у рутин с task.
+   * Список неполный (часть не прочиталась) — вид отдаёт прошлые записи этой части сам: пропажа значит «стало чисто».
+   */
+  snapshot?: boolean;
   /** Опрос: свежие записи (движок сам отсеет виденные id). Первый вызов после подключения задаёт «уже видено». */
   poll?: (ctx: SourceCtx) => Promise<RoutineEvent[]>;
   /** Постоянное соединение: emit на каждое новое событие; резолвится, когда signal прерван. Ошибка — движок переподключит с паузой. */
   listen?: (ctx: SourceCtx, emit: (events: RoutineEvent[]) => void) => Promise<void>;
   /** Ответ в источник: тред, чат, комментарий. target — event.replyTo или настройки источника (чат по умолчанию). */
   reply?: (ctx: SourceCtx, target: Record<string, unknown> | undefined, text: string) => Promise<{ link?: string }>;
+  /** Умеет ли ответить источник с такими настройками (у «Сервиса через Claude» ответ настраивается в источнике). Нет — по наличию reply. */
+  canReplyFor?: (spec: SourceSpec) => boolean;
   /** Защита от петли: сообщение своего бота / ответ в треде — не событие. */
   isSelf?: (ctx: SourceCtx, e: RoutineEvent) => boolean;
   /** Что будет выполняться — для «Что будет выполняться» и SourceTestResult.request (секреты замаскировать). */
