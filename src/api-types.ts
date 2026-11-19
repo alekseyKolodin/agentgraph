@@ -104,6 +104,28 @@ export type RunSource = {
   url?: string;
   /** Корень проекта (основной checkout). */
   project?: string;
+  /**
+   * Вещь, о которой запуск (src/things/types.ts): у запуска рутины — MR или задача Jira из события, рядом с рутиной в key.
+   * По её ключу «Код» и дела находят свои запуски.
+   */
+  thing?: Thing;
+};
+
+/** Вещь (src/things/types.ts) — здесь только ссылкой на тип: файл без импортов. */
+export type Thing = import('./things/types.js').Thing;
+
+/**
+ * Откуда сессия (session.json → source): вещь (MR, задача Jira), дело, запуск или рутина. Пишет POST /api/sessions
+ * с source; у сессий без источника поля нет.
+ */
+export type SessionSource = {
+  thing?: Thing;
+  /** Id дела (этап 3, src/desk). */
+  item?: string;
+  /** Id запуска, из которого открыта сессия. */
+  run?: string;
+  /** Слаг рутины. */
+  routine?: string;
 };
 
 export type RunWorktree = { path: string; branch?: string };
@@ -144,6 +166,8 @@ export type RunSummary = {
   knowledge?: string[];
   /** Дочерний запуск блока-вызова: список показывает его под родителем. */
   parent?: RunParent;
+  /** Продолжение: id первого запуска цепочки (ключ run:<root> не меняется от продолжения к продолжению). */
+  root?: string;
 };
 
 /** Идущий этап: у параллельной группы их несколько. */
@@ -672,6 +696,8 @@ export type SessionView = {
   ask?: SessionAsk;
   /** Сессия открыта из задачи Teamwork (POST /api/sessions с teamwork): инструменты team_task_update и team_doc_write. */
   teamwork?: RunTeamworkLink;
+  /** Откуда сессия: вещь, дело, запуск, рутина («Начать сессию» в «Коде»). */
+  source?: SessionSource;
   /** Проект сессии (пространство): явное пространство, иначе по папке; есть в списке GET /api/sessions. */
   projectRef?: ProjectRef;
 };
@@ -1120,6 +1146,8 @@ export type RunReport = {
   hidden?: boolean;
   /** Id запуска, который этот продолжает: его done-блоки пропущены, их выводы подставлены. */
   continuedFrom?: string;
+  /** Id первого запуска цепочки продолжений (у самого первого поля нет): ключ вещи run:<root> у всей цепочки один. */
+  root?: string;
   /** Разовый запуск: flow берётся из снимка flow.yaml в папке запуска, а не из flows/ по имени. У обычных поля нет. */
   adhoc?: true;
   source?: RunSource;

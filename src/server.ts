@@ -105,7 +105,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -115,7 +115,8 @@ import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './sessio
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
-import { ensureWorktree, repoRoot } from './git.js';
+import { repoRoot } from './git.js';
+import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type DropWorktreesDeps, type DropWorktreesResult } from './work-links.js';
 import { findProject } from './projects.js';
 import { worktreesDir } from './settings.js';
 import { readHead } from './safe-fs.js';
@@ -298,45 +299,69 @@ function routines(srv: ServerOptions): RoutineEngine {
 
 /**
  * Запуск flow по событию рутины — тот же startRun, что у формы: пространство, папка (рабочая папка рутины, пространства
- * или сервера), новый worktree, знания, модель, бюджет; задача — run.input (или input flow) + событие в обёртке данных.
+ * или сервера), worktree, знания, модель, бюджет; задача — run.input (или input flow) + событие в обёртке данных.
+ * В источнике — и рутина (key), и вещь события (thing: MR, задача Jira). worktree у события MR с веткой — на ветке MR
+ * (существующей, как requireExisting формы; папка та же, что у формы), если origin репо — проект этого MR и в папке никто
+ * не работает; иначе новая ветка routine/… от базы и строка агенту (work-links.ts → routineWorktree).
  */
 async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promise<string> {
   const { spec: rs, event } = r;
   assertFlowName(rs.run.flow);
   const spec = loadFlow(rs.run.flow);
   const task = rs.run.input?.trim() || spec.input?.trim() || '';
-  spec.input = [task, r.eventBlock].filter(Boolean).join('\n\n');
   const space = rs.run.space ? readSpace(spaceSlug(rs.run.space) ?? '') : undefined;
   if (rs.run.space && !space) throw new Error(`Пространства ${rs.run.space} нет`);
   let cwd = resolveDir(rs.run.cwd || space?.cwd, srv.defaultCwd);
   if (!isDir(cwd)) throw new Error(`Рабочей папки ${cwd} нет`);
   const knowledge = rs.run.knowledge?.length ? knowledgeTags(runTagSlugs(rs.run.knowledge)).map((t) => t.slug) : [];
   if (knowledge.length) resolveKnowledge(spec, knowledge);
+  const thing = eventThing(event);
   let worktree: RunWorktree | undefined;
   // основной checkout: запуск в worktree список покажет в группе проекта
   let project: string | undefined;
+  // ветку MR выгрузить не вышло — строка для агента: он должен знать, что сидит не в ней
+  let branchNote = '';
   if (rs.run.worktree === 'new') {
     const root = await repoRoot(cwd);
     if (!root) throw new Error(`${cwd} — не git-репозиторий: новый worktree сделать не из чего`);
     const s = loadSettings();
     const cfg = findProject(s, root);
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
-    const wt = await ensureWorktree({ root, baseDir: worktreesDir(s), branch: `routine/${r.routine}-${stamp}-${event.id.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x'}`, base: cfg?.base, copyFiles: cfg?.copyFiles });
+    const wt = await routineWorktree({ root, baseDir: worktreesDir(s), base: cfg?.base, copyFiles: cfg?.copyFiles, routine: r.routine, eventId: event.id, thing, fields: event.fields }, { busy: worktreeBusy });
+    branchNote = wt.branchNote ?? '';
     cwd = wt.path;
     project = root;
     worktree = { path: wt.path, ...(wt.branch ? { branch: wt.branch } : {}) };
   }
+  spec.input = [task, branchNote, r.eventBlock].filter(Boolean).join('\n\n');
   return startRun(spec, {
     cwd,
     ...(rs.limits?.usd ? { maxBudgetUsd: rs.limits.usd } : {}),
     ...(rs.run.model ? { model: rs.run.model } : {}),
-    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}), ...(project ? { project } : {}) },
+    source: { type: 'routine', key: r.routine, title: event.title.slice(0, 300), ...(event.link ? { url: event.link.slice(0, 500) } : {}), ...(project ? { project } : {}), ...(thing ? { thing } : {}) },
     ...(worktree ? { worktree } : {}),
     ...(space ? { space: space.slug, saveState: true, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
     ...(knowledge.length ? { knowledge } : {}),
     ...(r.pauseBefore.length ? { pauseBefore: r.pauseBefore } : {}),
     routineRun: true,
   }, srv);
+}
+
+/** Кто сейчас работает в папке worktree: идущий запуск (в ней или глубже) или живая сессия; никто — undefined. */
+function worktreeBusy(dir: string): string | undefined {
+  const d = path.resolve(dir);
+  const inDir = (p: string | undefined) => Boolean(p) && isInside(path.resolve(p!), d);
+  const run = listRuns().find((r) => r.status === 'running' && (inDir(r.worktree?.path) || inDir(r.cwd)));
+  if (run) return `идёт запуск ${run.id}`;
+  return liveSessionDirs().some((c) => inDir(c)) ? 'в папке идёт сессия' : undefined;
+}
+
+/**
+ * Вещь закрыта (MR смержен, задача сделана) — убрать worktree её запусков рутины. Вызывает сверка этапа 3
+ * (src/desk/reconcile.ts); папка, где работают (запуск, живая сессия), чужой и грязный worktree остаются
+ * (work-links.ts → dropRoutineWorktrees).
+ */
+export function dropThingWorktrees(key: string, exec?: DropWorktreesDeps['exec']): Promise<DropWorktreesResult> {
+  return dropRoutineWorktrees(key, { runs: listRuns, baseDir: worktreesDir(loadSettings()), busy: worktreeBusy, ...(exec ? { exec } : {}) });
 }
 
 export function startServer(opts: ServerOptions): Promise<string> {
@@ -1256,6 +1281,8 @@ function startRun(
     maxBudgetUsd?: number;
     model?: string;
     continueFrom?: Continuation;
+    /** Продолжение: id первого запуска цепочки (chainRoot) — в run.json → root. */
+    root?: string;
     source?: RunSource;
     /** Связь с Teamwork (черновик документа проекта или задача): в run.json; по задаче — статусы задачи на старте и в конце (teamwork-status.ts). */
     teamwork?: RunTeamworkLink;
@@ -1506,6 +1533,7 @@ function launchRun(
       ...(opts.knowledge?.length ? { knowledge: opts.knowledge } : {}),
       ...(opts.title ? { title: opts.title } : {}),
       ...(opts.parent ? { parent: opts.parent } : {}),
+      ...(opts.continueFrom ? { continuedFrom: opts.continueFrom.runId, ...(opts.root ? { root: opts.root } : {}) } : {}),
     };
     report.status = 'failed';
     report.error = errMsg(err);
@@ -1884,6 +1912,8 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     maxBudgetUsd: o.maxBudgetUsd,
     model: o.model,
     continueFrom: cont,
+    // ключ run:<id первого> у всей цепочки один: дело, привязанное к упавшему запуску, найдёт и продолжение
+    root: chainRoot(prev, readReport),
     source: prev.source,
     ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
     worktree: prev.worktree,
@@ -2373,6 +2403,7 @@ function listRuns(): RunSummary[] {
       cwd: r.cwd,
       hidden: Boolean(r.hidden),
       source: r.source,
+      ...(r.root ? { root: r.root } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       worktree: r.worktree,
       ...(r.worktree && worktreeProjectOf(r) ? { project: worktreeProjectOf(r) } : {}),

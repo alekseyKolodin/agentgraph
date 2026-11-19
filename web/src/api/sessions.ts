@@ -2,7 +2,7 @@
 // Список нужен сайдбару («Сейчас») и странице «Сессии»: пока есть живые сессии, он обновляется сам — статус
 // «работает / ждёт тебя» меняется хуками claude, а не действиями в этой вкладке.
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionView } from '@server/api-types';
+import type { Intake, RunSource, SessionList, SessionPermissionMode, SessionReviewEstimate, SessionReviewReply, SessionSource, SessionView } from '@server/api-types';
 import { LS } from '../lib/storage';
 import { api } from './client';
 import type { FlowAiProgressEvent } from './flows';
@@ -32,12 +32,19 @@ export type NewSession = {
   saveState: boolean;
   /** Первое сообщение новой сессии. */
   prompt?: string;
+  /** Откуда сессия (вещь, дело, запуск, рутина). С вещью и без space сервер берёт открытое пространство проекта папки. */
+  source?: SessionSource;
   /** Начальный размер терминала: claude перерисуется под окно при подключении. */
   cols?: number;
   rows?: number;
 };
 
 export const createSession = (body: NewSession) => api<SessionView>('POST', '/api/sessions', body);
+/**
+ * Текст задачи Jira или MR для первого сообщения сессии — тот же вход, что у формы запуска (POST /api/intake без flow):
+ * ключ и ссылка снаружи, заголовок и описание — в обёртке source-data.
+ */
+export const thingIntake = (target: { type: RunSource['type']; key: string; project?: string }) => api<Intake>('POST', '/api/intake', target);
 export const fetchSession = (id: string) => api<SessionView>('GET', `/api/sessions/${enc(id)}`);
 export const setSessionTags = (id: string, tags: string[]) => api<SessionView>('PUT', `/api/sessions/${enc(id)}/tags`, { tags });
 /** Пространство сессии: слаг или null — без пространства; живой сессии придёт со следующим шагом. */

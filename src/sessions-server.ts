@@ -13,12 +13,13 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type {
-  RunTeamworkLink, SessionAsk, SessionList, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
+  RunTeamworkLink, SessionAsk, SessionList, SessionSource, SessionPermissionMode, SessionSpaceChip, SessionStateUpdate, SessionStatus, SessionTagChip, SessionView, SessionWsClient, SessionWsServer, Space,
   SpaceEditPart, SpaceSession, TeamTask, TeamTaskWork,
 } from './api-types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { nothingToName, pickSessionTitle } from './session-title.js';
 import type { RunTitleReport } from './run-title.js';
+import { parseSessionSource } from './work-links.js';
 import { FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
@@ -48,6 +49,17 @@ import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
 import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
+
+/** Открытое пространство проекта папки (projectOf по папке); закрытое или «Без проекта» — undefined. */
+function openProjectSpace(cwd: string): string | undefined {
+  const slug = projectResolver().path(cwd).space;
+  if (!slug) return undefined;
+  try {
+    return readSpaceMeta(slug)?.closedAt ? undefined : slug;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Что лежит в <AGENTGRAPH_HOME>/sessions/<id>/session.json. */
 export type SessionRecord = {
@@ -95,6 +107,8 @@ export type SessionRecord = {
   statePending?: 'app-closed';
   /** Сессия открыта из задачи Teamwork (spec §8.9): инструменты задачи в MCP, старт и конец — в статусы задачи. */
   teamwork?: RunTeamworkLink;
+  /** Откуда сессия: вещь (MR, задача Jira — «Начать сессию» в «Коде»), дело, запуск, рутина. */
+  source?: SessionSource;
   /**
    * Открытый вопрос человеку: последний ход кончился вопросом, запросом разрешения или формой MCP (handleHook). Остаётся
    * после выхода claude и перезапуска сервера — «закончилась на вопросе»; снимается сообщением пользователя или шагом модели.
@@ -314,6 +328,11 @@ export class SessionManager {
     return [...this.sessions.values()].filter((s) => s.pty?.alive).length;
   }
 
+  /** Папки живых сессий: уборка worktree рутины не снимает папку из-под claude. */
+  liveCwds(): string[] {
+    return [...this.sessions.values()].filter((s) => s.pty?.alive).map((s) => s.rec.cwd);
+  }
+
   /** Названия живых сессий: десктоп спрашивает подтверждение выхода. */
   liveNames(): string[] {
     return [...this.sessions.values()].filter((s) => s.pty?.alive).map((s) => s.rec.name);
@@ -437,6 +456,7 @@ export class SessionManager {
       ...(live ? {} : { resumable: resumeTarget(r) !== undefined }),
       ...(live && s.status === 'waiting' && s.waitingSince ? { waitingSince: s.waitingSince } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
+      ...(r.source ? { source: r.source } : {}),
       ...(r.ask ? { ask: r.ask } : {}),
       // проект: явное пространство, иначе папка — та же подпись в каждом ответе (список, переименование, WS)
       projectRef: proj.of({ space: r.space, path: r.cwd }),
@@ -485,6 +505,7 @@ export class SessionManager {
     let flags: ReturnType<typeof sessionFlags>;
     let prompt: string | undefined;
     let teamwork: RunTeamworkLink | undefined;
+    let source: SessionSource | undefined;
     try {
       if (body.saveTag !== undefined) throw new Error('Теги задач заменены пространствами: space и saveState вместо тега задачи и saveTag');
       // тег задачи среди tags, нет тега, битый tag.json — 400, а не 500
@@ -495,9 +516,12 @@ export class SessionManager {
       prompt = sessionPrompt(body.prompt);
       if (body.saveState !== undefined && typeof body.saveState !== 'boolean') throw new Error('saveState — true или false');
       teamwork = parseTeamworkLink(body.teamwork);
+      source = parseSessionSource(body.source);
     } catch (err) {
       throw new SessionError(400, errMsg(err));
     }
+    // сессия из вещи без выбранного пространства — в пространстве проекта её папки (открытом), как подпись проекта
+    if (source?.thing && body.space === undefined) space = openProjectSpace(cwd);
     // связь с задачей Teamwork: команда, проект и задача должны быть — до запуска claude (их коды: 404, 400)
     if (teamwork) {
       if (!teamworkHooks) throw new SessionError(501, 'Teamwork недоступен в этом сервере');
@@ -530,6 +554,7 @@ export class SessionManager {
       turns: 0,
       ...(space ? { turnSpaces: [{ from: 0, space, ...(at ? { at } : {}) }] } : {}),
       ...(teamwork ? { teamwork } : {}),
+      ...(source ? { source } : {}),
     };
     if (typeof body.name !== 'string' || !body.name.trim()) rec.defaultName = rec.name;
     const s = newLive(rec, 'starting');
@@ -1893,3 +1918,5 @@ export function onSessionWaiting(fn: (v: SessionView) => void): () => void {
 }
 /** Названия живых сессий: подтверждение выхода в десктопе. */
 export const liveSessionNames = () => (manager ? manager.liveNames() : []);
+/** Папки живых сессий (без менеджера — нет). */
+export const liveSessionDirs = () => (manager ? manager.liveCwds() : []);

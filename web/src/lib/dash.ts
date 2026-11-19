@@ -1,6 +1,6 @@
 // «Задачи и код» (свой раздел /code) и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски
 // и выбор flow. Без React и DOM.
-import type { FlowListItem, IntegrationsInfo, RunSummary } from '@server/api-types';
+import type { FlowListItem, IntegrationsInfo, JiraIssueBrief, MergeRequestView, ProjectInfo, RunSummary, SessionView, Thing } from '@server/api-types';
 import { t } from './i18n';
 
 /** Сколько строк списка видно сразу; остальные — по «Ещё N». */
@@ -24,20 +24,76 @@ export const hasConnections = (info: Pick<IntegrationsInfo, 'jira' | 'projects'>
 /** Знак номера по ref: PR GitHub (owner/repo#N) — «#», MR GitLab (group/project!N) — «!». */
 export const mrSign = (ref: string): '#' | '!' => (/#\d+$/.test(ref) ? '#' : '!');
 
-/** Запуски из задачи Jira. */
-export const runsForJira = (runs: RunSummary[], key: string): RunSummary[] =>
-  runs.filter((r) => r.source?.type === 'jira' && r.source.key === key).slice(0, RELATED_MAX);
+// Ключи вещей — по формату src/things/types.ts (на сервере их собирает src/things/keys.ts; веб рантайм из src не берёт).
 
-/** Запуски из MR, ветки или в worktree на этой ветке. */
-export const runsForBranch = (runs: RunSummary[], project: string, branch: string, mrRef?: string): RunSummary[] =>
+/** Вещь задачи Jira: jira:<host>/<KEY>; хост — из ссылки задачи. Ссылка не разобралась — undefined. */
+export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thing | undefined {
+  let host = '';
+  try {
+    host = new URL(i.url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  const key = i.key.toUpperCase();
+  return { type: 'jira', key: `jira:${host}/${key}`, ref: { host, key }, url: i.url, title: i.title };
+}
+
+/** Вещь MR/PR проекта: mr:<host>/<путь проекта>/<номер>; у проекта без origin — undefined. */
+export function mrThing(p: Pick<ProjectInfo, 'remote' | 'forge'>, m: Pick<MergeRequestView, 'iid' | 'url' | 'title' | 'sourceBranch'>): Thing | undefined {
+  if (!p.remote) return undefined;
+  const host = p.remote.host.toLowerCase();
+  const project = p.remote.path.replace(/^\/+|\/+$/g, '');
+  return {
+    type: 'mr',
+    key: `mr:${host}/${project}/${m.iid}`,
+    ref: { host, project, number: m.iid, branch: m.sourceBranch, ...(p.forge ? { forge: p.forge } : {}) },
+    url: m.url,
+    title: m.title,
+  };
+}
+
+/** Запуск о вещи с этим ключом: запуск рутины по событию MR/задачи помнит вещь в source.thing. */
+const aboutThing = (r: RunSummary, thingKey?: string): boolean => Boolean(thingKey) && r.source?.thing?.key === thingKey;
+
+/** Запуски из задачи Jira: формой из «Кода» (source jira) или рутиной по этой задаче (вещь). */
+export const runsForJira = (runs: RunSummary[], key: string, thingKey?: string): RunSummary[] =>
+  runs.filter((r) => (r.source?.type === 'jira' && r.source.key === key) || aboutThing(r, thingKey)).slice(0, RELATED_MAX);
+
+/** Запуски из MR, ветки, в worktree на этой ветке или рутиной по этому MR (вещь). */
+export const runsForBranch = (runs: RunSummary[], project: string, branch: string, mrRef?: string, thingKey?: string): RunSummary[] =>
   runs
     .filter(
       (r) =>
         (mrRef && r.source?.type === 'mr' && r.source.key === mrRef)
+        || aboutThing(r, thingKey)
         || (r.source?.type === 'branch' && r.source.key === branch && r.source.project === project)
         || (r.worktree?.branch === branch && (!r.source?.project || r.source.project === project)),
     )
     .slice(0, RELATED_MAX);
+
+/** Сессии, начатые из этой вещи («Начать сессию»): свежие сверху. */
+export const sessionsForThing = (sessions: SessionView[], thingKey: string | undefined): SessionView[] =>
+  !thingKey ? [] : sessions.filter((s) => s.source?.thing?.key === thingKey).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt)).slice(0, RELATED_MAX);
+
+/**
+ * Папка сессии из задачи Jira: у задачи нет репозитория, поэтому — папка прошлой работы по ней (сессия из этой задачи,
+ * запуск по ней: основной checkout, а не worktree), иначе единственный проект «Подключений», иначе папка по умолчанию.
+ */
+export function jiraSessionCwd(o: { sessions: SessionView[]; runs: RunSummary[]; projects: Pick<ProjectInfo, 'path'>[]; fallback: string }): string {
+  const s = o.sessions[0];
+  if (s) return s.cwd;
+  const r = o.runs.find((x) => x.project || x.source?.project || x.cwd);
+  if (r) return r.project || r.source?.project || r.cwd || o.fallback;
+  const only = o.projects.length === 1 ? o.projects[0] : undefined;
+  return only?.path ?? o.fallback;
+}
+
+/** Первое сообщение сессии из вещи: просьба сверху, под ней — вход /api/intake (ключ, ссылка, текст в source-data). */
+export const thingSessionPrompt = (intake: string): string =>
+  ['Начинаем работу по этой задаче. Разберись в ней и предложи, с чего начать; ничего не меняй, пока я не скажу.', intake.trim()].join('\n\n');
+
+/** Имя сессии из вещи: «PAY-7 Падает оплата», «!12 Фикс». */
+export const thingSessionName = (label: string, title: string | undefined): string => [label, title].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
 /** Список выбора flow для «Запустить…»: только рабочие flow, по фильтру; последний запущенный — первым. */
 export function pickerFlows(flows: FlowListItem[], query: string, recent: string | null): FlowListItem[] {
