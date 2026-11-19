@@ -58,3 +58,9 @@ test('ссылка дела — только http(s)', () => {
   const x = item({ key: 'mr:h/g/a/9', thing: { type: 'mr', ref: { number: 9 }, url: 'javascript:alert(1)' }, signals: [{ source: 's', at: 'x', link: 'https://h/g/a/-/merge_requests/9' }] });
   assert.equal(deskMrRows([x], [])[0]?.url, 'https://h/g/a/-/merge_requests/9');
 });
+
+test('PR GitHub без forge в вещи (desk_put, CLI) — знак # по хосту ключа', () => {
+  const pr = item({ key: 'mr:github.com/o/r/8', thing: { type: 'mr', ref: { host: 'github.com', project: 'o/r', number: 8 } } });
+  const mrGl = item({ key: 'mr:gitlab.example.com/g/a/9', thing: { type: 'mr', ref: { host: 'gitlab.example.com', project: 'g/a', number: 9 } } });
+  assert.deepEqual(deskMrRows([pr, mrGl], []).map((r) => r.sign), ['#', '!']);
+});

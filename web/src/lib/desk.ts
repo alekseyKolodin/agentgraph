@@ -14,6 +14,20 @@ export type DeskMrRow = { key: string; sign: '!' | '#'; num: string; title: stri
 
 /** Адрес для ссылки — только http(s): ссылки сигналов приходят от рутин как есть. */
 const web = (u: string | undefined): string | undefined => (u && /^https?:\/\//i.test(u) ? u : undefined);
+/**
+ * PR GitHub — знак «#»: forge из ссылки, а у дел из desk_put и CLI (вещь по ключу, без forge) — по хосту ключа или адреса.
+ */
+const isGithub = (i: DeskItem): boolean => {
+  if (i.thing?.ref.forge) return i.thing.ref.forge === 'github';
+  const host = (u: string | undefined) => {
+    try {
+      return u ? new URL(u).hostname.toLowerCase() : '';
+    } catch {
+      return '';
+    }
+  };
+  return i.key.startsWith('mr:github.com/') || host(i.thing?.url) === 'github.com' || host(i.links.mr) === 'github.com';
+};
 const urlOf = (i: DeskItem): string | undefined => web(i.thing?.url) ?? web(i.links.mr) ?? i.signals.map((s) => web(s.link)).find(Boolean);
 
 /**
@@ -29,7 +43,7 @@ export function deskMrRows(items: readonly DeskItem[] | undefined, shownUrls: re
     if (url && shown.has(normUrl(url))) return [];
     const ref = i.thing.ref;
     const num = typeof ref.number === 'number' || typeof ref.number === 'string' ? String(ref.number) : (i.key.match(/\/(\d+)$/)?.[1] ?? '');
-    return [{ key: i.key, sign: ref.forge === 'github' ? '#' : '!', num, title: i.title, ...(url ? { url } : {}), ...(i.project ? { project: i.project } : {}), why: i.why, kind: i.kind }];
+    return [{ key: i.key, sign: isGithub(i) ? '#' : '!', num, title: i.title, ...(url ? { url } : {}), ...(i.project ? { project: i.project } : {}), why: i.why, kind: i.kind }];
   });
 }
 

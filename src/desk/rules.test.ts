@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ThingState } from '../things/types.js';
-import { fingerprint, SIGNALS_MAX, step, type RuleCtx } from './rules.js';
+import { fingerprint, LINKS_MAX, SIGNALS_MAX, step, type RuleCtx } from './rules.js';
 import type { DeskColumn, DeskItem, DeskSignal } from './types.js';
 
 const KEY = 'mr:gitlab.example.com/grp/app/7';
@@ -228,4 +228,54 @@ test('ссылки дописываются по одной и без повто
     i = step(i, { type: 'put', key: KEY, patch: { links }, by: 'session' }, ctx())?.item ?? i;
   }
   assert.deepEqual(i.links, { runs: ['r1', 'r2'], sessions: ['s1'], branch: 'feat' });
+});
+
+test('дело, переоткрытое сигналом, пока вещь закрыта, сверка закрывает снова', () => {
+  const merged = state({ closed: 'merged', turn: 'none', why: 'смержен' });
+  const done = step(item('work'), { type: 'state', state: merged }, ctx())!.item;
+  const reopened = step(done, { type: 'put', key: KEY, patch: { signal: sig('а что с этим MR?', '2026-11-19T11:00:00.000Z', 'slack') }, by: 'routine' }, ctx())!.item;
+  assert.deepEqual([reopened.column, reopened.seen], ['plan', undefined]);
+  const again = step(reopened, { type: 'state', state: merged }, ctx())!;
+  assert.equal(again.item.column, 'done');
+});
+
+test('перенос руками до первой сверки держится: первое состояние только запоминается', () => {
+  const manual = step(item('plan', { seen: undefined }), { type: 'move', column: 'work', by: 'me' }, ctx())!.item;
+  const r = step(manual, { type: 'state', state: state({ turn: 'others', why: 'жду автора' }) }, ctx())!;
+  assert.deepEqual([r.item.column, r.item.seen !== undefined, r.move], ['work', true, undefined]);
+  // следующее изменение вещи — уже правило
+  const next = step(r.item, { type: 'state', state: state({ turn: 'others', why: 'жду автора', updatedAt: '2026-11-19T12:00:00.000Z' }) }, ctx())!;
+  assert.equal(next.item.column, 'waiting');
+});
+
+test('итог запуска — только у дел, где он начат по делу (links.runs), не у заведённых им через desk_put (mentionedBy)', () => {
+  const byRoutine = step(item('plan'), { type: 'put', key: KEY, patch: { links: { runs: ['r1'] } }, by: 'routine' }, ctx())!.item;
+  const byFlow = step(undefined, { type: 'put', key: 'own:f', patch: { title: 'нашёл агент', links: { mentionedBy: ['r1'] } }, by: 'flow' }, ctx())!.item;
+  assert.deepEqual([byFlow.links.runs, byFlow.links.mentionedBy], [[], ['r1']]);
+  assert.equal(step(byFlow, { type: 'run', runIds: ['r1'], outcome: 'ok', summary: 'x' }, ctx()), undefined);
+  assert.equal(step(byRoutine, { type: 'run', runIds: ['r1'], outcome: 'ok', summary: 'x' }, ctx())!.item.why, 'агент закончил: x');
+});
+
+test('закрыто руками при открытой вещи, переоткрыто сигналом: отпечаток держится, сверка не уводит в «Ждёт других»', () => {
+  const watched = step(item('plan'), { type: 'state', state: state({ turn: 'others', why: 'ждём автора' }) }, ctx())!.item;
+  assert.equal(watched.column, 'waiting');
+  const closed = step(watched, { type: 'close', reason: 'не моё', by: 'me' }, ctx())!.item;
+  const reopened = step(closed, { type: 'put', key: KEY, patch: { signal: sig('всё же глянь', '2026-11-19T11:00:00.000Z', 'slack') }, by: 'routine' }, ctx())!.item;
+  assert.deepEqual([reopened.column, reopened.seen], ['plan', watched.seen]);
+  // то же состояние вещи: обновится только why, колонка та же
+  const r = step(reopened, { type: 'state', state: state({ turn: 'others', why: 'ждём автора' }) }, ctx())!;
+  assert.deepEqual([r.item.column, r.item.why, r.move], ['plan', 'ждём автора', undefined]);
+});
+
+test('createdBy — только у нового дела и только строки; mentionedBy дописывается без повторов, ссылок не больше LINKS_MAX', () => {
+  const made = step(undefined, { type: 'put', key: 'own:f', patch: { title: 'x', createdBy: { run: 'r1', routine: 7 as unknown as string } }, by: 'flow' }, ctx())!.item;
+  assert.deepEqual(made.createdBy, { run: 'r1' });
+  const again = step(made, { type: 'put', key: 'own:f', patch: { why: 'ещё', createdBy: { run: 'r2' }, links: { mentionedBy: ['r2', 'r2'] } }, by: 'flow' }, ctx())!.item;
+  assert.deepEqual([again.createdBy, again.links.mentionedBy], [{ run: 'r1' }, ['r2']]);
+  let i = again;
+  for (let k = 0; k < LINKS_MAX + 5; k++) i = step(i, { type: 'put', key: 'own:f', patch: { links: { runs: [`run-${k}`], mentionedBy: [`m-${k}`] } }, by: 'routine' }, ctx())!.item;
+  assert.equal(i.links.runs.length, LINKS_MAX);
+  // первый запуск (корень цепочки) остаётся: по нему продолжение находит дело
+  assert.deepEqual([i.links.runs[0], i.links.runs.at(-1)], ['run-0', `run-${LINKS_MAX + 4}`]);
+  assert.equal(i.links.mentionedBy?.length, LINKS_MAX);
 });
