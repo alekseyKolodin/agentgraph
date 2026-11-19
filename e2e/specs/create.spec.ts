@@ -20,6 +20,7 @@ test('Slack: подключить готовый вид, собрать рути
   expect(draft.spec.reply).toMatchObject({ to: 'source', draft: true });
   expect('check' in draft.spec.when && draft.spec.when.check).toBe('Это баг-репорт');
   await enable(page);
+  await page.goto('/routines');
   await expect(page.getByRole('list', { name: 'Рутины' }).getByRole('link', { name: 'Баги из Slack' })).toBeVisible();
   expect((await e2e.routine(slug)).spec.draft).toBeUndefined();
 

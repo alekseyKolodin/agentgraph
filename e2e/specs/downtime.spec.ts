@@ -66,7 +66,7 @@ function missedDaily(title: string, missed: 'ask' | 'skip'): RoutineSpec {
   return { title, when: { schedule: `${at.getMinutes()} ${at.getHours()} * * *`, missed }, run: { flow: 'digest', input: title }, mode: 'auto' };
 }
 
-test('пропущенное расписание: ask — строка на главной, «×» пишет missed; skip — молча', async ({ page, e2e }) => {
+test('пропущенное расписание: ask — строка на главной, «×» пишет missed; skip — без запуска и без вопроса, строка «пропущено» в журнале', async ({ page, e2e }) => {
   await e2e.saveRoutine('morning', missedDaily('Утренняя сводка', 'ask'));
   await e2e.saveRoutine('quiet', missedDaily('Тихая сводка', 'skip'));
   await e2e.restart(() => {
@@ -87,7 +87,10 @@ test('пропущенное расписание: ask — строка на г�
   await page.getByRole('button', { name: 'Не запускать' }).click();
   const missed = await e2e.logEntry('morning', 'missed');
   expect(missed.reason).toContain('пропущено по расписанию');
-  expect(await e2e.log('quiet')).toEqual([]);
+  // «пропускать молча» — без запуска и без строки на главной, но в «Срабатываниях» видно, что слот пропущен и почему
+  const quiet = await e2e.log('quiet');
+  expect(quiet.map((x) => x.outcome)).toEqual(['missed']);
+  expect(quiet[0]!.reason).toContain('«пропускать молча»');
   expect((await e2e.log('morning')).filter((x) => x.outcome === 'started')).toEqual([]);
 });
 

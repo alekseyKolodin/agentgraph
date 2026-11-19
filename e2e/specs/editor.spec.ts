@@ -38,8 +38,9 @@ test('проверка на истории: по последним событи
   expect((await e2e.routine('bug')).spec.when).toMatchObject({ check: 'Это баг-репорт: описано, что сломалось.' });
 
   // черновик включается из редактора
+  // после включения — «Срабатывания» этой рутины: видно, что она начала делать
   await page.getByRole('button', { name: 'Включить', exact: true }).click();
-  await expect(page).toHaveURL(/\/routines$/);
+  await expect(page).toHaveURL(/\/routines\/bug\/log$/);
   const saved = await e2e.routine('bug');
   expect(saved.spec.enabled).toBe(true);
   expect('check' in saved.spec.when ? saved.spec.when.check : undefined).toBeUndefined();

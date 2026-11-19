@@ -33,7 +33,7 @@ export type NewRoutine = {
   extra?: (page: Page) => Promise<void>;
 };
 
-/** «Новая рутина»: четыре шага и «Проверить и включить» → редактор черновика. Возвращает слаг. */
+/** «Новая рутина»: четыре шага и «Дальше: проверка на истории» → редактор черновика. Возвращает слаг. */
 export async function createRoutine(page: Page, r: NewRoutine, o: { goto?: boolean } = {}): Promise<string> {
   if (o.goto !== false) await page.goto('/routines/new');
   await expect(page.getByRole('heading', { name: 'Новая рутина' })).toBeVisible();
@@ -50,7 +50,7 @@ export async function createRoutine(page: Page, r: NewRoutine, o: { goto?: boole
   await r.extra?.(page);
   const summary = page.getByRole('complementary', { name: 'Что получится' });
   if (r.title) await summary.getByLabel('Название').fill(r.title);
-  await summary.getByRole('button', { name: 'Проверить и включить' }).click();
+  await summary.getByRole('button', { name: 'Дальше: проверка на истории' }).click();
   await expect(page).toHaveURL((u) => /^\/routines\/[a-z0-9-]+$/.test(u.pathname) && u.pathname !== '/routines/new');
   await expect(page.getByRole('link', { name: 'Правило' })).toBeVisible();
   return decodeURIComponent(new URL(page.url()).pathname.split('/').pop()!);
@@ -61,8 +61,8 @@ export async function openNode(page: Page, title: 'Триггер' | 'Услов
   await page.getByRole('list', { name: 'Граф рутины' }).getByRole('button', { name: new RegExp(`^${title}`) }).click();
 }
 
-/** Редактор черновика: «Включить» → список рутин. */
+/** Редактор черновика: «Включить» → «Срабатывания» этой рутины. */
 export async function enable(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Включить', exact: true }).click();
-  await expect(page).toHaveURL(/\/routines$/);
+  await expect(page).toHaveURL(/\/routines\/[a-z0-9-]+\/log$/);
 }
