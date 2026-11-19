@@ -97,8 +97,8 @@ test('Jira: назначили на меня — событие assigned с ве
   assert.equal(e.fields.assigned_to_me, true);
   assert.equal(e.id, 'ABC-1@assigned@2026-11-17T10:55:00.000+0000');
   assert.equal(e.at, '2026-11-17T10:55:00.000Z');
-  assert.match(e.text, /^Назначили на вас: исполнитель: Анна → Борис Иванов \(Лид\)/);
-  assert.deepEqual(e.fields.changed_fields, ['assignee']);
+  assert.match(e.text, /^Назначили на вас: исполнитель: Анна → Борис Иванов \(Лид\); приоритет: Low → High \(Лид\)/);
+  assert.deepEqual(e.fields.changed_fields, ['assignee', 'priority']);
   assert.deepEqual(e.fields.changed_by, ['Лид']);
   assert.equal(e.things![0].key, 'jira:acme.atlassian.net/ABC-1');
 });
@@ -287,6 +287,224 @@ test('Jira: историю читаем не больше десяти зада�
   assert.deepEqual(second.map((e) => e.fields.key), ['ABC-11', 'ABC-12']);
 });
 
+const ASSIGN_ME = (at: string): Hist => ({ created: at, author: 'Лид', field: 'assignee', from: 'Анна', to: 'Борис Иванов' });
+const cursorOf = (ctx: { cursorValue(): unknown }) => ctx.cursorValue() as { pending: Record<string, number>; seen: Record<string, number>; fails: Record<string, number> };
+
+test('Jira: новая в выборке задача, отложенная лимитом истории, не теряет назначение — граница первого показа лежит в курсоре', async () => {
+  const keys = Array.from({ length: 12 }, (_, i) => `ABC-${i + 1}`);
+  const history: Record<string, Hist[]> = { 'ABC-100': [], ...Object.fromEntries(keys.map((k) => [k, [ASSIGN_ME('2026-11-17T10:05:00.000+0000')]])) };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  list.push(...keys.map((k) => issue(k, '2026-11-17T10:06:00.000+0000')));
+  assert.equal((await kind.poll!(ctx)).length, 10);
+  assert.deepEqual(Object.keys(cursorOf(ctx).pending), ['ABC-11', 'ABC-12']);
+  // следующий опрос — через час: новая граница («после прошлого опроса») уже новее назначения, но у отложенных задач своя, старая
+  clock = Date.parse('2026-11-17T11:00:00Z');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => [e.fields.key, e.fields.change]), [['ABC-11', 'assigned'], ['ABC-12', 'assigned']]);
+  assert.deepEqual(cursorOf(ctx).pending, {});
+  assert.deepEqual(await kind.poll!(ctx), []);
+});
+
+test('Jira: пока описаний не хватает (пять за опрос), новые в выборке задачи ждут со своей границей и приходят как new; известные не отбирают у них очередь', async () => {
+  const created = Object.fromEntries(['ABC-6', 'ABC-7', 'ABC-8', 'ABC-9', 'ABC-10', 'ABC-11', 'ABC-12'].map((k) => [k, '2026-11-17T10:05:00.000+0000']));
+  // 7 новых + 3 известных = десять запросов истории: все разобраны за один опрос, а вот описаний только пять
+  const known = ['ABC-1', 'ABC-2', 'ABC-3'];
+  const history: Record<string, Hist[]> = Object.fromEntries(known.map((k) => [k, [{ created: '2026-11-17T10:07:00.000+0000', author: 'Анна', field: 'status', from: 'a', to: 'b' }]]));
+  const list = known.map((k) => issue(k, '2026-11-17T10:00:00.000+0000'));
+  const { fetch, calls } = jiraApi(list, history, created);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  for (const k of known) list[known.indexOf(k)] = issue(k, '2026-11-17T10:08:00.000+0000');
+  list.push(...Object.keys(created).map((k) => issue(k, '2026-11-17T10:06:00.000+0000')));
+  const before = calls.length;
+  const first = await kind.poll!(ctx);
+  assert.deepEqual(first.slice(0, 5).map((e) => [e.fields.key, e.fields.change]), ['ABC-6', 'ABC-7', 'ABC-8', 'ABC-9', 'ABC-10'].map((k) => [k, 'new']), 'сначала новые в выборке — им достался весь бюджет описаний');
+  assert.equal(calls.slice(before).filter((c) => /\/issue\/ABC-\d+$/.test(c.url.pathname)).length, 5);
+  assert.deepEqual(first.slice(5).map((e) => [e.fields.key, e.fields.change]), known.map((k) => [k, 'changed']), 'известные задачи — событием, но без описания');
+  assert.ok(first.slice(5).every((e) => !/Подробное описание/.test(e.text)));
+  assert.deepEqual(Object.keys(cursorOf(ctx).pending), ['ABC-11', 'ABC-12']);
+  // час спустя: созданы они до новой границы, но после своей — приходят как new
+  clock = Date.parse('2026-11-17T11:00:00Z');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => [e.fields.key, e.fields.change]), [['ABC-11', 'new'], ['ABC-12', 'new']]);
+  assert.deepEqual(cursorOf(ctx).pending, {});
+});
+
+test('Jira: отложенная задача, ушедшая из выборки, границу не держит', async () => {
+  const keys = Array.from({ length: 11 }, (_, i) => `ABC-${i + 1}`);
+  const history: Record<string, Hist[]> = { 'ABC-100': [], ...Object.fromEntries(keys.map((k) => [k, [ASSIGN_ME('2026-11-17T10:05:00.000+0000')]])) };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  list.push(...keys.map((k) => issue(k, '2026-11-17T10:06:00.000+0000')));
+  await kind.poll!(ctx);
+  assert.deepEqual(Object.keys(cursorOf(ctx).pending), ['ABC-11']);
+  list.pop();
+  clock = Date.parse('2026-11-17T10:20:00Z');
+  await kind.poll!(ctx);
+  assert.deepEqual(cursorOf(ctx).pending, {});
+});
+
+test('Jira: назначение приходит и тогда, когда описание задачи не получилось: оно нужно только чтобы отличить «новую» от давней', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-100': [], 'ABC-1': [ASSIGN_ME('2026-11-17T10:05:00.000+0000')] };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  // описания у «Jira» нет: задача в выборке есть, а issue/ABC-1 отвечает ошибкой
+  const broken = (url: string, init?: RequestInit) => (/\/issue\/ABC-1(\?|$)/.test(String(url)) ? Promise.resolve(new Response('busy', { status: 503 })) : fetch(url, init));
+  list.push(issue('ABC-1', '2026-11-17T10:06:00.000+0000'));
+  const ctx2 = makeCtx({ config: {}, fetch: broken as typeof fetch, cursor: ctx.cursorValue() });
+  const [e] = await kind.poll!(ctx2);
+  assert.equal(e.fields.change, 'assigned');
+  assert.equal(e.fields.assignee, '', 'описания нет — исполнитель в поле пуст, но событие пришло');
+});
+
+test('Jira: новая задача без записей в истории не обнуляет отметку — старая история потом не выдаётся за изменения', async () => {
+  const history: Record<string, Hist[]> = {
+    'ABC-100': [],
+    // правка из прошлого месяца: к «изменилось» отношения не имеет
+    'ABC-1': [{ created: '2026-10-01T10:00:00.000+0000', author: 'Анна', field: 'status', from: 'a', to: 'b' }],
+  };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history, { 'ABC-1': '2026-11-17T10:05:00.000+0000' });
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  list.push(issue('ABC-1', '2026-11-17T10:06:00.000+0000'));
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => e.fields.change), ['new']);
+  assert.equal(cursorOf(ctx).seen['ABC-1'], undefined, 'отметки нет, а не 0: иначе вся история станет «новой»');
+  clock = Date.parse('2026-11-17T12:00:00Z');
+  list[1] = issue('ABC-1', '2026-11-17T11:50:00.000+0000');
+  history['ABC-1'].push({ created: '2026-11-17T11:50:00.000+0000', author: 'Анна', field: 'priority', from: 'Low', to: 'High' });
+  const [e] = await kind.poll!(ctx);
+  assert.deepEqual(e.fields.changes, ['приоритет: Low → High (Анна)']);
+});
+
+test('Jira: запоздалый updated после уже разобранной правки — не «новый комментарий»; настоящий комментарий потом — событие', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-1': [] };
+  const list = [issue('ABC-1', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  list[0] = issue('ABC-1', '2026-11-17T10:30:00.200+0000');
+  history['ABC-1'].push({ created: '2026-11-17T10:30:00.000+0000', author: 'Анна', field: 'status', from: 'a', to: 'b' });
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => e.fields.change), ['changed']);
+  // Jira ещё раз сдвинула updated (индексация) на секунды, новых записей истории нет
+  list[0] = issue('ABC-1', '2026-11-17T10:30:04.000+0000');
+  assert.deepEqual(await kind.poll!(ctx), []);
+  // а комментарий через 40 секунд после разобранной правки — настоящий, его не глотаем
+  list[0] = issue('ABC-1', '2026-11-17T10:30:40.000+0000');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => e.fields.change), ['comment']);
+  // а комментарий через час — событие; и два комментария подряд в пределах минуты не склеиваются в один
+  list[0] = issue('ABC-1', '2026-11-17T11:30:00.000+0000');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => e.fields.change), ['comment']);
+  list[0] = issue('ABC-1', '2026-11-17T11:30:30.000+0000');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => e.fields.change), ['comment']);
+});
+
+test('Jira: после «назначили» чужая правка того же окна не теряется — она в том же событии, мои правки и прежние назначения на меня — нет', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-1': [] };
+  const list = [issue('ABC-1', '2026-11-17T10:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T11:30:00Z');
+  list[0] = issue('ABC-1', '2026-11-17T11:00:00.000+0000');
+  history['ABC-1'].push(
+    ASSIGN_ME('2026-11-17T10:40:00.000+0000'),
+    { created: '2026-11-17T10:45:00.000+0000', author: 'Лид', field: 'assignee', from: 'Борис Иванов', to: 'Анна' },
+    ASSIGN_ME('2026-11-17T10:55:00.000+0000'),
+    { created: '2026-11-17T10:56:00.000+0000', author: 'Борис Иванов', field: 'priority', from: 'Low', to: 'High' },
+    { created: '2026-11-17T10:58:00.000+0000', author: 'Анна', field: 'status', from: 'Todo', to: 'Ревью' },
+  );
+  const events = await kind.poll!(ctx);
+  assert.equal(events.length, 1);
+  const [e] = events;
+  assert.equal(e.fields.change, 'assigned');
+  assert.equal(e.id, 'ABC-1@assigned@2026-11-17T10:55:00.000+0000', 'id и время — момент последнего назначения');
+  assert.deepEqual(e.fields.changes, ['исполнитель: Анна → Борис Иванов (Лид)', 'исполнитель: Борис Иванов → Анна (Лид)', 'статус: Todo → Ревью (Анна)']);
+  assert.deepEqual(await kind.poll!(ctx), [], 'и в следующем опросе та же правка не повторяется');
+});
+
+test('Jira: новая в выборке задача: сбой истории — повтор со своей границей, назначение приходит позже; сбой описания считается, на третьем задача запоминается молча', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-100': [], 'ABC-1': [ASSIGN_ME('2026-11-17T10:05:00.000+0000')], 'ABC-2': [] };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const broken = { changelog: false };
+  const { fetch } = jiraApi(list, history, { 'ABC-2': '2026-11-17T10:05:00.000+0000' }, broken);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  list.push(issue('ABC-1', '2026-11-17T10:06:00.000+0000'));
+  broken.changelog = true;
+  assert.deepEqual(await kind.poll!(ctx), []);
+  assert.deepEqual([Object.keys(cursorOf(ctx).pending), cursorOf(ctx).fails], [['ABC-1'], { 'ABC-1': 1 }], 'задача ждёт со своей границей и счётом сбоев');
+  broken.changelog = false;
+  clock = Date.parse('2026-11-17T12:00:00Z');
+  assert.deepEqual((await kind.poll!(ctx)).map((e) => [e.fields.key, e.fields.change]), [['ABC-1', 'assigned']]);
+  assert.deepEqual([cursorOf(ctx).pending, cursorOf(ctx).fails], [{}, {}]);
+
+  // описание не получается (постоянная ошибка доступа): три опроса, дальше задача не держит очередь и не выдаётся за новую вслепую
+  const refuse = (url: string, init?: RequestInit) => (/\/issue\/ABC-2(\?|$)/.test(String(url)) ? Promise.resolve(new Response('forbidden', { status: 403 })) : fetch(url, init));
+  list.push(issue('ABC-2', '2026-11-17T12:01:00.000+0000'));
+  const ctx2 = makeCtx({ config: {}, fetch: refuse as typeof fetch, cursor: ctx.cursorValue() });
+  assert.deepEqual(await kind.poll!(ctx2), []);
+  assert.deepEqual(await kind.poll!(ctx2), []);
+  assert.deepEqual(cursorOf(ctx2).fails, { 'ABC-2': 2 });
+  assert.deepEqual(await kind.poll!(ctx2), []);
+  assert.deepEqual([cursorOf(ctx2).pending, cursorOf(ctx2).fails], [{}, {}]);
+  assert.ok(ctx2.logs.some((l) => /запомнена без события/.test(l)));
+  assert.deepEqual(await kind.poll!(ctx2), [], 'и дальше не возвращается');
+});
+
+test('Jira: задача, ушедшая из выборки и вернувшаяся, начинает с новой границы и нового счёта сбоев', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-100': [], 'ABC-1': [ASSIGN_ME('2026-11-17T10:05:00.000+0000')] };
+  const list = [issue('ABC-100', '2026-11-17T10:00:00.000+0000')];
+  const broken = { changelog: false };
+  const { fetch } = jiraApi(list, history, {}, broken);
+  const ctx = makeCtx({ config: {}, fetch });
+  const kind = jiraKind(deps);
+  await kind.poll!(ctx);
+  clock = Date.parse('2026-11-17T10:10:00Z');
+  list.push(issue('ABC-1', '2026-11-17T10:06:00.000+0000'));
+  broken.changelog = true;
+  await kind.poll!(ctx);
+  assert.deepEqual([Object.keys(cursorOf(ctx).pending), cursorOf(ctx).fails], [['ABC-1'], { 'ABC-1': 1 }]);
+  list.pop();
+  clock = Date.parse('2026-11-17T10:20:00Z');
+  await kind.poll!(ctx);
+  assert.deepEqual([cursorOf(ctx).pending, cursorOf(ctx).fails], [{}, {}]);
+  // вернулась: назначение 10:05 старше новой границы (10:18) — молча; граница не тянется из прошлого
+  list.push(issue('ABC-1', '2026-11-17T10:25:00.000+0000'));
+  broken.changelog = false;
+  clock = Date.parse('2026-11-17T10:30:00Z');
+  assert.deepEqual(await kind.poll!(ctx), []);
+});
+
+test('Jira: отметка seen = 0 из старого курсора — не «граница 1970 года»: прошлая история не выдаётся за новое назначение', async () => {
+  const history: Record<string, Hist[]> = { 'ABC-1': [ASSIGN_ME('2025-05-01T10:00:00.000+0000')] };
+  const list = [issue('ABC-1', '2026-11-17T11:00:00.000+0000')];
+  const { fetch } = jiraApi(list, history);
+  const ctx = makeCtx({ config: {}, fetch, cursor: { known: { 'ABC-1': '2026-11-17T10:00:00.000+0000' }, seen: { 'ABC-1': 0 }, at: Date.parse('2026-11-17T10:00:00Z') } });
+  clock = Date.parse('2026-11-17T11:05:00Z');
+  const [e] = await jiraKind(deps).poll!(ctx);
+  assert.equal(e.fields.change, 'comment');
+});
+
 test('Jira без подключения — понятная ошибка', async () => {
   await assert.rejects(() => jiraKind({ creds: () => undefined }).poll!(makeCtx()), /Jira не подключена/);
 });
@@ -330,5 +548,5 @@ test('Jira: комментарий, отправленный пока шёл о�
   list[0] = issue('ABC-1', '2026-11-17T13:00:00.000+0000');
   assert.equal((await kind.poll!(pollCtx)).length, 1, 'а настоящее обновление после — событие');
   assert.equal(kind.isSelf, undefined, 'isSelf, который ничего не проверял, убран');
-  assert.deepEqual(Object.keys(pollCtx.cursorValue() as object), ['known', 'own', 'seen', 'fails', 'at'], 'в курсоре: известные задачи, обновления от наших комментариев, время последней разобранной записи истории, сбои истории и начало опроса');
+  assert.deepEqual(Object.keys(pollCtx.cursorValue() as object), ['known', 'own', 'seen', 'fails', 'pending', 'at'], 'в курсоре: известные задачи, обновления от наших комментариев, время последней разобранной записи истории, сбои истории, граница отложенных новых и начало опроса');
 });

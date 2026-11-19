@@ -26,9 +26,11 @@ export type JiraDeps = {
 /**
  * known — последний виденный updated задач; own — updated, которые породил наш комментарий (их событием не считаем и в следующих опросах);
  * seen — время последней записи истории (changelog), по которой уже было событие: «что изменилось» берётся после неё;
- * fails — сколько опросов подряд не получилась история задачи; at — когда начался прошлый опрос.
+ * fails — сколько опросов подряд не получилась история задачи; at — когда начался прошлый опрос;
+ * pending — задачи, впервые попавшие в выборку и отложенные (лимит запросов, сбой): граница «что считать новым» на момент первого показа,
+ * чтобы назначение, случившееся до следующего опроса, не отрезалось новой границей.
  */
-type Cursor = { known?: Record<string, string>; own?: Record<string, string>; seen?: Record<string, number>; fails?: Record<string, number>; at?: number };
+type Cursor = { known?: Record<string, string>; own?: Record<string, string>; seen?: Record<string, number>; fails?: Record<string, number>; pending?: Record<string, number>; at?: number };
 
 /**
  * Наши комментарии: источник|задача → время комментария. Лежит в памяти процесса, а не в курсоре: у reply и poll разные ctx
@@ -70,8 +72,8 @@ const HISTORY_RETRIES = 3;
 const MAX_CHANGES_SHOWN = 3;
 /** Запас на разницу часов и на запись, пришедшую во время прошлого опроса: назначение «новее прошлого опроса» считается с этим запасом. */
 const OVERLAP_MS = 2 * 60_000;
-/** updated дальше последней записи истории больше чем на это — между ними был комментарий (его в истории нет). */
-const COMMENT_GAP_MS = 60_000;
+/** updated дальше последней записи истории больше чем на это — между ними был комментарий (его в истории нет). Запись и updated ставит один сервер: разница в доли секунды, а не в минуту. */
+const COMMENT_GAP_MS = 10_000;
 /** Служебные поля истории: порядок в списке, учёт времени. Это не «что изменилось» для человека. */
 const NOISY_FIELDS = new Set(['rank', 'timespent', 'timeestimate', 'timeoriginalestimate', 'aggregatetimespent', 'worklogid', 'remainingestimate', 'time spent', 'original estimate', 'remaining estimate', 'work ratio', 'lastviewed']);
 
@@ -118,13 +120,24 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
   const own = { ...(cursor.own ?? {}) };
   const seen = { ...(cursor.seen ?? {}) };
   const fails = { ...(cursor.fails ?? {}) };
+  const pending = { ...(cursor.pending ?? {}) };
   // порядок ключей в known — по давности: недавно виденную задачу переставляем в конец, обрезка до 300 бьёт по давно не виденным
   const remember = (key: string, updated: string): void => {
     delete known[key];
     known[key] = updated;
+    delete pending[key];
+    delete fails[key];
+  };
+  /** Записи истории до этого времени разобраны: отметка только растёт и нулём не бывает (иначе вся история задачи станет «новой»). */
+  const markSeen = (key: string, at: number): void => {
+    if (at > (seen[key] ?? 0)) seen[key] = at;
   };
   // «новее прошлого опроса»: для задачи, впервые попавшей в выборку, и для назначения на меня
   const recentCut = (cursor.at ?? startedAt - 24 * 3600_000) - OVERLAP_MS;
+  // задача, впервые попавшая в выборку и не разобранная сейчас, ждёт со своей границей: следующий опрос не сдвинет её вперёд
+  const defer = (key: string, isNew: boolean): void => {
+    if (isNew) pending[key] ??= recentCut;
+  };
   for (const [k, b] of bumps) if (Date.now() - b.setAt > BUMP_TTL_MS) bumps.delete(k);
   const out: RoutineEvent[] = [];
   let fetched = 0;
@@ -137,18 +150,25 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
   }
   const mine = (c: JiraChange): boolean => Boolean(c.author) && me.has(c.author.trim().toLowerCase());
   const toMe = (c: JiraChange): boolean => c.field.toLowerCase() === 'assignee' && me.has(c.to.trim().toLowerCase());
-  const getFull = async (key: string): Promise<JiraIssue | undefined> => {
-    if (fetched >= DESCRIPTION_FETCHES) return undefined;
+  /** Полная задача: описание, исполнитель, created. 'budget' — лимит за опрос вышел (подождёт), 'failed' — Jira не ответила (считается в fails). */
+  const getFull = async (key: string): Promise<JiraIssue | 'budget' | 'failed'> => {
+    if (fetched >= DESCRIPTION_FETCHES) return 'budget';
     fetched++;
     try {
       return await client.issue(key);
     } catch (err) {
       ctx.log(`Jira ${key}: описание не получено: ${(err as Error).message}`);
-      return undefined;
+      return 'failed';
     }
   };
+  const describeOf = async (key: string): Promise<JiraIssue | undefined> => {
+    const f = await getFull(key);
+    return typeof f === 'string' ? undefined : f;
+  };
 
-  for (const b of issues) {
+  // новые в выборке — первыми: им достаются и запросы истории, и описания, а известным задачам остаётся то, что осталось
+  const ordered = first ? issues : [...issues.filter((b) => known[b.key] === undefined), ...issues.filter((b) => known[b.key] !== undefined)];
+  for (const b of ordered) {
     const updated = b.updated ?? '';
     const bump = bumps.get(bumpKey(ctx.slug, b.key));
     if (bump && updated && Date.parse(updated) <= bump.created + SELF_BUMP_MS) {
@@ -168,28 +188,25 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
     let kind: ChangeKind = 'new';
     let full: JiraIssue | undefined;
     if (!first) {
-      if (histories >= HISTORY_FETCHES) continue;
-      histories++;
-      // задачу, впервые попавшую в выборку, различаем по created: ему нужна полная задача (подождёт следующего опроса, если лимит вышел)
-      if (isNew) {
-        full = await getFull(b.key);
-        if (!full) continue;
+      if (histories >= HISTORY_FETCHES) {
+        defer(b.key, isNew);
+        continue;
       }
-      // известная — записи после прошлого раза; новая в выборке — только то, что произошло после прошлого опроса
-      const since = isNew ? recentCut : (seen[b.key] ?? ms(known[b.key]));
+      histories++;
+      // известная — записи после прошлого раза; новая в выборке — только то, что произошло после прошлого опроса (границу держит pending, пока задача не разобрана)
+      const since = isNew ? (pending[b.key] ?? recentCut) : seen[b.key] || ms(known[b.key]);
       let all: JiraChange[];
       try {
         all = await client.changelog(b.key);
-        delete fails[b.key];
       } catch (err) {
         ctx.log(`Jira ${b.key}: история не получена: ${(err as Error).message}`);
         // блип Jira не должен стереть назначение: курсор по задаче не двигаем, спросим в следующий опрос
         const n = (fails[b.key] ?? 0) + 1;
         if (n < HISTORY_RETRIES) {
           fails[b.key] = n;
+          defer(b.key, isNew);
           continue;
         }
-        delete fails[b.key];
         all = [];
       }
       const freshAll = all.filter((c) => ms(c.at) > since);
@@ -198,37 +215,62 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
       const assigned = meaningful.filter((c) => toMe(c) && !mine(c));
       const lastEntry = Math.max(0, ...freshAll.map((c) => ms(c.at)));
       if (assigned.length) {
-        // назначили: событие про последнее назначение, прочие правки того же момента в него не входят
+        // назначили: назначение — первым, следом чужие правки окна (смена статуса после назначения не должна пропасть), прежние назначения на меня и мои правки — нет
         kind = 'assigned';
-        changes = assigned.slice(-1);
+        const last = assigned[assigned.length - 1];
+        changes = [last, ...meaningful.filter((c) => c !== last && !mine(c) && !toMe(c))];
       } else if (isNew) {
         // без назначения событием становится только созданная после прошлого опроса; задача, давно назначенная и просто поднявшаяся в выборке, запоминается молча
-        const created = full?.created ? ms(full.created) : 0;
-        if (created <= recentCut) {
+        const got = await getFull(b.key);
+        if (got === 'budget') {
+          // лимит описаний на этот опрос вышел: created неизвестен — подождём следующего опроса с той же границей
+          defer(b.key, true);
+          continue;
+        }
+        if (got === 'failed') {
+          // сбой считаем: постоянная ошибка доступа не должна держать задачу (и очередь описаний) вечно
+          const n = (fails[b.key] ?? 0) + 1;
+          if (n < HISTORY_RETRIES) {
+            fails[b.key] = n;
+            defer(b.key, true);
+            continue;
+          }
+          // создана ли после прошлого опроса — не узнать; шум хуже пропуска «новой»: запоминаем молча
+          ctx.log(`Jira ${b.key}: описание не получено ${HISTORY_RETRIES} опроса подряд — задача запомнена без события`);
           remember(b.key, updated);
-          seen[b.key] = Math.max(seen[b.key] ?? 0, lastEntry, ms(updated));
+          markSeen(b.key, Math.max(lastEntry, ms(updated)));
+          continue;
+        }
+        full = got;
+        const created = full.created ? ms(full.created) : 0;
+        if (created <= since) {
+          remember(b.key, updated);
+          markSeen(b.key, Math.max(lastEntry, ms(updated)));
           continue;
         }
         kind = 'new';
       } else {
         changes = meaningful.filter((c) => !mine(c));
-        if (!changes.length) {
-          // записи есть, но все мои или служебные: событием это не станет, если после них не было комментария
-          const commented = ms(updated) - lastEntry > COMMENT_GAP_MS;
-          if (freshAll.length && !commented) {
+        if (changes.length) kind = 'changed';
+        else {
+          // чужих правок нет: мои, служебные или вообще без записей. Комментарий — только если updated ушёл от последней известной записи истории
+          // (новой или разобранной раньше): иначе это запоздалый updated после уже учтённой правки
+          const commented = ms(updated) - Math.max(lastEntry, seen[b.key] ?? 0) > COMMENT_GAP_MS;
+          if (!commented) {
             remember(b.key, updated);
-            seen[b.key] = Math.max(seen[b.key] ?? 0, lastEntry);
+            markSeen(b.key, lastEntry);
             continue;
           }
           kind = 'comment';
-        } else kind = 'changed';
+        }
       }
-      seen[b.key] = Math.max(seen[b.key] ?? 0, lastEntry, kind === 'comment' ? ms(updated) : 0);
+      markSeen(b.key, lastEntry);
     }
 
-    full ??= await getFull(b.key);
+    full ??= await describeOf(b.key);
     remember(b.key, updated);
-    const stamp = changes.length ? changes[changes.length - 1].at : updated;
+    // id и время события: у «назначили» — момент назначения (правки после него едут в том же событии), у «изменилось» — последняя правка
+    const stamp = changes.length ? changes[kind === 'assigned' ? 0 : changes.length - 1].at : updated;
     const shown = changes.slice(0, MAX_CHANGES_SHOWN).map(describeChange).join('; ');
     const more = changes.length > MAX_CHANGES_SHOWN ? ` и ещё ${changes.length - MAX_CHANGES_SHOWN}` : '';
     const headline = kind === 'assigned' || kind === 'changed' ? `${KIND_TEXT[kind]}: ${shown}${more}` : KIND_TEXT[kind];
@@ -259,6 +301,10 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
       replyTo: { key: b.key },
     });
   }
+  // задача, которой больше нет в выборке, границу и счёт сбоев не держит: вернётся — начнёт с новой границы
+  const present = new Set(issues.map((b) => b.key));
+  for (const k of Object.keys(pending)) if (!present.has(k)) delete pending[k];
+  for (const k of Object.keys(fails)) if (!present.has(k)) delete fails[k];
   // курсор не растёт бесконечно: храним последние 300 задач
   const keys = Object.keys(known);
   for (const k of keys.slice(0, Math.max(0, keys.length - 300))) {
@@ -267,7 +313,7 @@ async function poll(ctx: SourceCtx, deps: JiraDeps): Promise<RoutineEvent[]> {
     delete fails[k];
   }
   for (const k of Object.keys(own).slice(0, Math.max(0, Object.keys(own).length - 300))) Reflect.deleteProperty(own, k);
-  ctx.cursor.set({ known, own, seen, fails, at: startedAt });
+  ctx.cursor.set({ known, own, seen, fails, pending, at: startedAt });
   return out;
 }
 

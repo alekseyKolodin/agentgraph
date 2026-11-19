@@ -128,10 +128,40 @@ test('не встреча — текст события без изменени�
   assert.ok(!t.includes('Мои пункты'));
 });
 
-test('встреча: пункты берутся и из текста записи («Action items»), профиль только с почтой Jira — не «пустой»', () => {
-  const e = meeting({ fields: {}, text: 'Итог: договорились\n\n## Action items\n**Борис Иванов**\nПодготовить отчёт до пятницы' });
-  assert.match(eventText(e, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
-  assert.ok(!/Профиль «кто я» не заполнен/.test(eventText(meeting(), { profile: { names: [], emails: [], jiraEmail: 'boris@example.com' } })));
+test('встреча: пункты в полях — и summary.action_items, и action_items; «Next steps» в тексте MR или задачи Jira встречей событие не делает', () => {
+  const noProfile = { profile: () => { throw new Error('профиль читать не нужно'); } };
+  const mr = meeting({ source: 'gitlab', fields: { iid: 7 }, text: 'Правки по биллингу\n\n## Next steps\n**Борис Иванов**\nПодготовить отчёт до пятницы' });
+  assert.ok(!/Пункты действий|Мои пункты/.test(eventText(mr, noProfile)), 'описание MR с «Next steps» — не встреча');
+  const jira = meeting({ source: 'jira', fields: { key: 'ABC-1', summary: 'Заголовок задачи' }, text: 'Action items\nБорис Иванов: сделать' });
+  assert.ok(!/Пункты действий|Мои пункты/.test(eventText(jira, noProfile)), 'summary-строка Jira — не summary.action_items');
+  const flat = meeting({ fields: { action_items: ['**Борис Иванов**', 'Подготовить отчёт до пятницы'] } });
+  assert.match(eventText(flat, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+});
+
+test('встреча: у записи с разделом «Action items» только в тексте пункты попадают в поля при получении — тогда блок встречи есть; у MR с тем же разделом полей нет', async () => {
+  const { withActionItems } = await import('./sources/connector.js');
+  const text = 'Итог: договорились\n\n## Action items\n**Борис Иванов**\nПодготовить отчёт до пятницы';
+  const rec = withActionItems(meeting({ fields: { channel: 'ff' }, text }));
+  assert.equal(rec.fields?.action_items, '**Борис Иванов**\nПодготовить отчёт до пятницы');
+  assert.equal(rec.fields?.channel, 'ff', 'остальные поля на месте');
+  assert.match(eventText(rec, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+  // уже есть в полях — не трогаем; раздела нет — поля не появляются
+  const done = meeting();
+  assert.equal(withActionItems(done).fields, done.fields);
+  assert.equal(withActionItems(meeting({ fields: {}, text: 'Обсудили action items позже' })).fields?.action_items, undefined);
+});
+
+test('встреча: профиль только с почтой Jira — не «пустой», в подписи названа почта, а не undefined', () => {
+  const jiraOnly = { names: [], emails: [], jiraEmail: 'boris@example.com' };
+  const withMine = meeting({ fields: { action_items: 'Отправить акт boris@example.com до пятницы' } });
+  const t = eventText(withMine, { profile: jiraOnly });
+  assert.match(t, /Мои пункты \(по профилю boris@example\.com\):\n- Отправить акт boris@example\.com до пятницы/);
+  const none = eventText(meeting(), { profile: jiraOnly });
+  assert.match(none, /Мои пункты: среди пунктов нет подписанных или названных по профилю \(boris@example\.com\)/);
+  assert.ok(!/undefined/.test(t + none));
+  assert.ok(!/Профиль «кто я» не заполнен/.test(none));
+  // логин GitLab, GitHub — то же самое
+  assert.match(eventText(meeting(), { profile: { names: [], emails: [], gitlab: 'bivanov' } }), /\(bivanov\)/);
 });
 
 test('проверка словами: у повторяющейся встречи с тем же названием другая дата — не дубль (правило в промпте), даты видны модели', async () => {
