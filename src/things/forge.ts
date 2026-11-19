@@ -14,8 +14,8 @@
 import { exec, forgeOf, ghUser, glabUser, type Exec, type Forge } from '../git.js';
 import type { Profile } from '../api-types.js';
 import { loadProfile } from '../settings.js';
-import type { Thing, ThingState, Turn, Watcher } from './types.js';
 import { mrKey } from './keys.js';
+import type { Thing, ThingState, Turn, Watcher } from './types.js';
 
 /** Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое). */
 export type ForgeRef = { host: string; project: string; number: number; forge?: Forge; me?: string; notesCount?: number };

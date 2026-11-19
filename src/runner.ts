@@ -39,7 +39,7 @@ import type { RunTitleReport } from './run-title.js';
 import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
 import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
 import { KNOWLEDGE_TOOLS_ALLOW, KNOWLEDGE_TOOLS_SERVER, knowledgeToolsServer } from './knowledge-tools.js';
-import { branchKeyOf, canonicalKey, DESK_TOOLS_ALLOW, DESK_TOOLS_SERVER, deskToolsServer } from './desk/tools.js';
+import { branchKeyOf, DESK_TOOLS_ALLOW, DESK_TOOLS_SERVER, deskToolsServer } from './desk/tools.js';
 import type { DeskApi, DeskItem } from './desk/types.js';
 import { flowChanges, flowEditProblems, keepBlockName, RESTART_DETAIL, RunFixError } from './run-fix.js';
 import { bypassedBlocks, callInput, callOutcome, pickNext } from './compose.js';
@@ -494,17 +494,17 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   let knowledge = new Map<string, KnowledgeTag[]>();
   const save = () => fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(report, null, 2));
   // дела: один сервер на этап (in-process, как knowledge), запуск и рутина — в каждом деле и сигнале, итог — в отчёт
+  // ключи дел, которые завёл этот запуск: признак «своё», даже если хранилище не сохранило createdBy
+  const createdHere = new Set<string>();
   const deskTools = (): McpTools => {
     if (!opts.desk) return {};
     const open = opts.desk;
     const thing = opts.source?.thing;
     const project = () => projectResolver().of({ space: opts.space, path: opts.cwd }).space ?? undefined;
-    // закрыть запуск может только своё: дело, где он (его цепочка, родитель) в links.runs, и дело о вещи запуска —
-    // текст задачи из Slack не вычистит доску пользователя
+    // своё запуску — только дело, которое завёл он сам (или его цепочка, или родитель): чужое он лишь дополняет сигналом
+    // и не закрывает — текст задачи из Slack не перепишет и не вычистит доску пользователя
     const own = new Set([report.id, report.continuedFrom, opts.root, opts.parent?.runId].filter((x): x is string => Boolean(x)));
-    const ownKey = thing ? canonicalKey(thing.key) : undefined;
-    const canClose = (item: DeskItem) =>
-      item.links.runs.some((r) => own.has(r)) || (ownKey !== undefined && item.key === ownKey) ? undefined : `Дело ${item.key} завёл не этот запуск: закрыть его может пользователь`;
+    const owns = (item: DeskItem) => createdHere.has(item.key) || (item.createdBy?.run !== undefined && own.has(item.createdBy.run));
     const server = deskToolsServer(
       () => ({
         api: open(),
@@ -516,8 +516,9 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         branch: () => branchKeyOf(opts.cwd),
         why: `из запуска ${spec.name}`,
         ...(thing ? { thing } : {}),
-        canClose,
+        owns,
         onPut: (item, created) => {
+          if (created) createdHere.add(item.key);
           report.desk = tallyDesk(report.desk, item.key, created);
           save();
         },

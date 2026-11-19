@@ -19,13 +19,13 @@ const MR_KEY = 'mr:gitlab.company.com/grp/app/12';
 type Call = { op: 'put'; key: string; patch: DeskPatch; by: DeskBy } | { op: 'move'; key: string; column: DeskColumn; by: DeskBy } | { op: 'close'; key: string; reason: string; by: DeskBy };
 
 /** Хранилище дел в памяти: заводит, дописывает сигнал, переносит; журнал вызовов — для проверок. */
-function fakeDesk(o: { fail?: boolean } = {}) {
+function fakeDesk(o: { fail?: boolean; /** put этих ключей падает (засев с ошибкой). */ failKeys?: Set<string> } = {}) {
   const items = new Map<string, DeskItem>();
   const calls: Call[] = [];
   const at = '2026-11-17T10:00:00.000Z';
   const api: DeskApi = {
     async put(key, patch, by) {
-      if (o.fail) throw new Error('диск занят');
+      if (o.fail || o.failKeys?.has(key)) throw new Error('диск занят');
       calls.push({ op: 'put', key, patch, by });
       const was = items.get(key);
       const item: DeskItem = was
@@ -59,13 +59,13 @@ function fakeDesk(o: { fail?: boolean } = {}) {
   return { api, items, calls, puts: () => allPuts().filter((c) => c.patch.signal), links: () => allPuts().filter((c) => !c.patch.signal) };
 }
 
-function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean } = {}) {
+function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean; failKeys?: Set<string>; duplicate?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-'));
   const store = new RoutineStore(root);
   const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
   const items: Record<string, RoutineEvent[]> = { gl: [], chat: [] };
   const started: RoutineRunRequest[] = [];
-  const desk = fakeDesk({ fail: o.failDesk });
+  const desk = fakeDesk({ fail: o.failDesk, failKeys: o.failKeys });
   const checks: string[] = [];
   const real = o.realDesk ? openDesk(path.join(root, 'desk')) : undefined;
   const kind: SourceKind = {
@@ -95,7 +95,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean 
     desk: () => real ?? desk.api,
     check: async (i) => {
       checks.push(i.event.id);
-      return { match: true, duplicate: false, reason: 'подходит', costUsd: 0 };
+      return { match: true, duplicate: Boolean(o.duplicate), reason: o.duplicate ? 'то же, что вчера' : 'подходит', costUsd: 0 };
     },
     log: () => {},
     lock: { who: 'test', deps: { alive: () => false } },
@@ -438,6 +438,97 @@ test('настоящее хранилище дел: две рутины на о�
     assert.equal(items[0].close, 'never');
     assert.deepEqual(items[0].signals.map((x) => x.routine), ['gitlab', 'slack']);
     assert.deepEqual(t.log('slack').map((x) => x.outcome), ['task']);
+  } finally {
+    t.done();
+  }
+});
+
+test('повтор по проверке словами у рутины с делом режет только запуск: сигнал дело получает', async () => {
+  const t = setup({ duplicate: true });
+  try {
+    t.routine('both', 'gl', { run: { flow: 'review' }, when: { source: 'gl', check: 'это ревью' } });
+    t.routine('only', 'chat', { run: undefined, when: { source: 'chat', check: 'это ревью' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', t.chat('2'));
+    assert.equal(t.started.length, 0);
+    assert.deepEqual(t.desk.puts().map((p) => p.patch.signal?.routine), ['both', 'only']);
+    const both = t.log('both').at(-1)!;
+    assert.equal(both.outcome, 'duplicate');
+    assert.equal(both.deskKey, MR_KEY);
+    const only = t.log('only').at(-1)!;
+    assert.equal(only.outcome, 'task');
+    assert.match(only.reason ?? '', /повтор: то же, что вчера/);
+    // засев и рутина без flow примеры повтора не пополняют
+    assert.deepEqual(t.store.events('only').started, []);
+  } finally {
+    t.done();
+  }
+});
+
+test('засев с ошибкой: прошедшие записи помнятся, повторяются только упавшие и не больше трёх раз', async () => {
+  const mr13 = 'mr:gitlab.company.com/grp/app/13';
+  const fail = new Set([mr13]);
+  const t = setup({ lastCheck: false, failKeys: fail });
+  try {
+    t.routine('only', 'gl', { run: undefined, when: { source: 'gl', check: 'это ревью' } });
+    await t.push('gl', t.gl('review:1'), t.gl('review:2', { link: 'https://gitlab.company.com/grp/app/-/merge_requests/13' }));
+    assert.deepEqual(t.checks, ['review:1', 'review:2']);
+    assert.equal(t.store.lastCheck('task:only@gl'), undefined);
+    // следующий опрос — только упавшая запись
+    await t.engine.pollSource('gl');
+    await t.engine.idle();
+    assert.deepEqual(t.checks, ['review:1', 'review:2', 'review:2']);
+    await t.engine.pollSource('gl');
+    await t.engine.idle();
+    // третья попытка не удалась — засев сдаётся и кончен
+    assert.ok(t.store.lastCheck('task:only@gl'));
+    await t.engine.pollSource('gl');
+    await t.engine.idle();
+    assert.equal(t.checks.length, 4);
+    assert.deepEqual(t.store.seedProgress('only'), {});
+  } finally {
+    t.done();
+  }
+});
+
+test('второй сигнал в то же дело: почему не переписывается, правило закрытия — только от рутины, что завела', async () => {
+  const t = setup();
+  try {
+    t.routine('gitlab', 'gl', { run: undefined, task: { kind: 'Ревью', close: 'never' } });
+    t.routine('slack', 'chat', { run: undefined, task: { kind: 'Ревью', close: 'thing' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', t.chat('2'));
+    await t.push('gl', t.gl('review:3'));
+    const [first, second, third] = t.desk.puts();
+    assert.equal(first!.patch.close, 'never');
+    assert.ok(first!.patch.why);
+    assert.equal(second!.patch.why, undefined);
+    assert.equal(second!.patch.close, undefined);
+    // та же рутина, что завела дело, правило закрытия передаёт
+    assert.equal(third!.patch.close, 'never');
+    assert.equal(third!.patch.why, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('«Не то» не закрывает общее дело другой рутины; закрытое сверкой дело ожидание не двигает', async () => {
+  const t = setup();
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('slack', 'chat', { run: { flow: 'review' }, mode: 'suggest' });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', t.chat('2'), t.chat('3', 'глянь https://gitlab.company.com/grp/app/-/merge_requests/14'));
+    const [w1, w2] = t.engine.waits();
+    await t.engine.waitAction(w1!.id, { action: 'reject' });
+    assert.equal(t.desk.items.get(MR_KEY)?.closed, undefined);
+    // дело !14 закрыла сверка — «Не сейчас» его не трогает
+    const key14 = 'mr:gitlab.company.com/grp/app/14';
+    await t.desk.api.close(key14, 'MR смержен', 'watcher');
+    const moves = t.desk.calls.filter((c) => c.op === 'move').length;
+    await t.engine.waitAction(w2!.id, { action: 'later' });
+    assert.equal(t.desk.calls.filter((c) => c.op === 'move').length, moves);
+    assert.equal(t.desk.items.get(key14)?.closed?.reason, 'MR смержен');
   } finally {
     t.done();
   }

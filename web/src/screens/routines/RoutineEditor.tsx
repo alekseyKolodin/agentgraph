@@ -304,6 +304,8 @@ function RunClause({ d, set }: ClauseProps) {
 }
 
 const KINDS = ['Ревью', 'Jira', 'Встреча', 'Задача', 'Своё'];
+/** Засев дел по текущему списку — не больше стольких записей (SEED_MAX в src/routines/engine.ts). */
+const SEED_MAX = 50;
 
 /**
  * «Дело» (блок task, docs/desk/design/RulePult.dc.html): «Завести дело как Ревью в Новое. Тем же делом считать ту же
@@ -412,6 +414,9 @@ function TaskClause({ d, set }: ClauseProps) {
                 ? t('Дела заводит flow инструментом desk_put — по одному на вещь, о которой он узнал.')
                 : t('Одно дело на вещь: сколько бы сигналов о ней ни пришло из этой и других рутин, дело одно.')}
             </span>
+            {d.taskFrom === 'event' && !isSchedule(d) && d.check.trim() && (
+              <span className={styles.hint}>{t('Первый опрос заведёт дела по текущему списку источника: до {n} записей, и каждую проверит словами — это расход модели.', { n: SEED_MAX })}</span>
+            )}
           </>
         )}
       </div>

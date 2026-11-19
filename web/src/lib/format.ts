@@ -33,7 +33,9 @@ export function excerpt(text: string | null | undefined, max = 160): string {
   const s = String(text || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/^[\s>#*\-+\d.]+/gm, '')
-    .replace(/[`*_]/g, '')
+    .replace(/[`*]/g, '')
+    // «_» — разметка только на краю слова: внутри (merge_requests, snake_case) он часть ссылки или имени
+    .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;

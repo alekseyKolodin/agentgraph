@@ -6,6 +6,7 @@ import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { SourceSpec, SourceTestResult } from '../types.js';
 import { actionItemsByOwner, actionItemsOf, BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, myActionItems, plainText, recordId, sampleProblem, scriptOf, textItems } from './connector.js';
+import { isStampedAt } from '../kind.js';
 import { makeCtx } from './testkit.js';
 
 const TOOL = 'mcp__claude_ai_Fireflies__fireflies_get_transcripts';
@@ -355,6 +356,8 @@ test('скрипт: нить и канал по FieldMap — сообщение 
   const steps = [{ tool: READ, args: {}, say: 'Читает канал', json: { items: 'messages', id: 'ts', text: 'text', thread: 'thread_ts', channel: 'ch' } }];
   const events = await kind.poll!(makeCtx({ slug: 'sl', config: scriptSpec(steps).config }));
   assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, { source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+  // времени у записей нет — отметка «время подставлено» не теряется вместе с нитью (иначе простой не уйдёт в «догнать»)
+  assert.ok(events.every((e) => isStampedAt(e)));
   // правило без нити — как раньше
   const plain = await connectorKind({ session: async () => assert.fail(), mcp: f.mcp }).poll!(makeCtx({ slug: 'sl', config: scriptSpec([{ ...steps[0], json: { items: 'messages', id: 'ts' } }]).config }));
   assert.ok(plain.every((e) => e.thread === undefined));

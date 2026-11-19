@@ -302,10 +302,12 @@ export type LogEntry = {
   startedAt?: string;
   /** Обратная связь человека на это событие (кнопки журнала «Это баг» / «Не повтор»). */
   feedback?: Feedback['verdict'];
-  /** Ключи вещей события (src/things/keys.ts); первый — главная вещь, по ней «то же срабатывание». */
+  /** Ключи вещей события (src/things/keys.ts) без угаданных по ключу в тексте; первый — главная вещь. По ним «то же срабатывание». */
   things?: string[];
   /** Версия главной вещи в этом событии: id события, которое само о ней (новый комментарий, ревью снова). Нет — только упоминание. */
   thingVersion?: string;
+  /** Нить события (thread:<источник>/<канал>/<нить>): упоминание вещи без версии — повтор только в той же нити. */
+  thread?: string;
   /** Повтор по вещи: строка срабатывания, которое уже было по той же вещи (эта или другая рутина с тем же flow и задачей). */
   sameAs?: { routine: string; logId: string };
   /** Чем кончился запуск строки (статус запуска): упавший запуск повтор по вещи не держит. */
@@ -439,6 +441,9 @@ export type HistoryCheck = {
  * «Учесть» в проверке на истории шлёт verdict = past этого события.
  */
 export type Feedback = { eventId: string; verdict: 'match' | 'no_match' | 'not_duplicate'; at?: string };
+
+/** Готовый flow шаблона рутины (templates/flows): GET /api/routines/flow-templates. */
+export type FlowTemplate = { name: string; description: string };
 
 /** Событие home-SSE (/api/events): UI перечитывает /api/routines. */
 export type RoutinesChange = { type: 'routines'; runId: ''; flow: '' };

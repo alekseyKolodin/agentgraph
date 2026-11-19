@@ -41,7 +41,9 @@ const safeKey = (f: () => string): string | undefined => {
  * (MR/PR, не задача) и Jira (replyTo.key + хост из ссылки). Ничего знакомого — undefined.
  */
 export function eventThing(e: Pick<RoutineEvent, 'things' | 'replyTo' | 'fields' | 'link'>): Thing | undefined {
-  if (e.things?.length) return e.things[0];
+  // угаданная по голому ключу в тексте задача (ref.guess) — не та вещь, о которой работа
+  const known = e.things?.find((t) => t.ref.guess !== true);
+  if (known) return known;
   const r = e.replyTo ?? {};
   const f = e.fields ?? {};
   const forge = str(r.forge);

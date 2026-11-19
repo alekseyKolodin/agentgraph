@@ -17,15 +17,9 @@ import { describeSchedule } from '../../lib/routines/schedule';
 import { everyLabel, foundText } from '../../lib/routines/source';
 import { activeWaits, overviewMeta, pollCostText, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
 import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
+import { ROUTINE_TEMPLATES } from '../../lib/routines/templates';
 import styles from './Routines.module.css';
 
-/** Шаблоны пустого списка: ключ уходит в /routines/new?tpl=…, там выбирается подходящий источник. */
-export const TEMPLATES = [
-  { tpl: 'bug', title: 'Баг в канале → таска и фикс', sub: 'Сообщение в Slack или Telegram' },
-  { tpl: 'mr', title: 'MR на ревью → замечания', sub: 'GitLab или GitHub' },
-  { tpl: 'meeting', title: 'Встреча закончилась → задачи и итог', sub: 'Fireflies.ai или другой сервис' },
-  { tpl: 'digest', title: 'Каждое утро → сводка', sub: 'Расписание' },
-] as const;
 
 /** Статусы запусков по id — для «идёт» и «не довёл» в полоске и журнале. */
 export function useRunStatuses(): RunStatuses {
@@ -167,9 +161,10 @@ function Empty() {
   return (
     <section className={styles.empty} aria-label={t('Пустой список')}>
       <p>{t('Рутина запускает flow, когда что-то происходит: пришло сообщение, в сервисе появилось новое, наступило время.')}</p>
+      <p className="muted small">{t('«Мои дела» наполняются сами за четыре первых шаблона — ревью, задачи Jira и встречи; flow писать не нужно.')}</p>
       <div className={styles.tpls}>
-        {TEMPLATES.map((x) => (
-          <Link key={x.tpl} className={styles.tpl} to={`/routines/new?tpl=${x.tpl}`}>
+        {ROUTINE_TEMPLATES.map((x) => (
+          <Link key={x.tpl} className={cx(styles.tpl, x.desk && styles.tplDesk)} to={`/routines/new?tpl=${x.tpl}`}>
             <b>{t(x.title)}</b>
             <span>{t(x.sub)}</span>
           </Link>
