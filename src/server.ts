@@ -590,7 +590,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (r) return sendJson(res, r.status, r.body);
   }
 
-  // --- дела: список с итогом сверки, put/move/close с карточки (src/desk/routes.ts)
+  // --- дела: список с итогом сверки, put/move/close/link с карточки (src/desk/routes.ts)
   if (p === '/api/desk' || p.startsWith('/api/desk/')) {
     const r = await deskRoute(method, url, () => readJson(req), { store: deskStore() });
     if (r) return sendJson(res, r.status, r.body);

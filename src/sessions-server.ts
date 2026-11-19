@@ -582,7 +582,24 @@ export class SessionManager {
     // сессия начата из задачи (spec §10): «К работе» → «В работе», исполнитель, запись в local.json. В фоне, как у
     // запусков: очередь репо команды может быть занята pull по сети; доска обновится событием team. Сбой — в лог внутри started
     if (teamwork?.task && teamworkHooks) void teamworkHooks.started(teamwork, { kind: 'session', id, status: s.status, title: rec.name });
+    // сессия начата с карточки дела (SPEC 3.2): дело — в «В работе», сессия — в его ссылках. До ответа (замок хранилища
+    // держит до нескольких секунд): доска, на которую вернутся, уже видит перенос
+    if (source?.item) await this.deskStarted(source.item, id, rec.name);
     return this.view(s);
+  }
+
+  /** Сессия по делу началась: ссылка в links.sessions и перенос в «В работе» от 'session'. Дела нет или сбой — только лог. */
+  private async deskStarted(itemId: string, session: string, name: string): Promise<void> {
+    try {
+      const api = (this.deps.desk ?? desk)();
+      const item = (await api.list()).find((i) => i.id === itemId);
+      if (!item) return;
+      await api.put(item.key, { links: { sessions: [session] } }, 'session');
+      // «почему твой ход» не затираем: что сессия открыта, карточка и так показывает
+      if (item.column !== 'work') await api.move(item.key, 'work', 'session', item.why ? undefined : `сессия «${name}»`);
+    } catch (err) {
+      console.error(`[дела] сессия ${session}: дело ${itemId} не обновилось —`, errMsg(err));
+    }
   }
 
   /** Новый процесс claude для сессии: новый токен, папки и запреты по текущим пространству и тегам знаний. */

@@ -34,6 +34,12 @@ export interface DeskStore extends DeskApi {
   onChange(fn: () => void): () => void;
   readCheck(): CheckResult | undefined;
   writeCheck(c: CheckResult): void;
+  /**
+   * «Привязать вещь» (POST /api/desk/link): своё открытое дело from переезжает на ключ вещи одной записью — сигналы, ссылки,
+   * срок, колонка и возраст те же, вид «Своё» становится видом вещи; своё закрывается с reason. Своего открытого нет —
+   * 'missing', у вещи уже есть дело (открытое или закрытое) — 'taken'.
+   */
+  relink(from: string, thing: Required<Pick<DeskItem, 'thing'>>['thing'] & { key: string; kind: string }, reason: string): Promise<DeskItem | 'missing' | 'taken'>;
 }
 
 export type DeskStoreDeps = { now?: () => Date; id?: () => string };
@@ -269,6 +275,28 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
         return undefined;
       }
     },
+    relink: (from, thing, reason) =>
+      enqueue(dir, () => withFileLock(lockFile, () => {
+        const { items, foreign } = readAll();
+        const idx = items.findIndex((i) => i.key === from);
+        const own = idx >= 0 ? items[idx] : undefined;
+        if (!own || own.closed || own.thing) return 'missing' as const;
+        if (items.some((i) => i.key === thing.key)) return 'taken' as const;
+        const at = now().toISOString();
+        const { key, kind, ...t } = thing;
+        // seen/turn — состояния прежней вещи (своей у дела не было): наблюдатель новой вещи начнёт с чистого листа
+        const { seen: _seen, turn: _turn, ...rest } = own;
+        const next: DeskItem = { ...rest, id: newId(), key, thing: t, kind: own.kind === 'Своё' ? kind : own.kind };
+        items[idx] = { ...own, column: 'done', closed: { at, reason }, movedAt: at, movedBy: 'me' };
+        items.push(next);
+        write(items, foreign);
+        log([
+          { at, key: from, from: own.column, to: 'done', by: 'me', why: reason },
+          { at, key, to: next.column, by: 'me', why: `из своего дела ${from}` },
+        ]);
+        emit();
+        return next;
+      })),
     writeCheck(c) {
       fs.mkdirSync(dir, { recursive: true });
       writeAtomic(checkFile, JSON.stringify(c) + '\n');
