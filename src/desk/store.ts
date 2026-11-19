@@ -422,7 +422,7 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
         const next: DeskItem = { ...rest, id: newId(), key, thing: t, kind: own.kind === 'Своё' ? kind : own.kind };
         items[idx] = { ...own, column: 'done', closed: { at, reason }, movedAt: at, movedBy: 'me' };
         items.push(next);
-        write(items, foreign);
+        write(items, foreign, false); // перенос дела на вещь: сигналов не прибавилось — пишется и на переполненной доске
         log([
           { at, key: from, from: own.column, to: 'done', by: 'me', why: reason },
           { at, key, to: next.column, by: 'me', why: `из своего дела ${from}` },
