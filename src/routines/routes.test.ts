@@ -12,7 +12,7 @@ import type { DraftView } from './types.js';
 
 function setup(drafts: DraftRoutes | null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
-  const engine = new RoutineEngine({
+  const engine = new RoutineEngine({ jiraHosts: () => [],
     store: new RoutineStore(root),
     kinds: () => [],
     startRun: async () => 'run-1',
@@ -146,7 +146,7 @@ test('POST /feedback: ответ человека на событие виден
 test('mcp-tools: читающие инструменты для чтения, пишущие — отдельно для ответа, force доходит до листинга', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
   try {
-    const engine = new RoutineEngine({ store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
+    const engine = new RoutineEngine({ jiraHosts: () => [], store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
     const forced: boolean[] = [];
     const mcpServers = async (force: boolean) => {
       forced.push(force);
@@ -172,7 +172,7 @@ test('mcp-tools: читающие инструменты для чтения, п
 test('connector-build: проверка тела, старт и опрос сборки', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
   try {
-    const engine = new RoutineEngine({ store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
+    const engine = new RoutineEngine({ jiraHosts: () => [], store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
     const started: unknown[] = [];
     const builds = {
       start: (req: unknown) => (started.push(req), { id: 'b1', state: 'working' as const, step: '…' }),
@@ -207,6 +207,19 @@ test('POST …/log/<id>/ask: стартовый запрос сессии; не�
     assert.equal((await t.call('POST', '/api/routines/morning/log/nope/ask', { question: 'почему?' }))?.status, 404);
     assert.equal((await t.call('POST', `/api/routines/nope/log/${id}/ask`, { question: 'почему?' }))?.status, 404);
     assert.equal(await t.call('GET', `/api/routines/morning/log/${id}/ask`), undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('готовые flow шаблонов: список; чужое имя — 404, плохое имя до рутины не доходит', async () => {
+  const t = setup(null);
+  try {
+    const list = await t.call('GET', '/api/routines/flow-templates');
+    assert.ok((list?.body as Array<{ name: string }>).some((x) => x.name === 'desk-review-mr'));
+    assert.equal((await t.call('POST', '/api/routines/flow-templates/nope', {}))?.status, 404);
+    // «flow-templates» занят разделом API: рутина с таким слагом не открылась бы
+    assert.equal((await t.call('PUT', '/api/routines/flow-templates', { spec }))?.status !== 200, true);
   } finally {
     t.done();
   }

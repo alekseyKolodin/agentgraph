@@ -40,7 +40,7 @@ function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult
     isSelf: (_ctx, e) => e.author === 'bot',
     describe: () => 'фейк',
   };
-  const engine = new RoutineEngine({
+  const engine = new RoutineEngine({ jiraHosts: () => [],
     store,
     kinds: () => [kind],
     startRun: async (r) => {
@@ -421,7 +421,7 @@ test('расписание: тик запускает по минутам, пр�
     // сервер выключили на час: новый движок на той же папке
     t.engine.stop();
     t.clock.now = new Date('2026-11-17T11:25:00.000Z');
-    const e2 = new RoutineEngine({ store: t.store, kinds: () => [], startRun: async () => 'run-x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => ['analyze'], now: () => t.clock.now, timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: () => 0, clearTimeout: () => {} } });
+    const e2 = new RoutineEngine({ jiraHosts: () => [], store: t.store, kinds: () => [], startRun: async () => 'run-x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => ['analyze'], now: () => t.clock.now, timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: () => 0, clearTimeout: () => {} } });
     e2.start();
     const rows = e2.catchUps();
     assert.equal(rows.length, 1);
@@ -761,7 +761,7 @@ test('история: оценка — запусков в неделю по ч�
   let flowCost: number | undefined;
   const t = setup();
   // свой движок на той же папке — с flowCost
-  const engine = new RoutineEngine({ store: t.store, kinds: () => [], startRun: async () => 'run-x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => ['analyze', 'fix'], flowCost: () => flowCost, now: () => t.clock.now });
+  const engine = new RoutineEngine({ jiraHosts: () => [], store: t.store, kinds: () => [], startRun: async () => 'run-x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => ['analyze', 'fix'], flowCost: () => flowCost, now: () => t.clock.now });
   try {
     t.connected();
     t.routine('r', { when: { source: 'src', match: { channel: 'bugs' } } });

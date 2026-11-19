@@ -1,5 +1,5 @@
-// Движок рутин и вещи (SPEC 2.2, 2.9): у пришедшего события есть things и thread; «то же срабатывание» по главной вещи —
-// одна вещь из GitLab и из чата даёт один запуск flow, новая версия вещи запускает снова, через сутки — тоже.
+// Движок рутин и вещи (SPEC 2.2, 2.9): у пришедшего события есть things и thread; «то же срабатывание» по вещи — одна
+// вещь из GitLab и из чата даёт один запуск flow, новая версия вещи запускает снова, через сутки — тоже.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -58,8 +58,8 @@ function setup(o: { jiraHosts?: () => string[] } = {}) {
   const at = () => new Date(clock.now.getTime() + 1000 + seq++).toISOString();
   /** Сигнал GitLab: ссылка события — сам MR, id — версия (ревью, ревью снова, комментарий). */
   const gl = (id: string, extra: Partial<RoutineEvent> = {}): RoutineEvent => ({ source: 'gl', id, at: at(), title: `Ревью: grp/app!12`, text: 'описание', link: `${MR}#${id}`, fields: {}, ...extra });
-  /** Сообщение в чате со ссылкой в тексте; ссылка события — на само сообщение. */
-  const chat = (id: string, text = `глянь ${MR} пожалуйста`): RoutineEvent => ({ source: 'chat', id, at: at(), title: text.slice(0, 40), text, link: `https://acme.slack.com/archives/C1/p${id}`, fields: {}, thread: { source: 'chat', channel: 'C1', thread: id } });
+  /** Сообщение в чате со ссылкой в тексте; ссылка события — на само сообщение; нить — своя или тред thread. */
+  const chat = (id: string, text = `глянь ${MR} пожалуйста`, thread = id): RoutineEvent => ({ source: 'chat', id, at: at(), title: text.slice(0, 40), text, link: `https://acme.slack.com/archives/C1/p${id}`, fields: {}, thread: { source: 'chat', channel: 'C1', thread } });
   const push = async (source: 'gl' | 'chat', ...evs: RoutineEvent[]) => {
     items[source].push(...evs);
     await engine.pollSource(source);
@@ -67,7 +67,7 @@ function setup(o: { jiraHosts?: () => string[] } = {}) {
   };
   const outcomes = (slug: string) => engine.logOf(slug, {}).map((x) => x.outcome).reverse();
   const later = (ms: number) => (clock.now = new Date(clock.now.getTime() + ms));
-  return { root, store, engine, items, started, logs, routine, gl, chat, push, outcomes, later, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, engine, clock, items, started, logs, routine, gl, chat, push, outcomes, later, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('пришедшее событие получает things и thread: в истории источника и в строке журнала', async () => {
@@ -81,7 +81,8 @@ test('пришедшее событие получает things и thread: в и
     assert.equal(e.things![0].ref.version, undefined);
     assert.deepEqual(e.thread, { source: 'chat', channel: 'C1', thread: '1' });
     const line = t.engine.logOf('b', {})[0];
-    assert.deepEqual(line.things, [MR_KEY, 'jira:jira.company.com/ABC-7']);
+    // угаданный по ключу в тексте ABC-7 — у события, но не в строке: правило повтора на него не опирается
+    assert.deepEqual(line.things, [MR_KEY]);
     assert.equal(line.thingVersion, undefined);
     // flow получает событие с вещами
     assert.deepEqual(t.started[0].event.things?.map((x) => x.key), [MR_KEY, 'jira:jira.company.com/ABC-7']);
@@ -145,19 +146,20 @@ test('своя версия вещи — новое: два комментари
   }
 });
 
-test('ссылка на тот же MR в чате дважды за сутки — один запуск; через сутки — снова', async () => {
+test('ссылка на тот же MR в той же нити за сутки — один запуск; через сутки — снова', async () => {
   const t = setup();
   try {
     t.routine('b', 'chat');
     await t.push('chat', t.chat('1'));
     await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.5 });
     t.later(20 * HOUR);
-    await t.push('chat', t.chat('2', `поправил, глянь ещё раз ${MR}`));
+    await t.push('chat', t.chat('2', `поправил, глянь ещё раз ${MR}`, '1'));
     assert.equal(t.started.length, 1);
     t.later(5 * HOUR);
-    await t.push('chat', t.chat('3'));
+    await t.push('chat', t.chat('3', `глянь ${MR}`, '1'));
     assert.equal(t.started.length, 2);
     assert.deepEqual(t.outcomes('b'), ['started', 'duplicate', 'started']);
+    assert.equal(t.engine.logOf('b', {})[0].thread, 'thread:chat/C1/1');
   } finally {
     t.done();
   }
@@ -170,7 +172,7 @@ test('пока первое срабатывание открыто (ожида�
     await t.push('chat', t.chat('1'));
     assert.equal(t.engine.waits().length, 1);
     t.later(3 * 24 * HOUR);
-    await t.push('chat', t.chat('2'));
+    await t.push('chat', t.chat('2', `напоминаю: ${MR}`, '1'));
     assert.deepEqual(t.outcomes('b'), ['waiting', 'duplicate']);
     assert.match(t.engine.logOf('b', {})[0].reason!, /уже ждёт решения/);
     assert.equal(t.engine.waits().length, 1);
@@ -213,7 +215,7 @@ test('другой flow или другая задача — другая раб
   }
 });
 
-test('главная вещь — первая: сообщение о двух MR не делает повтором ревью второго MR', async () => {
+test('сообщение о двух MR покрывает оба: назначение на второй — повтор, на третий — запуск', async () => {
   const t = setup();
   try {
     t.routine('a', 'gl');
@@ -221,6 +223,9 @@ test('главная вещь — первая: сообщение о двух M
     const other = 'https://gitlab.company.com/grp/app/-/merge_requests/13';
     await t.push('chat', t.chat('1', `глянь ${MR} и ${other}`));
     await t.push('gl', t.gl('review:13', { link: other }));
+    assert.equal(t.started.length, 1);
+    assert.match(t.engine.logOf('a', {})[0].reason!, /повтор: MR grp\/app!13 уже в работе рутиной «Ревью из chat»/);
+    await t.push('gl', t.gl('review:14', { link: 'https://gitlab.company.com/grp/app/-/merge_requests/14' }));
     assert.equal(t.started.length, 2);
   } finally {
     t.done();
@@ -251,6 +256,171 @@ test('событие без вещей идёт как раньше: повто�
     await t.push('chat', t.chat('1', 'просто вопрос'), t.chat('2', 'ещё вопрос'));
     assert.equal(t.started.length, 2);
     assert.equal(t.engine.logOf('b', {})[0].things, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('повтор — только если все вещи события уже были: «глянь MR12 и MR13» после ревью MR12 запускается', async () => {
+  const t = setup();
+  try {
+    t.routine('b', 'chat');
+    await t.push('chat', t.chat('1'));
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.5 });
+    t.later(HOUR);
+    await t.push('chat', t.chat('2', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`, '1'));
+    assert.deepEqual(t.outcomes('b'), ['started', 'started']);
+    // теперь были оба — то же сообщение ещё раз в той же нити повтор, с подписью «и ещё 1»
+    await t.push('chat', t.chat('3', `глянь ${MR} и https://gitlab.company.com/grp/app/-/merge_requests/13`, '1'));
+    assert.match(t.engine.logOf('b', {})[0].reason!, /MR grp\/app!12 \(и ещё 1\) уже/);
+  } finally {
+    t.done();
+  }
+});
+
+test('угаданная по ключу в тексте задача повтором не держит: два разных сообщения с «ABC-7» запускаются оба', async () => {
+  const t = setup();
+  try {
+    t.routine('b', 'chat');
+    await t.push('chat', t.chat('1', 'ABC-7 горит'), t.chat('2', 'по ABC-7 другой вопрос'));
+    assert.equal(t.started.length, 2);
+    // угаданная вещь — у события, но не в строке журнала
+    assert.deepEqual(t.started[0].event.things?.map((x) => x.key), ['jira:jira.company.com/ABC-7']);
+    assert.equal(t.engine.logOf('b', {})[0].things, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск без итога, оборвавшийся с прошлым процессом, повтор не держит', async () => {
+  const t = setup();
+  try {
+    t.routine('b', 'chat');
+    await t.push('chat', t.chat('1'));
+    // приложение закрыли посреди запуска: новый движок на той же папке, конца запуска не было
+    const again = new RoutineEngine({
+      store: t.store,
+      kinds: () => [{ kind: 'fake', title: 'Фейк', summary: '', delivery: 'poll', minEveryMs: 0, setup: [], match: [], poll: async (ctx) => [...t.items[ctx.slug]], describe: () => '' }],
+      startRun: async (r) => {
+        t.started.push(r);
+        return `run-${t.started.length}`;
+      },
+      resumeRun: () => {},
+      stopRun: () => {},
+      flowBlocks: () => ['review'],
+      now: () => t.clock.now,
+      jiraHosts: () => [],
+      lock: { who: 'test', deps: { alive: () => false } },
+    });
+    t.later(60_000);
+    t.items.chat.push(t.chat('2'));
+    await again.pollSource('chat');
+    await again.idle();
+    assert.equal(t.started.length, 2);
+  } finally {
+    t.done();
+  }
+});
+
+test('та же задача flow в другой папке — другая работа', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl', { run: { flow: 'review', input: 'Сделай ревью', cwd: '/work/app' } });
+    t.routine('b', 'chat', { run: { flow: 'review', input: 'Сделай ревью', cwd: '/work/other' } });
+    await t.push('gl', t.gl('review:12'));
+    await t.push('chat', t.chat('2'));
+    assert.equal(t.started.length, 2);
+  } finally {
+    t.done();
+  }
+});
+
+test('«MR обновлён» после ревью — повтор: у обновления версия того же запроса, новые коммиты не запускают flow ещё раз', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    await t.push('gl', t.gl('review:12', { things: [{ type: 'mr', key: MR_KEY, ref: { host: 'gitlab.company.com', project: 'grp/app', number: 12, version: 'review:12' } }] }));
+    t.later(HOUR);
+    await t.push('gl', t.gl('update:12@bbb', { things: [{ type: 'mr', key: MR_KEY, ref: { host: 'gitlab.company.com', project: 'grp/app', number: 12, version: 'review:12' } }] }));
+    assert.deepEqual(t.outcomes('a'), ['started', 'duplicate']);
+    // вид дал свою версию — движок её не подменяет id события
+    assert.equal(t.engine.logOf('a', {})[0].thingVersion, 'review:12');
+  } finally {
+    t.done();
+  }
+});
+
+test('назначение после ссылки в чате — повтор, даже если в описании MR ссылки на задачу и другой MR', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    await t.push('chat', t.chat('1'));
+    await t.push('gl', t.gl('review:12', { text: 'Closes https://jira.company.com/browse/ABC-5, после https://gitlab.company.com/grp/app/-/merge_requests/11' }));
+    assert.deepEqual(t.outcomes('a'), ['duplicate']);
+  } finally {
+    t.done();
+  }
+});
+
+test('MR, упомянутый в описании другого MR, не держит повтор: ссылка на него в чате запускает ревью', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    const mr13 = 'https://gitlab.company.com/grp/app/-/merge_requests/13';
+    await t.push('gl', t.gl('review:13', { link: mr13, text: `продолжение ${MR}` }));
+    assert.deepEqual(t.engine.logOf('a', {})[0].things, ['mr:gitlab.company.com/grp/app/13', MR_KEY]);
+    await t.push('chat', t.chat('2'));
+    assert.deepEqual(t.outcomes('b'), ['started']);
+  } finally {
+    t.done();
+  }
+});
+
+test('упоминание без версии в двух разных тредах — две просьбы: обе запускаются; срабатывание, где вещь своя, держит любой тред', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    const pay = 'https://jira.company.com/browse/PAY-7';
+    await t.push('chat', t.chat('1', `падает оплата ${pay}`), t.chat('2', `и у нас ${pay}`));
+    assert.deepEqual(t.outcomes('b'), ['started', 'started']);
+    // назначение MR в GitLab — вещь своя: ссылка на него в любом треде в эти сутки — повтор
+    await t.push('gl', t.gl('review:12'));
+    await t.push('chat', t.chat('3'), t.chat('4'));
+    assert.deepEqual(t.outcomes('b'), ['started', 'started', 'duplicate', 'duplicate']);
+  } finally {
+    t.done();
+  }
+});
+
+test('версия другого источника — не новое: RSS (или коннектор) GitLab со ссылкой на тот же MR после назначения — повтор', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    t.routine('b', 'chat');
+    await t.push('gl', t.gl('review:12'));
+    // у события свой id и ссылка на сам MR — вещь своя, версия — id этого источника
+    await t.push('chat', { source: 'chat', id: 'rss-77', at: new Date(t.clock.now.getTime() + 5000).toISOString(), title: 'MR !12 обновлён', text: '', link: MR, fields: {} });
+    assert.equal(t.engine.logOf('b', {})[0].thingVersion, 'rss-77');
+    assert.deepEqual(t.outcomes('b'), ['duplicate']);
+    // а новая версия того же источника — новое
+    t.later(HOUR);
+    await t.push('gl', t.gl('comment:grp/app!12:9'));
+    assert.deepEqual(t.outcomes('a'), ['started', 'started']);
+  } finally {
+    t.done();
+  }
+});
+
+test('ревью и упоминание того же MR за один опрос forge — один запуск (у упоминания версия запроса)', async () => {
+  const t = setup();
+  try {
+    t.routine('a', 'gl');
+    const thing = (version: string) => [{ type: 'mr' as const, key: MR_KEY, ref: { host: 'gitlab.company.com', project: 'grp/app', number: 12, version } }];
+    await t.push('gl', t.gl('review:12', { things: thing('review:12') }), t.gl('mention:70', { things: thing('review:12') }));
+    assert.deepEqual(t.outcomes('a'), ['started', 'duplicate']);
   } finally {
     t.done();
   }

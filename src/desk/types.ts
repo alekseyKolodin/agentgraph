@@ -24,7 +24,21 @@ export type DeskSignal = {
   routine?: string;
 };
 
-export type DeskLinks = { runs: string[]; sessions: string[]; branch?: string; mr?: string };
+export type DeskLinks = {
+  /** Запуски по делу (начаты с карточки, рутина): их конец пишет итог в why. */
+  runs: string[];
+  sessions: string[];
+  branch?: string;
+  mr?: string;
+  /**
+   * Запуски, которые завели или дополнили дело инструментом desk_put (src/desk/tools.ts). Не запуски по делу: их конец
+   * why не трогает. Хранилище дописывает их, как runs.
+   */
+  mentionedBy?: string[];
+};
+
+/** Кто завёл дело: запуск flow (инструментом desk_put), сессия, рутина. У дел, заведённых руками, поля нет. */
+export type DeskCreatedBy = { run?: string; session?: string; routine?: string };
 
 export type DeskItem = {
   id: string;
@@ -47,6 +61,8 @@ export type DeskItem = {
   movedAt: string;
   movedBy: DeskBy;
   closed?: { at: string; reason: string };
+  /** Кто завёл: запуск flow закрывает и правит только дела, заведённые им самим (или его цепочкой). */
+  createdBy?: DeskCreatedBy;
   /** Последний ход по вещи от наблюдателя: правила срабатывают только на его изменение. */
   turn?: 'me' | 'others' | 'none';
   /** Отпечаток последнего применённого состояния вещи (closed + turn + updatedAt), чтобы правило сработало один раз. */
@@ -82,6 +98,8 @@ export type DeskPatch = {
   onRepeat?: 'plan' | 'keep';
   /** Правило закрытия дела (DeskItem.close); у существующего дела переданное перезаписывает. */
   close?: string;
+  /** Кто завёл — только новому делу; у существующего не меняется. */
+  createdBy?: DeskCreatedBy;
 };
 
 export type DeskFilter = { column?: DeskColumn | DeskColumn[]; project?: string; kind?: string; key?: string; open?: boolean };
