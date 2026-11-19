@@ -110,8 +110,8 @@ import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
 } from './space-draft.js';
-import type { SessionReviewEstimate, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
-import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './session-review.js';
+import type { SessionReviewEstimate, SessionReviewState, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
+import { readReviewStore, REVIEW_MODEL, reviewedNow, reviewEstimate, reviewItems, reviewNow, reviewRunning, storedReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
@@ -891,7 +891,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       spaceDrafts.delete('groups');
     }
   }
-  // «Не доделано» на главной: недавние сессии разбирает модель (sonnet без инструментов); ничего не пишет
+  // «Не доделано» на главной: сессии разбирает модель (sonnet без инструментов); итог копится на сервере
+  // (session-review.ts), тот же разбор по расписанию ведёт источник рутин «Проекты». GET — итог без модели.
+  if (method === 'GET' && p === '/api/session-review') {
+    const store = readReviewStore();
+    const all = await sessionReviewSources(() => false).catch(() => []);
+    return sendJson(res, 200, { reply: storedReply(store, all) ?? null, running: reviewRunning() } satisfies SessionReviewState);
+  }
   if (method === 'POST' && p === '/api/session-review') {
     const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
     let model: ReturnType<typeof draftModel>;
@@ -900,15 +906,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     } catch (err) {
       return sendJson(res, 400, { error: errMsg(err) });
     }
-    const { items, skipped } = reviewItems(await sessionReviewSources().catch(() => []));
-    if (body?.estimate === true) return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
-    if (spaceDrafts.has('review')) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
-    spaceDrafts.add('review');
-    try {
-      return await respondFlowAi(req, res, generations, (ai) => reviewReply(items, skipped, model, ai, draftDeps(opts)));
-    } finally {
-      spaceDrafts.delete('review');
+    if (body?.estimate === true) {
+      const store = readReviewStore();
+      const done = reviewedNow(store);
+      const { items, skipped } = reviewItems(await sessionReviewSources((s) => !done(s)).catch(() => []), store);
+      return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
     }
+    if (reviewRunning()) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
+    return await respondFlowAi(req, res, generations, (ai) => reviewNow({ load: (turnsFor) => sessionReviewSources(turnsFor).catch(() => []), model, hooks: ai, deps: draftDeps(opts) }));
   }
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {

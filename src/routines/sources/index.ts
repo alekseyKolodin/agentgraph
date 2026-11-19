@@ -8,16 +8,17 @@ import { emailKind, type EmailDeps } from './email.js';
 import { folderKind } from './folder.js';
 import { githubKind, gitlabKind } from './forge.js';
 import { jiraKind, type JiraDeps } from './jira.js';
+import { projectsKind, type ProjectsDeps } from './projects.js';
 import { loadRecipes as loadRecipeFiles } from './recipes.js';
 import { rssKind } from './rss.js';
 import { slackKind } from './slack.js';
 import { telegramKind } from './telegram.js';
 
 /** Подмены внешних эффектов — для тестов и e2e; без аргументов виды работают по-настоящему. */
-export type KindDeps = { exec?: Exec; jira?: JiraDeps; email?: EmailDeps; connector?: ConnectorDeps };
+export type KindDeps = { exec?: Exec; jira?: JiraDeps; email?: EmailDeps; connector?: ConnectorDeps; projects?: ProjectsDeps };
 
 export function builtinKinds(deps: KindDeps = {}): SourceKind[] {
-  return [slackKind, telegramKind, gitlabKind(deps.exec), githubKind(deps.exec), jiraKind(deps.jira), rssKind, folderKind, emailKind(deps.email), connectorKind(deps.connector)];
+  return [slackKind, telegramKind, gitlabKind(deps.exec), githubKind(deps.exec), jiraKind(deps.jira), rssKind, folderKind, emailKind(deps.email), connectorKind(deps.connector), projectsKind({ ...(deps.exec ? { exec: deps.exec } : {}), ...deps.projects })];
 }
 
 export function loadRecipes(): Recipe[] {

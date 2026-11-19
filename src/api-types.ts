@@ -747,9 +747,18 @@ export type SessionView = {
  */
 export type SessionReviewVerdict = 'continue' | 'wrap' | 'done';
 /** Сессия в разборе: что сделано, что осталось, с чего продолжить — одной строкой каждое. */
-export type SessionReviewItem = { id: string; name: string; space?: string; verdict: SessionReviewVerdict; done: string; left: string; next: string };
-/** Ответ разбора: reviewed — сколько сессий видела модель, skipped — сколько не вошло (старые сверх лимита). */
+export type SessionReviewItem = {
+  id: string; name: string; space?: string; verdict: SessionReviewVerdict; done: string; left: string; next: string;
+  /** Когда сессию разобрали (итог на сервере копится разборами) и на какой её активности (lastActivityAt): позже были ходы — разбор мог устареть. */
+  at?: string;
+  activityAt?: string;
+  /** На скольких ходах сессии получен разбор: ходов стало больше — разбор мог устареть. */
+  turns?: number;
+};
+/** Итог разбора (POST и GET /api/session-review): вердикты по сессиям; reviewed — сколько их, skipped — сколько ещё ждёт разбора (новые ходы сверх лимита). */
 export type SessionReviewReply = { items: SessionReviewItem[]; reviewed: number; skipped: number; at: string; costUsd: number; model?: string; durationMs: number };
+/** GET /api/session-review: итог разбора на сервере (не было — null) и идёт ли разбор сейчас. */
+export type SessionReviewState = { reply: SessionReviewReply | null; running: boolean };
 /** Оценка цены разбора до запуска модели. */
 export type SessionReviewEstimate = { model: SpaceDraftModel; sessions: number; skipped: number; low: number; high: number; ceiling: number };
 

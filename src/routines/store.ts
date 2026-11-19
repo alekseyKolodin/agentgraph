@@ -56,6 +56,8 @@ export type CatchUpRecord = CatchUp & { items: RoutineEvent[]; matchingIds: stri
 /** Событие, ждущее очереди parallel. */
 export type QueueItem = { routine: string; event: RoutineEvent; at: string; /** Строка журнала limit, которая станет started. */ logId?: string; /** Решение человека: per_day не действует. */ human?: boolean; /** Дело события (рутина с task): запуск переносит его «В работу». */ deskKey?: string };
 
+/** Запись источника-снимка в прошлой проверке: id и то, по чему считается ключ дела (deskKeyOf). */
+export type SnapshotEntry = Pick<RoutineEvent, 'id' | 'source' | 'things' | 'thread'>;
 /** Обратная связь на диске: со снимком события — для примеров проверки словами. */
 export type FeedbackRecord = Feedback & { at: string; event?: RoutineEvent };
 
@@ -228,6 +230,23 @@ export class RoutineStore {
     const next = [...cur.filter((id) => !moved.has(id)), ...add];
     this.writeJson(this.keyed('seen', source), next.slice(-SEEN_MAX));
   }
+
+  /** Убрать id из виденных: запись источника-снимка пропала из списка — вернётся она уже новой. */
+  forgetSeen(source: string, ids: string[]): void {
+    if (!ids.length) return;
+    const drop = new Set(ids);
+    const cur = this.seen(source);
+    const next = cur.filter((id) => !drop.has(id));
+    if (next.length !== cur.length) this.writeJson(this.keyed('seen', source), next);
+  }
+
+  /** Источник-снимок (SourceKind.snapshot): записи прошлой проверки — по ним видно, что пропало. */
+  snapshot = (source: string): SnapshotEntry[] => {
+    const v = this.readJson<unknown>(this.keyed('snapshots', source), []);
+    return Array.isArray(v) ? v.filter((x): x is SnapshotEntry => Boolean(x) && typeof x === 'object' && typeof (x as SnapshotEntry).id === 'string') : [];
+  };
+  setSnapshot = (source: string, list: SnapshotEntry[]): void => this.writeJson(this.keyed('snapshots', source), list.slice(-SEEN_MAX));
+  deleteSnapshot = (source: string): void => fs.rmSync(this.keyed('snapshots', source), { force: true });
 
   cursor = (source: string): unknown => this.readJson<{ v?: unknown }>(this.keyed('cursors', source), {}).v;
   setCursor = (source: string, v: unknown): void => this.writeJson(this.keyed('cursors', source), { v });
