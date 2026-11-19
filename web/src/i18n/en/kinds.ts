@@ -50,6 +50,13 @@ export const kinds: Record<string, string> = {
   'Нужен установленный и авторизованный gh (gh auth login).': 'Needs gh installed and signed in (gh auth login).',
   'владелец/репозиторий': 'owner/repository',
   'Черновик (PR)': 'Draft (PR)',
+  // Проекты (src/routines/sources/projects.ts)
+  'Брошенное в проектах пространств: незакоммиченные и неотправленные ветки, ветки без MR, сессии на вопросе и «не доделано»': 'Left behind in your spaces’ projects: uncommitted and unpushed branches, branches without an MR, sessions that ended on a question, and “unfinished”',
+  'Слаги через запятую. Пусто — все открытые пространства и все сессии.': 'Slugs, comma-separated. Empty means all open spaces and all sessions.',
+  'Разбор сессий моделью': 'Session review by model',
+  'Как часто модель (sonnet) разбирает сессии с новыми ходами: «не доделано» и «последний шаг» станут делами. ≈ $0.05–0.6 за разбор. Пусто или off — без модели; 24h — раз в сутки.': 'How often the model (sonnet) reviews sessions with new turns: “unfinished” and “last step” become tasks. ≈ $0.05–0.6 per review. Empty or off means no model; 24h — once a day.',
+  'Что брошено': 'What was left',
+  'Вердикт разбора': 'Review verdict',
   // Jira
   'Задачи Jira: назначили на меня и что изменилось': 'Jira issues: assigned to me and what changed',
   'Запрос JQL': 'JQL query',
