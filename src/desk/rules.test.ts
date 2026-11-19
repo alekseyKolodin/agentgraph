@@ -221,3 +221,11 @@ test('сигнал с потолком: длинный текст обрезан
   assert.equal(s.text!.length, 2000);
   assert.deepEqual([s.link, s.replyTo], [undefined, undefined]);
 });
+
+test('ссылки дописываются по одной и без повторов, ветка и MR — последние переданные', () => {
+  let i = item('work');
+  for (const links of [{ runs: ['r1'] }, { sessions: ['s1'] }, { runs: ['r2'] }, { runs: ['r1'], sessions: ['s1'] }, { branch: 'feat' }]) {
+    i = step(i, { type: 'put', key: KEY, patch: { links }, by: 'session' }, ctx())?.item ?? i;
+  }
+  assert.deepEqual(i.links, { runs: ['r1', 'r2'], sessions: ['s1'], branch: 'feat' });
+});
