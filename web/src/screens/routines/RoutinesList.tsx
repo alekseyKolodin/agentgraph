@@ -7,14 +7,14 @@ import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { RoutineView, RoutinesOverview, SourceKindView, SourceView } from '@server/routines/types';
 import { ApiError, errorText, useConfig, useFeature, useRuns } from '../../api';
-import { deleteSource, routineKeys, saveSource, setRoutineEnabled, testSource, useRoutines } from '../../api/routines';
+import { checkSourceNow, deleteSource, routineKeys, saveSource, setRoutineEnabled, useRoutines } from '../../api/routines';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { ago, clock } from '../../lib/format';
 import { plural, t } from '../../lib/i18n';
 import { describeSchedule } from '../../lib/routines/schedule';
-import { everyLabel, foundText } from '../../lib/routines/source';
+import { checkNowText, everyLabel } from '../../lib/routines/source';
 import { activeWaits, overviewMeta, pollCostText, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
 import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
 import { RoutineTemplates } from './RoutineTemplates';
@@ -221,8 +221,8 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
   const check = async () => {
     setBusy(true);
     try {
-      const r = await testSource(s.spec);
-      toast(r.ok ? `${s.spec.title}: ${foundText(r.total)}` : `${s.spec.title}: ${r.error ?? t('не отвечает')}`);
+      const r = await checkSourceNow(s.slug);
+      toast(`${s.spec.title}: ${checkNowText(r)}`);
       done();
     } catch (e) {
       toast(errorText(e));
@@ -250,7 +250,7 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
         </span>
       </span>
       <span className="row">
-        <button type="button" className="btn small ghost" disabled={busy} title={t('Проверить источник сейчас: без модели')} onClick={() => void check()}>{t('Проверить')}</button>
+        <button type="button" className="btn small ghost" disabled={busy} title={t('Опросить источник прямо сейчас, как по таймеру: новые события пройдут правила рутин, запустят что должны и попадут в журнал')} onClick={() => void check()}>{t('Проверить сейчас')}</button>
         <button type="button" className="btn small ghost danger" title={t('Удалить источник')} onClick={() => void remove()}>{t('Удалить')}</button>
       </span>
       {missing.length > 0 && (

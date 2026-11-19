@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ConnectorBuildView, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ConnectorBuildView, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import type { ProfileResponse } from '@server/api-types';
@@ -69,6 +69,8 @@ export const answerCatchUp = (id: string, action: 'run' | 'skip') => api<{ ok: t
 
 export const fetchSources = () => api<SourceView[]>('GET', `${BASE}/sources`);
 export const saveSource = (slug: string, spec: SourceSpec, secrets?: Record<string, string>) => api<SourceView>('PUT', `${BASE}/sources/${enc(slug)}`, { spec, ...(secrets && Object.keys(secrets).length ? { secrets } : {}) });
+/** «Проверить сейчас»: принудительный опрос источника как по таймеру; новые события идут по правилам рутин. */
+export const checkSourceNow = (slug: string) => api<SourceCheckNow>('POST', `${BASE}/sources/${enc(slug)}/check`, {});
 /** 409 — источник используют рутины. */
 export const deleteSource = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/sources/${enc(slug)}`);
 export const testSource = (spec: SourceSpec, secrets?: Record<string, string>) => api<SourceTestResult>('POST', `${BASE}/sources/test`, { spec, ...(secrets && Object.keys(secrets).length ? { secrets } : {}) });

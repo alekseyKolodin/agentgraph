@@ -1,6 +1,6 @@
 // «Подключить сервис»: интервал опроса, сборка SourceSpec для «Своей команды» и «Готовых» (форма из setup вида),
 // строки «нашёл N записей» из пробной проверки.
-import type { FieldMap, KindField, RoutineEvent, SourceKindView, SourceSpec } from '@server/routines/types';
+import type { FieldMap, KindField, RoutineEvent, SourceCheckNow, SourceKindView, SourceSpec } from '@server/routines/types';
 import { clock } from '../format';
 import { locale, plural, t } from '../i18n';
 
@@ -76,6 +76,32 @@ export function missingFields(setup: KindField[], values: Record<string, string>
 export function foundText(total: number, command = false): string {
   const w = plural(total, 'запись', 'записи', 'записей');
   return command ? t('Команда отработала. Нашёл {n} {w}.', { n: total, w }) : t('Сервис отвечает. Нашёл {n} {w}.', { n: total, w });
+}
+
+/** Интервалы для редактора рутины: не чаще минимума вида, плюс текущий (если он нестандартный). */
+export function pollChoices(minEvery: string | undefined, current: string | undefined): string[] {
+  const list = [...everyOptions(minEvery), '3h', '6h'].filter((v, i, a) => a.indexOf(v) === i);
+  if (current && !list.includes(current)) list.push(current);
+  // нестандартное значение из файла (например '1d') everyMs не разбирает — такое встаёт в конец
+  const ms = (v: string) => (Number.isNaN(everyMs(v)) ? Infinity : everyMs(v));
+  return list.sort((a, b) => ms(a) - ms(b));
+}
+
+/** Итог «Проверить сейчас» одной фразой: что нашлось и что стало с новым. */
+export function checkNowText(r: SourceCheckNow): string {
+  if (!r.ok) return r.error ?? t('не отвечает');
+  const nw = plural(r.fresh, 'событие', 'события', 'событий');
+  if (!r.routines) return t('Нашёл {n} {w}. Ни одной включённой рутине этот источник не нужен — события не обрабатывались.', { n: r.total, w: plural(r.total, 'запись', 'записи', 'записей') });
+  if (r.first) return t('Первая проверка: {n} {w} запомнил как «уже были», ничего не запускал. Новое запустится по правилам.', { n: r.fresh, w: plural(r.fresh, 'запись', 'записи', 'записей') });
+  if (!r.fresh) return t('Новых событий нет (в сервисе {n}).', { n: r.total });
+  const parts = [
+    r.started ? t('запущено {n}', { n: r.started }) : '',
+    r.waiting ? t('ждёт тебя {n}', { n: r.waiting }) : '',
+    r.tasks ? t('заведено дел {n}', { n: r.tasks }) : '',
+    r.skipped ? t('пропущено {n}', { n: r.skipped }) : '',
+    r.errors ? t('ошибок {n}', { n: r.errors }) : '',
+  ].filter(Boolean);
+  return parts.length ? t('{fresh} новых {w}: {parts}.', { fresh: r.fresh, w: nw, parts: parts.join(', ') }) : t('{fresh} новых {w}, ни одна рутина их не взяла (свои сообщения или чужой источник).', { fresh: r.fresh, w: nw });
 }
 
 /** Строка найденной записи: заголовок и время. */

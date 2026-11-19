@@ -154,6 +154,12 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       return undefined;
     }
 
+    // «Проверить сейчас»: принудительный опрос источника, как по таймеру
+    if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)\/check$/)) && method === 'POST') {
+      if (!SLUG_RE.test(m[1])) return bad('Недопустимый слаг источника');
+      return ok(await engine.checkNow(m[1]));
+    }
+
     if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)$/))) {
       const slug = m[1];
       if (!SLUG_RE.test(slug)) return bad('Недопустимый слаг источника');

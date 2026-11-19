@@ -162,6 +162,7 @@ select.inp { height: 34px; }
 .clause { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line); align-items: baseline; }
 .clause:first-child { border-top: 0; }
 .k { font-size: var(--fs-small); font-weight: 500; line-height: 24px; color: var(--ink-3); }
+.poll { display: flex; flex-direction: column; gap: 2px; }
 .clause-body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .more { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 11px 16px; background: transparent; border: 0; border-top: 1px solid var(--line); font: inherit; font-size: var(--fs-small); color: var(--ink-2); cursor: pointer; text-align: left; }
 .more:hover { background: var(--hover); }
@@ -212,6 +213,10 @@ select.inp { height: 34px; }
 .chip[aria-pressed="true"] { background: var(--raised); color: var(--ink); border-color: var(--ink-2); }
 .chip .mono { margin-left: 4px; }
 .lg { display: grid; grid-template-columns: 52px 84px minmax(0, 1fr) auto; gap: 2px 14px; padding: 11px 6px; border-bottom: 1px solid var(--line); align-items: baseline; }
+.lg-skip { grid-column: 3 / -1; font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+.skip-note { margin: 0 0 8px; max-width: 72ch; }
+.catch-note { display: flex; gap: 6px 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--st-wait) 45%, transparent); border-radius: var(--r-xs); background: color-mix(in srgb, var(--st-wait) 6%, transparent); font-size: var(--fs-small); }
+.catch-note > span:first-child { flex: 1 1 320px; min-width: 0; text-wrap: pretty; }
 .lg.wait { background: color-mix(in srgb, var(--st-wait) 5%, transparent); }
 .lg-v { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .ev { font: inherit; color: var(--ink); background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -247,6 +252,7 @@ select.inp { height: 34px; }
 .dr-why.bad { color: var(--st-fail); }
 .dr-act { grid-column: 3; grid-row: 1; }
 .lg-detail { grid-column: 2 / -1; }
+.lg-skip { grid-column: 2 / -1; }
   .clause { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .cond-edit { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
