@@ -4,14 +4,14 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { LogEntry, RoutineSpec, RoutineWait } from '@server/routines/types';
+import type { CatchUp, LogEntry, RoutineSpec, RoutineWait } from '@server/routines/types';
 import { errorText } from '../../api';
-import { answerWait, routineKeys, runRoutine, sendFeedback, useRoutine, useRoutineLog, useRoutines } from '../../api/routines';
+import { answerCatchUp, answerWait, routineKeys, runRoutine, sendFeedback, useRoutine, useRoutineLog, useRoutines } from '../../api/routines';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { clock, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
-import { chipCounts, chipLabel, chipOf, feedbackLabel, feedbackNote, feedbackOptions, feedbackTitle, logAction, logTime, verdict, weekCost, type LogChip, type RunStatuses, type Verdict, waitButtons } from '../../lib/routines/view';
+import { chipCounts, catchUpLine, chipLabel, chipOf, feedbackLabel, feedbackNote, feedbackOptions, feedbackTitle, logAction, logTime, skipExplain, skipWhy, verdict, weekCost, type LogChip, type RunStatuses, type Verdict, waitButtons } from '../../lib/routines/view';
 import { NotAvailable, useRunStatuses } from './RoutinesList';
 import { LogWhy } from './LogWhy';
 import { cx, RoutineHead } from './parts';
@@ -21,7 +21,9 @@ export function RoutineLog() {
   const slug = useParams().slug!;
   const one = useRoutine(slug);
   const log = useRoutineLog(slug);
-  const waits = useRoutines().data?.waits ?? [];
+  const overview = useRoutines().data;
+  const waits = overview?.waits ?? [];
+  const pending = (overview?.catchUp ?? []).filter((c) => c.routine === slug);
   const runs = useRunStatuses();
   const now = useNow(60_000);
   const [chip, setChip] = useState<LogChip>('all');
@@ -41,10 +43,11 @@ export function RoutineLog() {
       {log.isPending && <p className="muted">{t('Загрузка…')}</p>}
       {log.data && (
         <>
+          {pending.length > 0 && <CatchUpNote slug={slug} list={pending} />}
           <div className={styles.filters}>
             <div className={styles.filters} role="group" aria-label={t('Показать')}>
               {chipCounts(entries).map((c) => (
-                <button key={c.chip} type="button" className={styles.chip} aria-pressed={c.chip === chip} onClick={() => setChip(c.chip)}>
+                <button key={c.chip} type="button" className={styles.chip} aria-pressed={c.chip === chip} title={c.chip === 'skip' ? skipExplain() : undefined} onClick={() => setChip(c.chip)}>
                   {chipLabel(c.chip)}
                   <span className={styles.mono}>{c.n}</span>
                 </button>
@@ -53,6 +56,7 @@ export function RoutineLog() {
             <span className={styles.barGap} />
             <span className={styles.mono} title={t('Сумма по срабатываниям за неделю: запуски и проверка словами')}>{t('за 7 дней · {usd}', { usd: usd(weekCost(entries, new Date(now))) })}</span>
           </div>
+          {chip === 'skip' && <p className={cx(styles.hint, styles.skipNote)}>{skipExplain()}</p>}
           <div>
             {rows.map((e) => (
               <Row key={e.id} e={e} slug={slug} spec={one.data?.spec} runs={runs} open={open.has(e.id)} onToggle={() => toggle(e.id)} now={new Date(now)} wait={waits.find((w) => w.routine === slug && w.event.id === e.event.id)} />
@@ -71,6 +75,7 @@ function Row({ e, slug, spec, runs, open, onToggle, now, wait }: { e: LogEntry; 
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const v = verdict(e, runs);
+  const why = chipOf(e.outcome) === 'skip' ? skipWhy(e) : '';
   // отложенное ожидание («Не сейчас») на главной не видно: решить его можно здесь
   const snoozed = e.outcome === 'waiting' && wait?.snoozedAt ? wait : undefined;
   // рутина без flow только заводит дела: запускать по строке нечего (открыть старый запуск — можно)
@@ -139,7 +144,38 @@ function Row({ e, slug, spec, runs, open, onToggle, now, wait }: { e: LogEntry; 
           </button>
         )}
       </span>
+      {!open && why && <span className={styles.lgSkip}>{why}</span>}
       {open && <LogWhy e={e} slug={slug} spec={spec} busy={busy} onFeedback={(v) => void feedback(v)} />}
+    </div>
+  );
+}
+
+/** Пропущенное расписание ждёт решения: оно живёт на главной, а здесь его не было видно — рутина казалась сломанной. */
+function CatchUpNote({ slug, list }: { slug: string; list: CatchUp[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const answer = async (action: 'run' | 'skip') => {
+    setBusy(true);
+    try {
+      for (const c of list) await answerCatchUp(c.id, action);
+      void qc.invalidateQueries({ queryKey: routineKeys.all });
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={styles.catchNote} role="status">
+      <span>
+        {t('Пока приложение было закрыто, рутина не сработала: {what}. Решение ждёт тебя — до ответа это не в списке ниже.', { what: list.map((c) => catchUpLine(c, (iso) => clock(iso))).join('; ') })}
+      </span>
+      <span className={styles.lgActs}>
+        <button type="button" className="btn small primary" disabled={busy} title={t('Выполнить рутину сейчас, как будто она сработала вовремя')} onClick={() => void answer('run')}>{t('Запустить сейчас')}</button>
+        <button type="button" className="btn small ghost" disabled={busy} title={t('Не запускать: пропуск запишется в журнал')} onClick={() => void answer('skip')}>{t('Пропустить')}</button>
+      </span>
+      <span className="muted small">{t('Рутина «{slug}» спрашивает один раз; «пропускать молча» меняется в правиле, в блоке «Когда».', { slug })}</span>
     </div>
   );
 }

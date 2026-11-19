@@ -6,9 +6,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { HistoryCheck, RoutineView, RoutinesOverview, SourceView } from '@server/routines/types';
+import type { HistoryCheck, RoutineView, RoutinesOverview, SourceKindView, SourceView } from '@server/routines/types';
 import { ApiError, errorText, useFeature, useFlows } from '../../api';
-import { checkHistory, deleteRoutine, routineKeys, runRoutine, saveRoutine, sendFeedback, useRoutine, useRoutines } from '../../api/routines';
+import { checkHistory, deleteRoutine, routineKeys, runRoutine, saveRoutine, saveSource, sendFeedback, useRoutine, useRoutines } from '../../api/routines';
 import { useSpaces } from '../../api/spaces';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SpacePicker } from '../../components/SpacePicker';
@@ -16,6 +16,7 @@ import { SourceReplyPanel } from './ReplySetup';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { plural, t } from '../../lib/i18n';
+import { everyLabel, pollChoices } from '../../lib/routines/source';
 import { matchFields } from '../../lib/routines/match';
 import { replyLabel, replyWhere } from '../../lib/routines/phrase';
 import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset } from '../../lib/routines/schedule';
@@ -54,6 +55,8 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
   const [more, setMore] = useState(false);
   const [saving, setSaving] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
+  // частота опроса живёт в источнике, а не в рутине: выбранное хранится по слагу источника и сохраняется вместе с правилом
+  const [everyBy, setEveryBy] = useState<Record<string, string>>({});
   const set = (patch: Partial<RoutineDraft>) => setD((x) => ({ ...x, ...patch }));
 
   const source = data.sources.find((s) => s.slug === d.source);
@@ -61,7 +64,8 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
   const fields = useMemo(() => matchFields(kind), [kind]);
   const spec = buildSpec(d, fields);
   const initial = useMemo(() => JSON.stringify(buildSpec(draftFromSpec(r.spec), fields)), [r.spec, fields]);
-  const dirty = JSON.stringify(spec) !== initial;
+  const everyChanged = Object.entries(everyBy).filter(([slug, v]) => data.sources.find((s) => s.slug === slug)?.spec.every !== v);
+  const dirty = JSON.stringify(spec) !== initial || (!isSchedule(d) && everyChanged.some(([slug]) => slug === d.source));
   const draft = isDraft(r);
   const missing = draftMissing(d);
   const runs = draftRuns(d);
@@ -80,6 +84,10 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
     setSaving(true);
     setProblems([]);
     try {
+      // новая частота опроса — в файл источника: движок читает его на каждом тике, перезапуск не нужен
+      const src = data.sources.find((s) => s.slug === d.source);
+      const every = everyBy[d.source];
+      if (!isSchedule(d) && src && every && src.spec.every !== every) await saveSource(src.slug, { ...src.spec, every });
       // «Включить» снимает признак черновика; «Сохранить черновик» его оставляет (buildSpec)
       const { draft: _draft, ...rest } = spec;
       const next = await saveRoutine(r.slug, { spec: enabled ? { ...rest, enabled } : spec });
@@ -178,6 +186,9 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
                   }
                 />
               )}
+              {!isSchedule(d) && source && (
+                <PollClause source={source} kind={kind} value={everyBy[d.source]} onChange={(v) => setEveryBy((x) => ({ ...x, [d.source]: v }))} />
+              )}
             </div>
           </div>
           {!isSchedule(d) && (
@@ -257,6 +268,33 @@ function ScheduleClause({ d, set }: ClauseProps) {
         </select>
       </div>
     </>
+  );
+}
+
+/**
+ * «Как часто спрашивать сервис» — интервал опроса источника (every). Он общий для всех рутин источника, поэтому рядом
+ * сказано, сколько их; у live-источников (Slack, Telegram) опроса нет — события приходят сразу.
+ */
+function PollClause({ source, kind, value, onChange }: { source: SourceView; kind: SourceKindView | undefined; value: string | undefined; onChange: (v: string) => void }) {
+  if (kind?.delivery === 'live') return <span className={styles.hint}>{t('События из «{title}» приходят сразу, опрашивать сервис не нужно.', { title: source.spec.title })}</span>;
+  const current = value ?? source.spec.every ?? '5m';
+  const others = source.usedBy.length;
+  return (
+    <div className={styles.poll}>
+      <label className={styles.sentence} htmlFor="poll-every">
+        {t('Спрашивать «{title}»', { title: source.spec.title })}{' '}
+        <select id="poll-every" className={styles.slot} value={current} onChange={(e) => onChange(e.target.value)}>
+          {pollChoices(kind?.minEvery, current).map((v) => (
+            <option key={v} value={v}>{everyLabel(v)}</option>
+          ))}
+        </select>
+      </label>
+      <span className={styles.hint}>
+        {others > 1 ? t('Частота общая для источника: ей пользуются рутин — {n}. ', { n: others }) : ''}
+        {kind?.minEvery ? t('Не чаще, чем {every}. ', { every: everyLabel(kind.minEvery) }) : ''}
+        {t('Сохраняется вместе с правилом и действует сразу, без перезапуска. «Проверить сейчас» — в «Источниках» на списке рутин.')}
+      </span>
+    </div>
   );
 }
 

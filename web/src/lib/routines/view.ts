@@ -197,6 +197,31 @@ export function chipCounts(entries: LogEntry[]): Array<{ chip: LogChip; n: numbe
   return chips.map((chip) => ({ chip, n: n(chip) }));
 }
 
+/** Что значит «пропущено» — одной фразой для подсказки чипа и пояснения под фильтром. */
+export const skipExplain = (): string =>
+  t('Сюда попадает всё, что рутина увидела, но не запустила: событие не подошло под условия или проверку «Если», оказалось повтором, упёрлось в лимит, ты ответил «не то» — а ещё запуски по расписанию, которые не состоялись, пока приложение было закрыто или компьютер спал.');
+
+/** Почему строка не привела к запуску, словами; у запущенных и ожидающих — пусто. */
+export function skipWhy(e: LogEntry): string {
+  const r = e.reason?.trim().replace(/[.!?…]+$/, '');
+  switch (e.outcome) {
+    case 'filtered':
+      return r ? t('Не подошло под условия: {r}', { r }) : t('Не подошло под условия на поля события');
+    case 'check_no':
+      return r ? t('Проверка «Если» ответила «нет»: {r}', { r }) : t('Проверка «Если» ответила «нет»');
+    case 'duplicate':
+      return r ? t('Повтор: {r}', { r }) : t('Повтор того, что уже было');
+    case 'limit':
+      return r ? t('Лимит: {r}', { r }) : t('Упёрлось в лимит рутины');
+    case 'rejected':
+      return t('Ты ответил «не то»');
+    case 'missed':
+      return r ?? t('Пришло, пока приложение было закрыто');
+    default:
+      return '';
+  }
+}
+
 /** Исход строки журнала: слово и тон. Запуск уточняется статусом запуска (идёт, готово, не довёл). */
 export function verdict(e: LogEntry, runs: RunStatuses = new Map()): { text: string; tone: Tone } {
   switch (e.outcome) {
@@ -219,7 +244,7 @@ export function verdict(e: LogEntry, runs: RunStatuses = new Map()): { text: str
     case 'rejected':
       return { text: t('не то'), tone: 'muted' };
     case 'missed':
-      return { text: t('простой'), tone: 'muted' };
+      return { text: t('пропущено'), tone: 'muted' };
     case 'task':
       return { text: t('дело'), tone: 'ok' };
     case 'error':

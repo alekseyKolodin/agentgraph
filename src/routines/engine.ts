@@ -43,6 +43,7 @@ import type {
   RoutineSpec,
   RoutineView,
   RoutineWait,
+  SourceCheckNow,
   SourceKindView,
   SourceSpec,
   SourceStatus,
@@ -515,6 +516,48 @@ export class RoutineEngine {
     } finally {
       this.polling.delete(slug);
     }
+  }
+
+  /**
+   * «Проверить сейчас»: тот же опрос, что по таймеру, — новые события идут по правилам рутин и пишутся в журнал.
+   * Источник, который не нужен ни одной включённой рутине, только пробуется (записи не помечаются виденными).
+   */
+  async checkNow(slug: string): Promise<SourceCheckNow> {
+    const src = this.store.source(slug);
+    if (!src) throw new HttpishError(404, 'Источник не найден');
+    if (!src.spec) throw new HttpishError(400, 'Источник не прошёл проверку', { problems: src.problems });
+    const kind = this.kind(src.spec.kind);
+    if (!kind) throw new HttpishError(400, `Неизвестный вид источника: ${src.spec.kind}`);
+    if (kind.listen || !kind.poll) throw new HttpishError(400, 'Этот источник присылает события сразу: опрашивать его не нужно');
+    const missing = this.missingSecrets(src.spec);
+    if (missing.length) throw new HttpishError(400, `Не хватает ключей: ${missing.join(', ')}`);
+    if (this.polling.has(slug)) throw new HttpishError(409, 'Проверка уже идёт, подожди пару секунд');
+    const users = this.store.routines().filter((r) => r.spec && r.spec.enabled !== false && !isSchedule(r.spec.when) && r.spec.when.source === slug);
+    const none = { started: 0, waiting: 0, tasks: 0, skipped: 0, errors: 0 };
+    if (!users.length) {
+      const r = await this.testSource(src.spec);
+      return { ok: r.ok, total: r.total, fresh: 0, routines: 0, ...none, ...(r.error ? { error: r.error } : {}) };
+    }
+    const first = !this.store.lastCheck(slug);
+    const from = this.now().getTime();
+    const before = new Set(users.flatMap((r) => this.store.log(r.slug, { limit: 200 }).map((e) => e.id)));
+    await this.pollSource(slug);
+    const last = this.store.checks(slug).last;
+    if (!last || Date.parse(last.at) < from) return { ok: false, total: 0, fresh: 0, routines: users.length, ...none, error: 'Проверка не удалась' };
+    if (!last.ok) return { ok: false, total: 0, fresh: 0, routines: users.length, ...none, error: last.error ?? 'Источник не отвечает' };
+    // что стало с новыми событиями — по строкам журнала, появившимся за эту проверку
+    const out = { ...none };
+    for (const r of users) {
+      for (const e of this.store.log(r.slug, { limit: 200 })) {
+        if (before.has(e.id)) break;
+        if (e.outcome === 'started') out.started++;
+        else if (e.outcome === 'waiting') out.waiting++;
+        else if (e.outcome === 'task') out.tasks++;
+        else if (e.outcome === 'error') out.errors++;
+        else out.skipped++;
+      }
+    }
+    return { ok: true, total: last.total, fresh: last.fresh, routines: users.length, ...out, ...(first ? { first: true } : {}) };
   }
 
   /** live-соединения: открыть у используемых, закрыть у ненужных и изменённых. Ошибка — переподключение с паузой. */
@@ -1495,13 +1538,27 @@ export class RoutineEngine {
       this.store.setLastCheck(this.scheduleKey(r.slug), now.toISOString());
       if (!last) continue;
       const missed = dueSlots(cron, new Date(last), now, 1);
-      if (!missed.length || r.spec.when.missed === 'skip') continue;
+      if (!missed.length) continue;
+      if (r.spec.when.missed === 'skip') {
+        this.logSkippedSlot(r.slug, r.spec.title, missed[missed.length - 1]);
+        continue;
+      }
       this.missedRow(rows, r.slug, r.spec.title, missed[missed.length - 1]);
       changed = true;
     }
     if (changed) {
       this.store.setCatchUp(rows);
       this.changed();
+    }
+  }
+
+  /** Пропущенный слот при «пропустить молча»: запуска нет, но в журнале он виден — иначе кажется, что рутина сломалась. */
+  private logSkippedSlot(slug: string, title: string, slot: Date): void {
+    try {
+      this.log(slug, scheduleEvent(slug, title, slot), 'missed', { reason: 'пропущено по расписанию: приложение было закрыто или компьютер спал, а в рутине выбрано «пропускать молча»' });
+      this.changed();
+    } catch (err) {
+      this.say(`[${slug}] пропуск расписания не записан: ${msg(err)}`);
     }
   }
 
@@ -1539,7 +1596,7 @@ export class RoutineEngine {
           this.missedRow(rows, r.slug, spec.title, slot);
           this.store.setCatchUp(rows);
           this.changed();
-        }
+        } else this.logSkippedSlot(r.slug, spec.title, slot);
         continue;
       }
       this.safe(this.enqueue(() => this.process(r.slug, spec, e)));

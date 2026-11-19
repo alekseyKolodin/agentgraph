@@ -173,6 +173,27 @@ export type SourceView = {
   canReply: boolean;
 };
 
+/**
+ * Итог «Проверить сейчас» (POST /api/routines/sources/:slug/check): источник опрошен так же, как по таймеру. total — сколько
+ * записей вернул сервис, fresh — сколько из них новых; дальше — что стало с новыми по строкам журнала рутин (started —
+ * запущено, waiting — ждёт человека, tasks — завело дело, skipped — не прошло правила или повтор, errors — ошибка).
+ * routines — сколько включённых рутин берут этот источник; 0 — записи только показаны, события не обрабатывались.
+ * first — первая проверка после подключения: записи запомнены как «уже были», ничего не запускалось.
+ */
+export type SourceCheckNow = {
+  ok: boolean;
+  error?: string;
+  total: number;
+  fresh: number;
+  routines: number;
+  started: number;
+  waiting: number;
+  tasks: number;
+  skipped: number;
+  errors: number;
+  first?: boolean;
+};
+
 /** Итог пробной проверки источника: показывается до сохранения («Сервис отвечает, нашёл 3 записи»). */
 export type SourceTestResult = {
   ok: boolean;
