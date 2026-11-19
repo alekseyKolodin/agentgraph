@@ -537,4 +537,5 @@ export const routines: Record<string, string> = {
   'Ответ уходит без модели и сразу, без твоей проверки: так настроена эта рутина.': 'The reply goes out without a model and immediately, without your check: that is how this routine is set up.',
   'У этой рутины ответ выключен: пока не включишь, ничего не уйдёт.': 'This routine has the reply turned off: nothing is sent until you turn it on.',
   'Ответ уходит без модели. Когда — после твоей проверки или сразу — решает режим ответа в самой рутине.': 'The reply goes out without a model. Whether after your check or immediately is set by the reply mode in the routine itself.',
+  'Первый опрос заведёт дела по текущему списку источника: до {n} записей, и каждую проверит словами — это расход модели.': 'The first poll creates tasks from the source’s current list: up to {n} records, each checked in words — that spends the model.',
 };

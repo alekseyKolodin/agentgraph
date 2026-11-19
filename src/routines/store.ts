@@ -62,6 +62,9 @@ export type FeedbackRecord = Feedback & { at: string; event?: RoutineEvent };
 /** Ожидание на диске: со строкой журнала, которую правит ответ человека. */
 export type StoredWait = RoutineWait & { logId?: string };
 
+/** Засев одной рутины по одному источнику: done — id записей, что прошли путь; tries — сколько раз упала запись. */
+export type SeedProgress = { done: string[]; tries: Record<string, number> };
+
 export class RoutineStore {
   constructor(readonly root: string = configDir()) {}
 
@@ -349,7 +352,17 @@ export class RoutineStore {
   }
 
   deleteRoutineState(routine: string): void {
-    for (const sub of ['log', 'events', 'feedback']) fs.rmSync(this.keyed(sub, routine), { force: true });
+    for (const sub of ['log', 'events', 'feedback', 'seed']) fs.rmSync(this.keyed(sub, routine), { force: true });
+  }
+
+  /** Засев дел по текущему списку, пока он не кончен: по источнику — id записей, что прошли, и попытки упавших. */
+  seedProgress = (routine: string): Record<string, SeedProgress> => this.readJson<Record<string, SeedProgress>>(this.keyed('seed', routine), {});
+  setSeedProgress(routine: string, source: string, p: SeedProgress | undefined): void {
+    const all = this.seedProgress(routine);
+    if (p) all[source] = p;
+    else delete all[source];
+    if (Object.keys(all).length) this.writeJson(this.keyed('seed', routine), all);
+    else fs.rmSync(this.keyed('seed', routine), { force: true });
   }
 
   /** Обратная связь рутины по порядку (старые первыми), по одной записи на событие. */
