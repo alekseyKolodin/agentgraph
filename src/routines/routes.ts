@@ -8,6 +8,8 @@ import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sour
 import { draftRoutes, loadRecipes } from './sources/index.js';
 import { ensureTemplateFlow, flowTemplates, NoFlowTemplate } from './flow-templates.js';
 import { createComposeRoutes, type ComposeContext, type ComposeRoutes } from './compose.js';
+import { createRoutineAssistant, type RoutineAssistant } from './assistant.js';
+import { AssistantBusy } from '../assistant.js';
 import { checkDir } from './dir-check.js';
 import { listFlows } from '../flows.js';
 import { listSpaces } from '../spaces.js';
@@ -19,7 +21,7 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
-export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir']);
+export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant']);
 
 const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
 
@@ -35,6 +37,10 @@ export type RoutinesRouteDeps = {
   mcpServers?: (force: boolean) => Promise<{ servers: McpServer[]; at: string }>;
   /** Сборка скрипта «Сервиса через Claude»; по умолчанию — сессия модели и проверка источника движком. */
   builds?: ConnectorBuilds;
+  /** Помощник раздела (docs/ASSISTANTS.md); по умолчанию — сессия модели с инструментами раздела. null — 501. */
+  assistant?: RoutineAssistant | null;
+  /** Папка сервера по умолчанию: в ней помощник собирает flow, если человек не назвал свою. */
+  defaultCwd?: string;
 };
 
 const buildCache = new WeakMap<RoutineEngine, ConnectorBuilds>();
@@ -97,6 +103,24 @@ function compose(deps: RoutinesRouteDeps): ComposeRoutes | undefined {
   return c;
 }
 
+const assistantCache = new WeakMap<RoutineEngine, RoutineAssistant>();
+function assistant(deps: RoutinesRouteDeps): RoutineAssistant | undefined {
+  if (deps.assistant !== undefined) return deps.assistant ?? undefined;
+  let a = assistantCache.get(deps.engine);
+  if (!a) {
+    a = createRoutineAssistant({
+      engine: deps.engine,
+      context: () => composeContext(deps.engine),
+      mcpServers: deps.mcpServers ?? getMcpServers,
+      builds: builds(deps),
+      checkDir: (p) => (deps.checkDir ?? checkDir)(p),
+      defaultCwd: deps.defaultCwd ?? process.cwd(),
+    });
+    assistantCache.set(deps.engine, a);
+  }
+  return a;
+}
+
 /** Рецепты: готовые (виды) и импортированные в ~/.agentgraph/recipes; поле file наружу не уходит. */
 function recipes(engine: RoutineEngine): Omit<Recipe, 'file'>[] {
   const out = new Map<string, Omit<Recipe, 'file'>>();
@@ -156,6 +180,17 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       }
     }
 
+    // --- черновик формы «Новая рутина»: лежит на сервере, уход с экрана его не стирает
+    if (p === '/api/routines/form-draft') {
+      if (method === 'GET') return ok({ draft: engine.formDraft() });
+      if (method === 'PUT') return ok(engine.saveFormDraft(obj(await readBody()).data));
+      if (method === 'DELETE') {
+        engine.dropFormDraft();
+        return ok({ ok: true });
+      }
+      return undefined;
+    }
+
     // --- папка проекта: есть ли, git ли (форма «Новой рутины» говорит словами до первого запуска)
     if (p === '/api/routines/check-dir' && method === 'GET') {
       const dir = url.searchParams.get('path')?.trim() ?? '';
@@ -171,7 +206,8 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
         const b = obj(await readBody());
         const description = typeof b.description === 'string' ? b.description.trim() : '';
         if (!description) return bad('Опиши словами, что рутина должна делать');
-        return ok(c.start(description.slice(0, 4000)), 201);
+        const model = typeof b.model === 'string' ? b.model.trim().slice(0, 100) : '';
+        return ok(c.start(description.slice(0, 4000), model || undefined), 201);
       }
       if ((m = p.match(/^\/api\/routines\/compose\/([A-Za-z0-9_-]+)$/))) {
         if (method === 'GET') return found(c.get(m[1]), 'Черновик не найден');
@@ -179,6 +215,48 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
           c.cancel(m[1]);
           return ok({ ok: true });
         }
+      }
+      return undefined;
+    }
+
+    // --- помощник раздела: разговор с инструментами; что он знает и умеет — GET без id
+    if (p === '/api/routines/assistant' || p.startsWith('/api/routines/assistant/')) {
+      const a = assistant(deps);
+      if (!a) return bad('Помощник пока недоступен', 501);
+      const say = (b: Record<string, unknown>): { text: string; model: string | undefined; client: unknown } => ({
+        text: typeof b.text === 'string' ? b.text.trim().slice(0, 4000) : '',
+        // модель — выбор человека; пустая строка — модель раздела по умолчанию, поля нет — прежняя модель разговора
+        model: typeof b.model === 'string' ? b.model.trim().slice(0, 100) : undefined,
+        // форма, как её видит человек сейчас: помощник правит её, а не свой прошлый черновик
+        client: b.form && typeof b.form === 'object' && !Array.isArray(b.form) ? { spec: b.form } : undefined,
+      });
+      try {
+        if (p === '/api/routines/assistant') {
+          if (method === 'GET') return ok(a.about());
+          if (method === 'POST') {
+            const { text, model, client } = say(obj(await readBody()));
+            if (!text) return bad('Напиши, что нужно');
+            return ok(a.start(text, model, client), 201);
+          }
+          return undefined;
+        }
+        if ((m = p.match(/^\/api\/routines\/assistant\/([A-Za-z0-9_-]+)(\/stop)?$/))) {
+          const id = m[1];
+          if (m[2]) return method === 'POST' ? found(a.stop(id), 'Разговор не найден') : undefined;
+          if (method === 'GET') return found(a.get(id), 'Разговор не найден');
+          if (method === 'POST') {
+            const { text, model, client } = say(obj(await readBody()));
+            if (!text) return bad('Напиши, что нужно');
+            return found(a.send(id, text, model, client), 'Разговор не найден');
+          }
+          if (method === 'DELETE') {
+            a.close(id);
+            return ok({ ok: true });
+          }
+        }
+      } catch (e) {
+        if (e instanceof AssistantBusy) return bad(e.message, 409);
+        throw e;
       }
       return undefined;
     }
@@ -222,6 +300,18 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
     if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)\/check$/)) && method === 'POST') {
       if (!SLUG_RE.test(m[1])) return bad('Недопустимый слаг источника');
       return ok(await engine.checkNow(m[1]));
+    }
+
+    // подробности одного события — как их получит flow перед запуском («Получит» в узле «Запустить flow»)
+    if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)\/detail$/)) && method === 'POST') {
+      if (!SLUG_RE.test(m[1])) return bad('Недопустимый слаг источника');
+      return ok(await engine.detailPreview(m[1], obj(await readBody())));
+    }
+
+    // пример событий источника для редактора рутины: GET — из журнала источника, POST — пробный опрос сейчас
+    if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)\/events$/)) && (method === 'GET' || method === 'POST')) {
+      if (!SLUG_RE.test(m[1])) return bad('Недопустимый слаг источника');
+      return ok(await engine.sourceEvents(m[1], { fresh: method === 'POST', limit: Number(url.searchParams.get('limit')) || undefined }));
     }
 
     if ((m = p.match(/^\/api\/routines\/sources\/([^/]+)$/))) {
@@ -281,8 +371,27 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
         return bad((err as Error).message);
       }
       if (m[3] === 'explain' && method === 'GET') return ok(engine.explain(m[1], m[2]));
+      // body: { check?, model?, ask? } — несохранённая правка узла «ИИ рутины» проверяется на этом же событии
       if (m[3] === 'recheck' && method === 'POST') return ok(await engine.recheck(m[1], m[2], obj(await readBody())));
       if (m[3] === 'ask' && method === 'POST') return ok(engine.ask(m[1], m[2], obj(await readBody())));
+      return undefined;
+    }
+    // проверка на истории с ходом: начать (или получить ту же, если она уже идёт), спросить, остановить
+    if ((m = p.match(/^\/api\/routines\/([^/]+)\/history\/runs(?:\/([a-f0-9]{1,32}))?$/))) {
+      const slug = m[1];
+      if (RESERVED.has(slug)) return undefined;
+      try {
+        assertSlug(slug);
+      } catch (err) {
+        return bad((err as Error).message);
+      }
+      if (!m[2]) {
+        if (method !== 'POST') return undefined;
+        const b = obj(await readBody());
+        return ok(engine.startHistory(slug, { spec: b.spec, limit: typeof b.limit === 'number' ? b.limit : undefined }), 201);
+      }
+      if (method === 'GET') return found(engine.historyRun(slug, m[2]), 'Проверка не найдена: приложение перезапускалось. Запусти её снова');
+      if (method === 'DELETE') return engine.stopHistory(slug, m[2]) ? ok({ ok: true }) : bad('Проверка не найдена', 404);
       return undefined;
     }
     if ((m = p.match(/^\/api\/routines\/([^/]+)(\/enabled|\/history|\/run|\/log|\/feedback)?$/))) {

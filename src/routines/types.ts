@@ -117,8 +117,11 @@ export type ConnectorBuildView =
       /** script — проверка без модели; model — разобрать ответ без модели не вышло, каждая проверка через модель. */
       mode: 'script' | 'model';
       problem?: string;
+      /** Сколько стоила сборка (сессии модели), $, и какая модель собирала. */
+      costUsd?: number;
+      model?: string;
     }
-  | { id: string; state: 'error'; error: string };
+  | { id: string; state: 'error'; error: string; costUsd?: number; model?: string };
 
 /** Поле события, на которое можно поставить условие в редакторе. */
 export type MatchField = { key: string; label: string; type: 'text' | 'number' | 'bool' | 'enum'; options?: string[] };
@@ -171,7 +174,16 @@ export type SourceView = {
   usedBy: string[];
   /** Умеет ли ЭТОТ источник ответить: у «Сервиса через Claude» — только если настроен инструмент ответа. */
   canReply: boolean;
+  /** Перед запуском flow источник дозапрашивает подробности события (полную запись) — flow получает их целиком. */
+  detail?: boolean;
 };
+
+/**
+ * Подробности одного события для «Получит» в узле «Запустить flow»: POST /api/routines/sources/:slug/detail
+ * { id, link?, title? } — тот же запрос, что движок делает перед запуском flow. block — что допишется ко входу flow
+ * после события; chars — длина подробностей целиком, max — предел (длиннее — в block обрезано).
+ */
+export type EventDetail = { block?: string; chars?: number; max: number; error?: string };
 
 /**
  * Итог «Проверить сейчас» (POST /api/routines/sources/:slug/check): источник опрошен так же, как по таймеру. total — сколько
@@ -208,6 +220,31 @@ export type SourceTestResult = {
   error?: string;
 };
 
+/**
+ * Поле события, как его видит условие по полям (src/routines/match.ts → eventFields): key — путь в fields через точку
+ * (тот же, что пишется в when.match), value — значение из этого события одной строкой. list — поле-список: условие
+ * совпадает, если совпал хоть один элемент.
+ */
+export type EventField = { key: string; type: 'text' | 'number' | 'bool'; value: string; list?: boolean };
+
+/**
+ * Пример событий источника для узлов «Условия по полям» и «ИИ рутины»: человек видит, что приходит с сервиса, до того как
+ * пишет условие. GET /api/routines/sources/:slug/events — последние события из журнала источника (свежие первыми; без
+ * опроса и без модели). POST — спросить сервис сейчас (пробный опрос, как testSource: ничего не запускает и не
+ * запоминает); у источника с опросом моделью тратит лимит.
+ */
+export type SourceEvents = {
+  /**
+   * block — событие ровно в том виде, в каком его получит flow (к задаче из run.input) и прочитает «ИИ рутины».
+   * cut — что в block обрезано по пределу: полная длина текста события и JSON его полей, знаков; нет — вошло целиком.
+   */
+  events: Array<{ event: RoutineEvent; fields: EventField[]; block: string; cut?: { text?: number; fields?: number; textMax: number; fieldsMax: number } }>;
+  /** history — журнал источника; poll — пробный опрос сейчас. */
+  from: 'history' | 'poll';
+  /** Пробный опрос не удался (сервис не ответил, не хватает ключей). */
+  error?: string;
+};
+
 // ---------------------------------------------------------------- подключение словами (src/routines/sources/draft.ts)
 
 export type DraftState =
@@ -234,7 +271,11 @@ export type ComposeState =
   | { state: 'ready'; spec: RoutineSpec; notes: string[]; problems: string[]; needs: ComposeNeeds; costUsd: number }
   | { state: 'error'; error: string };
 
-export type ComposeView = { id: string; description: string } & ComposeState;
+/** Черновик, который помощник раздела положил в форму «Новой рутины» (set_draft): те же поля, что у готовой сборки словами. */
+export type RoutineAssistantDraft = { spec: RoutineSpec; notes: string[]; problems: string[]; needs: ComposeNeeds };
+
+/** model — какая модель собирает черновик: фактическая модель сессии, а до её старта — то, что выбрал человек. */
+export type ComposeView = { id: string; description: string; model?: string } & ComposeState;
 
 /** Проверка папки для рутины (GET /api/routines/check-dir): есть ли она, git ли это. */
 export type DirCheck = {
@@ -261,8 +302,16 @@ export type MatchRule = Record<string, string | number | boolean | Array<string 
 export type WhenSource = {
   source: string;
   match?: MatchRule;
-  /** Проверка словами: haiku читает текст события по этому условию. Необязательно. */
+  /** Узел «ИИ рутины» (проверка словами): модель читает текст события по этому условию. Необязательно. */
   check?: string;
+  /** Модель узла «ИИ рутины»: псевдоним (haiku, sonnet, opus) или id модели. Нет — модель по умолчанию (CHECK_MODEL, haiku). */
+  model?: string;
+  /**
+   * Исход «спросить меня»: модель не уверена — событие не отсеивается, а ждёт человека карточкой «Запустить?» на
+   * главной, в каком бы режиме ни была рутина. Без поля неуверенный ответ — «нет», как раньше. Действует, только
+   * когда рутине есть что запускать (run): у рутины без flow и при засеве дел неуверенное событие — «не подошло».
+   */
+  ask?: boolean;
 };
 export type WhenSchedule = {
   /** cron из 5 полей, локальное время. */
@@ -354,6 +403,10 @@ export type LogEntry = {
   costUsd?: number;
   /** Из costUsd — проверка словами (у запущенных событий её не затирает стоимость запуска). */
   checkCostUsd?: number;
+  /** Какая модель решала в узле «ИИ рутины» (фактическая модель сессии); нет — проверки не было или строка старая. */
+  checkModel?: string;
+  /** Узел «ИИ рутины» не был уверен и спросил человека (when.ask): ожидание появилось из-за этого, а не из-за режима. */
+  unsure?: boolean;
   /** Отправленный наружу ответ (ссылка), если был. */
   replied?: { at: string; link?: string; text: string };
   /** Когда начался запуск по этой строке (per_day и «сегодня» считаются по нему, каким бы ни стал исход). */
@@ -392,12 +445,17 @@ export type LogExplain = {
   check?: string;
   /** Ответ проверки словами при срабатывании (why или reason строки). */
   answer?: string;
+  /** Модель узла «ИИ рутины» по текущему правилу (when.model); нет — по умолчанию. */
+  model?: string;
+  /** У текущего правила включён исход «спросить меня» (when.ask). */
+  ask?: boolean;
 };
 
 /** Стартовый запрос сессии «Спросить Claude» по строке журнала. */
 export type LogAsk = { prompt: string; cwd?: string; name: string };
 
-export type LogRecheck = { match: boolean; duplicate: boolean; reason: string; costUsd: number };
+/** unsure — модель не уверена (только при when.ask); model — какая модель ответила. */
+export type LogRecheck = { match: boolean; duplicate: boolean; reason: string; costUsd: number; unsure?: boolean; model?: string };
 
 /** Карточка ожидания на главной. */
 export type RoutineWait = {
@@ -466,12 +524,33 @@ export type RoutinesOverview = {
   engineOwner?: { pid: number; who: string };
 };
 
+/**
+ * Проверка на истории с ходом: POST /api/routines/:slug/history/runs { spec?, limit? } начинает её и сразу отвечает,
+ * GET …/history/runs/:id — что уже проверено. Экран рисует строки по мере готовности, а не ждёт все события разом.
+ * Та же проверка (рутина, правило, предел), начатая повторно, пока первая идёт, — это она же, а не вторая.
+ */
+export type HistoryRun = {
+  id: string;
+  state: 'working' | 'done' | 'error';
+  /** Сколько событий проверяется; 0 — источник ещё опрашивается. */
+  total: number;
+  /** Уже проверенные события, в порядке итога (свежие первыми). В итоге (result) у них добавятся дела и оценка. */
+  events: HistoryCheck['events'];
+  /** Итог целиком — когда state: done. */
+  result?: HistoryCheck;
+  error?: string;
+};
+
 /** Проверка правила на истории: что из последних событий источника запустилось бы. */
 export type HistoryCheck = {
   events: Array<{
     event: RoutineEvent;
     outcome: Extract<LogOutcome, 'started' | 'waiting' | 'filtered' | 'check_no' | 'duplicate'>;
     reason?: string;
+    /** Узел «ИИ рутины» не уверен (when.ask): событие ждало бы человека, а не отсеялось. outcome при этом — waiting. */
+    unsure?: boolean;
+    /** Сколько стоила проверка этого события узлом «ИИ рутины», $. */
+    checkCostUsd?: number;
     /** Как человек раньше ответил на это событие (журнал + обратная связь); есть и расходится с outcome — строка «расходится». */
     past?: Feedback['verdict'];
     disagrees?: boolean;
@@ -485,6 +564,9 @@ export type HistoryCheck = {
   tasks?: number;
   /** Человек раньше ответил на событие иначе, чем правило решило бы сейчас («Это не баг», а правило запустило бы). */
   disagreements: number;
+  /** Узел «ИИ рутины» на этой проверке: какая модель отвечала и сколько это стоило всего, $. Нет — узла нет или он не вызывался. */
+  /** cached — сколько из events взято из прошлых проверок: то же событие по тому же условию и модели не перечитывается и ничего не стоит. */
+  check?: { model?: string; costUsd: number; events: number; cached?: number };
   /** Оценка по истории: сколько запусков в неделю и во сколько обойдётся (средняя стоимость прошлых запусков рутины или flow). */
   /** usdPerWeek нет — стоимость неизвестна: ни у рутины, ни у flow ещё не было запусков с расходом. */
   estimate?: { runsPerWeek: number; usdPerWeek?: number };
@@ -499,6 +581,14 @@ export type HistoryCheck = {
  * «Учесть» в проверке на истории шлёт verdict = past этого события.
  */
 export type Feedback = { eventId: string; verdict: 'match' | 'no_match' | 'not_duplicate'; at?: string };
+
+/**
+ * Черновик формы «Новая рутина» (docs/ASSISTANTS.md §3): то, что человек набрал до первого сохранения правила. Лежит на
+ * сервере (routines-state/form-draft.json), поэтому уход на другой экран его не стирает. data — состояние формы как есть:
+ * сервер его не разбирает, только хранит. GET /api/routines/form-draft → { draft: FormDraft | null }, PUT { data } →
+ * { at }, DELETE → { ok: true }.
+ */
+export type FormDraft = { at: string; data: unknown };
 
 /** Готовый flow шаблона рутины (templates/flows): GET /api/routines/flow-templates. */
 export type FlowTemplate = { name: string; description: string };

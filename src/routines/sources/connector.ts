@@ -19,7 +19,7 @@ import { cfgList, cfgStr, firstLine, isoOf, truncate } from './util.js';
 
 /** Как SUGGEST_MODEL в attention.ts. */
 export const CONNECTOR_MODEL = 'claude-haiku-4-5-20251001';
-/** Сборка скрипта — один раз, ей нужна модель посильнее. */
+/** Сборка скрипта — один раз, ей нужна модель посильнее. Значение по умолчанию: модель сборки приходит в BuildRequest.model. */
 export const BUILD_MODEL = 'sonnet';
 const MODEL_POLL_MS = 30 * 60_000;
 const SCRIPT_POLL_MS = 60_000;
@@ -792,8 +792,16 @@ const BUILD_SCHEMA = {
   required: ['ok'],
 };
 
-export type BuildRequest = { tools: string[]; request: string; title?: string; note?: string; from?: string };
-export type ConnectorBuilds = { start: (req: BuildRequest) => ConnectorBuildView; get: (id: string) => ConnectorBuildView | undefined };
+/** model — кто собирает скрипт: выбор человека (псевдоним или id); пусто — BUILD_MODEL. */
+export type BuildRequest = { tools: string[]; request: string; title?: string; note?: string; from?: string; model?: string };
+export type ConnectorBuilds = {
+  start: (req: BuildRequest) => ConnectorBuildView;
+  get: (id: string) => ConnectorBuildView | undefined;
+  /** Итог сборки (ready или error), когда она закончится; undefined — сборки нет. */
+  done: (id: string) => Promise<ConnectorBuildView> | undefined;
+  /** Прервать сборку: её сессия получает abort, итог — ошибка «остановлена». */
+  cancel: (id: string) => void;
+};
 export type BuildDeps = {
   testSource: (spec: SourceSpec) => Promise<SourceTestResult>;
   session?: (req: SessionRequest) => Promise<SessionResult>;
@@ -847,7 +855,7 @@ export function sampleProblem(sample: RoutineEvent[]): string | undefined {
   return undefined;
 }
 
-type Build = { id: string; req: BuildRequest; notes: string[]; spec?: SourceSpec; view: ConnectorBuildView; at: number };
+type Build = { id: string; req: BuildRequest; notes: string[]; spec?: SourceSpec; view: ConnectorBuildView; at: number; costUsd: number; actual?: string; abort: AbortController; done?: Promise<ConnectorBuildView> };
 const MAX_BUILDS = 20;
 const MAX_RETRIES = 1;
 
@@ -876,15 +884,19 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
         implicitTools: [],
         allow: tools,
         guard: (name) => (tools.includes(name) ? undefined : `Разрешены только отмеченные инструменты`),
-        model: BUILD_MODEL,
+        model: b.req.model?.trim() || BUILD_MODEL,
+        onModel: (m) => void (b.actual = m),
         maxTurns: 30,
         maxBudgetUsd: 1.5,
         outputSchema: BUILD_SCHEMA,
         persist: false,
+        abort: b.abort,
       });
     } catch (err) {
       return { ok: false, error: `Сессия не удалась: ${(err as Error).message}` };
     }
+    b.costUsd += r.costUsd;
+    if (b.abort.signal.aborted) return { ok: false, error: 'Сборка остановлена' };
     if (!r.ok) return { ok: false, error: `Сессия не удалась: ${r.errors.join('; ') || r.subtype}` };
     return buildSpecOf(r.structured, b.req);
   }
@@ -947,14 +959,24 @@ export function createConnectorBuilds(deps: BuildDeps): ConnectorBuilds {
         spec: prev?.spec,
         view: { id: '', state: 'working', step: 'Модель смотрит сервис и собирает скрипт…' },
         at: Date.now(),
+        costUsd: 0,
+        abort: new AbortController(),
       };
       b.view = { ...b.view, id: b.id };
       builds.set(b.id, b);
       // старые сборки не копятся
       for (const old of [...builds.values()].sort((x, y) => x.at - y.at).slice(0, Math.max(0, builds.size - MAX_BUILDS))) builds.delete(old.id);
-      void drive(b).catch((e: Error) => (b.view = { id: b.id, state: 'error', error: e.message }));
+      b.done = drive(b)
+        .catch((e: Error) => void (b.view = { id: b.id, state: 'error', error: e.message }))
+        .then(() => {
+          // расход и модель сборки — в итог: человек видит, кто собирал и сколько это стоило
+          if (b.view.state !== 'working') b.view = { ...b.view, costUsd: b.costUsd, model: b.actual ?? (b.req.model?.trim() || BUILD_MODEL) };
+          return b.view;
+        });
       return b.view;
     },
     get: (id) => builds.get(id)?.view,
+    done: (id) => builds.get(id)?.done,
+    cancel: (id) => builds.get(id)?.abort.abort(),
   };
 }

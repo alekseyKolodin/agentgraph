@@ -1,4 +1,5 @@
-// Раскрытая строка «Срабатываний»: почему сработало (или пропущено) и как исправить. Событие целиком, условия на поля
+// Раскрытая строка «Срабатываний»: почему сработало (или пропущено) и как исправить. Путь события по графу рутины —
+// какие узлы оно прошло, на каком остановилось и почему (docs/ASSISTANTS.md §4). Событие целиком, условия на поля
 // по текущему правилу — каждое с тем, что было в событии, — «Если» и ответ проверки словами. Ниже — «Если» можно
 // поправить и проверить на этом же событии до сохранения, затем сохранить правило; «Зря запустилась» — пример для
 // следующих проверок. «Спросить Claude» — когда причина не в условиях, а в источнике: сервер собирает стартовый запрос
@@ -12,9 +13,12 @@ import { askLog, explainLog, recheckLog, routineKeys, saveRoutine } from '../../
 import { createSession, defaultSessionCwd, sessionKeys } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { usd } from '../../lib/format';
+import { modelChip } from '../../lib/flow/ai-progress';
 import { t } from '../../lib/i18n';
+import { eventPath } from '../../lib/routines/graph';
 import { feedbackLabel, feedbackNote, feedbackOptions, feedbackTitle, type Verdict } from '../../lib/routines/view';
 import { cx } from './parts';
+import { EventPath } from './RoutineGraph';
 import styles from './Routines.module.css';
 
 const TEXT_MAX = 600;
@@ -84,6 +88,13 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
             </div>
           </section>
 
+          <section aria-label={t('Путь события')}>
+            <span className={styles.lbl}>{t('Путь события по графу рутины')}</span>
+            <div className={styles.pathWrap}>
+              <EventPath path={eventPath(e, x, { hasTask: Boolean(spec?.task), runs: spec ? Boolean(spec.run) : undefined, replies: spec?.reply ? spec.reply.to !== 'none' : undefined })} />
+            </div>
+          </section>
+
           <section aria-label={ran ? t('Почему сработало') : t('Почему пропущено')}>
             <span className={styles.lbl}>{ran ? t('Почему сработало') : t('Почему пропущено')}</span>
             {x.schedule ? (
@@ -108,6 +119,13 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
                     {t('Если: «{check}»', { check: x.check })}
                     <br />
                     {x.answer ? t('Ответ проверки: {answer}', { answer: x.answer }) : <span className="muted">{t('Ответ проверки при срабатывании не сохранился — проверь событие ещё раз ниже.')}</span>}
+                    {e.checkModel && <span className="muted" title={t('Модель узла «ИИ рутины», которая решала: {model}', { model: e.checkModel })}>{` · ${modelChip(e.checkModel)}`}</span>}
+                    {e.unsure && (
+                      <>
+                        <br />
+                        <span className={styles.warn}>{t('ИИ рутины не был уверен и спросил тебя — поэтому событие ждало на главной.')}</span>
+                      </>
+                    )}
                   </p>
                 ) : (
                   <p className={styles.warn}>{t('Проверки словами нет: запускается всё, что прошло условия. Напиши ниже, какие события запускать.')}</p>
@@ -151,8 +169,9 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
                 <Link to={`/routines/${encodeURIComponent(slug)}`}>{t('Условия на поля — в правиле')}</Link>
               </div>
               {result && (
-                <p className={result.match && !result.duplicate ? styles.tOk : styles.tFail}>
-                  {result.match && !result.duplicate ? t('С этим текстом запустилась бы: {why}', { why: result.reason }) : result.duplicate ? t('С этим текстом — повтор, не запустилась бы: {why}', { why: result.reason }) : t('С этим текстом не запустилась бы: {why}', { why: result.reason })}
+                <p className={result.unsure ? styles.warn : result.match && !result.duplicate ? styles.tOk : styles.tFail}>
+                  {result.unsure ? t('С этим текстом ИИ не уверен и спросил бы тебя: {why}', { why: result.reason }) : result.match && !result.duplicate ? t('С этим текстом запустилась бы: {why}', { why: result.reason }) : result.duplicate ? t('С этим текстом — повтор, не запустилась бы: {why}', { why: result.reason }) : t('С этим текстом не запустилась бы: {why}', { why: result.reason })}
+                  {result.model && <span className="muted">{` · ${modelChip(result.model)}`}</span>}
                   {result.costUsd >= 0.005 && <span className="muted">{` · ${usd(result.costUsd)}`}</span>}
                 </p>
               )}

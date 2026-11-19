@@ -12,6 +12,7 @@ import { parseCron } from './schedule.js';
 import { parseRoutine, routineProblems, TaskRuleSchema } from './schema.js';
 import type { ComposeNeeds, ComposeState, ComposeView, DirCheck, MatchField, MatchRule, RoutineSpec, SourceKindView, TaskRule } from './types.js';
 
+/** Модель по умолчанию; человек выбирает свою в шапке помощника (docs/ASSISTANTS.md) — она приходит в start(). */
 export const COMPOSE_MODEL = 'sonnet';
 const MAX_RETRIES = 1;
 const MAX_DRAFTS = 20;
@@ -39,7 +40,8 @@ export type ComposeOptions = {
 };
 
 export type ComposeRoutes = {
-  start: (description: string) => ComposeView;
+  /** model — выбор человека (псевдоним или id); пусто — COMPOSE_MODEL. */
+  start: (description: string, model?: string) => ComposeView;
   get: (id: string) => ComposeView | undefined;
   cancel: (id: string) => void;
 };
@@ -295,6 +297,10 @@ export async function buildSpec(raw: unknown, ctx: ComposeContext, checkDirFn: (
 type Job = {
   id: string;
   description: string;
+  /** Что ушло в сессию: выбор человека или модель по умолчанию. */
+  model: string;
+  /** Фактическая модель сессии (из её init), когда стала известна. */
+  actual?: string;
   state: ComposeState;
   gen: number;
   abort: AbortController;
@@ -306,7 +312,7 @@ export function createComposeRoutes(deps: ComposeDeps, opts: ComposeOptions = {}
   const now = opts.now ?? (() => new Date());
   const dir = deps.dir ?? ((p: string) => checkDir(p));
   const jobs = new Map<string, Job>();
-  const view = (j: Job): ComposeView => ({ id: j.id, description: j.description, ...j.state }) as ComposeView;
+  const view = (j: Job): ComposeView => ({ id: j.id, description: j.description, model: j.actual ?? j.model, ...j.state }) as ComposeView;
 
   function prompt(j: Job, ctx: ComposeContext, feedback?: string): string {
     const d = now();
@@ -330,7 +336,8 @@ export function createComposeRoutes(deps: ComposeDeps, opts: ComposeOptions = {}
         tools: [],
         implicitTools: [],
         guard: (tool) => `Инструмент ${tool} здесь не разрешён: только ответ по схеме`,
-        model: COMPOSE_MODEL,
+        model: j.model,
+        onModel: (m) => void (j.actual = m),
         maxTurns: 4,
         maxBudgetUsd: 0.5,
         outputSchema: SCHEMA,
@@ -374,7 +381,7 @@ export function createComposeRoutes(deps: ComposeDeps, opts: ComposeOptions = {}
   }
 
   return {
-    start(description) {
+    start(description, model) {
       const text = description.trim();
       if (!text) throw new Error('Опиши словами, что рутина должна делать');
       while (jobs.size >= MAX_DRAFTS) {
@@ -386,7 +393,7 @@ export function createComposeRoutes(deps: ComposeDeps, opts: ComposeOptions = {}
         }
         jobs.delete(oldest);
       }
-      const j: Job = { id: newId(), description: text, state: { state: 'working', step: 'Читаю описание, смотрю твои источники и flow…' }, gen: 1, abort: new AbortController() };
+      const j: Job = { id: newId(), description: text, model: model?.trim() || COMPOSE_MODEL, state: { state: 'working', step: 'Читаю описание, смотрю твои источники и flow…' }, gen: 1, abort: new AbortController() };
       jobs.set(j.id, j);
       void drive(j, j.gen).catch((err) => void setState(j, j.gen, { state: 'error', error: (err as Error).message }));
       return view(j);

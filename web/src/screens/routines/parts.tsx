@@ -48,8 +48,18 @@ export function Seg<V extends string>({ options, value, onChange, label }: { opt
  * Условия на поля события: каждое — слот во фразе («Канал = bugs»), клик раскрывает строку правки под фразой
  * (поле · оператор · значение · ×). «+ условие» добавляет строку и сразу её раскрывает.
  */
-export function Conditions({ conds, fields, onChange, lead }: { conds: Condition[]; fields: MatchField[]; onChange: (c: Condition[]) => void; lead?: ReactNode }) {
-  const [open, setOpen] = useState<number | null>(null);
+export function Conditions({ conds, fields, onChange, lead, opened, onOpened }: {
+  conds: Condition[];
+  fields: MatchField[];
+  onChange: (c: Condition[]) => void;
+  lead?: ReactNode;
+  /** Какое условие раскрыто — снаружи: условие, добавленное из примера события, раскрывается сразу. Без пары — своё состояние. */
+  opened?: number | null;
+  onOpened?: (i: number | null) => void;
+}) {
+  const [own, setOwn] = useState<number | null>(null);
+  const open = onOpened ? (opened ?? null) : own;
+  const setOpen = onOpened ?? setOwn;
   const set = (i: number, patch: Partial<Condition>) => onChange(conds.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   const remove = (i: number) => {
     onChange(conds.filter((_, j) => j !== i));

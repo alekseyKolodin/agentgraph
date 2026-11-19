@@ -1,0 +1,42 @@
+/* Граф рутины: вертикальная цепочка узлов (docs/routines/design/v2). Узел — кнопка: клик открывает его настройки. */
+.graph { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.graph > li { display: flex; flex-direction: column; }
+.link { width: 1px; height: 12px; background: var(--line-strong); margin: 0 auto; }
+.link.pass { background: color-mix(in srgb, var(--st-ok) 60%, transparent); }
+
+.node { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; width: 100%; text-align: left; font: inherit; color: var(--ink); background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 9px 12px; }
+button.node { cursor: pointer; transition: border-color .12s; }
+button.node:hover { border-color: var(--ink-3); }
+button.node:focus-visible { outline: none; box-shadow: var(--focus); }
+button.node[aria-pressed="true"] { border-color: var(--live); box-shadow: 0 0 0 1px var(--live); }
+.node b { font-weight: 600; font-size: var(--fs-body); }
+.node.off { background: transparent; border-style: dashed; }
+.node.off b { font-weight: 500; color: var(--ink-2); }
+.sub { grid-column: 1 / -1; font-size: var(--fs-small); color: var(--ink-2); overflow-wrap: anywhere; text-wrap: pretty; }
+.node.warned .sub { color: var(--st-wait); }
+.meta { display: inline-flex; gap: 8px; align-items: baseline; }
+
+/* кто работает в узле: без модели — нейтрально, модель — синим, человек — жёлтым */
+.who { font-size: var(--fs-cap); font-weight: 500; border-radius: var(--r-xs); padding: 1px 6px; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.who.model { background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); }
+.who.me { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
+.count { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.outs { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px; }
+.out { font-size: var(--fs-cap); font-weight: 500; border-radius: var(--r-pill); padding: 1px 8px; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.out.run { background: color-mix(in srgb, var(--st-ok) 16%, transparent); color: var(--st-ok); }
+.out.ask { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
+
+.note { margin: 10px 0 0; font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+
+/* путь срабатывания: тот же граф, но узлы — не кнопки; пройдено, остановилось, ждёт, не дошло */
+.step { grid-template-columns: 14px minmax(0, 1fr) auto; }
+.step .sub { grid-column: 2 / -1; }
+.step.pass { border-color: color-mix(in srgb, var(--st-ok) 50%, transparent); }
+.step.stop { border-color: var(--ink-2); box-shadow: 0 0 0 1px var(--ink-2); }
+.step.stop .sub, .step.ask .sub { color: var(--ink); }
+.step.ask { border-color: var(--st-wait); box-shadow: 0 0 0 1px var(--st-wait); }
+.mark { font-size: var(--fs-small); line-height: 1; }
+.mark.pass { color: var(--st-ok); }
+.mark.ask { color: var(--st-wait); }
+.mark.stop { color: var(--ink); }

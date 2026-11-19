@@ -177,6 +177,8 @@ test('connector-build: проверка тела, старт и опрос сб�
     const builds = {
       start: (req: unknown) => (started.push(req), { id: 'b1', state: 'working' as const, step: '…' }),
       get: (id: string) => (id === 'b1' ? { id, state: 'error' as const, error: 'нет' } : undefined),
+      done: () => undefined,
+      cancel: () => {},
     };
     const call = (method: string, url: string, body?: unknown) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null, builds });
     assert.equal((await call('POST', '/api/routines/sources/connector-build', { tools: [], request: 'x' }))?.status, 400);
@@ -255,3 +257,26 @@ test('рутина словами и проверка папки: POST/GET/DELET
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('черновик формы «Новая рутина»: лежит на сервере как есть, PUT заменяет, DELETE убирает; не объект и слишком большой — отказ', async () => {
+  const t = setup(null);
+  try {
+    assert.deepEqual((await t.call('GET', '/api/routines/form-draft'))?.body, { draft: null });
+    const saved = await t.call('PUT', '/api/routines/form-draft', { data: { v: 1, d: { title: 'Ревью', conds: [] } } });
+    assert.equal(saved?.status, 200);
+    const got = (await t.call('GET', '/api/routines/form-draft'))?.body as { draft: { at: string; data: unknown } };
+    assert.deepEqual(got.draft.data, { v: 1, d: { title: 'Ревью', conds: [] } });
+    assert.equal(got.draft.at, (saved?.body as { at: string }).at);
+    assert.equal((await t.call('PUT', '/api/routines/form-draft', { data: 'текст' }))?.status, 400);
+    assert.equal((await t.call('PUT', '/api/routines/form-draft', { data: { big: 'x'.repeat(200_000) } }))?.status, 413);
+    // отказ прежний черновик не трогает
+    assert.ok(((await t.call('GET', '/api/routines/form-draft'))?.body as { draft: unknown }).draft);
+    assert.deepEqual((await t.call('DELETE', '/api/routines/form-draft'))?.body, { ok: true });
+    assert.deepEqual((await t.call('GET', '/api/routines/form-draft'))?.body, { draft: null });
+    // имя раздела API — не слаг рутины
+    assert.equal(await t.call('GET', '/api/routines/form-draft/log'), undefined);
+  } finally {
+    t.done();
+  }
+});
+

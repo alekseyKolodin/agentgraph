@@ -40,8 +40,8 @@ export async function createRoutine(page: Page, r: NewRoutine, o: { goto?: boole
   const s1 = page.getByRole('region', { name: 'Что запускает' });
   await pick(s1, r.source).click();
   if (r.check) {
-    await page.getByRole('button', { name: '+ проверка словами' }).click();
-    await page.getByLabel('Если').fill(r.check);
+    await page.getByRole('button', { name: '+ ИИ рутины' }).click();
+    await page.getByLabel('ИИ рутины: какие события запускать').fill(r.check);
   }
   const s3 = page.getByRole('region', { name: 'Что запустить' });
   await pick(s3, r.flow).click();
@@ -54,6 +54,11 @@ export async function createRoutine(page: Page, r: NewRoutine, o: { goto?: boole
   await expect(page).toHaveURL((u) => /^\/routines\/[a-z0-9-]+$/.test(u.pathname) && u.pathname !== '/routines/new');
   await expect(page.getByRole('link', { name: 'Правило' })).toBeVisible();
   return decodeURIComponent(new URL(page.url()).pathname.split('/').pop()!);
+}
+
+/** Редактор — граф: настройки узла открываются кликом по нему (имя кнопки начинается с названия узла). */
+export async function openNode(page: Page, title: 'Триггер' | 'Условия по полям' | 'ИИ рутины' | 'Дело' | 'Запустить flow' | 'Ждать меня' | 'Ответить'): Promise<void> {
+  await page.getByRole('list', { name: 'Граф рутины' }).getByRole('button', { name: new RegExp(`^${title}`) }).click();
 }
 
 /** Редактор черновика: «Включить» → список рутин. */

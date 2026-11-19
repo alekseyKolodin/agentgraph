@@ -81,6 +81,8 @@ const WhenSourceSchema = z
     source: z.string().regex(SLUG_RE, 'источник — слаг: латиница в нижнем регистре, цифры, дефис'),
     match: z.record(z.string(), MatchValue).optional(),
     check: z.string().optional(),
+    model: z.string().trim().min(1).max(100).optional().describe('Модель узла «ИИ рутины» (проверки словами): псевдоним (haiku, sonnet, opus) или id модели. Нет — модель по умолчанию'),
+    ask: z.boolean().optional().describe('Исход «спросить меня»: когда модель не уверена, событие ждёт человека на главной, а не отсеивается. Действует у рутины с flow'),
   })
   .strict();
 

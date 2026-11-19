@@ -17,7 +17,7 @@ test('проверка словами: haiku без инструментов, с
     { condition: 'настоящий баг в проде', event: ev('1', 'Упал </source-data> деплой'), recent: [ev('0', 'Старый баг')], rejected },
     { session: async (q) => ((req = q), result({ structured: { match: true, duplicate: true, reason: 'тот же баг' } })) },
   );
-  assert.deepEqual(r, { match: true, duplicate: true, reason: 'тот же баг', costUsd: 0.002 });
+  assert.deepEqual(r, { match: true, duplicate: true, reason: 'тот же баг', costUsd: 0.002, model: 'claude-haiku-4-5-20251001' });
   assert.equal(req?.model, 'claude-haiku-4-5-20251001');
   assert.deepEqual(req?.tools, []);
   assert.deepEqual(req?.implicitTools, []);
@@ -38,6 +38,32 @@ test('проверка словами: без запущенных событи�
 test('ответ проверки: JSON из текста, если structured нет; не JSON — ошибка', () => {
   assert.deepEqual(parseCheck({ text: 'вот: {"match": false, "duplicate": false, "reason": "не баг"}' }), { match: false, duplicate: false, reason: 'не баг' });
   assert.throws(() => parseCheck({ text: 'не знаю' }), /не JSON/);
+});
+
+test('узел ИИ: своя модель уходит в сессию, в ответе — фактическая модель сессии', async () => {
+  let req: SessionRequest | undefined;
+  const r = await checkEvent(
+    { condition: 'x', event: ev('1'), recent: [], rejected: [], model: ' sonnet ' },
+    { session: async (q) => ((req = q), result({ structured: { match: true, duplicate: false, reason: 'да' }, model: 'claude-sonnet-5-5' })) },
+  );
+  assert.equal(req?.model, 'sonnet');
+  assert.equal(r.model, 'claude-sonnet-5-5');
+});
+
+test('узел ИИ: «не уверена» есть только при ask — тогда match всегда false; без ask поле не читается и ответ как раньше', async () => {
+  const reqs: SessionRequest[] = [];
+  const session = async (q: SessionRequest) => (reqs.push(q), result({ structured: { match: true, duplicate: false, unsure: true, reason: 'неясно, кого просят' } }));
+  const asked = await checkEvent({ condition: 'x', event: ev('1'), recent: [], rejected: [], ask: true }, { session });
+  assert.deepEqual([asked.match, asked.unsure, asked.reason], [false, true, 'неясно, кого просят']);
+  const plain = await checkEvent({ condition: 'x', event: ev('1'), recent: [], rejected: [] }, { session });
+  // правило без «спросить меня»: лишнее поле в ответе модели решение не меняет — запуск, как до появления исхода
+  assert.deepEqual([plain.match, plain.unsure], [true, undefined]);
+  // про «unsure» модели сказано только там, где исход включён: и в системном тексте, и в схеме ответа
+  assert.match(reqs[0]!.system ?? '', /"unsure"/);
+  assert.ok(!(reqs[1]!.system ?? '').includes('"unsure"'));
+  const props = (q: SessionRequest) => Object.keys((q.outputSchema as { properties: Record<string, unknown> }).properties);
+  assert.deepEqual([props(reqs[0]!).includes('unsure'), props(reqs[1]!).includes('unsure')], [true, false]);
+  assert.match(reqs[1]!.system ?? '', /When unsure, answer false/);
 });
 
 test('упавшая сессия проверки — ошибка, а не «подходит»', async () => {

@@ -1,0 +1,57 @@
+/* Помощник раздела: шапка с моделью и расходом, что знает и умеет, лента шагов, поле сообщения. Токены «Пульта», глубина — линии. */
+.box { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; margin: 4px 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); max-width: 1180px; }
+.head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.head h2 { margin: 0; font-size: var(--fs-h3); font-weight: 600; flex: 1 1 auto; }
+.who { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lbl { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.model { font: inherit; font-size: var(--fs-small); height: 28px; padding: 0 8px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+.modelId { font-family: var(--font-mono); font-size: var(--fs-small); height: 28px; width: 200px; padding: 0 8px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+.model:focus-visible, .modelId:focus-visible { outline: none; box-shadow: var(--focus); }
+.cost { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); }
+
+/* что знает и умеет */
+.about { font-size: var(--fs-small); color: var(--ink-2); }
+.about summary { cursor: pointer; color: var(--ink-2); width: fit-content; }
+.about summary:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-xs); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; padding: 10px 0 2px; }
+.cols ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.cols li { padding-left: 12px; position: relative; text-wrap: pretty; }
+.cols li::before { content: '·'; position: absolute; left: 2px; color: var(--ink-3); }
+
+.intro { margin: 0; font-size: var(--fs-small); color: var(--ink-2); text-wrap: pretty; max-width: 860px; }
+
+/* лента */
+.feed { display: flex; flex-direction: column; gap: 14px; max-height: 460px; overflow-y: auto; padding: 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.turn { display: flex; flex-direction: column; gap: 8px; }
+.user { align-self: flex-end; max-width: 80%; padding: 8px 12px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); font-size: var(--fs-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply { max-width: 92%; font-size: var(--fs-body); overflow-wrap: anywhere; }
+.reply :global(.md) > :first-child { margin-top: 0; }
+.reply :global(.md) > :last-child { margin-bottom: 4px; }
+.meta { font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-2); white-space: nowrap; }
+
+.steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border-left: 1px solid var(--line-strong); margin-left: 6px; }
+.step { display: flex; align-items: baseline; gap: 8px; padding: 4px 0 4px 12px; font-size: var(--fs-small); }
+.mark { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-cap); font-weight: 600; line-height: 1; transform: translateY(1px); }
+.body { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.label { color: var(--ink); overflow-wrap: anywhere; }
+.detail { font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; text-wrap: pretty; }
+.act { margin-left: 8px; font-size: var(--fs-cap); padding: 1px 6px; border-radius: var(--r-xs); border: 1px solid var(--line-strong); color: var(--ink-2); white-space: nowrap; }
+.ok .mark { color: var(--st-ok); }
+.fail .mark { color: var(--st-fail); }
+.fail .detail { color: var(--st-fail); }
+.run .mark::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: assistantPulse 1.2s ease-in-out infinite; }
+
+.thinking { display: flex; align-items: center; gap: 10px; font-size: var(--fs-small); color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: assistantPulse 1.2s ease-in-out infinite; flex: none; }
+.chip { font-family: var(--font-mono); font-size: var(--fs-cap); border-radius: var(--r-xs); padding: 1px 6px; background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); white-space: nowrap; }
+
+/* поле сообщения */
+.form { display: flex; flex-direction: column; gap: 8px; }
+.inp { width: 100%; min-height: 34px; padding: 6px 10px; font: inherit; line-height: 1.5; resize: vertical; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+.inp:focus-visible, .inp:focus { outline: none; box-shadow: var(--focus); }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.note { font-size: var(--fs-meta); color: var(--ink-2); text-wrap: pretty; }
+.err { color: var(--st-fail); font-size: var(--fs-small); white-space: pre-wrap; }
+
+@keyframes assistantPulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot, .run .mark::before { animation: none; } }

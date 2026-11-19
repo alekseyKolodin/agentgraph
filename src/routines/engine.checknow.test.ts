@@ -8,7 +8,7 @@ import { RoutineEngine } from './engine.js';
 import { RoutineStore } from './store.js';
 import { routinesRoute } from './routes.js';
 import type { SourceKind } from './kind.js';
-import type { RoutineEvent, SourceCheckNow } from './types.js';
+import type { HistoryRun, RoutineEvent, SourceCheckNow, SourceEvents } from './types.js';
 
 function setup(o: { live?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-checknow-'));
@@ -221,6 +221,100 @@ test('маршрут POST /sources/:slug/check: итог, 404 и 400', async () 
     assert.equal((ok?.body as SourceCheckNow).started, 1);
     assert.equal((await call('/api/routines/sources/nope/check'))?.status, 404);
     assert.equal((await call('/api/routines/sources/Bad_Slug/check'))?.status, 400);
+  } finally {
+    t.done();
+  }
+});
+
+test('пример событий: из журнала источника — свежие первыми, с полями, без опроса', async () => {
+  const t = setup();
+  try {
+    t.store.addHistory('src', [
+      { ...t.event('1'), at: '2026-11-17T09:00:00.000Z' },
+      { ...t.event('2', 'random'), at: '2026-11-17T09:30:00.000Z', fields: { channel: 'random', user: { name: 'Аня' } } },
+    ]);
+    const r = await t.engine.sourceEvents('src');
+    assert.equal(r.from, 'history');
+    assert.deepEqual(r.events.map((x) => x.event.id), ['2', '1']);
+    assert.deepEqual(r.events[0]!.fields, [{ key: 'channel', type: 'text', value: 'random' }, { key: 'user.name', type: 'text', value: 'Аня' }]);
+    // событие — как его получит flow; обрезанного нет
+    assert.ok(r.events[0]!.block.startsWith('Событие:\n<source-data>'));
+    assert.match(r.events[0]!.block, /Заголовок: Баг 2/);
+    assert.equal(r.events[0]!.cut, undefined);
+    assert.equal(t.polls(), 0);
+    assert.equal((await t.engine.sourceEvents('src', { limit: 1 })).events.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('пример событий: журнал пуст — пробный опрос только по просьбе, записи не помечаются виденными', async () => {
+  const t = setup();
+  try {
+    t.items.push(t.event('1'));
+    assert.deepEqual(await t.engine.sourceEvents('src'), { events: [], from: 'history' });
+    assert.equal(t.polls(), 0);
+    const r = await t.engine.sourceEvents('src', { fresh: true });
+    assert.equal(r.from, 'poll');
+    assert.deepEqual(r.events.map((x) => x.event.id), ['1']);
+    assert.equal(t.polls(), 1);
+    assert.deepEqual(t.store.history('src'), []);
+    assert.deepEqual(t.started, []);
+  } finally {
+    t.done();
+  }
+});
+
+test('маршруты примера событий: GET — журнал, POST — опрос, 404 без источника, 400 на плохой слаг', async () => {
+  const t = setup();
+  try {
+    t.items.push(t.event('1'));
+    const call = (method: string, url: string) => routinesRoute(method, new URL(url, 'http://localhost'), async () => ({}), { engine: t.engine, drafts: null });
+    const got = await call('GET', '/api/routines/sources/src/events');
+    assert.equal(got?.status, 200);
+    assert.deepEqual(got?.body, { events: [], from: 'history' });
+    const polled = await call('POST', '/api/routines/sources/src/events');
+    assert.equal((polled?.body as SourceEvents).events.length, 1);
+    assert.equal((await call('GET', '/api/routines/sources/nope/events'))?.status, 404);
+    assert.equal((await call('GET', '/api/routines/sources/Bad_Slug/events'))?.status, 400);
+  } finally {
+    t.done();
+  }
+});
+
+test('маршруты проверки на истории с ходом: начать, спросить, остановить, 404 на чужой id', async () => {
+  const t = setup();
+  try {
+    t.engine.saveRoutine('r', { spec: { title: 'Р', when: { source: 'src', match: { channel: 'bugs' } }, run: { flow: 'demo' }, mode: 'auto' } });
+    t.items.push(t.event('1'), t.event('2', 'random'));
+    const call = (method: string, url: string, body: unknown = {}) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine: t.engine, drafts: null });
+    const started = await call('POST', '/api/routines/r/history/runs', { limit: 5 });
+    assert.equal(started?.status, 201);
+    const id = (started?.body as HistoryRun).id;
+    let got = (await call('GET', `/api/routines/r/history/runs/${id}`))?.body as HistoryRun;
+    for (let i = 0; i < 50 && got.state === 'working'; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      got = (await call('GET', `/api/routines/r/history/runs/${id}`))?.body as HistoryRun;
+    }
+    assert.equal(got.state, 'done');
+    assert.deepEqual(got.result?.events.map((e) => e.outcome).sort(), ['filtered', 'started']);
+    assert.equal((await call('GET', '/api/routines/r/history/runs/abc123'))?.status, 404);
+    assert.equal((await call('DELETE', `/api/routines/r/history/runs/${id}`))?.status, 200);
+    assert.equal((await call('DELETE', '/api/routines/r/history/runs/abc123'))?.status, 404);
+    assert.equal((await call('POST', '/api/routines/Bad_Slug/history/runs'))?.status, 400);
+  } finally {
+    t.done();
+  }
+});
+
+test('пример событий: длинный текст — в блоке для flow обрезан, полная длина названа', async () => {
+  const t = setup();
+  try {
+    t.store.addHistory('src', [{ ...t.event('1'), text: 'я'.repeat(9000), fields: { big: 'x'.repeat(5000) } }]);
+    const e = (await t.engine.sourceEvents('src')).events[0]!;
+    assert.deepEqual(e.cut, { text: 9000, fields: 5010, textMax: 8000, fieldsMax: 4000 });
+    assert.equal(e.block.includes('я'.repeat(8001)), false);
+    assert.ok(e.block.includes('я'.repeat(8000)));
   } finally {
     t.done();
   }

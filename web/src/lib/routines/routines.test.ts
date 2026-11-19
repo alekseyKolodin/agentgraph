@@ -95,7 +95,8 @@ test('сборка RoutineSpec из шагов: источник с услови
   assert.deepEqual(spec, {
     title: 'Баг в #bugs → таска и фикс',
     enabled: false,
-    when: { source: 'slack-work', match: { channel: 'bugs', thread: false }, check: 'Это баг-репорт' },
+    // новый узел «ИИ рутины» спрашивает, когда не уверен (checkAsk у нового черновика включён)
+    when: { source: 'slack-work', match: { channel: 'bugs', thread: false }, check: 'Это баг-репорт', ask: true },
     run: { flow: 'bug-to-fix', space: 'billing', worktree: 'new', pause_before: ['fix'] },
     mode: 'until_pause',
     reply: { to: 'source', on: ['pause', 'end'], draft: true },

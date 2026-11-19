@@ -1,7 +1,7 @@
 // Условия рутины на поля события без модели (MatchRule в types.ts): ключ — поле события или путь в fields, суффикс —
 // оператор: без суффикса — равно (строки без учёта регистра, массив значений — любое из), `~` — содержит, `!` — не равно,
 // `>` `<` — числа. Поле-массив совпадает, если совпал хоть один элемент.
-import type { MatchRule, RoutineEvent } from './types.js';
+import type { EventField, MatchRule, RoutineEvent } from './types.js';
 
 type Op = '=' | '~' | '!' | '>' | '<';
 
@@ -98,4 +98,38 @@ export function matchRule(rule: MatchRule | undefined, e: RoutineEvent): { ok: b
     if (!r.ok) return r;
   }
   return { ok: true };
+}
+
+const FIELDS_MAX = 60;
+const FIELD_DEPTH = 4;
+const VALUE_MAX = 200;
+
+/**
+ * Поля события списком для примера в редакторе: пути через точку в fields — те же ключи, что принимает matchRule.
+ * Объекты разворачиваются (до FIELD_DEPTH уровней), список остаётся одним полем: условие сравнивает каждый его
+ * элемент. Пустые значения (null, '', [], {}) не показываются — условие на них написать не о чем.
+ */
+export function eventFields(e: Pick<RoutineEvent, 'fields'>): EventField[] {
+  const out: EventField[] = [];
+  const clip = (s: string) => (s.length > VALUE_MAX ? `${s.slice(0, VALUE_MAX - 1)}…` : s);
+  const walk = (v: unknown, key: string, depth: number): void => {
+    if (out.length >= FIELDS_MAX || v === null || v === undefined || v === '') return;
+    if (Array.isArray(v)) {
+      if (!v.length) return;
+      const scalar = v.every((x) => x === null || typeof x !== 'object');
+      out.push({ key, type: 'text', value: clip(scalar ? v.map((x) => String(x)).join(', ') : JSON.stringify(v)), list: true });
+    } else if (typeof v === 'object') {
+      const entries = Object.entries(v as Record<string, unknown>);
+      if (!entries.length) return;
+      // глубже не разворачиваем: «содержит» по такому полю ищет в его JSON
+      if (depth >= FIELD_DEPTH) out.push({ key, type: 'text', value: clip(JSON.stringify(v)) });
+      // ключ с точкой путём не достать (pathGet делит по точкам): такое поле не показываем
+      else for (const [k, x] of entries) if (k && !k.includes('.')) walk(x, key ? `${key}.${k}` : k, depth + 1);
+    } else if (typeof v === 'number') out.push({ key, type: 'number', value: String(v) });
+    else if (typeof v === 'boolean') out.push({ key, type: 'bool', value: String(v) });
+    else out.push({ key, type: 'text', value: clip(String(v)) });
+  };
+  walk(e.fields ?? {}, '', 0);
+  // имя верхнего поля события (title, text…) в условии значит его, а не fields.title: такому ключу нужен префикс
+  return out.map((f) => (TOP.has(f.key) ? { ...f, key: `fields.${f.key}` } : f));
 }

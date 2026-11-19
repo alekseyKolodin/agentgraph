@@ -278,10 +278,32 @@ test('сборка: сервис не подходит — ошибка слов
   });
   const first = await settle(b, b.start({ tools: [SEARCH], request: 'баги' }).id);
   const second = await settle(b, b.start({ tools: [SEARCH], request: 'баги', note: 'только #bugs-prod', from: first.id }).id);
-  assert.deepEqual(second, { id: second.id, state: 'error', error: 'В Slack нет такого канала' });
+  assert.deepEqual(second, { id: second.id, state: 'error', error: 'В Slack нет такого канала', costUsd: 0.01, model: BUILD_MODEL });
   assert.match(prompts[1], /только #bugs-prod/);
   assert.match(prompts[1], /Предыдущий вариант скрипта/);
   assert.throws(() => b.start({ tools: ['mcp__claude_ai_Slack__slack_send_message'], request: 'x' }), /похож на запись/);
+});
+
+test('сборка: модель — выбор человека, итог ждётся через done и несёт модель и расход; cancel прерывает сессию', async () => {
+  const reqs: SessionRequest[] = [];
+  const b = createConnectorBuilds({
+    session: async (req) => (reqs.push(req), { ...ok({ ok: true, expected: 1, steps: [step] }), model: 'claude-opus-5-5' }),
+    testSource: async () => found(1),
+    newId: () => `b${reqs.length + 1}`,
+  });
+  const v = await b.done(b.start({ tools: [SEARCH], request: 'баги', model: ' opus ' }).id)!;
+  assert.equal(reqs[0]!.model, 'opus');
+  assert.deepEqual([v.state, v.state === 'ready' && v.costUsd, v.state === 'ready' && v.model], ['ready', 0.01, 'opus']);
+  assert.equal(b.done('нет'), undefined);
+  // остановка: сессия получает abort, сборка кончается ошибкой, а не готовым источником
+  const hung = createConnectorBuilds({
+    session: (req) => new Promise((resolve) => req.abort!.signal.addEventListener('abort', () => resolve(ok({ ok: true, expected: 1, steps: [step] })))),
+    testSource: async () => found(1),
+    newId: () => 'h1',
+  });
+  hung.start({ tools: [SEARCH], request: 'баги' });
+  hung.cancel('h1');
+  assert.deepEqual(await hung.done('h1'), { id: 'h1', state: 'error', error: 'Сборка остановлена', costUsd: 0.01, model: BUILD_MODEL });
 });
 
 test('сборка: ответ модели → spec; битые аргументы — пустой объект, текстовый формат — регулярки', () => {

@@ -112,6 +112,11 @@ export type GenerateOptions = {
   onModel?: (model: string) => void;
   /** Подмена сессии в тестах. */
   deps?: { session: typeof runSession };
+  /**
+   * Слова человека, по которым решается, просил ли он permission_mode, add_dirs и plugins. По умолчанию — сама задача;
+   * когда задачу пишет не человек, а модель (помощник раздела), сюда идут его сообщения: модель себе права не выпишет.
+   */
+  asked?: string;
 };
 
 /** model — фактическая модель сессии (нет — init не пришёл), durationMs — весь вызов. */
@@ -148,7 +153,7 @@ export async function generateFlow(task: string, opts: GenerateOptions): Promise
   if (!raw) {
     throw new Error(`Генератор не вернул спецификацию (${result.subtype}${result.errors.length ? ': ' + result.errors.join('; ') : ''})`);
   }
-  const spec = compactSpec(tidyGenerated(FlowSchema.parse(GeneratedFlowSchema.parse(raw)), task, opts.cwd));
+  const spec = compactSpec(tidyGenerated(FlowSchema.parse(GeneratedFlowSchema.parse(raw)), opts.asked ?? task, opts.cwd));
   if (!spec.input) spec.input = task;
   validateReferences(spec);
   return { spec, result, model: result.model, durationMs: Date.now() - started };

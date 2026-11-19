@@ -426,8 +426,9 @@ export function estimateText(est: HistoryCheck['estimate']): string {
 
 /** Строка проверки на истории: слово исхода и расходится ли с прошлым ответом человека. */
 export function historyVerdict(e: HistoryCheck['events'][number]): { text: string; run: boolean; disagrees: boolean; why: string } {
-  const run = e.outcome === 'started' || e.outcome === 'waiting';
-  const text = run ? t('запуск') : e.outcome === 'duplicate' ? t('повтор') : t('пропуск');
+  // «ИИ не уверен» — не запуск и не пропуск: событие ждало бы человека
+  const run = !e.unsure && (e.outcome === 'started' || e.outcome === 'waiting');
+  const text = e.unsure ? t('спросит') : run ? t('запуск') : e.outcome === 'duplicate' ? t('повтор') : t('пропуск');
   const disagrees = Boolean(e.disagrees && e.past);
   const why = disagrees
     ? [{ match: t('Ты отметил это как подходящее, правило пропустило.'), no_match: t('Ты отметил это как неподходящее, правило запустило бы.'), not_duplicate: t('Ты отметил, что это не повтор, правило отсеяло как дубль.') }[e.past!], e.reason ?? ''].filter(Boolean).join(' ')

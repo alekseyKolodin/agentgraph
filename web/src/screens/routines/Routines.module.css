@@ -171,9 +171,13 @@ select.inp { height: 34px; }
 .history { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .hist-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .hist-big { font-size: var(--fs-h3); font-weight: 600; }
+/* проверка идёт: под уже проверенными событиями — что дальше */
+.hist-progress { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-small); color: var(--ink-2); text-wrap: pretty; }
+.hist-progress .spinner { flex: none; }
 .dr { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); font-size: var(--fs-small); align-items: baseline; }
 .dr-v { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .dr-v.run { color: var(--st-ok); }
+.dr-v.ask { color: var(--st-wait); }
 .dr-v.run.closed { color: var(--ink-3); }
 .dr-why { grid-column: 2 / -1; font-size: var(--fs-meta); color: var(--ink-3); }
 .dr > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -265,6 +269,20 @@ select.inp { height: 34px; }
 .preview > summary { cursor: pointer; font-size: var(--fs-meta); color: var(--ink-3); }
 .preview-text { margin: 8px 0 0; padding: 8px 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
 
+/* пример события в узлах «Условия по полям» и «ИИ рутины»: что приходит с сервиса */
+.sample-head { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; font-size: var(--fs-small); color: var(--ink-2); }
+.sample-rows { display: flex; flex-direction: column; max-height: 340px; overflow: auto; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.sample-row { display: grid; grid-template-columns: 168px minmax(0, 1fr) auto; gap: 10px; padding: 5px 10px; border-top: 1px solid var(--line); align-items: baseline; font-size: var(--fs-small); }
+.sample-row:first-child { border-top: 0; }
+.sample-key { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sample-key.path { font-family: var(--font-mono); font-size: var(--fs-meta); }
+.sample-val { color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sample-note { color: var(--ink-3); font-size: var(--fs-meta); }
+.sample-part { padding: 6px 10px 4px; border-top: 1px solid var(--line); font-size: var(--fs-cap); font-weight: 500; color: var(--ink-3); }
+@media (max-width: 700px) {
+  .sample-row { grid-template-columns: 96px minmax(0, 1fr) auto; }
+}
+
 /* раскрытая строка «Срабатываний»: событие, почему сработало, исправить */
 .why { display: flex; flex-direction: column; gap: 12px; padding: 8px 0 4px; }
 .why section { display: flex; flex-direction: column; gap: 6px; }
@@ -272,3 +290,27 @@ select.inp { height: 34px; }
 .why-event { color: var(--ink); }
 .why-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
 .why-conds { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+
+/* ---------- редактор-граф (docs/routines/design/v2): слева цепочка узлов, справа настройки выбранного и проверка на истории */
+.graph-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.graph-col { flex: 1 1 280px; max-width: 360px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.graph-note { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+.node-col { flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.node-col > .rule, .node-col > .history { flex: none; }
+.node-head { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.node-head h2 { margin: 0; font-size: var(--fs-h3); font-weight: 600; }
+.node-head + .clause { border-top: 0; }
+.node-about { flex: 1 1 100%; font-size: var(--fs-small); color: var(--ink-2); text-wrap: pretty; }
+.node-who { font-size: var(--fs-cap); font-weight: 500; border-radius: var(--r-xs); padding: 1px 6px; background: var(--select); color: var(--ink-2); white-space: nowrap; }
+.node-who.model { background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); }
+.node-who.me { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
+.plain { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-small); color: var(--ink-2); }
+.plain b { font-weight: 600; color: var(--ink); }
+.check-row { display: flex; gap: 8px; align-items: baseline; font-size: var(--fs-small); color: var(--ink-2); cursor: pointer; }
+.check-row b { font-weight: 600; color: var(--ink); }
+.check-row input { flex: none; }
+/* помощник: кто работает, что он знает и умеет, сколько потратил */
+.ai-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ai-chip { font-family: var(--font-mono); font-size: var(--fs-cap); border-radius: var(--r-xs); padding: 1px 6px; background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); white-space: nowrap; }
+.saved { font-size: var(--fs-meta); color: var(--ink-3); }
+.path-wrap { display: flex; flex-direction: column; gap: 6px; max-width: 520px; }

@@ -20,6 +20,10 @@ export type RoutineDraft = {
   source: string;
   conds: Condition[];
   check: string;
+  /** Модель узла «ИИ рутины» (when.model); '' — по умолчанию. Пишется в правило, только когда у узла есть условие. */
+  checkModel: string;
+  /** Исход «спросить меня» узла «ИИ рутины» (when.ask). У нового узла включён. */
+  checkAsk: boolean;
   schedule: ScheduleChoice;
   missed: 'ask' | 'skip';
   flow: string;
@@ -61,6 +65,8 @@ export function emptyDraft(): RoutineDraft {
     source: '',
     conds: [],
     check: '',
+    checkModel: '',
+    checkAsk: true,
     schedule: { preset: 'weekdays', time: DEFAULT_TIME },
     missed: 'ask',
     flow: '',
@@ -131,7 +137,9 @@ export function buildSpec(d: RoutineDraft, fields: MatchField[]): RoutineSpec {
   if (isSchedule(d)) when = { schedule: toCron(d.schedule), missed: d.missed };
   else {
     const match = buildMatch(d.conds, fields);
-    when = { source: d.source, ...(match ? { match } : {}), ...(d.check.trim() ? { check: d.check.trim() } : {}) };
+    // модель и «спросить меня» — настройки узла «ИИ рутины»: без условия словами узла нет, и в правило они не идут
+    const node = d.check.trim() ? { check: d.check.trim(), ...(d.checkModel.trim() ? { model: d.checkModel.trim() } : {}), ...(d.checkAsk ? { ask: true } : {}) } : {};
+    when = { source: d.source, ...(match ? { match } : {}), ...node };
   }
   const mode = d.mode;
   const limits = { usd: num(d.usd), per_day: num(d.perDay), parallel: num(d.parallel) };
@@ -179,6 +187,9 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
     source: sched ? SCHEDULE : w.source,
     conds: sched ? [] : parseMatch(w.match),
     check: sched ? '' : (w.check ?? ''),
+    checkModel: sched ? '' : (w.model ?? ''),
+    // у правила с условием — как записано (старые правила без поля не спрашивают); узла ещё нет — новый будет спрашивать
+    checkAsk: sched || !w.check?.trim() ? true : w.ask === true,
     schedule: sched ? fromCron(w.schedule) : d.schedule,
     missed: sched ? (w.missed ?? 'ask') : 'ask',
     flow: run?.flow ?? '',
@@ -227,7 +238,7 @@ const TRANSLIT: Record<string, string> = {
   с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 /** Адреса экранов /routines/new и /routines/connect: такие слаги заняли бы маршрут. */
-const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates', 'compose', 'check-dir']);
+const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant']);
 
 /** Слаг файла из названия: [a-z0-9-], не длиннее 48, свободный среди taken («-2», «-3»…). */
 export function slugify(title: string, taken: Iterable<string> = []): string {

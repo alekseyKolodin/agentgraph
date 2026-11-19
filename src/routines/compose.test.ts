@@ -204,3 +204,26 @@ test('собранная рутина проходит схему после п�
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('модель: выбор человека уходит в сессию и виден в ответе; без выбора — модель по умолчанию; фактическая модель сессии её заменяет', async () => {
+  const reqs: SessionRequest[] = [];
+  let n = 0;
+  const routes = createComposeRoutes(
+    { context: () => ctx, dir: dirOf(true) },
+    { newId: () => `m${++n}`, session: async (req) => {
+      reqs.push(req);
+      // модель сессия называет не сразу: до этого виден выбор человека
+      await new Promise((r) => setImmediate(r));
+      req.onModel?.('claude-opus-5-5');
+      return ok(base);
+    } },
+  );
+  assert.equal(routes.start('ревью моих MR', ' opus ').model, 'opus');
+  const chosen = await settle(routes, 'm1');
+  assert.equal(reqs[0]!.model, 'opus');
+  assert.equal(chosen.model, 'claude-opus-5-5');
+  assert.equal(routes.start('ревью моих MR').model, COMPOSE_MODEL);
+  await settle(routes, 'm2');
+  assert.equal(reqs[1]!.model, COMPOSE_MODEL);
+});
+

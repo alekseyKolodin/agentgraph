@@ -1,6 +1,7 @@
 // Редактор рутины (SPEC §6): «Проверить на истории» по несохранённому правилу, расхождение с прошлым ответом и «Учесть»,
 // включение черновика, правка YAML вручную, удаление источника, который используют рутины (409 в интерфейсе).
 import { expect, test } from '../support/env.js';
+import { openNode } from '../support/ui.js';
 
 test.beforeEach(async ({ e2e }) => {
   await e2e.slackSource();
@@ -27,6 +28,7 @@ test('проверка на истории: по последним событи
 
   // убрать проверку словами в форме: результат устарел, «Проверить снова» берёт правило из формы
   const calls = e2e.checkCalls().length;
+  await openNode(page, 'ИИ рутины');
   await page.locator('#cond').fill('');
   await expect(history).toContainText('правило поменялось — проверь снова');
   await history.getByRole('button', { name: 'Проверить снова' }).click();
@@ -66,7 +68,6 @@ test('расхождение с прошлым ответом: «Это не б�
 test('YAML вручную: правка сохраняется в файл и форма перечитывает её; ошибка схемы — с причинами', async ({ page, e2e }) => {
   await e2e.saveRoutine('bug', e2e.bugRoutine());
   await page.goto('/routines/bug');
-  await page.getByRole('button', { name: /Ещё/ }).click();
   await page.getByRole('button', { name: /Открыть YAML/ }).click();
   const yaml = page.getByRole('textbox', { name: 'YAML' });
   const text = await yaml.inputValue();
@@ -86,6 +87,7 @@ test('YAML вручную: правка сохраняется в файл и ф
   expect(r.spec).toMatchObject({ title: 'Баги из YAML', mode: 'suggest' });
   expect(r.yaml).toContain('title: Баги из YAML');
   // форма перечитала правило: «перед запуском» выбрано
+  await openNode(page, 'Ждать меня');
   await expect(page.getByRole('group', { name: 'Когда ждать меня' }).getByRole('button', { name: 'перед запуском' })).toHaveAttribute('aria-pressed', 'true');
 });
 
@@ -93,10 +95,12 @@ test('правка формы на включённой рутине: «Сохр
   await e2e.telegramSource();
   await e2e.saveRoutine('bug', e2e.bugRoutine());
   await page.goto('/routines/bug');
+  await openNode(page, 'ИИ рутины');
   await page.locator('#cond').fill('Это баг в оплате');
-  await page.getByRole('button', { name: /Ещё/ }).click();
+  await openNode(page, 'Запустить flow');
   await page.getByLabel('Запусков в день').fill('3');
   await page.getByLabel('Одновременно').fill('1');
+  await openNode(page, 'Ответить');
   await page.getByLabel('Куда писать').selectOption('tg-bot');
   await expect(page.getByText('есть несохранённые изменения')).toBeVisible();
   await page.getByRole('button', { name: 'Сохранить', exact: true }).click();

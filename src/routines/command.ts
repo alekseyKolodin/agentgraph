@@ -1,5 +1,7 @@
 // Вид источника command: любая команда печатает JSON, map говорит, где в нём записи и какие поля — id, заголовок,
 // текст… Ключи источника — переменными окружения команды (в файле источника только $ИМЯ). Таймаут — 60 с.
+// config.detail — вторая команда, для одного события: печатает его подробности (полную запись), которых нет в списке.
+// Событие она получает переменными окружения $EVENT_ID, $EVENT_LINK, $EVENT_TITLE — значения в текст команды не вставляются.
 import { spawn } from 'node:child_process';
 import type { RunCommand, SourceCtx, SourceKind } from './kind.js';
 import { BASE_MATCH, stampAt } from './kind.js';
@@ -126,6 +128,8 @@ export function parseOutput(stdout: string): unknown {
 }
 
 const command = (spec: SourceSpec): string => (typeof spec.config.command === 'string' ? spec.config.command : '');
+const detailCommand = (spec: SourceSpec): string => (typeof spec.config.detail === 'string' ? spec.config.detail.trim() : '');
+const cwdOf = (spec: SourceSpec): string | undefined => (typeof spec.config.cwd === 'string' && spec.config.cwd ? spec.config.cwd : undefined);
 
 export const commandKind: SourceKind = {
   kind: 'command',
@@ -136,15 +140,33 @@ export const commandKind: SourceKind = {
   setup: [
     { key: 'command', label: 'Команда', placeholder: 'curl -s -H "Authorization: Bearer $API_KEY" https://…', hint: 'Печатает JSON. Ключи — как $ИМЯ: значения подставятся переменными окружения' },
     { key: 'cwd', label: 'Папка', optional: true },
+    {
+      key: 'detail',
+      label: 'Подробности события',
+      optional: true,
+      placeholder: 'curl -s -H "Authorization: Bearer $API_KEY" "https://…/records/$EVENT_ID"',
+      hint: 'Вторая команда — для одного события, которое дошло до запуска flow: печатает то, чего нет в списке (полную запись встречи, письмо целиком). Событие — в $EVENT_ID, $EVENT_LINK и $EVENT_TITLE. Что она напечатает, flow получит целиком.',
+    },
   ],
   match: BASE_MATCH,
   async poll(ctx) {
     const cmd = command(ctx.spec);
     if (!cmd.trim()) throw new Error('Не задана команда (config.command)');
-    const cwd = typeof ctx.spec.config.cwd === 'string' && ctx.spec.config.cwd ? ctx.spec.config.cwd : undefined;
-    const r = await ctx.run(cmd, { env: secretEnv(ctx), cwd, timeoutMs: COMMAND_TIMEOUT_MS, signal: ctx.signal });
+    const r = await ctx.run(cmd, { env: secretEnv(ctx), cwd: cwdOf(ctx.spec), timeoutMs: COMMAND_TIMEOUT_MS, signal: ctx.signal });
     if (r.code !== 0) throw new Error(`Команда завершилась с кодом ${r.code}${r.stderr.trim() ? `: ${r.stderr.trim().slice(0, 500)}` : ''}`);
     return mapItems(parseOutput(r.stdout), ctx.spec.map, ctx.slug);
+  },
+  hasDetail: (spec) => Boolean(detailCommand(spec)),
+  async detail(ctx, e) {
+    const cmd = detailCommand(ctx.spec);
+    if (!cmd) throw new Error('Не задана команда подробностей (config.detail)');
+    // событие — данные сервиса: только переменными окружения, в текст команды они не попадают
+    const env = { ...secretEnv(ctx), EVENT_ID: e.id, EVENT_LINK: e.link ?? '', EVENT_TITLE: e.title };
+    const r = await ctx.run(cmd, { env, cwd: cwdOf(ctx.spec), timeoutMs: COMMAND_TIMEOUT_MS, signal: ctx.signal });
+    if (r.code !== 0) throw new Error(`Команда подробностей завершилась с кодом ${r.code}${r.stderr.trim() ? `: ${r.stderr.trim().slice(0, 500)}` : ''}`);
+    const out = r.stdout.trim();
+    if (!out) throw new Error('Команда подробностей ничего не напечатала');
+    return out;
   },
   describe: (spec) => command(spec),
 };

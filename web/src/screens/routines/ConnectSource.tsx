@@ -725,6 +725,8 @@ function ConnectorForm({ data, fromNew, service }: { data: RoutinesOverview; fro
 
 function Command({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
   const [cmd, setCmd] = useState('');
+  /** Вторая команда — подробности одного события перед запуском flow (config.detail). */
+  const [detail, setDetail] = useState('');
   const [title, setTitle] = useState('');
   const [map, setMap] = useState<FieldMap>(DEFAULT_MAP);
   const [mapOpen, setMapOpen] = useState(false);
@@ -737,7 +739,8 @@ function Command({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }
   const min = minEveryOf(data, 'command');
 
   const build = () => {
-    const spec = commandSpec(cmd, title, map, every);
+    const base = commandSpec(cmd, title, map, every);
+    const spec = detail.trim() ? { ...base, config: { ...base.config, detail: detail.trim() } } : base;
     const names = keys.map((k) => k.name.trim()).filter(Boolean);
     const secrets = Object.fromEntries(keys.filter((k) => k.name.trim() && k.value.trim()).map((k) => [k.name.trim(), k.value.trim()]));
     return { spec: names.length ? { ...spec, secrets: names } : spec, secrets };
@@ -801,6 +804,11 @@ function Command({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }
             ))}
           </div>
           <span className={styles.hint}>{t('Пути через точку: data.items, meta.id. Ключи команда получает переменными окружения: $ИМЯ.')}</span>
+          <label className={styles.field}>
+            <span className={styles.lbl}>{t('Подробности события')} · {t('необязательно')}</span>
+            <textarea className={cx(styles.inp, styles.mono)} rows={2} value={detail} placeholder={'curl -s -H "Authorization: Bearer $API_KEY" "https://…/records/$EVENT_ID"'} onChange={(e) => setDetail(e.target.value)} />
+            <span className={styles.hint}>{t('Вторая команда — для одного события, которое дошло до запуска flow: печатает то, чего нет в списке (полную запись встречи, письмо целиком). Событие — в $EVENT_ID, $EVENT_LINK и $EVENT_TITLE. Что она напечатает, flow получит целиком.')}</span>
+          </label>
           {keys.map((k, i) => (
             <div key={i} className={styles.inline}>
               <input className={cx(styles.inp, styles.mono, styles.flowSearch)} placeholder="API_KEY" aria-label={t('Имя ключа')} value={k.name} onChange={(e) => setKeys(keys.map((x, j) => (j === i ? { ...x, name: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') } : x)))} />

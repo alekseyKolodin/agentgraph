@@ -50,6 +50,13 @@ export type SourceKind = {
   canReplyFor?: (spec: SourceSpec) => boolean;
   /** Защита от петли: сообщение своего бота / ответ в треде — не событие. */
   isSelf?: (ctx: SourceCtx, e: RoutineEvent) => boolean;
+  /**
+   * Подробности одного события — то, чего нет в списке записей (полная транскрипция встречи, письмо целиком). Движок
+   * зовёт это один раз на событие, которое дошло до запуска flow, и отдаёт ответ flow целиком. Пустой ответ — ошибка.
+   */
+  detail?: (ctx: SourceCtx, e: RoutineEvent) => Promise<string>;
+  /** Настроены ли подробности у источника с такими настройками. Нет функции — настроены у любого источника вида с detail. */
+  hasDetail?: (spec: SourceSpec) => boolean;
   /** Что будет выполняться — для «Что будет выполняться» и SourceTestResult.request (секреты замаскировать). */
   describe: (spec: SourceSpec) => string;
 };

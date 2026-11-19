@@ -2,7 +2,7 @@
 // ожидание человека; лимиты per_day / parallel (очередь) / usd; ответ наружу на start / pause / end (с черновиком);
 // события простоя и пропущенное расписание — в «догнать»; журнал. Все внешние эффекты — через deps: запуск flow,
 // продолжение и остановка запуска, время, таймеры, fetch, команды и проверка словами. Сервер связывает их в server.ts.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,11 +11,11 @@ import { STATUS_LABEL } from '../reporters.js';
 import { SESSION_PROMPT_MAX } from '../sessions.js';
 import type { RunStatus } from '../api-types.js';
 import type { Notice } from '../notify.js';
-import { checkEvent, eventText, type CheckInput, type CheckResult } from './check.js';
+import { checkEvent, checkPrompt, eventText, EVENT_FIELDS_MAX, EVENT_TEXT_MAX, type CheckInput, type CheckResult } from './check.js';
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
 import { acquireEngineLock, type EngineOwner, type LockDeps } from './lock.js';
-import { explainMatch, matchRule } from './match.js';
+import { eventFields, explainMatch, matchRule } from './match.js';
 import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
@@ -30,9 +30,12 @@ import { projectOfPath } from '../spaces.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, SnapshotEntry, SourceChecks, StoredWait } from './store.js';
 import { LogReadError, RoutineStore } from './store.js';
 import type {
+  FormDraft,
   CatchUp,
   Feedback,
+  EventDetail,
   HistoryCheck,
+  HistoryRun,
   LogAsk,
   LogExplain,
   LogRecheck,
@@ -44,6 +47,7 @@ import type {
   RoutineView,
   RoutineWait,
   SourceCheckNow,
+  SourceEvents,
   SourceKindView,
   SourceSpec,
   SourceStatus,
@@ -178,6 +182,8 @@ export class RoutineEngine {
   /** Источники, чья первая пачка после старта движка уже пришла: события простоя — только в ней. */
   private readonly firstDone = new Set<string>();
   private readonly pollAbort = new AbortController();
+  /** Проверки на истории с ходом (startHistory): в памяти процесса. */
+  private readonly historyRuns = new Map<string, HistoryJob>();
   private tickHandle: unknown;
   private startedAt: Date;
   private running = false;
@@ -849,6 +855,9 @@ export class RoutineEngine {
     let checkCost: number | undefined;
     /** Проверка словами сочла событие повтором (рутина с делом): дело получает сигнал, запуска нет. */
     let modelDup: string | undefined;
+    /** Узел «ИИ рутины» не уверен (when.ask): событие ждёт человека, какой бы ни был режим. */
+    let unsure = false;
+    let checkModel: string | undefined;
     const task = taskFromEvent(spec);
     // «догнать» у рутины с делом: событие простоя уже прошло путь и завело дело — проверку словами второй раз не платим
     const seededRow = task && o.noPut ? this.seededRow(slug, e) : undefined;
@@ -867,16 +876,20 @@ export class RoutineEngine {
         const x = this.examples(slug);
         let c: CheckResult;
         try {
-          c = await this.checkFn({ condition: spec.when.check, event: e, recent: x.recent, rejected: x.rejected, positive: x.positive, notDuplicate: x.notDuplicate });
+          c = await this.checkFn({ condition: spec.when.check, event: e, recent: x.recent, rejected: x.rejected, positive: x.positive, notDuplicate: x.notDuplicate, ...nodeOf(spec.when) });
         } catch (err) {
           return this.record(slug, e, 'error', { reason: msg(err) });
         }
-        const cost = c.costUsd > 0 ? { costUsd: c.costUsd, checkCostUsd: c.costUsd } : {};
+        checkModel = c.model;
+        const cost = { ...(c.costUsd > 0 ? { costUsd: c.costUsd, checkCostUsd: c.costUsd } : {}), ...(c.model ? { checkModel: c.model } : {}) };
+        // «не уверена» при when.ask — не отсев: событие дойдёт до человека карточкой «Запустить?». Спрашивать есть о чём,
+        // только когда есть что запускать: у рутины без flow и при засеве дел неуверенный ответ — «не подошло»
+        unsure = c.unsure === true && asksMe(spec) && !o.seed;
         // засев: неподошедшее журнал не забивает, но расход проверки остаётся в журнале одной строкой check_no
-        if (!c.match) return o.seed && !c.costUsd ? { outcome: 'check_no', reason: c.reason } : this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
+        if (!c.match && !unsure) return o.seed && !c.costUsd ? { outcome: 'check_no', reason: c.reason } : this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
         // «Не повтор» от человека сильнее ответа модели. У рутины с делом повтор режет только запуск: сигнал о том же
         // дело получает (ниже), как и при повторе по вещи
-        if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') {
+        if (c.duplicate && !unsure && x.verdicts.get(e.id) !== 'not_duplicate') {
           if (!task) return this.record(slug, e, 'duplicate', { reason: c.reason, ...cost });
           modelDup = c.reason?.trim() || 'повтор недавнего';
         }
@@ -885,10 +898,12 @@ export class RoutineEngine {
       }
     }
     // проверка словами у подошедшего события стоит денег так же: её расход — в строку ожидания или запуска
-    const spent = checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {};
+    const spent = { ...(checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {}), ...(checkModel ? { checkModel } : {}), ...(unsure ? { unsure: true } : {}) };
     let deskKey: string | undefined;
     if (task) {
-      if (o.noPut) deskKey = seededRow?.deskKey;
+      // «догнать»: дело события простоя уже завелось при приходе. Неуверенное событие засев делом не сделал («не
+      // подошло») — его дело заводится сейчас, чтобы ожидание было с делом, как у живого события
+      if (o.noPut && !(unsure && !seededRow)) deskKey = seededRow?.deskKey;
       else {
         try {
           deskKey = await this.putTask(slug, spec, task, e, why);
@@ -906,7 +921,8 @@ export class RoutineEngine {
         if (same) return this.record(slug, e, 'duplicate', { reason: same.reason, sameAs: { routine: same.routine, logId: same.logId }, ...(deskKey ? { deskKey } : {}), ...spent });
       }
     }
-    if (spec.mode === 'suggest' && !o.human) {
+    // «спросить меня» узла ИИ сильнее режима и «догнать»: неуверенное событие не запускается без ответа человека
+    if ((spec.mode === 'suggest' && !o.human) || unsure) {
       const entry = this.log(slug, e, 'waiting', { ...(why ? { why } : {}), ...spent, ...(deskKey ? { deskKey } : {}) });
       const wait: RoutineWait = {
         id: newId(),
@@ -915,6 +931,7 @@ export class RoutineEngine {
         event: e,
         kind: 'suggest',
         question: routineTexts(e).suggest(spec.title, e.title),
+        ...(unsure && why ? { context: `ИИ рутины не уверен: ${why}` } : {}),
         at: this.now().toISOString(),
         // 3.8: ожидание рутины с task — это дело в «Новом» с кнопкой «Запустить»
         ...(deskKey ? { deskKey } : {}),
@@ -925,7 +942,7 @@ export class RoutineEngine {
       if (!o.quiet) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
       return { outcome: 'waiting', wait };
     }
-    return this.launch(slug, spec, e, { human: o.human, why, checkCost, deskKey });
+    return this.launch(slug, spec, e, { human: o.human, why, checkCost, checkModel, deskKey });
   }
 
   /** Строка журнала «дело» по этому событию (засев, простой): с ней «догнать» не проверяет и не заводит дело заново. */
@@ -1068,10 +1085,10 @@ export class RoutineEngine {
   }
 
   /** Запуск с лимитами: per_day (кроме решения человека), parallel — в очередь, usd — бюджет запуска. */
-  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; attempts?: number; why?: string; checkCost?: number; /** Дело события: запуск переносит его «В работу». */ deskKey?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
+  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; attempts?: number; why?: string; checkCost?: number; /** Модель узла «ИИ рутины», решавшая по событию. */ checkModel?: string; /** Дело события: запуск переносит его «В работу». */ deskKey?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
     const lim = spec.limits ?? {};
     // строка ожидания или очереди уже хранит why и расход проверки — патч их не трогает
-    const w = { ...(o.why ? { why: o.why } : {}), ...(o.checkCost ? { costUsd: o.checkCost, checkCostUsd: o.checkCost } : {}) };
+    const w = { ...(o.why ? { why: o.why } : {}), ...(o.checkCost ? { costUsd: o.checkCost, checkCostUsd: o.checkCost } : {}), ...(o.checkModel ? { checkModel: o.checkModel } : {}) };
     // сервер останавливается: запуск не начинаем, событие ждёт в очереди следующего старта (виденным оно уже стало)
     if (this.stopped) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId, ...w });
@@ -1092,7 +1109,9 @@ export class RoutineEngine {
     // слот занят до await: worktree с git fetch идёт долго, и второй запуск в это время не должен пройти лимиты
     this.starting.set(slug, (this.starting.get(slug) ?? 0) + 1);
     try {
-      runId = await this.deps.startRun({ routine: slug, spec, event: e, eventBlock: eventBlock(e), pauseBefore });
+      // подробности события (полная запись) — один запрос источника перед самым запуском: до него дошло не каждое событие
+      const detail = await this.eventDetail(e);
+      runId = await this.deps.startRun({ routine: slug, spec, event: e, eventBlock: eventBlock(e, detail), pauseBefore });
     } catch (err) {
       const why = `запуск не начался: ${msg(err)}`;
       const attempts = (o.attempts ?? 0) + 1;
@@ -1690,8 +1709,52 @@ export class RoutineEngine {
         missingSecrets: missing,
         usedBy: used.get(f.slug) ?? [],
         canReply: f.spec ? this.canReply(f.spec) : false,
+        ...(f.spec && this.hasDetail(f.spec) ? { detail: true } : {}),
       };
     });
+  }
+
+  /** Настроены ли у источника подробности события (kind.detail). */
+  private hasDetail(spec: SourceSpec): boolean {
+    const k = this.kind(spec.kind);
+    if (!k?.detail) return false;
+    try {
+      return k.hasDetail ? k.hasDetail(spec) : true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Подробности события перед запуском flow: источник дозапрашивает то, чего нет в списке записей (полную запись).
+   * Не настроены — undefined. Не получены — ошибка: запуск без них flow разобрал бы не то, о чём просили.
+   */
+  private async eventDetail(e: Pick<RoutineEvent, 'source' | 'id' | 'title' | 'link'>): Promise<string | undefined> {
+    const src = this.store.source(e.source);
+    const kind = src?.spec && this.kind(src.spec.kind);
+    if (!src?.spec || !kind?.detail || !this.hasDetail(src.spec)) return undefined;
+    const missing = this.missingSecrets(src.spec);
+    if (missing.length) throw new Error(`подробности события не получены: не хватает ключей ${missing.join(', ')}`);
+    try {
+      return await kind.detail(this.ctx(e.source, src.spec, this.pollAbort.signal, { readonlyCursor: true }), { source: e.source, id: e.id, at: '', title: e.title, text: '', ...(e.link ? { link: e.link } : {}), fields: {} });
+    } catch (err) {
+      throw new Error(`подробности события не получены: ${redact(msg(err), this.store.secrets())}`);
+    }
+  }
+
+  /** «Получит» в редакторе: подробности одного события тем же запросом, что перед запуском flow. Ничего не запускает. */
+  async detailPreview(slug: string, body: { id?: unknown; link?: unknown; title?: unknown }): Promise<EventDetail> {
+    const src = this.store.source(slug);
+    if (!src) throw new HttpishError(404, 'Источник не найден');
+    if (!src.spec || !this.hasDetail(src.spec)) throw new HttpishError(400, 'У источника не настроены подробности события');
+    if (typeof body.id !== 'string' || !body.id.trim()) throw new HttpishError(400, 'Нужен id события');
+    const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
+    try {
+      const text = (await this.eventDetail({ source: slug, id: body.id.slice(0, 500), title: str(body.title, 300), link: str(body.link, 2000) })) ?? '';
+      return { block: detailBlock(text), chars: text.length, max: EVENT_DETAIL_MAX };
+    } catch (err) {
+      return { max: EVENT_DETAIL_MAX, error: msg(err) };
+    }
   }
 
   /** Умеет ли источник ответить: вид с reply, а если ответ настраивается в источнике — только с настроенным. */
@@ -1767,6 +1830,24 @@ export class RoutineEngine {
     return this.routineView(slug)!;
   }
 
+  // ---- черновик формы «Новая рутина»: сервер хранит его как есть, чтобы уход с экрана ничего не стирал
+
+  formDraft(): FormDraft | null {
+    return this.store.formDraft() ?? null;
+  }
+
+  saveFormDraft(data: unknown): { at: string } {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) throw new HttpishError(400, 'Черновик — объект с состоянием формы');
+    if (Buffer.byteLength(JSON.stringify(data), 'utf8') > FORM_DRAFT_MAX) throw new HttpishError(413, 'Черновик слишком большой');
+    const at = this.now().toISOString();
+    this.store.setFormDraft({ at, data });
+    return { at };
+  }
+
+  dropFormDraft(): void {
+    this.store.setFormDraft(undefined);
+  }
+
   deleteRoutine(slug: string): void {
     if (!this.store.deleteRoutine(slug)) throw new HttpishError(404, 'Рутина не найдена');
     this.store.deleteRoutineState(slug);
@@ -1837,7 +1918,9 @@ export class RoutineEngine {
   }
 
   /** «Проверить на истории»: последние события источника (журнал + свежий опрос без записи курсора) через условия и проверку. */
-  async history(slug: string, body: { spec?: unknown; limit?: number }): Promise<HistoryCheck> {
+  /** signal — проверку прервали (помощник остановлен): оставшиеся события модель уже не читает. */
+  /** onStart — сколько событий проверяется (после опроса источника); onRow — событие проверено (i — его место в итоге). */
+  async history(slug: string, body: { spec?: unknown; limit?: number; signal?: AbortSignal; onStart?: (total: number) => void; onRow?: (i: number, row: HistoryCheck['events'][number]) => void }): Promise<HistoryCheck> {
     let spec: RoutineSpec | undefined;
     if (body.spec !== undefined) {
       const p = parseRoutine(body.spec);
@@ -1861,21 +1944,50 @@ export class RoutineEngine {
     }
     const list = [...events.values()].sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
     const past = this.pastVerdicts(slug);
-    const out: HistoryCheck['events'] = [];
     let disagreements = 0;
-    for (const e of list) {
-      let outcome: HistoryCheck['events'][number]['outcome'] = spec.mode === 'suggest' ? 'waiting' : 'started';
+    /** Узел «ИИ рутины» за эту проверку: сколько событий прочитал, чем и за сколько; cached — ответы из прошлых проверок. */
+    const checked: { model?: string; costUsd: number; events: number; cached: number } = { costUsd: 0, events: 0, cached: 0 };
+    // то же событие по тому же условию, примерам и модели модель второй раз не читает: ответ лежит в кэше рутины
+    const cache = this.store.checkCache(slug);
+    const node = nodeOf(spec.when);
+    const rule = spec;
+    const when = spec.when;
+    // модель читает события по несколько сразу: по одному 30 событий — это минуты ожидания
+    body.onStart?.(list.length);
+    const out = await inPool(list, HISTORY_PARALLEL, async (e, at): Promise<HistoryCheck['events'][number]> => {
+      if (body.signal?.aborted) throw new HttpishError(499, 'Проверка на истории остановлена');
+      let outcome: HistoryCheck['events'][number]['outcome'] = rule.mode === 'suggest' ? 'waiting' : 'started';
       let reason: string | undefined;
-      const m = matchRule(spec.when.match, e);
+      let unsure = false;
+      let checkCost: number | undefined;
+      const m = matchRule(when.match, e);
       if (!m.ok) {
         outcome = 'filtered';
         reason = m.reason;
-      } else if (spec.when.check?.trim()) {
+      } else if (when.check?.trim()) {
         try {
           const x = this.examples(slug, e.id);
-          const c = await this.checkFn({ condition: spec.when.check, event: e, recent: x.recent, rejected: x.rejected, positive: x.positive, notDuplicate: x.notDuplicate });
+          const input: CheckInput = { condition: when.check, event: e, recent: x.recent, rejected: x.rejected, positive: x.positive, notDuplicate: x.notDuplicate, ...node };
+          const key = checkKey(input);
+          const hit = cache[key];
+          const c = hit ? { ...hit, costUsd: 0 } : await this.checkFn(input);
+          if (hit) checked.cached++;
+          else {
+            // ответ запоминается сразу: за него уже заплачено, и перезапуск посреди проверки его не теряет
+            const { costUsd: _cost, ...answer } = c;
+            const all = this.store.checkCache(slug);
+            delete all[key];
+            this.store.setCheckCache(slug, { ...all, [key]: answer });
+          }
           reason = c.reason;
-          if (!c.match) outcome = 'check_no';
+          checked.events++;
+          checked.costUsd += c.costUsd;
+          checked.model ??= c.model;
+          if (c.costUsd > 0) checkCost = c.costUsd;
+          if (c.unsure && asksMe(rule)) {
+            unsure = true;
+            outcome = 'waiting';
+          } else if (!c.match) outcome = 'check_no';
           else if (c.duplicate && past.get(e.id) !== 'not_duplicate') outcome = 'duplicate';
         } catch (err) {
           outcome = 'check_no';
@@ -1883,17 +1995,75 @@ export class RoutineEngine {
         }
       }
       const was = past.get(e.id);
-      const disagrees = was !== undefined && disagree(was, outcome);
+      // «не уверен, спрошу» с прошлым ответом человека не расходится: решение ещё за ним
+      const disagrees = was !== undefined && !unsure && disagree(was, outcome);
       if (disagrees) disagreements++;
-      out.push({ event: e, outcome, ...(reason ? { reason } : {}), ...(was ? { past: was, disagrees } : {}) });
-    }
+      const row = { event: e, outcome, ...(reason ? { reason } : {}), ...(unsure ? { unsure } : {}), ...(checkCost ? { checkCostUsd: checkCost } : {}), ...(was ? { past: was, disagrees } : {}) };
+      body.onRow?.(at, row);
+      return row;
+    });
     const tasks = await this.historyTasks(spec, out);
     // рутина без flow не запускает: оценки запусков и «Что получит flow» у неё нет
     const estimate = spec.run ? this.estimate(slug, spec, out) : undefined;
     const shown = out.find((x) => x.outcome === 'started' || x.outcome === 'waiting') ?? out[0];
     const task = spec.run?.input?.trim();
     const preview = spec.run && shown && { eventId: shown.event.id, ...(task ? { task } : {}), event: eventBlock(shown.event) };
-    return { events: out, disagreements, ...(tasks !== undefined ? { tasks } : {}), ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}) };
+    return { events: out, disagreements, ...(checked.events ? { check: { ...(checked.model ? { model: checked.model } : {}), costUsd: checked.costUsd, events: checked.events, ...(checked.cached ? { cached: checked.cached } : {}) } } : {}), ...(tasks !== undefined ? { tasks } : {}), ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}) };
+  }
+
+  /**
+   * Проверка на истории с ходом: начинается и сразу отвечает, дальше экран спрашивает historyRun(id) и рисует строки по
+   * мере готовности. Та же проверка (рутина, правило, предел), пока она идёт, второй раз не начинается: экран открыли
+   * заново — он получает её же, а модель не читает события дважды. Правило поменяли — прежняя проверка останавливается.
+   */
+  startHistory(slug: string, body: { spec?: unknown; limit?: number }): HistoryRun {
+    const key = JSON.stringify([slug, body.spec ?? null, body.limit ?? null]);
+    for (const r of this.historyRuns.values()) {
+      if (r.state !== 'working' || r.slug !== slug) continue;
+      if (r.key === key) return historyRunView(r);
+      r.abort.abort();
+    }
+    const run: HistoryJob = { id: randomBytes(6).toString('hex'), slug, key, state: 'working', total: 0, rows: [], abort: new AbortController() };
+    this.historyRuns.set(run.id, run);
+    // помним последние проверки: законченные старые вытесняются, идущие остаются
+    for (const [id, r] of this.historyRuns) {
+      if (this.historyRuns.size <= HISTORY_RUNS_MAX) break;
+      if (r.state !== 'working') this.historyRuns.delete(id);
+    }
+    void this.history(slug, {
+      ...body,
+      signal: run.abort.signal,
+      onStart: (total) => {
+        run.total = total;
+        run.rows = new Array<HistoryCheck['events'][number] | undefined>(total);
+      },
+      onRow: (i, row) => void (run.rows[i] = row),
+    }).then(
+      (result) => {
+        run.state = 'done';
+        run.result = result;
+        run.total = result.events.length;
+      },
+      (err) => {
+        run.state = 'error';
+        const problems = err instanceof HttpishError ? (err.body?.problems as string[] | undefined) : undefined;
+        run.error = [msg(err), ...(problems ?? [])].join(': ');
+      },
+    );
+    return historyRunView(run);
+  }
+
+  historyRun(slug: string, id: string): HistoryRun | undefined {
+    const r = this.historyRuns.get(id);
+    return r && r.slug === slug ? historyRunView(r) : undefined;
+  }
+
+  /** Остановить проверку: события, которые модель ещё не начала читать, не читаются; прочитанное остаётся в кэше. */
+  stopHistory(slug: string, id: string): boolean {
+    const r = this.historyRuns.get(id);
+    if (!r || r.slug !== slug) return false;
+    r.abort.abort();
+    return true;
   }
 
   /**
@@ -1946,7 +2116,8 @@ export class RoutineEngine {
   /** Сколько запусков в неделю дала бы эта частота подходящих событий и во что обойдётся (средняя прошлых запусков). */
   private estimate(slug: string, spec: RoutineSpec, events: HistoryCheck['events']): HistoryCheck['estimate'] {
     if (!events.length) return undefined;
-    const runs = events.filter((x) => x.outcome === 'started' || x.outcome === 'waiting').length;
+    // неуверенное событие (ИИ рутины спросит человека) — ещё не запуск: в оценку расхода не идёт
+    const runs = events.filter((x) => (x.outcome === 'started' || x.outcome === 'waiting') && !x.unsure).length;
     const times = events.map((x) => Date.parse(x.event.at)).filter(Number.isFinite);
     const now = this.now().getTime();
     const oldest = times.length ? Math.min(...times) : now;
@@ -2016,18 +2187,23 @@ export class RoutineEngine {
       conditions: when && event ? explainMatch(when.match, event) : [],
       ...(when?.check?.trim() ? { check: when.check.trim() } : {}),
       ...(answer ? { answer } : {}),
+      ...(when?.model?.trim() ? { model: when.model.trim() } : {}),
+      ...(when?.ask ? { ask: true } : {}),
     };
   }
 
   /** Проверка словами на событии строки журнала заново: текст из body (исправленное «Если» до сохранения) или правила. */
-  async recheck(slug: string, logId: string, body: { check?: unknown }): Promise<LogRecheck> {
+  async recheck(slug: string, logId: string, body: { check?: unknown; model?: unknown; ask?: unknown }): Promise<LogRecheck> {
     const x = this.explain(slug, logId);
     if (!x.event) throw new HttpishError(404, 'Событие уже не хранится: проверить не на чем');
     const condition = (typeof body.check === 'string' ? body.check : x.check ?? '').trim().slice(0, 4000);
     if (!condition) throw new HttpishError(400, 'Напиши, какие события запускать');
     const ex = this.examples(slug, x.event.id);
-    const c = await this.checkFn({ condition, event: x.event, recent: ex.recent, rejected: ex.rejected, positive: ex.positive, notDuplicate: ex.notDuplicate });
-    return { match: c.match, duplicate: Boolean(c.duplicate), reason: c.reason, costUsd: c.costUsd };
+    // модель и «спросить меня» — из body (несохранённая правка узла) или из правила
+    const model = (typeof body.model === 'string' ? body.model : x.model ?? '').trim().slice(0, 100);
+    const ask = typeof body.ask === 'boolean' ? body.ask : x.ask === true;
+    const c = await this.checkFn({ condition, event: x.event, recent: ex.recent, rejected: ex.rejected, positive: ex.positive, notDuplicate: ex.notDuplicate, ...(model ? { model } : {}), ...(ask ? { ask } : {}) });
+    return { match: c.match, duplicate: Boolean(c.duplicate), reason: c.reason, costUsd: c.costUsd, ...(c.unsure && ask ? { unsure: true } : {}), ...(c.model ? { model: c.model } : {}) };
   }
 
   /** Стартовый запрос сессии «Спросить Claude» по строке журнала: событие (данными), проверка условий, YAML рутины и
@@ -2147,6 +2323,33 @@ export class RoutineEngine {
     }
   }
 
+  /**
+   * Пример событий источника для редактора рутины: что приходит с сервиса и какие у события поля. Без fresh — последние
+   * события из журнала источника (ни опроса, ни модели). fresh — пробный опрос сейчас (testSource): журнал пуст, пока
+   * источник не нужен ни одной включённой рутине.
+   */
+  async sourceEvents(slug: string, o: { fresh?: boolean; limit?: number } = {}): Promise<SourceEvents> {
+    const src = this.store.source(slug);
+    if (!src) throw new HttpishError(404, 'Источник не найден');
+    const limit = Math.min(Math.max(Number(o.limit) || 5, 1), 10);
+    const pack = (list: RoutineEvent[]) =>
+      list.slice(0, limit).map((event) => {
+        const text = event.text?.length ?? 0;
+        const fields = JSON.stringify(event.fields ?? {}).length;
+        const cut = text > EVENT_TEXT_MAX || fields > EVENT_FIELDS_MAX;
+        return {
+          event,
+          fields: eventFields(event),
+          block: eventBlock(event),
+          ...(cut ? { cut: { ...(text > EVENT_TEXT_MAX ? { text } : {}), ...(fields > EVENT_FIELDS_MAX ? { fields } : {}), textMax: EVENT_TEXT_MAX, fieldsMax: EVENT_FIELDS_MAX } } : {}),
+        };
+      });
+    if (!o.fresh) return { events: pack([...this.store.history(slug)].sort((a, b) => b.at.localeCompare(a.at))), from: 'history' };
+    if (!src.spec) throw new HttpishError(400, 'Источник не прошёл проверку', { problems: src.problems });
+    const r = await this.testSource(src.spec);
+    return { events: pack(r.sample), from: 'poll', ...(r.ok ? {} : { error: r.error ?? 'Источник не ответил' }) };
+  }
+
   /** То, что ядро даёт подключению словами (sources/draft.ts). */
   draftDeps(): DraftDeps {
     return {
@@ -2259,8 +2462,58 @@ function askPrompt(o: { question: string; x: LogExplain; slug: string; routineYa
 
 /** Ответ человека расходится с тем, что решило бы правило сейчас. */
 /** Что сервер дописывает к задаче flow при запуске рутины; предпросмотр в проверке на истории — тем же текстом. */
-export function eventBlock(e: RoutineEvent): string {
-  return `Событие:\n${wrapData(eventText(e))}`;
+/** Сколько знаков подробностей события уходит во вход flow: двухчасовая встреча — около 150 тысяч. */
+export const EVENT_DETAIL_MAX = 400_000;
+
+/** Подробности события для входа flow: текст сервиса — данными, длиннее предела — обрезан с пометкой. */
+export function detailBlock(detail: string): string {
+  const cut = detail.length > EVENT_DETAIL_MAX;
+  const note = cut ? ` (обрезано: первые ${EVENT_DETAIL_MAX} знаков из ${detail.length})` : '';
+  return `Подробности события — полная запись из источника${note}:\n${wrapData(cut ? detail.slice(0, EVENT_DETAIL_MAX) : detail)}`;
+}
+
+/** detail — подробности события (kind.detail): дописываются после события. */
+export function eventBlock(e: RoutineEvent, detail?: string): string {
+  const base = `Событие:\n${wrapData(eventText(e))}`;
+  return detail ? `${base}\n\n${detailBlock(detail)}` : base;
+}
+
+/** Сколько проверок на истории с ходом помнится. */
+const HISTORY_RUNS_MAX = 10;
+
+type HistoryJob = { id: string; slug: string; key: string; state: HistoryRun['state']; total: number; rows: Array<HistoryCheck['events'][number] | undefined>; abort: AbortController; result?: HistoryCheck; error?: string };
+
+function historyRunView(r: HistoryJob): HistoryRun {
+  return {
+    id: r.id,
+    state: r.state,
+    total: r.total,
+    events: r.result ? r.result.events : r.rows.filter((x): x is HistoryCheck['events'][number] => x !== undefined),
+    ...(r.result ? { result: r.result } : {}),
+    ...(r.error ? { error: r.error } : {}),
+  };
+}
+
+/** Сколько событий узел «ИИ рутины» читает одновременно на проверке на истории. */
+const HISTORY_PARALLEL = 4;
+
+/** Ключ ответа узла «ИИ рутины»: всё, что уходит модели (условие, событие, примеры, «кто я»), модель и исход «спросить меня». */
+function checkKey(input: CheckInput): string {
+  return createHash('sha256').update(JSON.stringify([input.model ?? '', input.ask === true, checkPrompt(input)])).digest('hex').slice(0, 32);
+}
+
+/** fn по списку, не больше n одновременно; итог — в порядке списка. Первая ошибка обрывает всё. */
+async function inPool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
 }
 
 function disagree(past: Feedback['verdict'], outcome: HistoryCheck['events'][number]['outcome']): boolean {
@@ -2410,6 +2663,19 @@ export function redact(text: string, secrets: Record<string, string>): string {
   let out = text;
   for (const v of Object.values(secrets)) if (v && v.length >= 4) out = out.split(v).join('••••');
   return out;
+}
+
+/** Потолок черновика формы «Новая рутина», байт JSON: форма с длинной задачей flow и десятком условий — единицы КБ. */
+export const FORM_DRAFT_MAX = 100_000;
+
+/** Настройки узла «ИИ рутины» для проверки словами: модель (when.model) и исход «спросить меня» (when.ask). */
+function nodeOf(when: { model?: string; ask?: boolean }): { model?: string; ask?: boolean } {
+  return { ...(when.model?.trim() ? { model: when.model.trim() } : {}), ...(when.ask ? { ask: true } : {}) };
+}
+
+/** Исход «спросить меня» действует: он включён (when.ask) и рутине есть что запускать. Без flow спрашивать не о чем. */
+function asksMe(spec: RoutineSpec): boolean {
+  return !isSchedule(spec.when) && spec.when.ask === true && Boolean(spec.run);
 }
 
 /** Битый файл правила: показываем со слагом в заголовке, чтобы его можно было открыть и поправить. */

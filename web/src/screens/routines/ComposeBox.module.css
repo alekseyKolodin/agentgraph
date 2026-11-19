@@ -27,3 +27,11 @@
 .forgeErr { color: var(--st-fail); font-size: var(--fs-small); text-wrap: pretty; }
 @keyframes composePulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+
+/* помощник: кто работает (модель выбирает человек) */
+.who { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lbl { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.model { font: inherit; font-size: var(--fs-small); height: 28px; padding: 0 8px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+.modelId { font-family: var(--font-mono); font-size: var(--fs-small); height: 28px; width: 200px; padding: 0 8px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); }
+.model:focus-visible, .modelId:focus-visible { outline: none; box-shadow: var(--focus); }
+.chip { font-family: var(--font-mono); font-size: var(--fs-cap); border-radius: var(--r-xs); padding: 1px 6px; background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); white-space: nowrap; }

@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { configDir } from '../settings.js';
 import { readRegular, writeAtomic } from '../safe-fs.js';
 import { assertSlug, parseRoutineYaml, parseSourceYaml, SLUG_RE, toYaml, type Parsed } from './schema.js';
-import type { CatchUp, CheckResult, Feedback, LogEntry, LogOutcome, RoutineEvent, RoutineSpec, RoutineWait, SourceSpec } from './types.js';
+import type { CatchUp, CheckResult, Feedback, FormDraft, LogEntry, LogOutcome, RoutineEvent, RoutineSpec, RoutineWait, SourceSpec } from './types.js';
 
 const FILE_MAX = 1024 * 1024;
 const LOG_MAX = 8 * 1024 * 1024;
@@ -16,6 +16,10 @@ const LOG_MAX = 8 * 1024 * 1024;
 export const SEEN_MAX = 2000;
 /** Последних событий источника для «Проверить на истории». */
 export const HISTORY_MAX = 50;
+/** Сколько ответов узла «ИИ рутины» помнится на рутину (проверка на истории берёт до 50 событий). */
+const CHECK_CACHE_MAX = 300;
+/** Ответ узла «ИИ рутины» без расхода: за что заплачено, второй раз не платится. */
+export type CachedCheck = { match: boolean; duplicate: boolean; reason: string; unsure?: boolean; model?: string };
 /** Запущенных событий рутины для поиска дублей и «Это не баг» для отрицательных примеров. */
 export const STARTED_MAX = 20;
 export const REJECTED_MAX = 20;
@@ -259,6 +263,18 @@ export class RoutineStore {
     this.writeJson(this.keyed('history', source), [...this.history(source).filter((e) => !ids.has(e.id)), ...events].slice(-HISTORY_MAX));
   }
 
+  /**
+   * Ответы узла «ИИ рутины» на проверке на истории, по ключу запроса к модели (условие, событие, примеры, модель):
+   * то же событие по тому же условию второй раз модель не читает. Свежие в конце, старые вытесняются.
+   */
+  checkCache = (routine: string): Record<string, CachedCheck> => {
+    const v = this.readJson<unknown>(this.keyed('check-cache', routine), {});
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, CachedCheck>) : {};
+  };
+  setCheckCache(routine: string, map: Record<string, CachedCheck>): void {
+    this.writeJson(this.keyed('check-cache', routine), Object.fromEntries(Object.entries(map).slice(-CHECK_CACHE_MAX)));
+  }
+
   /** События рутины: запущенные (дубли) и отклонённые человеком (отрицательные примеры). */
   events(routine: string): { started: RoutineEvent[]; rejected: RoutineEvent[] } {
     const r = this.readJson<{ started?: RoutineEvent[]; rejected?: RoutineEvent[] }>(this.keyed('events', routine), {});
@@ -371,7 +387,7 @@ export class RoutineStore {
   }
 
   deleteRoutineState(routine: string): void {
-    for (const sub of ['log', 'events', 'feedback', 'seed']) fs.rmSync(this.keyed(sub, routine), { force: true });
+    for (const sub of ['log', 'events', 'feedback', 'seed', 'check-cache']) fs.rmSync(this.keyed(sub, routine), { force: true });
   }
 
   /** Засев дел по текущему списку, пока он не кончен: по источнику — id записей, что прошли, и попытки упавших. */
@@ -397,6 +413,13 @@ export class RoutineStore {
 
   waits = (): StoredWait[] => this.readJson<StoredWait[]>(this.stateFile('waits.json'), []);
   setWaits = (w: StoredWait[]) => this.writeJson(this.stateFile('waits.json'), w);
+
+  /** Черновик формы «Новая рутина»: один на человека; null в файле — черновика нет. */
+  formDraft = (): FormDraft | undefined => {
+    const v = this.readJson<FormDraft | null>(this.stateFile('form-draft.json'), null);
+    return v && typeof v === 'object' && typeof v.at === 'string' ? v : undefined;
+  };
+  setFormDraft = (d: FormDraft | undefined) => this.writeJson(this.stateFile('form-draft.json'), d ?? null);
 
   catchUp = (): CatchUpRecord[] => this.readJson<CatchUpRecord[]>(this.stateFile('catchup.json'), []);
   setCatchUp = (c: CatchUpRecord[]) => this.writeJson(this.stateFile('catchup.json'), c);

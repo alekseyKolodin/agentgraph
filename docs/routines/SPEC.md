@@ -78,6 +78,8 @@
 | `DELETE /api/routines/:slug` | → `{ ok: true }` |
 | `POST /api/routines/:slug/enabled` | `{ enabled: boolean }` → `RoutineView` |
 | `POST /api/routines/:slug/history` | `{ spec?: RoutineSpec, limit?: number }` → `HistoryCheck` (по последним событиям источника из журнала и свежему опросу; можно для несохранённого spec — «Проверить на истории» в редакторе и создании) |
+| `POST /api/routines/:slug/history/runs` | `{ spec?, limit? }` → 201 `HistoryRun`: та же проверка с ходом — отвечает сразу. Такая же проверка (рутина, правило, предел) уже идёт — вернётся она; идёт с другим правилом — та останавливается |
+| `GET /api/routines/:slug/history/runs/:id` | → `HistoryRun`: `events` — уже проверенные события, `total` — сколько всего, `result` — итог (`HistoryCheck`) при `state: done`. `DELETE` — остановить |
 | `POST /api/routines/:slug/run` | `{ eventId?: string }` → `{ runId?: string; wait?: RoutineWait }` (ручной запуск; для расписания — сейчас) |
 | `GET /api/routines/:slug/log?outcome=a,b&limit=` | → `LogEntry[]` (новые сверху, с `feedback`) |
 | `POST /api/routines/:slug/feedback` | `{ eventId, verdict: 'match' \| 'no_match' \| 'not_duplicate' }` → `{ ok: true }` (`routines-state/feedback/<routine>.json`; match/no_match — примеры проверки словами, not_duplicate — не дубль) |
@@ -87,6 +89,9 @@
 | `PUT /api/routines/sources/:slug` | `{ spec: SourceSpec; secrets?: Record<string,string> }` → `SourceView` |
 | `DELETE /api/routines/sources/:slug` | 409, если источник используют рутины |
 | `POST /api/routines/sources/test` | `{ spec: SourceSpec; secrets?: Record<string,string> }` → `SourceTestResult` |
+| `POST /api/routines/sources/:slug/detail` | `{ id, link?, title? }` → `EventDetail`: подробности одного события тем же запросом, что перед запуском flow (`config.detail` источника-команды: вторая команда, событие — в `$EVENT_ID`, `$EVENT_LINK`, `$EVENT_TITLE`; вывод целиком дописывается ко входу flow после события, до 400 000 знаков). Ничего не запускает. Не получены перед запуском — запуск не начинается (повторы как при сбое старта). `SourceView.detail` — подробности настроены |
+| `GET /api/routines/sources/:slug/events` | `?limit` (до 10, по умолчанию 5) → `SourceEvents`: последние события из журнала источника, свежие первыми, у каждого — поля путями (`EventField`); без опроса и без модели. Пример события в узлах «Условия по полям» и «ИИ рутины» |
+| `POST /api/routines/sources/:slug/events` | → `SourceEvents` (`from: 'poll'`): пробный опрос сервиса сейчас, как `sources/test` — ничего не запускает и не запоминает; у опроса моделью тратит лимит |
 | `POST /api/routines/sources/draft` | `{ description: string }` → `DraftView` (подключение словами) |
 | `GET /api/routines/sources/draft/:id` | → `DraftView` |
 | `POST /api/routines/sources/draft/:id/secret` | `{ name, value }` → `DraftView` |
@@ -154,3 +159,45 @@ Bash) по описанию находит API и возвращает JSON `Sou
   расписание, Slack, Telegram); событие → условия → проверка словами → запуск → пауза перед блоком → карточка на
   главной → «Чинить» с ответом в тред → ответ ушёл в фейковый Slack; «Это не баг»; suggest; лимиты; журнал и фильтры;
   пауза рутины; простой и «догнать»; пропущенное расписание; редактор и проверка на истории; YAML вручную.
+
+## 7. Решения 19.11.2026: помощник и граф (частично реализовано — см. «Что уже сделано» в ASSISTANTS.md)
+
+Правила — [../ASSISTANTS.md](../ASSISTANTS.md). Макеты — `design/v2/*.dc.html`: Main — новая рутина с помощником и графом, AiNode — узел «ИИ
+рутины», Log — срабатывание на графе, Assistant — помощник, общий для разделов, Logic-Event и Logic-Assistant —
+диаграммы логики. Там, где этот раздел расходится с разделами 1–6, для новой работы верен он.
+
+- **Создание.** Вместо «Опиши словами» (одна сессия без инструментов) — помощник: модель выбирает человек, в контексте
+  пакет знаний рутин и коннекторы Claude, инструменты подключают и проверяют источник, собирают flow, проверяют на
+  истории. Включает рутину только человек.
+- **Черновик.** Сохраняется на сервер сам (`draft: true` уже есть в `RoutineSpec`); «Собрать flow» и «Подключить
+  сервис» возвращают в тот же черновик.
+- **Экран.** Редактор — граф с фиксированным порядком узлов: Триггер → Условия по полям → ИИ рутины → Запустить flow →
+  Ждать меня → Ответить. На узле — кто работает и сколько событий дошло на истории. Журнал показывает путь события по
+  тому же графу.
+- **ИИ рутины.** `when.check` становится узлом с объяснением, своей моделью (по умолчанию haiku, можно любую) и тремя
+  исходами: запустить, пропустить, спросить меня. Путь события из раздела 1 не меняется: узел стоит на месте шага 3.
+- **Слова.** Частота опроса — свойство источника; «каждые 30 минут» про источник не превращается в расписание.
+
+Контракт, добавленный этим разделом (types.ts):
+
+- `when.model` — модель узла «ИИ рутины»; нет — `CHECK_MODEL`. `when.ask` — исход «спросить меня»: при неуверенном
+  ответе событие не отсеивается, а ждёт человека ожиданием `suggest` в любом режиме, в том числе при «догнать». Без
+  поля неуверенность — «нет», как раньше. Спрашивать есть о чём, только когда есть что запускать: у рутины без flow и
+  при засеве дел неуверенное событие — «не подошло».
+- `LogEntry.checkModel`, `LogEntry.unsure`; `HistoryCheck.check` (модель, расход и число событий узла на проверке),
+  `HistoryCheck.events[].unsure` и `checkCostUsd`; `LogRecheck.unsure`, `LogRecheck.model`; `LogExplain.model`, `ask`.
+- `POST …/log/:id/recheck` принимает `model` и `ask` — несохранённую правку узла.
+- `POST /api/routines/compose` принимает `model`; `ComposeView.model` — какая модель собирает черновик.
+- `GET | PUT | DELETE /api/routines/form-draft` — черновик формы «Новая рутина» (`FormDraft`): сервер хранит состояние
+  формы как есть в `routines-state/form-draft.json`, не больше 100 КБ.
+- Помощник раздела (`src/routines/assistant.ts`, механизм — `src/assistant.ts`, ответы — `AssistantView` из
+  `src/assistant-types.ts`): `GET /api/routines/assistant` — что знает и умеет (`AssistantAbout`); `POST` с
+  `{ text, model, form }` — начать разговор (201; `form` — правило из формы, как его видит человек сейчас); `GET /api/routines/assistant/:id` — состояние с лентой шагов;
+  `POST …/:id` — следующее сообщение (409, пока идёт ход); `POST …/:id/stop` — прервать ход; `DELETE …/:id` — закрыть.
+  Результат разговора — `RoutineAssistantDraft` (черновик для формы; `resultRev` растёт с каждым `set_draft`).
+  Инструменты: читают — `get_state`, `list_connectors`, `source_sample`, `check_history`, `read_routine`, `read_log`;
+  действуют — `connect_service` (сохраняет источник «Сервис через Claude»), `set_source_every`, `build_flow`
+  (сохраняет flow), `set_draft`. Включить рутину, ввести ключ, удалить, отправить наружу помощник не может.
+  Признак в `/api/config`: `routine-assistant`.
+- Сборка «Сервиса через Claude»: `BuildRequest.model` — модель сборки (нет — `BUILD_MODEL`); итог несёт `costUsd` и
+  `model`.

@@ -142,6 +142,110 @@ test('проверка словами: «нет» и дубль — в журн�
   }
 });
 
+test('узел ИИ: модель и «спросить меня» из правила уходят в проверку; модель решения — в журнале', async () => {
+  const t = setup({ check: () => ({ match: false, duplicate: false, reason: 'не баг', costUsd: 0.01, model: 'claude-sonnet-5-5' }) });
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', check: 'баг', model: 'sonnet', ask: true } });
+    await t.push(t.event('1'));
+    assert.deepEqual([t.checks[0].model, t.checks[0].ask], ['sonnet', true]);
+    const [row] = t.engine.logOf('r', {});
+    assert.deepEqual([row.outcome, row.checkModel, row.unsure], ['check_no', 'claude-sonnet-5-5', undefined]);
+    // без полей в правиле проверка идёт как раньше: модель по умолчанию, неуверенность — «нет»
+    t.routine('plain', { when: { source: 'src', check: 'баг' } });
+    await t.push(t.event('2'));
+    // событие 2 проверили обе рутины: у «plain» — без модели и без «спросить меня»
+    assert.deepEqual(t.checks.slice(1).map((c) => [c.condition, c.model, c.ask]).sort(), [['баг', undefined, undefined], ['баг', 'sonnet', true]]);
+  } finally {
+    t.done();
+  }
+});
+
+test('узел ИИ не уверен (ask): событие ждёт человека даже в режиме auto; «Запустить» — запуск, причина осталась в строке', async () => {
+  const t = setup({ check: () => ({ match: false, duplicate: false, unsure: true, reason: 'неясно, кого просят', costUsd: 0.01, model: 'haiku' }) });
+  try {
+    t.connected();
+    t.routine('r', { mode: 'auto', when: { source: 'src', check: 'ревью мне', ask: true } });
+    await t.push(t.event('1'));
+    assert.equal(t.started.length, 0);
+    const [w] = t.engine.waits();
+    assert.equal(w.kind, 'suggest');
+    assert.match(w.context ?? '', /не уверен: неясно, кого просят/);
+    let [row] = t.engine.logOf('r', {});
+    assert.deepEqual([row.outcome, row.unsure, row.why, row.checkModel], ['waiting', true, 'неясно, кого просят', 'haiku']);
+    await t.engine.waitAction(w.id, { action: 'run' });
+    await t.engine.idle();
+    assert.equal(t.started.length, 1);
+    [row] = t.engine.logOf('r', {});
+    assert.deepEqual([row.outcome, row.unsure], ['started', true]);
+  } finally {
+    t.done();
+  }
+});
+
+test('узел ИИ не уверен, а «спросить меня» выключено — событие отсеяно, как раньше', async () => {
+  const t = setup({ check: () => ({ match: false, duplicate: false, unsure: true, reason: 'неясно', costUsd: 0 }) });
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', check: 'ревью мне' } });
+    await t.push(t.event('1'));
+    assert.equal(t.engine.waits().length, 0);
+    assert.equal(t.engine.logOf('r', {})[0].outcome, 'check_no');
+  } finally {
+    t.done();
+  }
+});
+
+test('узел ИИ не уверен у рутины без flow: спрашивать не о чем — «не подошло», дела нет; на истории то же', async () => {
+  const t = setup({ check: () => ({ match: false, duplicate: false, unsure: true, reason: 'неясно', costUsd: 0.01 }) });
+  try {
+    t.connected();
+    t.engine.saveRoutine('r', { spec: { title: 'Дела', when: { source: 'src', check: 'ревью мне', ask: true }, mode: 'auto', task: { kind: 'Ревью' } } });
+    await t.push(t.event('1'));
+    assert.equal(t.engine.waits().length, 0);
+    assert.deepEqual(t.engine.logOf('r', {}).map((x) => [x.outcome, x.unsure, x.deskKey]), [['check_no', undefined, undefined]]);
+    const h = await t.engine.history('r', {});
+    assert.deepEqual(h.events.map((x) => [x.outcome, x.unsure]), [['check_no', undefined]]);
+  } finally {
+    t.done();
+  }
+});
+
+test('«проверить на этом событии» с несохранённой правкой узла: модель и «спросить меня» из запроса сильнее правила', async () => {
+  const t = setup({ check: (i) => ({ match: false, duplicate: false, unsure: true, reason: 'неясно', costUsd: 0.01, model: i.model ?? 'haiku' }) });
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', check: 'ревью мне', model: 'sonnet' } });
+    await t.push(t.event('1'));
+    const [row] = t.engine.logOf('r', {});
+    const x = t.engine.explain('r', row.id);
+    assert.deepEqual([x.model, x.ask], ['sonnet', undefined]);
+    // как в правиле: модель правила, «спросить меня» выключено — неуверенность не показывается
+    const asIs = await t.engine.recheck('r', row.id, {});
+    assert.deepEqual([asIs.model, asIs.unsure], ['sonnet', undefined]);
+    const edited = await t.engine.recheck('r', row.id, { model: 'opus', ask: true });
+    assert.deepEqual([edited.model, edited.unsure, edited.match], ['opus', true, false]);
+    const last = t.checks[t.checks.length - 1]!;
+    assert.deepEqual([last.model, last.ask], ['opus', true]);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории: неуверенное событие — «ждало бы меня», итог узла — модель, число событий и расход', async () => {
+  const t = setup({ check: (i) => (i.event.id === '2' ? { match: false, duplicate: false, unsure: true, reason: 'неясно', costUsd: 0.01, model: 'haiku' } : { match: true, duplicate: false, reason: 'да', costUsd: 0.01, model: 'haiku' }) });
+  try {
+    t.connected();
+    t.routine('r', { mode: 'auto', when: { source: 'src', check: 'ревью мне', ask: true } });
+    t.items.push(t.event('1'), t.event('2', { at: '2026-11-17T10:00:06.000Z' }));
+    const h = await t.engine.history('r', {});
+    assert.deepEqual(h.events.map((x) => [x.event.id, x.outcome, x.unsure, x.checkCostUsd]), [['2', 'waiting', true, 0.01], ['1', 'started', undefined, 0.01]]);
+    assert.deepEqual(h.check, { model: 'haiku', costUsd: 0.02, events: 2 });
+  } finally {
+    t.done();
+  }
+});
+
 test('своё сообщение (isSelf) — не событие', async () => {
   const t = setup();
   try {
@@ -1224,6 +1328,153 @@ test('интерфейс 2 и 12: «Не сейчас» откладывает �
     const o = t.engine.overview();
     assert.deepEqual(o.secretNames, ['A_KEY', 'B_KEY']);
     assert.ok(!JSON.stringify(o).includes('v1'));
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории: то же событие по тому же условию модель второй раз не читает', async () => {
+  const t = setup({ check: (i) => ({ match: !i.event.title.includes('2'), duplicate: false, reason: `про ${i.event.id}`, costUsd: 0.01, model: 'haiku' }) });
+  try {
+    const rule = (check: string, model?: string) => ({ spec: { title: 'x', when: { source: 'src', check, ...(model ? { model } : {}) }, run: { flow: 'demo' }, mode: 'auto' } });
+    t.items.push(t.event('1'), t.event('2'));
+    const first = await t.engine.history('r', rule('баг'));
+    assert.equal(t.checks.length, 2);
+    assert.deepEqual(first.check, { model: 'haiku', costUsd: 0.02, events: 2 });
+    // вторая проверка: ответы и причины те же, модель не звали, расхода нет
+    const again = await t.engine.history('r', rule('баг'));
+    assert.equal(t.checks.length, 2);
+    assert.deepEqual(again.check, { model: 'haiku', costUsd: 0, events: 2, cached: 2 });
+    assert.deepEqual(again.events.map((e) => [e.event.id, e.outcome, e.reason]), first.events.map((e) => [e.event.id, e.outcome, e.reason]));
+    assert.equal(again.events.some((e) => e.checkCostUsd), false);
+    // новое событие читается одно; другое условие или другая модель — читается всё заново
+    t.items.push(t.event('3'));
+    assert.deepEqual((await t.engine.history('r', rule('баг'))).check, { model: 'haiku', costUsd: 0.01, events: 3, cached: 2 });
+    assert.equal(t.checks.length, 3);
+    await t.engine.history('r', rule('не баг'));
+    assert.equal(t.checks.length, 6);
+    await t.engine.history('r', rule('баг', 'sonnet'));
+    assert.equal(t.checks.length, 9);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории: сбой проверки не запоминается, удаление рутины стирает её ответы', async () => {
+  let fail = true;
+  const t = setup({ check: () => {
+    if (fail) throw new Error('сеть');
+    return { match: true, duplicate: false, reason: 'да', costUsd: 0.01 };
+  } });
+  try {
+    t.routine('r', { when: { source: 'src', check: 'баг' } });
+    t.items.push(t.event('1'));
+    assert.match((await t.engine.history('r', {})).events[0]!.reason ?? '', /проверка не удалась/);
+    fail = false;
+    assert.equal((await t.engine.history('r', {})).events[0]!.outcome, 'started');
+    assert.equal(t.checks.length, 2);
+    assert.equal(Object.keys(t.store.checkCache('r')).length, 1);
+    t.engine.deleteRoutine('r');
+    assert.deepEqual(t.store.checkCache('r'), {});
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории: модель читает события по несколько сразу, итог — в порядке событий', async () => {
+  let now = 0;
+  let peak = 0;
+  const t = setup({ check: async (i) => {
+    peak = Math.max(peak, ++now);
+    await new Promise((r) => setTimeout(r, 5));
+    now--;
+    return { match: true, duplicate: false, reason: i.event.id, costUsd: 0 };
+  } });
+  try {
+    t.routine('r', { when: { source: 'src', check: 'баг' } });
+    for (let i = 1; i <= 9; i++) t.items.push(t.event(String(i), { at: `2026-11-17T10:00:0${i}.000Z` }));
+    const h = await t.engine.history('r', {});
+    assert.equal(peak, 4);
+    assert.deepEqual(h.events.map((e) => e.event.id), ['9', '8', '7', '6', '5', '4', '3', '2', '1']);
+    assert.deepEqual(h.events.map((e) => e.reason), ['9', '8', '7', '6', '5', '4', '3', '2', '1']);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории с ходом: проверенные события видны до конца, та же проверка второй раз не начинается', async () => {
+  const gates: Array<() => void> = [];
+  const t = setup({ check: (i) => new Promise((resolve) => gates.push(() => resolve({ match: true, duplicate: false, reason: i.event.id, costUsd: 0.01 }))) });
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  try {
+    t.routine('r', { when: { source: 'src', check: 'баг' } });
+    for (let i = 1; i <= 6; i++) t.items.push(t.event(String(i), { at: `2026-11-17T10:00:0${i}.000Z` }));
+    const run = t.engine.startHistory('r', { limit: 10 });
+    assert.deepEqual({ state: run.state, total: run.total, events: run.events }, { state: 'working', total: 0, events: [] });
+    await tick();
+    // первая четвёрка у модели; открыли экран заново — это та же проверка, новых вызовов нет
+    assert.equal(gates.length, 4);
+    assert.equal(t.engine.startHistory('r', { limit: 10 }).id, run.id);
+    await tick();
+    assert.equal(gates.length, 4);
+    gates[1]!();
+    gates[0]!();
+    await tick();
+    const mid = t.engine.historyRun('r', run.id)!;
+    assert.deepEqual({ state: mid.state, total: mid.total, ids: mid.events.map((e) => e.event.id) }, { state: 'working', total: 6, ids: ['6', '5'] });
+    assert.equal(mid.result, undefined);
+    while (t.engine.historyRun('r', run.id)!.state === 'working') {
+      gates.splice(0).forEach((g) => g());
+      await tick();
+    }
+    const done = t.engine.historyRun('r', run.id)!;
+    assert.equal(done.state, 'done');
+    assert.deepEqual(done.events.map((e) => e.event.id), ['6', '5', '4', '3', '2', '1']);
+    assert.equal(done.result?.check?.events, 6);
+    assert.equal(t.engine.historyRun('other', run.id), undefined);
+    assert.equal(t.engine.historyRun('r', 'nope'), undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории с ходом: другое правило останавливает прежнюю проверку, прочитанное остаётся в кэше', async () => {
+  const gates: Array<() => void> = [];
+  const t = setup({ check: (i) => new Promise((resolve) => gates.push(() => resolve({ match: true, duplicate: false, reason: i.event.id, costUsd: 0.01 }))) });
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  const rule = (check: string) => ({ title: 'x', when: { source: 'src', check }, run: { flow: 'demo' }, mode: 'auto' });
+  try {
+    for (let i = 1; i <= 6; i++) t.items.push(t.event(String(i), { at: `2026-11-17T10:00:0${i}.000Z` }));
+    const first = t.engine.startHistory('r', { spec: rule('баг') });
+    await tick();
+    const second = t.engine.startHistory('r', { spec: rule('не баг') });
+    assert.notEqual(second.id, first.id);
+    // первая четвёрка прежней проверки дочитывается (за неё уже платят), остальные два события она не берёт
+    gates.splice(0, 4).forEach((g) => g());
+    await tick();
+    const stopped = t.engine.historyRun('r', first.id)!;
+    assert.equal(stopped.state, 'error');
+    assert.match(stopped.error ?? '', /остановлена/);
+    assert.equal(Object.keys(t.store.checkCache('r')).length, 4);
+    assert.equal(t.engine.stopHistory('r', second.id), true);
+    assert.equal(t.engine.stopHistory('r', 'nope'), false);
+    while (t.engine.historyRun('r', second.id)!.state === 'working') {
+      gates.splice(0).forEach((g) => g());
+      await tick();
+    }
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка на истории с ходом: правило не прошло проверку — ошибка с причинами', async () => {
+  const t = setup();
+  try {
+    const run = t.engine.startHistory('r', { spec: { title: 'x' } });
+    await new Promise((r) => setTimeout(r, 5));
+    const got = t.engine.historyRun('r', run.id)!;
+    assert.equal(got.state, 'error');
+    assert.match(got.error ?? '', /Правило не прошло проверку: /);
   } finally {
     t.done();
   }

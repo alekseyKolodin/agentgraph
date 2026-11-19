@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Помощник — общий для всех разделов</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#8b929c;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn:focus-visible,.opt:focus-visible,input:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.pn{border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.h{font-size:12px;font-weight:500;color:var(--ink-3)}
+.tg{font-size:11px;font-weight:500;border-radius:4px;padding:1px 6px;background:var(--select);color:var(--ink-2);white-space:nowrap}
+.opt{display:grid;grid-template-columns:16px 72px minmax(0,1fr);gap:8px;align-items:baseline;width:100%;font-family:inherit;font-size:13px;color:var(--ink);background:transparent;border:0;padding:7px 12px;text-align:left;cursor:pointer}
+.opt:hover{background:var(--hover)}
+.opt[aria-selected="true"]{background:var(--select)}
+.opt span:last-child{color:var(--ink-2)}
+.rw{display:grid;grid-template-columns:132px minmax(0,1fr);gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline}
+.rw span:first-child{color:var(--ink)}
+.rw span:last-child{color:var(--ink-2)}
+</style>
+</helmet>
+<div class="ag" style="width: 560px; height: 900px; padding: 24px; display: flex; flex-direction: column; gap: 14px">
+  <section class="pn" aria-label="Помощник" style="display: flex; flex-direction: column">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line)">
+      <b style="font-weight: 600">Помощник</b>
+      <span class="tg">раздел: Рутины</span>
+      <span style="flex: 1"></span>
+      <button type="button" class="btn s" aria-haspopup="listbox" aria-expanded="true">sonnet <span aria-hidden="true" style="color: var(--ink-3)">▴</span></button>
+    </div>
+
+    <div role="listbox" aria-label="Модель помощника" style="margin: 8px 14px 0; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raised); overflow: hidden">
+      <button type="button" role="option" aria-selected="false" class="opt"><span aria-hidden="true"></span><b style="font-weight: 600">haiku</b><span>быстро и дёшево, для простых правок</span></button>
+      <button type="button" role="option" aria-selected="true" class="opt"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m2.5 6.5 2.5 2.5 4.5-5.5"/></svg><b style="font-weight: 600">sonnet</b><span>по умолчанию</span></button>
+      <button type="button" role="option" aria-selected="false" class="opt"><span aria-hidden="true"></span><b style="font-weight: 600">opus</b><span>самая сильная, для сложной сборки</span></button>
+      <div style="display: grid; grid-template-columns: 16px 72px minmax(0,1fr); gap: 8px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--line)">
+        <span aria-hidden="true"></span>
+        <label for="mid" style="font-size: 13px; font-weight: 600">другая</label>
+        <input id="mid" type="text" placeholder="id модели" style="font-family: var(--mono); font-size: 12px; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: 4px; padding: 4px 8px; min-width: 0; width: 100%">
+      </div>
+      <div style="padding: 7px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-2)">Выбор запоминается для раздела. Сменить можно посреди разговора.</div>
+    </div>
+
+    <div style="padding: 14px">
+      <span class="h">Что знает</span>
+      <div class="rw"><span>Справка раздела</span><span>как устроены рутины: путь события, виды источников, режимы</span></div>
+      <div class="rw"><span>Схема</span><span>все поля рутины и источника и что каждое значит</span></div>
+      <div class="rw"><span>Примеры</span><span>готовые рутины, источники и flow целиком</span></div>
+      <div class="rw"><span>Рецепты</span><span>шаги по порядку: «сервис через Claude», «собрать flow под задачу»</span></div>
+      <div class="rw" style="border-bottom: 0"><span>Твоё</span><span>подключённые источники, коннекторы Claude, flow, пространства, этот черновик</span></div>
+    </div>
+
+    <div style="padding: 0 14px 14px">
+      <span class="h">Что умеет</span>
+      <div class="rw"><span>Читает сам</span><span>коннекторы, журнал, последние события источника</span></div>
+      <div class="rw"><span>Делает сам, шаг виден в ленте</span><span>подключить и проверить источник, собрать flow, заполнить черновик, проверить на истории</span></div>
+      <div class="rw" style="border-bottom: 0"><span style="color: var(--wait)">Только с тобой</span><span>включить рутину, удалить, отправить что-то наружу, сохранить ключ</span></div>
+    </div>
+  </section>
+
+  <section class="pn" aria-label="Где есть помощник" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+    <span class="h">Один и тот же помощник во всех разделах</span>
+    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+      <span class="tg">Рутины</span><span class="tg">Источники</span><span class="tg">Flow</span><span class="tg">Пространства</span><span class="tg">Сессии</span><span class="tg">Запуск</span>
+    </div>
+    <span style="font-size: 13px; color: var(--ink-2)">Везде одинаково: выбор модели в шапке, пакет знаний своего раздела, инструменты, лента шагов и стоимость. Меняется только раздел.</span>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":560,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

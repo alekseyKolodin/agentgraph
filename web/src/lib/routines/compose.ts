@@ -1,46 +1,49 @@
-// «Новая рутина» по описанию словами: что запомнить, пока человек уходит подключать недостающий источник, и как это
-// вернуть. Черновик лежит в sessionStorage вкладки: после подключения форма открывается с ним и с новым источником.
-import type { RoutineDraft } from './spec';
+// «Новая рутина»: черновик формы, который лежит на сервере (docs/ASSISTANTS.md §3 — уход с экрана ничего не стирает), и
+// ссылка на подключение недостающего источника. Здесь — что именно сохраняется, как это читается обратно (в том числе
+// черновик, сохранённый прошлой версией формы) и как по возврате со сборки flow находится только что собранный flow.
+import { emptyDraft, type RoutineDraft } from './spec';
 
-const KEY = 'agentgraph.routineCompose';
+/**
+ * Что уходит на сервер (PUT /api/routines/form-draft, поле data): состояние шагов, правил ли человек название и какие
+ * flow были, когда он ушёл собирать новый, — по возврате единственный новый подставится сам.
+ */
+export type FormDraftData = { v: 1; d: RoutineDraft; titleEdited: boolean; flowsBefore?: string[]; chat?: FormChat };
 
-type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
-const defaultStore = (): Store | undefined => {
-  try {
-    return globalThis.sessionStorage;
-  } catch {
-    return undefined;
-  }
-};
+/**
+ * Разговор с помощником, открытый на форме: id (по возврате лента открывается с сервера) и номер результата, который
+ * форма уже приняла, — принятый черновик помощника не ложится поверх правок человека второй раз.
+ */
+export type FormChat = { id: string; rev: number };
 
-/** Запомнить черновик перед уходом на «Подключить сервис». Нет хранилища — просто не запоминаем. */
-export function stashDraft(d: RoutineDraft, store: Store | undefined = defaultStore()): void {
-  try {
-    store?.setItem(KEY, JSON.stringify(d));
-  } catch {
-    /* частное окно, переполнено — форма откроется пустой, как раньше */
-  }
+export function packDraft(d: RoutineDraft, titleEdited: boolean, flowsBefore?: string[], chat?: FormChat): FormDraftData {
+  return { v: 1, d, titleEdited, ...(flowsBefore ? { flowsBefore } : {}), ...(chat ? { chat } : {}) };
 }
 
-/** Прочитать запомненный черновик (возврат с подключения). Не удаляет: React в dev вызывает инициализатор состояния дважды. */
-export function readStash(store: Store | undefined = defaultStore()): RoutineDraft | undefined {
-  try {
-    const raw = store?.getItem(KEY);
-    if (!raw) return undefined;
-    const v = JSON.parse(raw) as RoutineDraft;
-    return v && typeof v === 'object' && typeof v.title === 'string' && Array.isArray(v.conds) ? v : undefined;
-  } catch {
-    return undefined;
-  }
+/** Черновик с сервера → состояние формы. Не наш формат — undefined; поля, которых не было в старой форме, — из пустой. */
+export function unpackDraft(data: unknown): FormDraftData | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const x = data as Partial<FormDraftData>;
+  const d = x.d as Partial<RoutineDraft> | undefined;
+  if (x.v !== 1 || !d || typeof d !== 'object' || typeof d.title !== 'string' || !Array.isArray(d.conds)) return undefined;
+  const before = Array.isArray(x.flowsBefore) ? x.flowsBefore.filter((f): f is string => typeof f === 'string') : undefined;
+  const c = x.chat as Partial<FormChat> | undefined;
+  const chat = c && typeof c === 'object' && typeof c.id === 'string' && c.id ? { id: c.id, rev: typeof c.rev === 'number' && c.rev > 0 ? c.rev : 0 } : undefined;
+  return { v: 1, d: { ...emptyDraft(), ...d }, titleEdited: x.titleEdited === true, ...(before ? { flowsBefore: before } : {}), ...(chat ? { chat } : {}) };
 }
 
-/** Забыть запомненный черновик: форма уже открылась с ним. */
-export function dropStash(store: Store | undefined = defaultStore()): void {
-  try {
-    store?.removeItem(KEY);
-  } catch {
-    /* нечего забывать */
-  }
+/** В форме уже что-то выбрано или написано: пустую форму на сервер не пишем (и чужой черновик ею не затираем). */
+export function draftTouched(d: RoutineDraft): boolean {
+  const { title: _t, ...rest } = d;
+  const { title: _e, ...empty } = emptyDraft();
+  return Boolean(d.title.trim()) || JSON.stringify(rest) !== JSON.stringify(empty);
+}
+
+/** Flow, собранный, пока человек уходил с формы: единственный, которого не было до ухода. Несколько или ни одного — не угадываем. */
+export function pickNewFlow(before: string[] | undefined, now: string[]): string | undefined {
+  if (!before) return undefined;
+  const known = new Set(before);
+  const fresh = now.filter((f) => !known.has(f));
+  return fresh.length === 1 ? fresh[0] : undefined;
 }
 
 /** Ссылка на «Подключить сервис» для недостающего источника: готовый вид — на «Готовые», иначе описание словами. */

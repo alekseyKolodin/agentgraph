@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ComposeView, ConnectorBuildView, DirCheck, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ComposeView, ConnectorBuildView, DirCheck, DraftView, EventDetail, Feedback, FlowTemplate, FormDraft, HistoryCheck, HistoryRun, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceEvents, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import type { ProfileResponse } from '@server/api-types';
@@ -21,6 +21,7 @@ export const routineKeys = {
   overview: ['routines', 'overview'] as const,
   one: (slug: string) => ['routines', 'one', slug] as const,
   log: (slug: string, outcomes: string) => ['routines', 'log', slug, outcomes] as const,
+  events: (source: string) => ['routines', 'events', source] as const,
   recipes: ['routines', 'recipes'] as const,
   draft: (id: string) => ['routines', 'draft', id] as const,
   compose: (id: string) => ['routines', 'compose', id] as const,
@@ -42,7 +43,8 @@ export const fetchOverview = async () => {
 };
 export const fetchRoutine = (slug: string) => api<RoutineView>('GET', `${BASE}/${enc(slug)}`);
 /** spec или yaml (YAML вручную); ошибка схемы — 400 с problems в теле (ApiError.data). */
-export const saveRoutine = (slug: string, body: { spec: RoutineSpec } | { yaml: string }) => api<RoutineView>('PUT', `${BASE}/${enc(slug)}`, body);
+/** keepalive — сохранение на уходе с экрана: запрос должен дойти, даже если экран уже сменился. */
+export const saveRoutine = (slug: string, body: { spec: RoutineSpec } | { yaml: string }, keepalive = false) => api<RoutineView>('PUT', `${BASE}/${enc(slug)}`, body, undefined, keepalive);
 export const deleteRoutine = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/${enc(slug)}`);
 export const setRoutineEnabled = (slug: string, enabled: boolean) => api<RoutineView>('POST', `${BASE}/${enc(slug)}/enabled`, { enabled });
 /** «Проверить на истории»: можно для несохранённого spec. */
@@ -50,8 +52,13 @@ export const setRoutineEnabled = (slug: string, enabled: boolean) => api<Routine
 export const explainLog = (slug: string, id: string) => api<LogExplain>('GET', `${BASE}/${enc(slug)}/log/${enc(id)}/explain`);
 /** Стартовый запрос сессии «Спросить Claude» по строке журнала; сессию создаёт createSession. */
 export const askLog = (slug: string, id: string, question: string) => api<LogAsk>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/ask`, { question });
-export const recheckLog = (slug: string, id: string, check: string) => api<LogRecheck>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/recheck`, { check });
+/** node — несохранённые настройки узла «ИИ рутины» (модель, «спросить меня»); нет — как в правиле. */
+export const recheckLog = (slug: string, id: string, check: string, node?: { model?: string; ask?: boolean }) =>
+  api<LogRecheck>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/recheck`, { check, ...(node ?? {}) });
 export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryCheck>('POST', `${BASE}/${enc(slug)}/history`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
+/** Проверка на истории с ходом: начать (идёт такая же — вернётся она) и спрашивать, что уже проверено. */
+export const startHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryRun>('POST', `${BASE}/${enc(slug)}/history/runs`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
+export const fetchHistoryRun = (slug: string, id: string) => api<HistoryRun>('GET', `${BASE}/${enc(slug)}/history/runs/${enc(id)}`);
 /** Готовый flow шаблона рутины (templates/flows) у пользователя: нет — сервер копирует его в flows/Мои дела. */
 export const ensureTemplateFlow = (name: string) => api<{ flow: string; copied: boolean }>('POST', `${BASE}/flow-templates/${enc(name)}`, {});
 /** Готовые flow шаблонов: описание карточки flow, которого у пользователя ещё нет. */
@@ -76,6 +83,12 @@ export const checkSourceNow = (slug: string) => api<SourceCheckNow>('POST', `${B
 export const deleteSource = (slug: string) => api<{ ok: true }>('DELETE', `${BASE}/sources/${enc(slug)}`);
 export const testSource = (spec: SourceSpec, secrets?: Record<string, string>) => api<SourceTestResult>('POST', `${BASE}/sources/test`, { spec, ...(secrets && Object.keys(secrets).length ? { secrets } : {}) });
 
+/** Пример событий источника: GET — из журнала источника (без опроса), POST — пробный опрос сервиса сейчас. */
+export const fetchSourceEvents = (slug: string) => api<SourceEvents>('GET', `${BASE}/sources/${enc(slug)}/events`);
+export const pollSourceEvents = (slug: string) => api<SourceEvents>('POST', `${BASE}/sources/${enc(slug)}/events`, {});
+/** Подробности одного события — тем же запросом источника, что перед запуском flow; ничего не запускает. */
+export const fetchEventDetail = (slug: string, e: { id: string; link?: string; title?: string }) => api<EventDetail>('POST', `${BASE}/sources/${enc(slug)}/detail`, e);
+
 export const startDraft = (description: string) => api<DraftView>('POST', `${BASE}/sources/draft`, { description });
 export const fetchDraft = (id: string) => api<DraftView>('GET', `${BASE}/sources/draft/${enc(id)}`);
 export const draftSecret = (id: string, name: string, value: string) => api<DraftView>('POST', `${BASE}/sources/draft/${enc(id)}/secret`, { name, value });
@@ -93,6 +106,25 @@ export function useRoutines(enabled = true) {
 export function useRoutine(slug: string | undefined) {
   return useQuery({ queryKey: routineKeys.one(slug ?? ''), queryFn: () => fetchRoutine(slug!), enabled: Boolean(slug) });
 }
+
+/**
+ * Пример событий источника для узлов «Условия по полям» и «ИИ рутины». Журнал источника читается сам (это файл, без
+ * опроса); он пуст, пока источник не нужен включённой рутине, — тогда человек просит пробный опрос кнопкой (poll).
+ * Итог опроса лежит вне ['routines']: событие `routines` в общем потоке не должно повторять опрос сервиса.
+ */
+export function useSourceSample(slug: string | undefined) {
+  const stored = useQuery({ queryKey: routineKeys.events(slug ?? ''), queryFn: () => fetchSourceEvents(slug!), enabled: Boolean(slug), retry: false });
+  const polled = useQuery({ queryKey: ['routine-events-poll', slug ?? ''], queryFn: () => pollSourceEvents(slug!), enabled: false, staleTime: Infinity, retry: false });
+  const data = stored.data?.events.length ? stored.data : (polled.data ?? stored.data);
+  return {
+    data,
+    loading: Boolean(slug) && stored.isPending,
+    polling: polled.isFetching,
+    poll: () => void polled.refetch(),
+    error: polled.error ?? stored.error,
+  };
+}
+export type SourceSample = ReturnType<typeof useSourceSample>;
 
 /** Журнал целиком (до 200 строк): фильтры-чипы считаются на месте, без запроса на каждый. */
 export function useRoutineLog(slug: string | undefined) {
@@ -131,7 +163,14 @@ export function useDraft(id: string | null) {
 }
 
 /** Рутина по описанию словами: модель собирает черновик, ничего не сохраняется. Пока она работает, опрос раз в 1.5 с. */
-export const startCompose = (description: string) => api<ComposeView>('POST', `${BASE}/compose`, { description });
+/** model — выбор человека в шапке помощника; '' — модель по умолчанию. */
+export const startCompose = (description: string, model = '') => api<ComposeView>('POST', `${BASE}/compose`, { description, ...(model ? { model } : {}) });
+
+// черновик формы «Новая рутина» лежит на сервере: уход на другой экран его не стирает (docs/ASSISTANTS.md §3)
+export const fetchFormDraft = async () => (await api<{ draft: FormDraft | null }>('GET', `${BASE}/form-draft`)).draft;
+/** keepalive — сохранение на уходе со страницы (клик по ссылке): запрос должен дойти, даже если экран уже сменился. */
+export const saveFormDraft = (data: unknown, keepalive = false) => api<{ at: string }>('PUT', `${BASE}/form-draft`, { data }, undefined, keepalive);
+export const dropFormDraft = () => api<{ ok: true }>('DELETE', `${BASE}/form-draft`);
 export const cancelCompose = (id: string) => api<{ ok: true }>('DELETE', `${BASE}/compose/${enc(id)}`);
 export function useCompose(id: string | null) {
   return useQuery({
