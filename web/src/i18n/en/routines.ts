@@ -458,7 +458,6 @@ export const routines: Record<string, string> = {
   'Аргументы слишком длинные': 'The arguments are too long',
   'В аргументах нет {{text}}: сообщение ушло бы без текста': 'The arguments have no {{text}}: the message would go out empty',
   'Как отвечать': 'How to reply',
-  'Чтобы рутина могла ответить в тред, откуда пришла запись, выбери один инструмент сервиса, который отправляет сообщение. Это единственный инструмент, которым рутина может что-то записать: читать им нельзя, а источник выше только читает. Ответ уходит без модели и тем текстом, который ты одобрил.': 'So the routine can reply to the thread the record came from, pick one tool of the service that sends a message. It is the only tool the routine can write with: it cannot read with it, and the source above only reads. The reply goes out without a model, with the text you approved.',
   'Инструмент ответа': 'Reply tool',
   'Не отвечать из источника': 'Do not reply from the source',
   'У подключённых сервисов нет инструментов отправки — отвечать можно будет из flow.': 'The connected services have no sending tools — replying will be possible from the flow.',
@@ -470,4 +469,9 @@ export const routines: Record<string, string> = {
   'Сохранить ответ': 'Save the reply',
   'Сохранить ответ в источнике «{title}»': 'Save the reply in the source “{title}”',
   'JSON с аргументами инструмента — имена бери из его описания. {{channel}} — канал записи, {{thread}} — её тред (если записи не в треде, аргумент не передаётся и сообщение уйдёт в канал), {{text}} — текст ответа. Вместо {{channel}} можно вписать фиксированный канал.': 'JSON with the tool’s arguments — take the names from its description. {{channel}} is the record’s channel, {{thread}} its thread (if the record is not in a thread the argument is not passed and the message goes to the channel), {{text}} the reply text. Instead of {{channel}} you can put a fixed channel.',
+  'Чтобы рутина могла ответить в тред, откуда пришла запись, выбери один инструмент сервиса, который отправляет сообщение. Это единственный инструмент, которым рутина может что-то записать: читать им нельзя, а источник выше только читает.': 'So the routine can reply to the thread the record came from, pick one tool of the service that sends a message. It is the only tool the routine can write with: it cannot read with it, and the source above only reads.',
+  'Ответ уходит без модели и только после твоей проверки.': 'The reply goes out without a model and only after your check.',
+  'Ответ уходит без модели и сразу, без твоей проверки: так настроена эта рутина.': 'The reply goes out without a model and immediately, without your check: that is how this routine is set up.',
+  'У этой рутины ответ выключен: пока не включишь, ничего не уйдёт.': 'This routine has the reply turned off: nothing is sent until you turn it on.',
+  'Ответ уходит без модели. Когда — после твоей проверки или сразу — решает режим ответа в самой рутине.': 'The reply goes out without a model. Whether after your check or immediately is set by the reply mode in the routine itself.',
 };

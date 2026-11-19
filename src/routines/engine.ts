@@ -344,7 +344,8 @@ export class RoutineEngine {
       fetch: this.deps.fetch ?? fetch,
       run: this.deps.run ?? runCommand,
       cursor: {
-        get: () => cursor,
+        // не снимок на момент создания: ответ, отправленный во время опроса, пишет в тот же курсор
+        get: () => (o.readonlyCursor ? cursor : this.store.cursor(slug)),
         set: (v) => {
           cursor = v;
           if (!o.readonlyCursor) this.store.setCursor(slug, v);

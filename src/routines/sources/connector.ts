@@ -350,27 +350,82 @@ export function fillReplyArgs(args: unknown, vars: { channel?: string; thread?: 
 
 const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : undefined);
 
+const SENT_KEYS = ['ts', 'message_ts', 'message_id', 'id', 'timestamp'];
+const LINK_KEYS = ['permalink', 'link', 'url', 'message_link', 'web_url'];
+
+/** Объекты ответа, где искать признаки сообщения: сам ответ и вложенные message/result. */
+function replyObjects(r: McpCallResult): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  const add = (v: unknown): void => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) out.push(v as Record<string, unknown>);
+  };
+  add(r.data);
+  for (const o of [...out]) {
+    add(o.message);
+    add(o.result);
+  }
+  return out;
+}
+
 /** Ссылка на отправленное сообщение, если инструмент её вернул. */
 function replyLink(r: McpCallResult): string | undefined {
-  const d = r.data;
-  if (d && typeof d === 'object' && !Array.isArray(d)) {
-    for (const k of ['permalink', 'link', 'url', 'message_link', 'web_url']) {
-      const v = (d as Record<string, unknown>)[k];
+  for (const o of replyObjects(r))
+    for (const k of LINK_KEYS) {
+      const v = o[k];
       if (typeof v === 'string' && /^https?:\/\//.test(v)) return v;
     }
-  }
+  return /https?:\/\/[^\s"'<>)]+\/archives\/[^\s"'<>)]+/.exec(r.text)?.[0];
+}
+
+/** Идентификатор отправленного сообщения (ts Slack и подобное), если инструмент его вернул. */
+function replyMessageId(r: McpCallResult): string | undefined {
+  for (const o of replyObjects(r))
+    for (const k of SENT_KEYS) {
+      const v = idOf(o[k]);
+      if (v) return v;
+    }
   return undefined;
 }
 
-/** Что рутина уже отправила в источник: её собственный ответ при следующем опросе — не новая запись (isSelf не должен зависеть от профиля). */
+// ---------------------------------------------------------------- курсор и отправленное
+
+/** Что рутина отправила в источник: её собственный ответ при следующем опросе — не новая запись (isSelf не зависит от профиля). */
+type Sent = { at: string; id?: string; link?: string; text: string; channel?: string };
+type ConnectorCursor = { since?: string; sent: Sent[] };
 const MAX_SENT = 100;
+const SENT_TTL_MS = 14 * 24 * 3600_000;
 const sentNorm = (v: string): string => v.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+const linkNorm = (v: string): string => v.trim().replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+
+/** Курсор источника: до ответов это была строка со временем прошлой проверки, теперь — объект со временем и отправленным. */
+function readCursor(v: unknown): ConnectorCursor {
+  if (typeof v === 'string') return { since: v, sent: [] };
+  if (v && typeof v === 'object') {
+    const o = v as { since?: unknown; sent?: unknown };
+    const sent = Array.isArray(o.sent) ? (o.sent as Sent[]).filter((x) => x && typeof x.text === 'string' && typeof x.at === 'string') : [];
+    return { ...(typeof o.since === 'string' ? { since: o.since } : {}), sent };
+  }
+  return { sent: [] };
+}
+
+/** Запись — то, что рутина сама отправила: по id или ссылке сообщения; запасной путь — тот же текст (в рамках этого источника, в том же канале, пока свежо). */
+export function isSentReply(cursor: unknown, e: RoutineEvent, now = Date.now()): boolean {
+  const body = sentNorm(e.text);
+  const evLink = e.link ? linkNorm(e.link) : undefined;
+  return readCursor(cursor).sent.some((x) => {
+    if (x.id && (e.id === x.id || e.fields?.ts === x.id)) return true;
+    if (x.link && (evLink === linkNorm(x.link) || linkNorm(e.id) === linkNorm(x.link))) return true;
+    if (!x.text || body !== x.text || now - Date.parse(x.at) > SENT_TTL_MS) return false;
+    return !(x.channel && e.thread?.channel && x.channel !== e.thread.channel);
+  });
+}
 
 /** Ответ в источник без модели: единственный выбранный инструмент, аргументы из шаблона, канал и тред — из event.replyTo. */
-async function reply(ctx: SourceCtx, target: Record<string, unknown> | undefined, text: string, deps: ConnectorDeps, sent: Array<{ text: string; link?: string }>): Promise<{ link?: string }> {
+async function reply(ctx: SourceCtx, target: Record<string, unknown> | undefined, text: string, deps: ConnectorDeps): Promise<{ link?: string }> {
   const r = replyOf(ctx.spec);
   if (!r) throw new Error('Сервис через Claude: ответ не настроен — выберите инструмент ответа в настройках источника');
-  const args = fillReplyArgs(r.args, { channel: idOf(target?.channel), thread: idOf(target?.thread) ?? idOf(target?.thread_ts), text }) as Record<string, unknown>;
+  const channel = idOf(target?.channel);
+  const args = fillReplyArgs(r.args, { channel, thread: idOf(target?.thread) ?? idOf(target?.thread_ts), text }) as Record<string, unknown>;
   const caller = deps.mcp ? deps.mcp(ctx.signal) : openMcp(undefined, ctx.signal);
   // сервис завис или ждёт входа: ответ не должен держать движок бесконечно
   const ms = deps.replyTimeoutMs ?? REPLY_TIMEOUT_MS;
@@ -389,8 +444,12 @@ async function reply(ctx: SourceCtx, target: Record<string, unknown> | undefined
     // часть серверов (Slack) отвечает {ok:false, error} обычным ответом
     if (data && typeof data === 'object' && !Array.isArray(data) && data.ok === false) throw new Error(`${short(r.tool)}: ${truncate(typeof data.error === 'string' ? data.error : res.text || 'ответ не отправлен', 300)}`);
     const link = replyLink(res);
-    sent.push({ text: sentNorm(text), ...(link ? { link } : {}) });
-    if (sent.length > MAX_SENT) sent.splice(0, sent.length - MAX_SENT);
+    const id = replyMessageId(res);
+    // отправленное — в курсор этого источника: переживает перезапуск и не задевает другие источники
+    const cur = readCursor(ctx.cursor.get());
+    const now = Date.now();
+    cur.sent = [...cur.sent.filter((x) => now - Date.parse(x.at) <= SENT_TTL_MS), { at: new Date(now).toISOString(), text: sentNorm(text), ...(id ? { id } : {}), ...(link ? { link } : {}), ...(channel ? { channel } : {}) }].slice(-MAX_SENT);
+    ctx.cursor.set(cur);
     return link ? { link } : {};
   } finally {
     if (timer) clearTimeout(timer);
@@ -411,13 +470,15 @@ async function poll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEvent[]
   const script = scriptOf(ctx.spec);
   if (!script) return modelPoll(ctx, deps);
   const started = new Date();
-  const prev = ctx.cursor.get();
-  const since = typeof prev === 'string' && !Number.isNaN(Date.parse(prev)) ? new Date(prev) : new Date(started.getTime() - FIRST_SINCE_MS);
+  const prev = readCursor(ctx.cursor.get()).since;
+  const since = prev && !Number.isNaN(Date.parse(prev)) ? new Date(prev) : new Date(started.getTime() - FIRST_SINCE_MS);
   const caller = deps.mcp ? deps.mcp(ctx.signal) : openMcp(undefined, ctx.signal);
   try {
     const events = await runScript(script, caller, since, ctx.slug);
     // минута внахлёст: запись, пришедшая во время проверки, не потеряется, повтор отсеет движок
-    ctx.cursor.set(new Date(started.getTime() - 60_000).toISOString());
+    // отправленное (ответы) лежит в том же курсоре: читаем свежее значение, чтобы ответ, ушедший во время опроса, не потерялся
+    const next = { ...readCursor(ctx.cursor.get()), since: new Date(started.getTime() - 60_000).toISOString() };
+    ctx.cursor.set(next.sent.length ? next : next.since);
     return events;
   } finally {
     caller.close();
@@ -534,7 +595,6 @@ export function isMyRecord(p: Profile, e: RoutineEvent): boolean {
 }
 
 export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
-  const sent: Array<{ text: string; link?: string }> = [];
   return {
     kind: 'connector',
     title: 'Сервис через Claude',
@@ -564,7 +624,7 @@ export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
     ],
     match: [...BASE_MATCH],
     poll: async (ctx) => withReplyTo(await poll(ctx, deps)),
-    reply: (ctx, target, text) => reply(ctx, target, text, deps, sent),
+    reply: (ctx, target, text) => reply(ctx, target, text, deps),
     canReplyFor: (spec) => {
       try {
         return replyOf(spec) !== undefined;
@@ -572,12 +632,8 @@ export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
         return false;
       }
     },
-    // свой ответ в канале, который читает тот же источник, — не событие: по тексту и ссылке отправленного, профиль не нужен
-    isSelf: (_ctx, e) => {
-      const body = sentNorm(e.text);
-      if (sent.some((x) => (x.link && e.link === x.link) || (x.text && body === x.text))) return true;
-      return isMyRecord((deps.profile ?? loadProfile)(), e);
-    },
+    // свой ответ в канале, который читает тот же источник, — не событие: по id и ссылке отправленного (хранится в курсоре), профиль не нужен
+    isSelf: (ctx, e) => isSentReply(ctx.cursor.get(), e) || isMyRecord((deps.profile ?? loadProfile)(), e),
     describe,
   };
 }
