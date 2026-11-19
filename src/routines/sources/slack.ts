@@ -256,6 +256,8 @@ export function slackEvent(slug: string, ch: Channel, m: SlackMessage, extra: { 
     author: author || undefined,
     fields: { channel: ch.name, channel_id: ch.id, thread, author, user: m.user ?? '', bot, bot_id: m.bot_id ?? '', files, ts: m.ts, thread_ts: m.thread_ts ?? '', subtype: m.subtype ?? '', to_me: toMe(ch, m, extra.me, extra.ownToken ?? true) },
     replyTo: { channel: ch.id, thread_ts: m.thread_ts ?? m.ts },
+    // нить — тред сообщения; у сообщения вне треда — оно само (ответы на него придут с его ts)
+    thread: { source: slug, channel: ch.id, thread: m.thread_ts ?? m.ts },
   };
 }
 

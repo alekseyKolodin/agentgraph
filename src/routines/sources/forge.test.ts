@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Exec } from '../../git.js';
 import type { SourceKind } from '../kind.js';
+import { resolveThings } from '../../things/resolve.js';
 import { githubKind, gitlabKind } from './forge.js';
 import { makeCtx } from './testkit.js';
 
@@ -25,7 +26,7 @@ const glMr = (iid: number, extra: Record<string, unknown> = {}) => ({ iid, title
 // uniqueHost — glabUser кэширует логин по хосту на весь процесс, поэтому у каждого теста свой хост
 const gitlabCtx = (host: string, config: Record<string, unknown> = {}) => makeCtx({ slug: 'gl', kind: 'gitlab', config: { host, ...config } });
 
-test('GitLab: ревью, упоминания и комментарии к моим MR становятся событиями', async () => {
+test('GitLab: ревью, упоминания и комментарии к моим MR (одним событием на MR) становятся событиями', async () => {
   const { x, calls } = fakeExec([
     [/ user$/, { username: 'me' }],
     [/reviewer_username=me/, [glMr(5, { draft: true, source_branch: 'feat' })]],
@@ -35,7 +36,7 @@ test('GitLab: ревью, упоминания и комментарии к мо
   ]);
   const kind = gitlabKind(x);
   const events = await kind.poll!(gitlabCtx('gl-one.test'));
-  assert.deepEqual(events.map((e) => e.id), ['review:https://gitlab.test/grp/repo/-/merge_requests/5', 'mention:77', 'comment:grp/repo!9:1', 'comment:grp/repo!9:3']);
+  assert.deepEqual(events.map((e) => e.id), ['review:https://gitlab.test/grp/repo/-/merge_requests/5', 'mention:77', 'comment:grp/repo!9:3']);
   const review = events[0];
   assert.equal(review.fields.event, 'review');
   assert.equal(review.fields.draft, true);
@@ -44,11 +45,21 @@ test('GitLab: ревью, упоминания и комментарии к мо
   assert.match(review.title, /^Ревью: grp\/repo!5 MR 5/);
   assert.equal(events[1].fields.event, 'mention');
   assert.equal(events[1].fields.project, 'grp/repo');
-  assert.equal(events[2].link, 'https://gitlab.test/grp/repo/-/merge_requests/9#note_1');
-  assert.deepEqual(events[2].replyTo, { forge: 'gitlab', host: 'gl-one.test', project: 'grp/repo', number: 9 });
-  // свой комментарий — self, система — пропущена
-  assert.equal(kind.isSelf!(gitlabCtx('gl-one.test'), events[2]), false);
-  assert.equal(kind.isSelf!(gitlabCtx('gl-one.test'), events[3]), true);
+  // два новых комментария — одно событие: ссылка на первый чужой, автор — последний не я, система пропущена
+  const c = events[2];
+  assert.equal(c.link, 'https://gitlab.test/grp/repo/-/merge_requests/9#note_1');
+  assert.equal(c.author, 'bob');
+  assert.equal(c.text, 'bob: исправь\n\nme: ответ себе');
+  assert.equal(c.fields.count, 2);
+  assert.deepEqual(c.replyTo, { forge: 'gitlab', host: 'gl-one.test', project: 'grp/repo', number: 9 });
+  assert.equal(kind.isSelf!(gitlabCtx('gl-one.test'), c), false);
+  // события о MR несут вещь; упоминание в задаче — нет
+  assert.deepEqual(review.things?.map((t) => t.key), ['mr:gitlab.test/grp/repo/5']);
+  assert.equal(review.things?.[0].ref.forge, 'gitlab');
+  // назначение в GitLab и ссылка на тот же MR в Slack — одна вещь
+  assert.equal(resolveThings({ text: 'глянь <https://GitLab.test/Grp/Repo/-/merge_requests/5/diffs|!5>' })[0].key, review.things?.[0].key);
+  assert.deepEqual(c.things?.map((t) => t.key), ['mr:gitlab.test/grp/repo/9']);
+  assert.equal(events[1].things, undefined);
   assert.ok(calls.every((c) => c.cmd === 'glab' && c.args.includes('--hostname')));
 });
 
@@ -91,12 +102,13 @@ test('GitHub: ревью, упоминания и комментарии к мо
   const kind = githubKind(x);
   const ctx = makeCtx({ slug: 'gh', kind: 'github', config: { host: 'gh-host.test', project: 'o/r' } });
   const events = await kind.poll!(ctx);
-  assert.deepEqual(events.map((e) => e.id), ['review:https://github.com/o/r/pull/1', 'mention:https://github.com/o/r/pull/2', 'comment:o/r#3:10', 'comment:o/r#3:11']);
+  assert.deepEqual(events.map((e) => e.id), ['review:https://github.com/o/r/pull/1', 'mention:https://github.com/o/r/pull/2', 'comment:o/r#3:11']);
   assert.equal(events[0].fields.draft, true);
   assert.equal(events[0].fields.ref, 'o/r#1');
   assert.equal(events[1].fields.is_pr, true);
+  assert.deepEqual(events[1].things?.map((t) => t.key), ['mr:github.com/o/r/2']);
   assert.equal(events[2].link, 'https://github.com/o/r/pull/3#issuecomment-10');
-  assert.equal(kind.isSelf!(ctx, events[3]), true);
+  assert.equal(events[2].fields.count, 2);
   assert.equal(kind.isSelf!(ctx, events[2]), false);
   // репозиторий ограничивает поиск
   assert.ok(calls.some((c) => c.args.join(' ').includes('review-requested:me+repo:o/r')));
@@ -154,7 +166,138 @@ test('GitHub: в PR больше десяти комментариев — бе�
     [/pulls\/7\/comments\?sort=created&direction=desc/, []],
   ]);
   const events = await githubKind(x).poll!(makeCtx({ slug: 'gh', kind: 'github', config: { host: 'gh-big.test' } }));
-  assert.equal(events.length, 10);
-  assert.equal(events.at(-1)!.id, 'comment:o/r#7:21');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, 'comment:o/r#7:21');
+  assert.equal(events[0].fields.count, 10);
+  assert.match(events[0].text, /dave: новый$/);
   assert.ok(calls.some((c) => c.args.join(' ').includes('issues/7/comments?per_page=10&page=3')));
+});
+
+test('GitLab: версия ревью в id — обновление (новые коммиты) и запрос снова (todo, возврат в список) различимы', async () => {
+  const url = 'https://gitlab.test/grp/repo/-/merge_requests/5';
+  const st: { sha: string; todos: unknown[]; list: boolean } = { sha: 'aaa111', todos: [{ id: 10, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' }, created_at: '2026-11-17T09:00:00Z' }], list: true };
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/reviewer_username=me/.test(line)) return JSON.stringify(st.list ? [glMr(5, { sha: st.sha, updated_at: '2026-11-17T12:00:00Z' })] : []);
+    if (/todos\?action=review_requested/.test(line)) return JSON.stringify(st.todos);
+    if (/todos|author_username/.test(line)) return '[]';
+    throw new Error(`нет ответа на ${line}`);
+  };
+  const kind = gitlabKind(x);
+  const ctx = gitlabCtx('gl-ver.test');
+  const ids = async () => (await kind.poll!(ctx)).map((e) => [e.id, e.fields.event, e.fields.again, e.title.split(':')[0]]);
+  // первый раз — как раньше, без версии
+  assert.deepEqual(await ids(), [[`review:${url}`, 'review', false, 'Ревью']]);
+  assert.deepEqual(await ids(), [[`review:${url}`, 'review', false, 'Ревью']]);
+  // новые коммиты, пока я ревьюер, — «MR обновлён»
+  st.sha = 'bbb222';
+  assert.deepEqual(await ids(), [[`update:${url}@bbb222`, 'update', false, 'MR обновлён']]);
+  assert.deepEqual(await ids(), [[`update:${url}@bbb222`, 'update', false, 'MR обновлён']]);
+  // автор запросил ревью снова — новый todo
+  st.todos = [{ id: 11, target: { iid: 5 }, project: { path_with_namespace: 'grp/repo' }, created_at: '2026-11-17T13:00:00Z' }];
+  const again = (await kind.poll!(ctx))[0];
+  assert.deepEqual([again.id, again.fields.event, again.fields.again, again.at], [`review:${url}@2`, 'review', true, '2026-11-17T13:00:00Z']);
+  assert.match(again.title, /^Ревью снова: grp\/repo!5/);
+  // todo закрыли — не новый запрос
+  st.todos = [];
+  assert.deepEqual((await ids())[0][0], `review:${url}@2`);
+  // меня сняли с ревьюеров и вернули — тоже запрос снова
+  st.list = false;
+  assert.deepEqual(await ids(), []);
+  st.list = true;
+  assert.deepEqual((await ids())[0].slice(0, 3), [`review:${url}@3`, 'review', true]);
+});
+
+test('GitLab: todo «review_requested» не отдался (старый GitLab) — опрос идёт, запрос снова не выдумывается', async () => {
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/reviewer_username=me/.test(line)) return JSON.stringify([glMr(5, { sha: 'aaa' })]);
+    if (/review_requested/.test(line)) throw new Error('400 action does not have a valid value');
+    return '[]';
+  };
+  const ctx = gitlabCtx('gl-old.test');
+  const kind = gitlabKind(x);
+  assert.equal((await kind.poll!(ctx))[0].id, 'review:https://gitlab.test/grp/repo/-/merge_requests/5');
+  assert.equal((await kind.poll!(ctx))[0].id, 'review:https://gitlab.test/grp/repo/-/merge_requests/5');
+  assert.ok(ctx.logs.some((m) => /запросы ревью из todo не получены/.test(m)));
+});
+
+test('GitHub: PR вернулся в список ревью — запрос снова; новые коммиты — обновление; sha берётся только у обновлённых', async () => {
+  const st = { list: true, updated: '2026-11-17T10:00:00Z', sha: 's1' };
+  const { x, calls } = fakeExec([]);
+  const exec: Exec = async (cmd, args, o) => {
+    const line = args.join(' ');
+    if (/gh-ver\.test user$/.test(line)) return JSON.stringify({ login: 'me' });
+    if (/review-requested:me/.test(line)) return JSON.stringify({ items: st.list ? [ghItem(1, { updated_at: st.updated })] : [] });
+    if (/repos\/o\/r\/pulls\/1$/.test(line)) {
+      await x(cmd, args, o).catch(() => '');
+      return JSON.stringify({ head: { sha: st.sha } });
+    }
+    return JSON.stringify({ items: [] });
+  };
+  const kind = githubKind(exec);
+  const ctx = makeCtx({ slug: 'gh', kind: 'github', config: { host: 'gh-ver.test' } });
+  const first = async () => (await kind.poll!(ctx))[0]?.id;
+  const url = 'https://github.com/o/r/pull/1';
+  assert.equal(await first(), `review:${url}`);
+  assert.equal(await first(), `review:${url}`);
+  // updated_at не менялся — head sha второй раз не спрашиваем
+  assert.equal(calls.filter((c) => c.args.join(' ').endsWith('pulls/1')).length, 1);
+  // комментарий двигает updated_at, а sha тот же — не обновление
+  st.updated = '2026-11-17T11:00:00Z';
+  assert.equal(await first(), `review:${url}`);
+  st.updated = '2026-11-17T12:00:00Z';
+  st.sha = 's2';
+  assert.equal(await first(), `update:${url}@s2`);
+  // я отревьюил — GitHub снял запрос; автор запросил снова
+  st.list = false;
+  assert.equal(await first(), undefined);
+  st.list = true;
+  assert.equal(await first(), `review:${url}@2`);
+});
+
+test('комментарии к MR: за опрос — одно событие из новых; новых нет — то же событие; все новые мои — «своё»', async () => {
+  let notes: Array<{ id: number; body: string; author: { username: string }; created_at: string }> = [
+    { id: 1, body: 'первый', author: { username: 'bob' }, created_at: '2026-11-17T10:00:00Z' },
+    { id: 2, body: 'второй', author: { username: 'bob' }, created_at: '2026-11-17T10:01:00Z' },
+  ];
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/author_username=me/.test(line)) return JSON.stringify([glMr(9)]);
+    if (/merge_requests\/9\/notes/.test(line)) return JSON.stringify([...notes].reverse());
+    return '[]';
+  };
+  const kind = gitlabKind(x);
+  const ctx = gitlabCtx('gl-notes.test');
+  const poll = async () => (await kind.poll!(ctx)).filter((e) => e.fields.event === 'comment');
+  let [e] = await poll();
+  assert.deepEqual([e.id, e.fields.count], ['comment:grp/repo!9:2', 2]);
+  [e] = await poll();
+  assert.equal(e.id, 'comment:grp/repo!9:2');
+  notes = [...notes, { id: 3, body: 'поправил', author: { username: 'me' }, created_at: '2026-11-17T11:00:00Z' }];
+  [e] = await poll();
+  assert.deepEqual([e.id, e.fields.count, e.fields.self, e.text], ['comment:grp/repo!9:3', 1, true, 'поправил']);
+  notes = [...notes, { id: 4, body: 'ок', author: { username: 'bob' }, created_at: '2026-11-17T12:00:00Z' }, { id: 5, body: 'и ещё', author: { username: 'carol' }, created_at: '2026-11-17T12:05:00Z' }];
+  [e] = await poll();
+  assert.deepEqual([e.id, e.fields.count, e.fields.self, e.author, e.link], ['comment:grp/repo!9:5', 2, false, 'carol', 'https://gitlab.test/grp/repo/-/merge_requests/9#note_4']);
+  assert.equal(e.text, 'bob: ок\n\ncarol: и ещё');
+});
+
+test('проверка без записи курсора (история, пробная) отдаёт те же id, что и опрос', async () => {
+  const x: Exec = async (_cmd, args) => {
+    const line = args.join(' ');
+    if (/ user$/.test(line)) return JSON.stringify({ username: 'me' });
+    if (/reviewer_username=me/.test(line)) return JSON.stringify([glMr(5, { sha: 'aaa' })]);
+    if (/author_username=me/.test(line)) return JSON.stringify([glMr(9)]);
+    if (/merge_requests\/9\/notes/.test(line)) return JSON.stringify([{ id: 7, body: 'x', author: { username: 'bob' } }]);
+    return '[]';
+  };
+  const ctx = gitlabCtx('gl-ro.test');
+  const a = (await gitlabKind(x).poll!(ctx)).map((e) => e.id);
+  // курсор не сохранили (readonlyCursor) — тот же ответ
+  const ro = { ...ctx, cursor: { get: () => undefined, set: () => {} } };
+  assert.deepEqual((await gitlabKind(x).poll!(ro)).map((e) => e.id), a);
 });
