@@ -1,9 +1,10 @@
 // Маршруты /api/desk (контракт — комментарий в types.ts) в стиле routinesRoute: (method, url, readBody) → Reply или
 // undefined. Проверки Host/Origin/типа тела уже сделал server-guard в handle(). Всё, что приходит из UI, — от 'me'.
 import { randomBytes } from 'node:crypto';
+import { deskCheck } from './check.js';
 import { isColumn } from './rules.js';
 import type { DeskStore } from './store.js';
-import type { DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
+import type { DeskCheckReply, DeskColumn, DeskFilter, DeskListReply, DeskPatch } from './types.js';
 
 export type Reply = { status: number; body: unknown };
 
@@ -12,8 +13,14 @@ const bad = (error: string, status = 400): Reply => ({ status, body: { error } }
 
 const KEY_RE = /^[a-z]+:\S/;
 const KEY_MAX = 600;
+/** Запуск процесса: итог сверки наблюдателей старше — «не проверялось с запуска приложения». */
+export const PROCESS_STARTED = new Date(Date.now() - process.uptime() * 1000);
 
-export type DeskRouteDeps = { store: DeskStore };
+/**
+ * check — сверка «N из N» (check.ts): сервер собирает её из итогов источников рутин и наблюдателей. Нет — в сверке только
+ * наблюдатели (в тестах и без рутин).
+ */
+export type DeskRouteDeps = { store: DeskStore; check?: () => DeskCheckReply };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -65,6 +72,9 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
   if (p === '/api/desk' && method === 'GET') {
     const reply: DeskListReply = { items: await store.list(filterOf(url.searchParams)), ...((c) => (c ? { check: c } : {}))(store.readCheck()) };
     return ok(reply);
+  }
+  if (p === '/api/desk/check' && method === 'GET') {
+    return ok(deps.check ? deps.check() : deskCheck({ watcher: store.readCheck(), startedAt: PROCESS_STARTED }));
   }
   if (method !== 'POST') return p === '/api/desk' || p.startsWith('/api/desk/') ? bad('Метод не поддерживается', 405) : undefined;
   if (p === '/api/desk/put') {
