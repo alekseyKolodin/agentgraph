@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adfToMarkdown, JIRA_SEARCH_PATH, jiraClient, LIST_FIELDS, normalizeBaseUrl, parseIssueKey, type FetchFn } from './jira.js';
+import { adfToMarkdown, ASSIGNED_TO_ME_JQL, JIRA_SEARCH_PATH, JQL_PRESETS, jiraClient, LIST_FIELDS, normalizeBaseUrl, parseIssueKey, type FetchFn } from './jira.js';
 
 const cfg = { baseUrl: 'https://example.atlassian.net/', email: 'dev@example.com' };
 const TOKEN = 'secret-token-123';
@@ -117,4 +117,42 @@ test('ADF: текст из attrs и незнакомых узлов не тер�
     ],
   });
   for (const s of ['@Разработчик', 'https://x.test/a', ':ok:', '[BLOCKED]', 'внутри нового узла', 'скрытое']) assert.ok(md.includes(s), s);
+});
+
+test('задача: исполнитель в issue(); нет исполнителя — undefined', async () => {
+  const f = fakeFetch(() => ({ body: { key: 'ABC-1', fields: { summary: 'S', status: { name: 'Todo' }, assignee: { accountId: 'acc-1', displayName: 'Анна', emailAddress: 'ann@example.com' } } } }));
+  const issue = await jiraClient(cfg, TOKEN, f.fn).issue('ABC-1');
+  assert.deepEqual(issue.assignee, { accountId: 'acc-1', displayName: 'Анна', email: 'ann@example.com' });
+  assert.match(f.calls[0].url, /fields=[^&]*assignee/);
+  const none = fakeFetch(() => ({ body: { key: 'ABC-1', fields: { assignee: null } } }));
+  assert.equal((await jiraClient(cfg, TOKEN, none.fn).issue('ABC-1')).assignee, undefined);
+});
+
+test('changelog: записи по полям, отсутствующий toString не подменяется методом объекта', async () => {
+  const f = fakeFetch(() => ({
+    body: { isLast: true, total: 2, values: [
+      { created: '2026-11-09T10:00:00.000+0000', author: { displayName: 'Анна' }, items: [{ field: 'status', fromString: 'Todo', toString: 'Done' }, { field: 'labels' }] },
+      { created: '2026-11-10T10:00:00.000+0000', items: [{ field: 'assignee', fromString: null, toString: 'Борис' }] },
+    ] },
+  }));
+  const list = await jiraClient(cfg, TOKEN, f.fn).changelog('ABC-1');
+  assert.match(f.calls[0].url, /\/rest\/api\/3\/issue\/ABC-1\/changelog\?startAt=0&maxResults=100$/);
+  assert.deepEqual(list, [
+    { at: '2026-11-09T10:00:00.000+0000', author: 'Анна', field: 'status', from: 'Todo', to: 'Done' },
+    { at: '2026-11-09T10:00:00.000+0000', author: 'Анна', field: 'labels', from: '', to: '' },
+    { at: '2026-11-10T10:00:00.000+0000', author: '', field: 'assignee', from: '', to: 'Борис' },
+  ]);
+});
+
+test('changelog: длинная история — берём последнюю страницу, плохой ключ отклоняется', async () => {
+  const f = fakeFetch((url) => ({ body: url.includes('startAt=0') ? { isLast: false, total: 250, values: [{ created: 'old', items: [{ field: 'x' }] }] } : { isLast: true, total: 250, values: [{ created: 'new', items: [{ field: 'status', toString: 'Done' }] }] } }));
+  const list = await jiraClient(cfg, TOKEN, f.fn).changelog('ABC-1', 100);
+  assert.match(f.calls[1].url, /startAt=150&maxResults=100$/);
+  assert.deepEqual(list.map((c) => c.at), ['new']);
+  await assert.rejects(jiraClient(cfg, TOKEN, f.fn).changelog('нет'), /Не ключ задачи/);
+});
+
+test('пресет «назначено на меня» общий: «Код» (mine) и рутина берут один запрос', () => {
+  assert.equal(JQL_PRESETS.mine, ASSIGNED_TO_ME_JQL);
+  assert.match(ASSIGNED_TO_ME_JQL, /assignee = currentUser\(\) AND statusCategory != Done/);
 });
