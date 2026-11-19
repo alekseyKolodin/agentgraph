@@ -3,9 +3,10 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ConnectorBuildView, DraftView, Feedback, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ConnectorBuildView, DraftView, Feedback, FlowTemplate, HistoryCheck, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
+import type { ProfileResponse } from '@server/api-types';
 import { api } from './client';
 import { t } from '../lib/i18n';
 
@@ -50,6 +51,12 @@ export const explainLog = (slug: string, id: string) => api<LogExplain>('GET', `
 export const askLog = (slug: string, id: string, question: string) => api<LogAsk>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/ask`, { question });
 export const recheckLog = (slug: string, id: string, check: string) => api<LogRecheck>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/recheck`, { check });
 export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryCheck>('POST', `${BASE}/${enc(slug)}/history`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
+/** Готовый flow шаблона рутины (templates/flows) у пользователя: нет — сервер копирует его в flows/Мои дела. */
+export const ensureTemplateFlow = (name: string) => api<{ flow: string; copied: boolean }>('POST', `${BASE}/flow-templates/${enc(name)}`, {});
+/** Готовые flow шаблонов: описание карточки flow, которого у пользователя ещё нет. */
+export const useFlowTemplates = () => useQuery({ queryKey: ['routine-flow-templates'], queryFn: () => api<FlowTemplate[]>('GET', `${BASE}/flow-templates`), staleTime: 10 * 60_000, retry: false });
+/** Профиль «кто я» (GET /api/settings/profile) — шаблону встреч: какие пункты мои. */
+export const useProfile = (on: boolean) => useQuery({ queryKey: ['settings-profile'], queryFn: () => api<ProfileResponse>('GET', '/api/settings/profile'), enabled: on, staleTime: 5 * 60_000, retry: false });
 /** Ручной запуск: по событию журнала или (расписание) сейчас. */
 export const runRoutine = (slug: string, eventId?: string) => api<{ runId?: string; wait?: RoutineWait }>('POST', `${BASE}/${enc(slug)}/run`, eventId ? { eventId } : {});
 export const fetchLog = (slug: string, outcomes?: LogOutcome[], limit = 200) =>

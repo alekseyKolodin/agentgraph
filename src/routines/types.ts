@@ -442,5 +442,8 @@ export type HistoryCheck = {
  */
 export type Feedback = { eventId: string; verdict: 'match' | 'no_match' | 'not_duplicate'; at?: string };
 
+/** Готовый flow шаблона рутины (templates/flows): GET /api/routines/flow-templates. */
+export type FlowTemplate = { name: string; description: string };
+
 /** Событие home-SSE (/api/events): UI перечитывает /api/routines. */
 export type RoutinesChange = { type: 'routines'; runId: ''; flow: '' };
