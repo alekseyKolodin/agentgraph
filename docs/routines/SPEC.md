@@ -103,6 +103,9 @@
 - **email** — IMAP через `curl` (`imaps://`, SEARCH UNSEEN/SINCE + FETCH заголовков), ключ `EMAIL_PASSWORD`.
 - **connector** — подключение claude.ai: сессия haiku через Agent SDK вызывает read-only инструмент-«список» и
   возвращает JSON записей; интервал не меньше 30 мин, `delivery: 'model'`.
+  Ответ в источник — по явному выбору: `config.reply = { tool, args }` — один пишущий инструмент сервиса и шаблон его
+  аргументов (`{{channel}}`, `{{thread}}` из `event.replyTo`, `{{text}}`); вызывается через `mcp-call` без модели, читать им
+  источник нельзя. `SourceView.canReply` у источника — только если ответ настроен; свой ответ при опросе — не событие (`isSelf`).
 - **рецепты** — `templates/sources/*.yaml` (несколько примеров на `command`: Fireflies GraphQL, Sentry issues, Linear,
   GitHub notifications) и `~/.agentgraph/recipes`.
 

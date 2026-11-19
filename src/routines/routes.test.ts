@@ -143,7 +143,7 @@ test('POST /feedback: ответ человека на событие виден
   }
 });
 
-test('mcp-tools: сервисы для «Сервис через Claude» без пишущих инструментов, force доходит до листинга', async () => {
+test('mcp-tools: читающие инструменты для чтения, пишущие — отдельно для ответа, force доходит до листинга', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
   try {
     const engine = new RoutineEngine({ store: new RoutineStore(root), kinds: () => [], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
@@ -161,7 +161,7 @@ test('mcp-tools: сервисы для «Сервис через Claude» без
     const call = (url: string) => routinesRoute('GET', new URL(url, 'http://localhost'), async () => undefined, { engine, drafts: null, mcpServers });
     const r = await call('/api/routines/mcp-tools');
     assert.equal(r?.status, 200);
-    assert.deepEqual(r?.body, { at: '2026-11-18T10:00:00Z', services: [{ server: 'claude.ai Slack', title: 'Slack', origin: 'claudeai', status: 'connected', hidden: 1, tools: [{ name: 'mcp__claude_ai_Slack__slack_read_channel', tool: 'slack_read_channel' }] }] });
+    assert.deepEqual(r?.body, { at: '2026-11-18T10:00:00Z', services: [{ server: 'claude.ai Slack', title: 'Slack', origin: 'claudeai', status: 'connected', hidden: 1, tools: [{ name: 'mcp__claude_ai_Slack__slack_read_channel', tool: 'slack_read_channel' }], writeTools: [{ name: 'mcp__claude_ai_Slack__slack_send_message', tool: 'slack_send_message' }] }] });
     await call('/api/routines/mcp-tools?force=1');
     assert.deepEqual(forced, [false, true]);
   } finally {

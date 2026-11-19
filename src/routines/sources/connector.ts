@@ -3,6 +3,7 @@
 // с готовыми аргументами и правило, как достать записи из ответа (createConnectorBuilds). Дальше каждая проверка идёт
 // по скрипту без модели (src/mcp-call.ts): лимит не тратится, проверять можно раз в минуту. Не вышло разобрать ответ
 // без модели — источник без скрипта: каждая проверка через сессию haiku, не чаще раза в 30 минут.
+// Ответ в источник (config.reply) — единственный пишущий инструмент, выбранный человеком; вызывается тоже без модели.
 import { createHash, randomBytes } from 'node:crypto';
 import os from 'node:os';
 import { runSession, type SessionRequest, type SessionResult } from '../../agent.js';
@@ -12,7 +13,7 @@ import type { Profile } from '../../api-types.js';
 import { loadProfile } from '../../settings.js';
 import { mapItems } from '../command.js';
 import { BASE_MATCH, stampAt, type SourceCtx, type SourceKind } from '../kind.js';
-import type { ConnectorBuildView, ConnectorScript, ConnectorStep, FieldMap, McpServiceView, RoutineEvent, SourceSpec, SourceTestResult, TextRule } from '../types.js';
+import type { ConnectorBuildView, ConnectorReply, ConnectorScript, ConnectorStep, FieldMap, McpServiceView, RoutineEvent, SourceSpec, SourceTestResult, TextRule } from '../types.js';
 import { cfgList, cfgStr, firstLine, isoOf, truncate } from './util.js';
 
 /** Как SUGGEST_MODEL в attention.ts. */
@@ -78,6 +79,8 @@ export type ConnectorDeps = {
   mcp?: (signal: AbortSignal) => McpCaller;
   /** Профиль «кто я» для isSelf; по умолчанию — сохранённый в настройках. */
   profile?: () => Profile;
+  /** Сколько ждать инструмент ответа, мс (по умолчанию минута); в тестах — меньше. */
+  replyTimeoutMs?: number;
 };
 
 const defaultDeps: ConnectorDeps = {
@@ -123,15 +126,24 @@ export function checkToolName(tool: string | undefined): string {
 
 type ServerLike = { server: string; name: string; status: string; scope: string; tools: Array<{ name: string; tool: string; description?: string; readOnly: boolean; annotated: boolean }> };
 
-/** Сервисы для выбора в форме: только читающие инструменты, в порядке сервера. */
+/** Для выбора инструмента ответа: «отправить в тред» — раньше остальных пишущих. */
+const REPLY_WORDS = new Set(['send', 'post', 'reply', 'message', 'comment', 'thread']);
+const replyScore = (action: string): number => words(action).filter((w) => REPLY_WORDS.has(w)).length;
+
+/** Сервисы для выбора в форме: читающие инструменты для чтения, пишущие — отдельно, только для выбора инструмента ответа. */
 export function mcpServices(servers: ServerLike[]): McpServiceView[] {
+  const view = (t: ServerLike['tools'][number]) => ({ name: t.name, tool: t.tool, ...(t.description ? { description: t.description } : {}) });
   return servers.map((s) => {
     // разметка сервера главнее имени; без разметки — по имени, как checkToolName при проверке
-    const tools = s.tools
-      .filter((t) => (t.annotated ? t.readOnly : true) && !looksLikeWrite(t.tool) && /^mcp__[\w-]+__[\w-]+$/.test(t.name))
-      .map((t) => ({ name: t.name, tool: t.tool, ...(t.description ? { description: t.description } : {}) }));
+    const named = s.tools.filter((t) => /^mcp__[\w-]+__[\w-]+$/.test(t.name));
+    const isRead = (t: ServerLike['tools'][number]): boolean => (t.annotated ? t.readOnly : true) && !looksLikeWrite(t.tool);
+    const tools = named.filter(isRead).map(view);
+    const writeTools = named
+      .filter((t) => !isRead(t))
+      .sort((a, b) => replyScore(b.tool) - replyScore(a.tool))
+      .map(view);
     const ai = s.scope === 'claudeai';
-    return { server: s.server, title: ai ? s.server.replace(/^claude\.ai\s+/, '') : s.server, origin: ai ? 'claudeai' : 'claude-code', status: s.status, tools, hidden: s.tools.length - tools.length };
+    return { server: s.server, title: ai ? s.server.replace(/^claude\.ai\s+/, '') : s.server, origin: ai ? 'claudeai' : 'claude-code', status: s.status, tools, hidden: s.tools.length - tools.length, writeTools };
   });
 }
 
@@ -266,6 +278,125 @@ export async function runScript(script: ConnectorScript, caller: McpCaller, sinc
   return out.slice(0, MAX_RECORDS);
 }
 
+// ---------------------------------------------------------------- ответ
+
+const MAX_REPLY_ARGS = 4000;
+const REPLY_TIMEOUT_MS = 60_000;
+const REPLY_VARS = /\{\{(channel|thread|text)\}\}/g;
+
+/**
+ * Ответ из config.reply, проверенный: один инструмент mcp__сервер__инструмент и шаблон аргументов с {{text}}. Это единственный
+ * пишущий инструмент источника: читать им нельзя (его нет среди tools и в скрипте), а скрипт и опрос моделью других пишущих не получают.
+ */
+export function replyOf(spec: SourceSpec): ConnectorReply | undefined {
+  const raw = spec.config?.reply as { tool?: unknown; args?: unknown } | undefined | null;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Ответ: ожидается инструмент и шаблон аргументов');
+  const tool = typeof raw.tool === 'string' ? raw.tool : '';
+  if (!/^mcp__[\w-]+__[\w-]+$/.test(tool)) throw new Error('Ответ: выберите сервис и инструмент, которым отправляется сообщение');
+  if (allowedTools(spec).includes(tool)) throw new Error('Ответ: инструмент ответа не может быть среди читающих — для чтения он не годится');
+  const args = raw.args === undefined ? {} : raw.args;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Ответ: аргументы — объект');
+  if (JSON.stringify(args).length > MAX_REPLY_ARGS) throw new Error(`Ответ: аргументы длиннее ${MAX_REPLY_ARGS} знаков`);
+  if (!hasTextValue(args)) throw new Error('Ответ: в значениях аргументов нет {{text}} — сообщение ушло бы без текста');
+  return { tool, args: args as Record<string, unknown> };
+}
+
+/** {{text}} должен стоять в значении аргумента (ключ не подставляется). */
+function hasTextValue(v: unknown): boolean {
+  if (typeof v === 'string') return v.includes('{{text}}');
+  if (Array.isArray(v)) return v.some(hasTextValue);
+  if (v && typeof v === 'object') return Object.values(v).some(hasTextValue);
+  return false;
+}
+
+const DROP = Symbol('drop');
+
+/** Шаблон аргументов → аргументы вызова. Подстановка за один проход: текст ответа с «{{…}}» внутри второй раз не разбирается. */
+export function fillReplyArgs(args: unknown, vars: { channel?: string; thread?: string; text: string }): unknown {
+  const fill = (v: unknown): unknown => {
+    if (typeof v === 'string') {
+      // аргумент, который целиком «тред», при ответе не в треде просто не передаётся: сообщение уходит в канал
+      if (v.trim() === '{{thread}}' && !vars.thread) return DROP;
+      return v.replace(REPLY_VARS, (_m, name: 'channel' | 'thread' | 'text') => {
+        const val = vars[name];
+        if (val === undefined && name === 'channel') throw new Error('Сервис через Claude: не знаю, в какой канал отвечать — у события нет канала, а в шаблоне ответа он не задан');
+        return val ?? '';
+      });
+    }
+    if (Array.isArray(v)) return v.map(fill).filter((x) => x !== DROP);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v)) {
+        const f = fill(x);
+        if (f !== DROP) out[k] = f;
+      }
+      return out;
+    }
+    return v;
+  };
+  return fill(args);
+}
+
+const idOf = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : typeof v === 'number' ? String(v) : undefined);
+
+/** Ссылка на отправленное сообщение, если инструмент её вернул. */
+function replyLink(r: McpCallResult): string | undefined {
+  const d = r.data;
+  if (d && typeof d === 'object' && !Array.isArray(d)) {
+    for (const k of ['permalink', 'link', 'url', 'message_link', 'web_url']) {
+      const v = (d as Record<string, unknown>)[k];
+      if (typeof v === 'string' && /^https?:\/\//.test(v)) return v;
+    }
+  }
+  return undefined;
+}
+
+/** Что рутина уже отправила в источник: её собственный ответ при следующем опросе — не новая запись (isSelf не должен зависеть от профиля). */
+const MAX_SENT = 100;
+const sentNorm = (v: string): string => v.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** Ответ в источник без модели: единственный выбранный инструмент, аргументы из шаблона, канал и тред — из event.replyTo. */
+async function reply(ctx: SourceCtx, target: Record<string, unknown> | undefined, text: string, deps: ConnectorDeps, sent: Array<{ text: string; link?: string }>): Promise<{ link?: string }> {
+  const r = replyOf(ctx.spec);
+  if (!r) throw new Error('Сервис через Claude: ответ не настроен — выберите инструмент ответа в настройках источника');
+  const args = fillReplyArgs(r.args, { channel: idOf(target?.channel), thread: idOf(target?.thread) ?? idOf(target?.thread_ts), text }) as Record<string, unknown>;
+  const caller = deps.mcp ? deps.mcp(ctx.signal) : openMcp(undefined, ctx.signal);
+  // сервис завис или ждёт входа: ответ не должен держать движок бесконечно
+  const ms = deps.replyTimeoutMs ?? REPLY_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const call = caller.call(r.tool, args);
+    call.catch(() => {});
+    const res = await Promise.race([
+      call,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${short(r.tool)}: сервис не ответил за ${Math.round(ms / 1000)} с`)), ms);
+      }),
+    ]);
+    const data = res.data as { ok?: unknown; error?: unknown } | undefined;
+    if (res.isError) throw new Error(`${short(r.tool)}: ${truncate(res.text || 'инструмент вернул ошибку', 300)}`);
+    // часть серверов (Slack) отвечает {ok:false, error} обычным ответом
+    if (data && typeof data === 'object' && !Array.isArray(data) && data.ok === false) throw new Error(`${short(r.tool)}: ${truncate(typeof data.error === 'string' ? data.error : res.text || 'ответ не отправлен', 300)}`);
+    const link = replyLink(res);
+    sent.push({ text: sentNorm(text), ...(link ? { link } : {}) });
+    if (sent.length > MAX_SENT) sent.splice(0, sent.length - MAX_SENT);
+    return link ? { link } : {};
+  } finally {
+    if (timer) clearTimeout(timer);
+    caller.close();
+  }
+}
+
+/** Канал и тред для ответа — из нити события, если разбор записи их дал (thread/channel в FieldMap) и вид сам replyTo не положил. */
+export function withReplyTo(events: RoutineEvent[]): RoutineEvent[] {
+  for (const e of events) {
+    if (e.replyTo || !e.thread) continue;
+    e.replyTo = { ...(e.thread.channel ? { channel: e.thread.channel } : {}), thread: e.thread.thread };
+  }
+  return events;
+}
+
 async function poll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEvent[]> {
   const script = scriptOf(ctx.spec);
   if (!script) return modelPoll(ctx, deps);
@@ -364,9 +495,16 @@ function describe(spec: SourceSpec): string {
   } catch (e) {
     return `Сервис через Claude: скрипт не проходит проверку — ${(e as Error).message}`;
   }
-  if (script) return `Без модели, по скрипту:\n${script.steps.map((s, i) => `${i + 1}. ${s.say} — ${short(s.tool)} ${JSON.stringify(s.args)}`).join('\n')}`;
+  let answer = '';
+  try {
+    const r = replyOf(spec);
+    if (r) answer = `\nОТПРАВЛЯЕТ сообщения (ответ в источник — единственный пишущий инструмент): ${short(r.tool)} ${JSON.stringify(r.args)}`;
+  } catch (e) {
+    answer = `\n${(e as Error).message}`;
+  }
+  if (script) return `Без модели, по скрипту:\n${script.steps.map((s, i) => `${i + 1}. ${s.say} — ${short(s.tool)} ${JSON.stringify(s.args)}`).join('\n')}${answer}`;
   const tools = allowedTools(spec);
-  return `Сервис через Claude: сессия haiku вызывает ${tools.length ? tools.map(short).join(', ') : '(инструменты не выбраны)'} — «${cfgStr(spec, 'request') ?? 'последние записи'}» — и возвращает список записей. Только чтение; тратит лимит, не чаще раза в 30 минут.`;
+  return `Сервис через Claude: сессия haiku вызывает ${tools.length ? tools.map(short).join(', ') : '(инструменты не выбраны)'} — «${cfgStr(spec, 'request') ?? 'последние записи'}» — и возвращает список записей. Только чтение; тратит лимит, не чаще раза в 30 минут.${answer}`;
 }
 
 /** Для сравнения: регистр, пробелы, ведущая «@» (логин в упоминании) не важны. */
@@ -384,6 +522,7 @@ export function isMyRecord(p: Profile, e: RoutineEvent): boolean {
 }
 
 export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
+  const sent: Array<{ text: string; link?: string }> = [];
   return {
     kind: 'connector',
     title: 'Сервис через Claude',
@@ -412,8 +551,21 @@ export function connectorKind(deps: ConnectorDeps = defaultDeps): SourceKind {
       },
     ],
     match: [...BASE_MATCH],
-    poll: (ctx) => poll(ctx, deps),
-    isSelf: (_ctx, e) => isMyRecord((deps.profile ?? loadProfile)(), e),
+    poll: async (ctx) => withReplyTo(await poll(ctx, deps)),
+    reply: (ctx, target, text) => reply(ctx, target, text, deps, sent),
+    canReplyFor: (spec) => {
+      try {
+        return replyOf(spec) !== undefined;
+      } catch {
+        return false;
+      }
+    },
+    // свой ответ в канале, который читает тот же источник, — не событие: по тексту и ссылке отправленного, профиль не нужен
+    isSelf: (_ctx, e) => {
+      const body = sentNorm(e.text);
+      if (sent.some((x) => (x.link && e.link === x.link) || (x.text && body === x.text))) return true;
+      return isMyRecord((deps.profile ?? loadProfile)(), e);
+    },
     describe,
   };
 }

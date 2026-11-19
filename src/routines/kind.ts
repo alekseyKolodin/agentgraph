@@ -38,6 +38,8 @@ export type SourceKind = {
   listen?: (ctx: SourceCtx, emit: (events: RoutineEvent[]) => void) => Promise<void>;
   /** Ответ в источник: тред, чат, комментарий. target — event.replyTo или настройки источника (чат по умолчанию). */
   reply?: (ctx: SourceCtx, target: Record<string, unknown> | undefined, text: string) => Promise<{ link?: string }>;
+  /** Умеет ли ответить источник с такими настройками (у «Сервиса через Claude» ответ настраивается в источнике). Нет — по наличию reply. */
+  canReplyFor?: (spec: SourceSpec) => boolean;
   /** Защита от петли: сообщение своего бота / ответ в треде — не событие. */
   isSelf?: (ctx: SourceCtx, e: RoutineEvent) => boolean;
   /** Что будет выполняться — для «Что будет выполняться» и SourceTestResult.request (секреты замаскировать). */

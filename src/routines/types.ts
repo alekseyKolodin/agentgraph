@@ -72,7 +72,16 @@ export type McpToolView = { name: string; tool: string; description?: string };
  * добавленный в Claude Code (claude mcp add). tools — подходящие инструменты, самые похожие на список — первыми; hidden —
  * сколько инструментов спрятано, потому что они меняют данные.
  */
-export type McpServiceView = { server: string; title: string; origin: 'claudeai' | 'claude-code'; status: string; tools: McpToolView[]; hidden: number };
+export type McpServiceView = {
+  server: string;
+  title: string;
+  origin: 'claudeai' | 'claude-code';
+  status: string;
+  tools: McpToolView[];
+  hidden: number;
+  /** Инструменты, которые меняют данные: из них (и только из них) выбирается один для ответа в источник. Читать ими нельзя. */
+  writeTools: McpToolView[];
+};
 export type McpServicesView = { services: McpServiceView[]; at: string };
 
 /** Разбор текстового ответа инструмента: split — регулярка-разделитель записей, поля — регулярки с одной группой. */
@@ -83,6 +92,12 @@ export type TextRule = { split: string; id?: string; title?: string; text?: stri
  * Записи из ответа: json — по полям, как у своей команды; text — регулярками.
  */
 export type ConnectorStep = { tool: string; args: Record<string, unknown>; say: string; json?: FieldMap; text?: TextRule };
+/**
+ * Ответ в источник «Сервис через Claude» (config.reply): один пишущий инструмент, выбранный человеком, и шаблон его
+ * аргументов. В строках {{channel}}, {{thread}} и {{text}} подставляются канал и тред события (event.replyTo) и текст ответа;
+ * строка без подстановок уходит как есть (например, фиксированный канал). Читать этим инструментом источник не может.
+ */
+export type ConnectorReply = { tool: string; args: Record<string, unknown> };
 /** Скрипт, который модель собрала один раз: дальше проверка ходит по нему без модели. */
 export type ConnectorScript = { steps: ConnectorStep[] };
 
@@ -115,7 +130,7 @@ export type SourceKindView = {
   minEvery: string;
   setup: KindField[];
   match: MatchField[];
-  /** Умеет ответить в источник (тред, чат, комментарий). */
+  /** Вид умеет ответить в источник (тред, чат, комментарий). Умеет ли конкретный источник — `SourceView.canReply`: у «Сервиса через Claude» ответ настраивается в источнике. */
   canReply: boolean;
   /** Рецепт из файла (~/.agentgraph/recipes или templates/sources), а не встроенный вид. */
   recipe?: boolean;
@@ -150,6 +165,8 @@ export type SourceView = {
   missingSecrets: string[];
   /** Какие рутины его используют (слаги). */
   usedBy: string[];
+  /** Умеет ли ЭТОТ источник ответить: у «Сервиса через Claude» — только если настроен инструмент ответа. */
+  canReply: boolean;
 };
 
 /** Итог пробной проверки источника: показывается до сохранения («Сервис отвечает, нашёл 3 записи»). */
