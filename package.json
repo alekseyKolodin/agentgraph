@@ -19,7 +19,7 @@
     "desktop:dev": "tsx scripts/ensure-web.mts && npm run build && electron .",
     "desktop:install": "tsx scripts/ensure-web.mts && npm run build && tsx scripts/desktop-install.mts",
     "desktop:build": "npm run build:web && npm run build && tsx scripts/pty-helper.mts && electron-builder --mac",
-    "test": "tsx --test src/*.test.ts src/routines/*.test.ts src/routines/sources/*.test.ts web/src/lib/*.test.ts web/src/lib/*/*.test.ts",
+    "test": "tsx --test src/*.test.ts src/routines/*.test.ts src/routines/sources/*.test.ts src/things/*.test.ts web/src/lib/*.test.ts web/src/lib/*/*.test.ts",
     "share": "bash scripts/share.sh",
     "release": "tsx scripts/release.mts",
     "e2e": "playwright test -c e2e"
