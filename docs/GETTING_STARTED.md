@@ -126,6 +126,77 @@ Four more examples in `flows/example/`:
 - **example-parallel** — three phases run at the same time (the `group` parallel group), and a fourth combines their outputs. On the run page you can see several phases "running" at once.
 - **example-compose** — connecting flows: a phase decides what to do and ends with a marker, `next` leads to a call of `example-parallel` or of `example-blocks` (repeated until the judge approves), and each call runs as its own child run with its own page.
 
+## Routines and My tasks: the first hour
+
+Home (`/`) is the **My tasks** board. A task is the state of a real thing (an MR or PR, a Jira issue, a branch, a terminal session, a Slack thread, or your own note), not an event. Five comments on one MR are one task. A review asked for in GitLab and again in Slack is one task with two signals. Tasks are personal and live in `~/.agentgraph/desk/`. They are filled by **routines**, and **watchers** keep them current. The design is in [desk/SPEC.md](desk/SPEC.md).
+
+### What the board shows
+
+- **Five columns:** **New**, **Planned**, **In progress**, **Waiting on others**, **Done**.
+  - **Card:** kind (`Ревью`, `Jira`, `Встреча`, `Забытое` — routines name it), project (space), due date and how long it has been in the column.
+  - **Why line:** why it is your move ("3 files not committed", "the author replied", "agent finished: …").
+  - **Who moved it last:** for example "moved by watcher".
+- **Card actions:**
+  - **Continue session** / **Start session** — a Claude session for the task; it moves to In progress.
+  - **Run a flow…**
+  - **Reply** — opens the conversation where you were asked.
+  - **Link an MR or issue…**
+  - **Move to** (or ⌥← ⌥→), **To plan**, **Not mine** (closes it), **Close**.
+- **Above the board:**
+  - **Agent questions**: questions from running flows (answered in place), routine waits and "catch up", terminal sessions waiting for your answer.
+  - **Start with this** — computed without a model: overdue first, then due today, then the longest your-move, then the newest in New.
+  - **"N of N fine"** — every source and the watchers: "checked 09:12, 14 records, 2 new", "checked, empty for 6 days — usually 3 a day", "broken: …", "key missing", "not checked since the app started". With a broken source, **Fix** opens Routines.
+  - **By project** — `/?project=<space slug>` shows one project.
+- **Empty board:** Home offers the routine templates.
+
+### Fill it in an hour
+
+1. **Who you are.** Rail → **Code** (`/code`) → **Connections** → **Who I am**.
+   - Fields: names, emails, GitLab and GitHub logins, Slack member id, Jira email.
+   - Empty fields fill themselves from `glab`, `gh`, `git config` and the Jira connection; what you type is kept.
+   - Routines use the profile to tell "addressed to me" and "my action items" from the rest, and to skip your own messages.
+2. **Connections.** In the same dialog:
+   - **Jira**: address, email, API token. The token is checked on save.
+   - Your git repositories.
+   - Install and log in `glab` (`glab auth login`) or `gh` (`gh auth login`) for MRs and PRs.
+   - A project is a space: link its repositories on the space page (**Repositories**). Work outside every space is "No project".
+3. **Four templates.** Rail → **Routines** (`/routines`) → **New routine**, or the tiles on an empty board.
+   - **Review: assigned in GitLab or GitHub.** A `Ревью` task when you are asked to review. The `desk-review-mr` flow does a first review after you press Run (the routine waits for you). If the source can reply, the draft goes back to the MR.
+   - **Review: a link dropped in Slack.** A message with `/merge_requests/` or `/pull/` in it. Slack is connected through Claude: **Connect a service** → **Ready-made** → **Service connected to Claude**, with your claude.ai Slack connector or an MCP server. The same MR from GitLab and from Slack is one task.
+   - **Jira: assigned to me.** A `Jira` task when an issue is assigned to you or appears in the query. `desk-task-start` works in a new worktree of the project, so the template needs a project folder.
+   - **Meetings → tasks.** The Fireflies.ai recipe (key `FIREFLIES_API_KEY`). `desk-meeting-tasks` turns your action items from the meeting summary into `Встреча` tasks; the due date counts from the meeting date. It runs by itself with a $1 limit.
+   - **What saving does:** the template's flow is copied into `flows/Мои дела/`, where you can edit it. The routine is saved switched off; the next screen has **Check on history**, which shows which tasks the recent events would have created. **Turn on** starts it.
+   - **First poll:** the routine creates tasks for what is already in the source (for example, reviews assigned before you connected it, up to 50).
+4. **The Projects source.** **Connect a service** → **Ready-made** → **Projects**.
+   - What it lists: branches of your spaces' repositories that are dirty, have unpushed commits, or are ahead of the base without an MR; terminal sessions that ended on a question. No model.
+   - **Spaces** (field): space slugs; empty means all open spaces.
+   - **Session review by model** (field): for example `24h`, off by default. Sonnet then reviews sessions with new turns, about $0.05–0.6 per review. Its "unfinished" and "last step" verdicts become tasks too.
+   - Then make a routine on this source with **Task**, kind `Забытое`, and flow **nothing — only create a task**.
+   - It is a snapshot: a branch that became clean, a session that was answered or deleted — its task closes ("no longer in «Projects»"). If it comes back, the task reopens. A repository that could not be read keeps its previous records.
+   - **Alternative — Every morning → project sweep:** the same with a model, as a scheduled flow in one project folder.
+
+### How a task moves by itself
+
+Watchers check the things of open tasks while the app or `agentgraph ui` runs, about every minute for branches, every 2 minutes for MRs and every 5 minutes for Jira. They also run right after start, so whatever happened while the app was closed lands on the first pass, without clicks.
+
+| What happened | Where the task goes |
+|---|---|
+| Your move again (author replied, review requested again) | Waiting on others → Planned |
+| Someone else's move (you replied last) | Planned or In progress → Waiting on others |
+| The thing closed (MR merged, issue done, branch clean) | Done (unless the routine's rule is "only by hand") |
+| A new signal about the same thing | Waiting on others or Done → Planned |
+| A session or run started from the card | In progress; when the run ends, the column stays and the why line says how it went |
+
+A move by hand holds until the thing itself changes. The watcher sees the same state on every pass and leaves your column alone. A thing without a watcher (a thread, your own task) moves only by hand or by the flow and session tools `desk_put` / `desk_close`.
+
+### A month later
+
+- **"Stuck for over N days: K"** above the board (or **Week** when nothing is stuck) opens the **Week review**:
+  - what was **Closed**;
+  - what is **Stuck** — no move in Planned, Waiting on others or In progress for N days; N is 3, 7, 14 or 30, set in the review, 7 by default;
+  - what **Arrived**, by routine, and "by hand and from sessions".
+- After a task you worked on (with a run or session) is closed, **Save a lesson** offers a line for the knowledge tag of that kind of work. Phases and sessions with the tag get it next time.
+
 ## Everyday use
 
 ### Create a flow
