@@ -72,7 +72,10 @@ test('builtinKinds: все виды-сервисы на месте, у кажд�
   }
   const by = Object.fromEntries(kinds.map((k) => [k.kind, k]));
   for (const k of ['slack', 'telegram', 'gitlab', 'github', 'jira']) assert.ok(by[k].reply, `${k} умеет отвечать`);
-  for (const k of ['rss', 'folder', 'email', 'connector']) assert.equal(by[k].reply, undefined);
+  for (const k of ['rss', 'folder', 'email']) assert.equal(by[k].reply, undefined);
+  // «Сервис через Claude» отвечает без модели, но только если в источнике выбран инструмент ответа
+  assert.ok(by.connector.reply && by.connector.canReplyFor);
+  assert.equal(by.connector.canReplyFor!({ title: 't', kind: 'connector', config: {} }), false);
   // скрипт без модели — обычный опрос; без скрипта минимум 30 минут даёт minEveryFor
   assert.equal(by.connector.delivery, 'poll');
   assert.equal(by.slack.delivery, 'live');

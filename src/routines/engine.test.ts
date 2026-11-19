@@ -651,6 +651,31 @@ test('live-источник: события из listen идут тем же п�
   }
 });
 
+test('источник отвечает, если вид умеет и (когда ответ настраивается в источнике) настроен: canReply у источника', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-'));
+  try {
+    const store = new RoutineStore(root);
+    const kind: SourceKind = {
+      kind: 'fake', title: 'Фейк', summary: 'тест', delivery: 'poll', minEveryMs: 0, setup: [], match: [],
+      poll: async () => [],
+      reply: async () => ({}),
+      canReplyFor: (spec) => Boolean(spec.config.reply),
+      describe: () => 'фейк',
+    };
+    const plain: SourceKind = { ...kind, kind: 'plain', canReplyFor: undefined };
+    const mute: SourceKind = { ...kind, kind: 'mute', reply: undefined, canReplyFor: undefined };
+    const engine = new RoutineEngine({ store, kinds: () => [kind, plain, mute], startRun: async () => 'r', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
+    store.writeSource('set', { title: 'Настроен', kind: 'fake', config: { reply: { tool: 'x' } } });
+    store.writeSource('unset', { title: 'Не настроен', kind: 'fake', config: {} });
+    store.writeSource('plain', { title: 'Обычный', kind: 'plain', config: {} });
+    store.writeSource('mute', { title: 'Читает', kind: 'mute', config: {} });
+    const can = Object.fromEntries(engine.sourceViews().map((v) => [v.slug, v.canReply]));
+    assert.deepEqual(can, { set: true, unset: false, plain: true, mute: false });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('обзор: виды с command, рутины со статистикой и последними строками', async () => {
   const t = setup();
   try {

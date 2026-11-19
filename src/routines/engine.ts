@@ -1298,8 +1298,20 @@ export class RoutineEngine {
         ...(pollCostUsd ? { pollCostUsd } : {}),
         missingSecrets: missing,
         usedBy: used.get(f.slug) ?? [],
+        canReply: f.spec ? this.canReply(f.spec) : false,
       };
     });
+  }
+
+  /** Умеет ли источник ответить: вид с reply, а если ответ настраивается в источнике — только с настроенным. */
+  private canReply(spec: SourceSpec): boolean {
+    const k = this.kind(spec.kind);
+    if (!k?.reply) return false;
+    try {
+      return k.canReplyFor ? k.canReplyFor(spec) : true;
+    } catch {
+      return false;
+    }
   }
 
   kindViews(): SourceKindView[] {
