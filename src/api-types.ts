@@ -355,16 +355,24 @@ export type FlowHistory = {
 
 /** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
 export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
+/**
+ * Шаг «Правки с ИИ» словами: что агент сделал с файлом flow (src/edit-steps.ts). read — прочитал файл; add/edit/remove —
+ * этап, блок, артефакт (файл запуска) или поля самого flow (what: 'flow', name пустой). fields — ключи YAML, которые
+ * поменялись (prompt, handoff, loop…); title — название этапа или блока, у артефакта — имя файла.
+ */
+export type FlowEditStep =
+  | { kind: 'read'; blocks: number; phases: number; artifacts: number }
+  | { kind: 'add' | 'edit' | 'remove'; what: 'phase' | 'block' | 'artifact' | 'flow'; name: string; title?: string; fields?: string[] };
 /** Что done потока добавляет к обычному телу ответа: фактическая модель (нет — init не пришёл) и длительность всего запроса. */
 export type FlowAiDone = { model?: string; durationMs: number };
 /**
  * POST /api/flows/generate и /api/flows/:name/edit с Accept: application/x-ndjson — ход ИИ-сессии построчно.
- * progress — модель (как только её назвал system/init), повтор запроса к API, шаг; log — строка хода (текст агента,
+ * progress — модель (как только её назвал system/init), повтор запроса к API, шаг, у правки — шаг словами (step); log — строка хода (текст агента,
  * вызов инструмента); done — тело, которое без заголовка пришло бы одним JSON, плюс FlowAiDone; error — ошибка, поток закрыт.
  * B — тело маршрута: в web/ — FlowGenerated или FlowEdited (spec типизирован там).
  */
 export type FlowAiStreamEvent<B = Record<string, unknown>> =
-  | { type: 'progress'; model?: string; retry?: { attempt: number; maxRetries: number; delayMs: number }; stage?: FlowAiStage }
+  | { type: 'progress'; model?: string; retry?: { attempt: number; maxRetries: number; delayMs: number }; stage?: FlowAiStage; step?: FlowEditStep }
   | { type: 'log'; line: string }
   | { type: 'done'; body: B & FlowAiDone }
   | { type: 'error'; error: string };

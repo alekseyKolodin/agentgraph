@@ -3,7 +3,7 @@
 // С ним — поток FlowAiStreamEvent: модель, повторы запроса к API, шаг правки, строки хода и в конце то же тело.
 import fs from 'node:fs';
 import type http from 'node:http';
-import type { FlowAiStage, FlowAiStreamEvent } from './api-types.js';
+import type { FlowAiStage, FlowAiStreamEvent, FlowEditStep } from './api-types.js';
 import { runSession, truncate, type LogFn, type SessionEvent } from './agent.js';
 import { generateFlow } from './generate.js';
 import { editFlow, type EditBase } from './edit.js';
@@ -21,6 +21,8 @@ export type FlowAiHooks = {
   onEvent: (e: SessionEvent) => void;
   onModel: (model: string) => void;
   onStage: (stage: FlowAiStage) => void;
+  /** Шаг правки словами (только «Правка с ИИ»; нет — шаги не считаются). */
+  onStep?: (step: FlowEditStep) => void;
 };
 
 /** Подмена сессии в тестах. */
@@ -60,6 +62,7 @@ export async function respondFlowAi(
     },
     onModel: (model) => send({ type: 'progress', model }),
     onStage: (stage) => send({ type: 'progress', stage }),
+    onStep: (step) => send({ type: 'progress', step }),
   };
   try {
     if (!stream) {
@@ -121,6 +124,7 @@ export async function editReply(
     onEvent: hooks.onEvent,
     onModel: hooks.onModel,
     onStage: hooks.onStage,
+    onStep: hooks.onStep,
     ...(deps.session ? { deps: { session: deps.session } } : {}),
   });
   return { status: 200, body: { name, spec: r.spec, summary: r.summary, changed: r.changed, costUsd: r.costUsd }, model: r.model, durationMs: r.durationMs };

@@ -15,7 +15,8 @@ import {
 import {
   addConnTools, connChips, connManualError, connNote, connPick, connPicked, CONN_PREFIX, EFFORTS, modelOptions, normalizeConnectors, PERMS, TOOL_HINT,
 } from '../../lib/flow/tools';
-import { afterRender, dropStaleSel, openPhasePane, showPhasePane } from './actions';
+import { phaseAsk } from '../../lib/flow/assistant';
+import { afterRender, askAi, dropStaleSel, openPhasePane, showPhasePane } from './actions';
 import { DraftInput, DraftTextarea, PluginsField } from './fields';
 import { flowState, markDirty, selPhaseAt, useFlowStore } from './store';
 import styles from './Flow.module.css';
@@ -240,6 +241,22 @@ export function PhaseCard({ bi, i, pane = false }: { bi: number; i: number; pane
           <textarea className={styles.pSchema} data-field="p-schema" rows={3} value={schemaText(p)} onChange={(e) => set({ _schemaText: e.target.value })} />
         </label>
       </details>
+      {/* подсказки параллельной группы: группы этого блока */}
+      <datalist id={`b-groups-${bi}`}>
+        {[...new Set(block.phases.map((x) => x.group).filter(Boolean))].map((g) => <option key={g} value={g} />)}
+      </datalist>
+      {pane && (
+        <div className={styles.pcardFoot}>
+          <button
+            type="button"
+            className="btn"
+            title={t('Начать запрос помощнику про этот этап')}
+            onClick={() => askAi(phaseAsk(phaseNum(spec, bi, i), p.title || p.name))}
+          >
+            {t('Попросить ИИ поправить этап')}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

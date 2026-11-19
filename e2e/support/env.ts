@@ -15,7 +15,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const FAKE_CLAUDE = path.join(ROOT, 'e2e/support/fake-claude.mjs');
 
 /** Правило фейкового claude: подстрока промпта или системного промпта → ответ. */
-export type ClaudeRule = { when: string; text?: string; structured?: unknown; delayMs?: number; error?: string; costUsd?: number };
+export type ClaudeRule = {
+  when: string; text?: string; structured?: unknown; delayMs?: number; error?: string; costUsd?: number;
+  /** «Правка с ИИ»: замены в файле flow вызовами Read/Edit, между шагами — stepDelayMs. */
+  edits?: { find: string; replace: string }[]; stepDelayMs?: number;
+};
 export type ClaudeCall = { at: string; model: string; system: string; prompt: string; schema: boolean; answer: unknown };
 
 /** Тестовый flow: triage → fix. Маркеры [[triage]]/[[fix]] — по ним отвечает фейковый claude. */

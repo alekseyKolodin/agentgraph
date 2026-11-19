@@ -1,10 +1,16 @@
-// Выбор в конструкторе (ui/app.js openPhasePane, showPhasePane, openBlockPane, bindFocus, clearFocus, focusPhaseCard, revealField):
-// на широком экране — инспектор справа, на узком (≤1100px, инспектора нет) — карточка или панель в ленте.
-// Карточки в ленте — с id pcard-<блок>-<этап>, блоки — bblock-<блок>, поля — data-field: по ним ищут прокрутка и фокус.
+// Выбор в «Правке» (ui/app.js openPhasePane, showPhasePane, openBlockPane, bindFocus, clearFocus, revealField): этап, блок
+// или «Настройки flow» открываются в правой панели вместо помощника (EditSide.tsx); на узком окне (≤1100px) панель
+// стоит под схемой — к ней прокручиваем. Поля — data-field: по ним ищут прокрутка и фокус.
 import type { FieldRef } from '../../lib/flow/edit';
 import { emit, flowState, selPhaseAt, type FieldKey } from './store';
 
+/** Правая панель «Правки» стоит справа от схемы (широкое окно), а не под ней. */
 export const paneShown = (): boolean => matchMedia('(min-width: 1101px)').matches;
+
+/** Узкое окно: панель под схемой — прокрутить к ней после перерисовки. */
+function revealSide(): void {
+  if (!paneShown()) afterRender(() => document.getElementById('edit-side')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
 
 /** Подсветить элемент на 1.2 с (класс flash из модуля стилей): после перерисовки, иначе React перепишет className карточки. */
 export function flash(el: Element | null, cls: string): void {
@@ -26,30 +32,18 @@ export function showPhasePane(bi: number, i: number): void {
   emit();
 }
 
-/** Единая точка входа «открыть этап»: на широком экране — целиком в редакторе справа, на узком — карточка слева. */
-export function openPhasePane(bi: number, i: number, flashCls: string): void {
+/**
+ * Единая точка входа «открыть этап»: его поля — в правой панели вместо помощника, этап выделен на схеме. flashCls
+ * остался от ленты карточек (подсветка карточки) — сигнатуру зовут и снаружи (вкладка «Запуск»).
+ */
+export function openPhasePane(bi: number, i: number, _flashCls?: string): void {
   const p = flowState.spec?.blocks[bi]?.phases[i];
   if (!p) return;
   flowState.graphSel = p.name;
-  if (!paneShown()) {
-    emit();
-    afterRender(() => focusPhaseCard(bi, i, flashCls));
-    return;
-  }
   flowState.sel = { kind: 'phase', phase: p, b: bi, idx: i };
   flowState.openSeq++;
   emit();
-}
-
-/** Карточка этапа слева (узкое окно, где редактора справа нет): прокрутить, подсветить, фокус в промпт. */
-export function focusPhaseCard(bi: number, i: number, flashCls: string): void {
-  const card = document.getElementById(`pcard-${bi}-${i}`);
-  if (!card) return;
-  card.querySelector<HTMLElement>('[data-field="p-prompt"]')?.focus({ preventScroll: true });
-  const at = flowState.spec ? selPhaseAt(flowState.spec, flowState.sel) : null;
-  if (!at || at.b !== bi || at.i !== i) showPhasePane(bi, i);
-  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  flash(card, flashCls);
+  revealSide();
 }
 
 /** Блок в инспекторе: цикл, условие и теги знаний. */
@@ -60,6 +54,42 @@ export function openBlockPane(bi: number): void {
   flowState.sel = { kind: 'block', block, b: bi };
   flowState.openSeq++;
   emit();
+  revealSide();
+}
+
+/** «Настройки flow» в правой панели: описание, задача по умолчанию, файлы, блоки; focus — какое поле в фокус. */
+export function openFlowSettings(focus: 'description' | 'input' | 'artifacts' = 'description'): void {
+  flowState.sel = { kind: 'field', field: { scope: 'flow', key: focus === 'input' ? 'input' : 'description' } };
+  flowState.graphSel = null;
+  flowState.openSeq++;
+  emit();
+  revealSide();
+  afterRender(() => {
+    const el = document.getElementById(focus === 'artifacts' ? 'b-art-decl' : `b-${focus}`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'nearest' });
+    if (focus !== 'artifacts') el.focus({ preventScroll: true });
+  });
+}
+
+/** К помощнику: выбор снят, этап на схеме остаётся выделенным. */
+export function showAssistant(): void {
+  flowState.sel = null;
+  emit();
+}
+
+/** «Попросить ИИ поправить этап»: начало запроса — в поле помощника, курсор в конец. */
+export function askAi(prefix: string): void {
+  const text = flowState.aiText.trim();
+  flowState.aiText = text.startsWith(prefix.trim()) ? flowState.aiText : prefix + (text ? `\n${text}` : '');
+  showAssistant();
+  afterRender(() => {
+    const ta = document.getElementById('ai-ask') as HTMLTextAreaElement | null;
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(prefix.length, prefix.length);
+    if (!paneShown()) ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
 }
 
 /** Поле flow или блока — в крупный редактор справа (режим «поле»). Выделенный на графе этап больше не то, что в инспекторе. */
@@ -92,23 +122,16 @@ export function dropStaleSel(): void {
   if (gone) clearSel();
 }
 
-/** Поле с ошибкой сохранения: на широком экране — в редакторе этапа справа, на узком — в карточке слева. */
-export function revealField(ref: FieldRef, flashCls: string): void {
-  if (paneShown()) {
-    openPhasePane(ref.b, ref.i, flashCls);
-    afterRender(() => {
-      const box = document.querySelector<HTMLElement>('[data-pane="phase"]');
-      const field = box?.querySelector<HTMLElement>(`[data-field="${ref.field}"]`);
-      if (!box || !field) return;
-      field.focus({ preventScroll: true });
-      box.scrollTop += field.getBoundingClientRect().top - box.getBoundingClientRect().top - box.clientHeight / 3;
-    });
-    return;
-  }
-  const el = document.querySelector<HTMLElement>(`#pcard-${ref.b}-${ref.i} [data-field="${ref.field}"]`);
-  if (!el) return;
-  const adv = el.closest('details');
-  if (adv) adv.open = true;
-  el.focus();
-  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+/** Поле с ошибкой сохранения: этап — в правой панели, поле — в фокус и в треть панели. */
+export function revealField(ref: FieldRef, flashCls?: string): void {
+  openPhasePane(ref.b, ref.i, flashCls);
+  afterRender(() => {
+    const box = document.querySelector<HTMLElement>('[data-pane="phase"]');
+    const field = box?.querySelector<HTMLElement>(`[data-field="${ref.field}"]`);
+    if (!box || !field) return;
+    const adv = field.closest('details');
+    if (adv) adv.open = true;
+    field.focus({ preventScroll: true });
+    box.scrollTop += field.getBoundingClientRect().top - box.getBoundingClientRect().top - box.clientHeight / 3;
+  });
 }

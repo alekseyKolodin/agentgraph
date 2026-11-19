@@ -27,3 +27,23 @@
 /* выбор модели рядом с кнопкой ИИ */
 .model { flex: none; max-width: 150px; padding: 6px 8px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-small); }
 .model:disabled { opacity: .7; }
+
+/* «Правка с ИИ» в помощнике: шаги словами, технический лог свёрнут */
+.work { display: flex; flex-direction: column; gap: 8px; }
+.steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-small); color: var(--ink-2); }
+.steps li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.steps li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.steps li.now { color: var(--ink); }
+.steps .dot { margin-top: 6px; }
+.check { flex: none; margin-top: 4px; fill: none; stroke: var(--st-ok); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.detail { color: var(--ink-3); }
+.tech-log > summary { cursor: pointer; font-size: var(--fs-meta); color: var(--ink-3); width: max-content; }
+.tech-log > summary:hover { color: var(--ink-2); }
+.tech-log pre {
+  margin: 6px 0 0; max-height: 240px; overflow: auto; padding: 6px 8px; background: var(--well); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.5; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* тихий выбор модели в шапке помощника */
+.model-quiet { flex: none; max-width: 210px; padding: 3px 6px; border-radius: var(--r-sm); border: 1px solid transparent; background: transparent; color: var(--ink-2); font: inherit; font-size: var(--fs-meta); cursor: pointer; }
+.model-quiet:hover, .model-quiet:focus-visible { border-color: var(--line); color: var(--ink); background: var(--panel); outline: none; }
+.model-quiet:disabled { opacity: .6; cursor: default; }

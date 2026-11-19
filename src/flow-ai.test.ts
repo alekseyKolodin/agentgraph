@@ -37,7 +37,13 @@ function fakeSession(opts: { edit?: boolean; files?: string[]; hold?: boolean; s
     req.onModel?.('claude-haiku-test');
     req.onEvent?.({ kind: 'retry', attempt: 1, maxRetries: 10, delayMs: 2000, status: 529 });
     log('думаю');
-    if (opts.edit) fs.writeFileSync(path.join(req.cwd, 'flow.yaml'), opts.files?.[call] ?? EDITED);
+    if (opts.edit) {
+      // как агент: Edit над файлом правки и его результат — по ним сервер шлёт шаг словами
+      const file = path.join(req.cwd, 'flow.yaml');
+      req.onEvent?.({ kind: 'tool_use', id: `e${call}`, name: 'Edit', input: { file_path: file } });
+      fs.writeFileSync(file, opts.files?.[call] ?? EDITED);
+      req.onEvent?.({ kind: 'tool_result', toolUseId: `e${call}`, isError: false, text: '' });
+    }
     call++;
     if (opts.hold) {
       await new Promise<void>((resolve) => req.abort!.signal.addEventListener('abort', () => resolve()));
@@ -138,6 +144,10 @@ test('правка потоком: шаг «правка» и done с телом
     const res = await fetch(s.url, { method: 'POST', headers: { Accept: 'application/x-ndjson' } });
     const events = ndjson(await res.text());
     assert.deepEqual(events[0], { type: 'progress', stage: { kind: 'edit' } });
+    // шаг словами: что поменялось в файле после Edit
+    const steps = events.flatMap((e) => (e.type === 'progress' && e.step ? [e.step] : []));
+    assert.equal(steps.length, 1);
+    assert.ok(steps[0]!.kind === 'edit' && steps[0]!.what === 'phase');
     const done = events.at(-1)!;
     assert.ok(done.type === 'done' && done.body.changed === true && done.body.model === 'claude-haiku-test');
   } finally {

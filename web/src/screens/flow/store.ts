@@ -2,10 +2,11 @@
 // и возврат, как в старом UI — несохранённый конструктор не теряется, пока открыта вкладка. Рабочая копия (spec) правится
 // на месте, а version растёт на каждую правку: компоненты перерисовываются через useFlowStore().
 import { useSyncExternalStore } from 'react';
-import type { FlowSummary } from '@server/api-types';
+import type { FlowEditStep, FlowSummary } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
 import type { FlowSaved } from '../../api';
 import type { AiProgress } from '../../lib/flow/ai-progress';
+import type { ChangeRow } from '../../lib/flow/assistant';
 import { toEditable, type EditBlock, type EditPhase, type EditSpec, type SpecChanges } from '../../lib/flow/edit';
 
 export type Tab = 'run' | 'edit' | 'history';
@@ -23,9 +24,23 @@ export type FlowDoc = { name: string; folder?: string; yaml: string; summary?: F
  * конструктор правили.
  */
 export type AiResult = {
-  undo: { spec: EditSpec | null; dirty: boolean }; summary: string; diff: SpecChanges; stale: boolean; cost: number; seq: number;
+  /** prev — правка ИИ перед этой (отмена идёт по цепочке); seq — editSeq до того, как эта правка легла в схему. */
+  undo: { spec: EditSpec | null; dirty: boolean; prev?: AiResult | null; seq?: number }; summary: string; diff: SpecChanges; stale: boolean; cost: number; seq: number;
   model?: string; durationMs?: number;
+  /** Сообщение помощника с этой правкой: «Отменить правку» помечает его отменённым. */
+  msgId?: number;
 };
+
+/**
+ * Сообщение в чате помощника «Правки»: запрос человека (queued — ждёт, пока закончится идущая правка) или ответ ИИ —
+ * отрисованный итог, строки «Что изменилось», предупреждения, факты; шаги и технический лог правки — свёрнуто.
+ */
+export type ChatMsg =
+  | { id: number; who: 'me'; text: string; queued?: boolean }
+  | {
+    id: number; who: 'ai'; status: 'done' | 'same' | 'aborted' | 'error'; intro: string; rows: ChangeRow[]; notes: string[];
+    facts: string; error?: string; steps: FlowEditStep[]; log: string[]; stale?: boolean; undone?: boolean;
+  };
 
 /** Поле flow или блока, открытое в крупном редакторе справа (режим «поле»). */
 export type BlockField = 'title' | 'until-run' | 'until-prompt' | 'until-marker' | 'knowledge';
@@ -70,6 +85,12 @@ type State = {
   yamlFrom: { text: string; label: string } | null;
   /** Явное открытие этапа или блока в инспекторе: прокрутка наверх, фокус в название. */
   openSeq: number;
+  /** Чат помощника «Правки»: живёт, пока открыт этот flow. */
+  chat: ChatMsg[];
+  /** Уточнение, отправленное во время правки: уйдёт следующей правкой, когда эта закончится. */
+  aiQueue: string | null;
+  /** editSeq на старте идущей правки ИИ: ручные правки после него в результат не войдут. */
+  aiStartSeq: number;
   /** Уход с экрана уже подтверждён (openFlow, удаление): блокировщик перехода не спрашивает второй раз. */
   approved: boolean;
   /** Растёт, когда форму запуска надо заполнить заново (renderFlow старого UI): flow открыли или сохранили. */
@@ -81,6 +102,7 @@ type State = {
 export const flowState: State = {
   flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiProgress: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
   sel: null, graphSel: null, tab: 'run', editView: 'scheme', refit: 0, yamlSeq: 0, yamlFrom: null, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
+  chat: [], aiQueue: null, aiStartSeq: 0,
 };
 
 let version = 0;
@@ -137,7 +159,23 @@ export function useAiProgress(): AiProgress | null {
 /** Прервать идущую правку ИИ и забыть результат прошлой. */
 export function resetAi(): void {
   flowState.aiAbort?.abort();
-  Object.assign(flowState, { aiAbort: null, aiProgress: null, ai: null, aiText: '', aiMsg: NO_MSG });
+  // пузырь уточнения из очереди без правки остался бы навсегда «уйдёт, когда закончится…»
+  Object.assign(flowState, { aiAbort: null, aiProgress: null, ai: null, aiText: '', aiMsg: NO_MSG, aiQueue: null, chat: flowState.chat.filter((m) => m.who !== 'me' || !m.queued) });
+}
+
+let chatSeq = 0;
+/** Новое сообщение в чат помощника; id — чтобы потом поправить его (очередь ушла, правку отменили). */
+export function pushChat<M extends ChatMsg>(msg: Omit<M, 'id'>): number {
+  const id = ++chatSeq;
+  flowState.chat = [...flowState.chat, { ...msg, id } as unknown as ChatMsg];
+  emit();
+  return id;
+}
+
+/** Поправить сообщение чата по id. */
+export function patchChat(id: number, patch: Partial<ChatMsg>): void {
+  flowState.chat = flowState.chat.map((m) => (m.id === id ? ({ ...m, ...patch } as ChatMsg) : m));
+  emit();
 }
 
 /** Открыть flow, прочитанный с сервера: рабочая копия заново, правки и выбор сбрасываются. */
@@ -161,6 +199,8 @@ export function openLoaded(doc: FlowDoc, tab: Tab): void {
     formSeq: flowState.formSeq + 1,
     // повторное открытие того же flow вложения не стирает; у черновика они всегда новые
     extrasSeq: other || doc.draft ? flowState.extrasSeq + 1 : flowState.extrasSeq,
+    // чат помощника — пока открыт этот flow
+    chat: other ? [] : flowState.chat,
   });
   emit();
 }
@@ -168,7 +208,7 @@ export function openLoaded(doc: FlowDoc, tab: Tab): void {
 /** Закрыть flow (удалён, черновик брошен). */
 export function closeFlow(): void {
   resetAi();
-  Object.assign(flowState, { flow: null, spec: null, dirty: false, sel: null, graphSel: null, bMsg: NO_MSG, yamlMsg: NO_MSG, yamlFrom: null });
+  Object.assign(flowState, { flow: null, spec: null, dirty: false, sel: null, graphSel: null, bMsg: NO_MSG, yamlMsg: NO_MSG, yamlFrom: null, chat: [] });
   emit();
 }
 
@@ -266,3 +306,9 @@ export function selBlockAt(spec: EditSpec, sel: Selection): number {
 
 /** Вписанный, но ещё не добавленный тег знаний блока: общий для поля в ленте, в инспекторе и крупного редактора. */
 export const knowledgeDraft = new WeakMap<EditBlock, string>();
+
+const NO_STEPS: FlowEditStep[] = [];
+/** Шаги идущей правки ИИ: перерисовка только когда пришёл новый шаг, а не на каждую строку лога (граф схемы). */
+export function useAiSteps(): FlowEditStep[] {
+  return useSyncExternalStore(subscribeProgress, () => flowState.aiProgress?.steps ?? NO_STEPS);
+}

@@ -586,7 +586,8 @@ export function collectSpec(spec: EditSpec): Record<string, unknown> {
 
 // ---------- правка flow ИИ: что поменялось между двумя версиями
 
-const PHASE_FIELDS: Record<string, string> = {
+/** Поля этапа словами: строки «Что изменилось» и шаги правки ИИ (lib/flow/ai-progress.ts). */
+export const PHASE_FIELDS: Record<string, string> = {
   title: 'название', prompt: 'промпт', handoff: 'что передать следующему этапу', tools: 'инструменты', add_dirs: 'дополнительные директории', system: 'системный промпт',
   model: 'модель', effort: 'effort', max_turns: 'лимит ходов', permission_mode: 'права', max_budget_usd: 'лимит стоимости',
   output_schema: 'схема вывода', group: 'параллельная группа', reads: 'читает артефакты', writes: 'пишет артефакты', plugins: 'плагины',

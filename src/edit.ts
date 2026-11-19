@@ -6,7 +6,8 @@ import path from 'node:path';
 import { stringify as toYaml } from 'yaml';
 import { compactSpec, KNOWN_TOOLS, type FlowSpec } from './schema.js';
 import { CLAUDEAI_TOOL_PREFIX, runSession, type LogFn, type SessionEvent, type SessionResult } from './agent.js';
-import type { FlowAiStage } from './api-types.js';
+import type { FlowAiStage, FlowEditStep } from './api-types.js';
+import { stepWatcher } from './edit-steps.js';
 import { describeDir, DESIGN_RULES, ORCHESTRATOR_RULES } from './generate.js';
 import { flowToYaml, parseFlow, validateSpec } from './flows.js';
 
@@ -31,7 +32,11 @@ How to edit:
 6. New prompts are written in the language of the existing flow.
 7. Keep call blocks ("flow", "input") and every "next" exactly as they are unless the request is about them; never add phases to a call block. If a block you rename or remove is a "goto" target, update that "next".
 8. If the request is unclear or cannot be expressed in this format, change nothing and say why.
-9. Your final message is shown to the user as the summary of the edit: a short bulleted list in the language of the request, naming the phases and blocks you changed and how. When the summary is in Russian, call phases «этапы» and flows «flow» (never «фазы» or «флоу»); the stop condition is «условие». No preamble.
+9. Your final message is shown to the user as your chat reply about the edit, in the language of the request, with no preamble and no headings. It has up to three parts:
+   - one or two plain sentences: how you understood the request and what you did overall;
+   - one line per phase, block or artifact you added, changed or removed: "- \`name\`: what changed, one short phrase", where name is exactly the phase name, block name or artifact key from the file;
+   - only if the user should check or decide something (a risk, a limit that may now be too low, an assumption you made): one line each starting with "! ".
+   If you changed nothing, say why in one or two sentences. When the reply is in Russian, call phases «этапы» and flows «flow» (never «фазы» or «флоу»), the stop condition «условие», artifacts «файлы».
 
 Design rules for the parts you add or rewrite. Existing parts the request does not touch stay as they are, even if they break these rules:
 
@@ -56,6 +61,8 @@ export type EditOptions = {
   onModel?: (model: string) => void;
   /** Начался шаг: правка или починка после неё. */
   onStage?: (stage: FlowAiStage) => void;
+  /** Шаг словами: агент прочитал или поправил файл flow (этап добавлен, у этапа правится промпт…). */
+  onStep?: (step: FlowEditStep) => void;
   /** Подмена сессии в тестах. */
   deps?: { session: typeof runSession };
 };
@@ -108,6 +115,9 @@ export async function editFlow(name: string, instruction: string, base: EditBase
   let costUsd = 0;
   let model: string | undefined;
   const run = opts.deps?.session ?? runSession;
+  // шаги словами — по результатам Read/Edit/Write над файлом; один наблюдатель на правку и починки: снимок общий
+  const watch = opts.onStep ? stepWatcher(file, () => fs.readFileSync(file, 'utf8'), opts.onStep) : undefined;
+  const onEvent = watch || opts.onEvent ? (e: SessionEvent) => { watch?.(e); opts.onEvent?.(e); } : undefined;
   const session = async (prompt: string, stage: FlowAiStage): Promise<SessionResult> => {
     // прервали между сессиями — следующую (платную) не начинаем
     if (opts.abort?.signal.aborted) throw new Error('Правка прервана');
@@ -122,7 +132,7 @@ export async function editFlow(name: string, instruction: string, base: EditBase
         maxTurns: 40,
         persist: false,
         abort: opts.abort,
-        onEvent: opts.onEvent,
+        onEvent,
         onModel: opts.onModel,
       },
       opts.log ?? (() => {}),
