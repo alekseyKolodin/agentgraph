@@ -211,3 +211,16 @@ test('POST …/log/<id>/ask: стартовый запрос сессии; не�
     t.done();
   }
 });
+
+test('готовые flow шаблонов: список; чужое имя — 404, плохое имя до рутины не доходит', async () => {
+  const t = setup(null);
+  try {
+    const list = await t.call('GET', '/api/routines/flow-templates');
+    assert.ok((list?.body as Array<{ name: string }>).some((x) => x.name === 'desk-review-mr'));
+    assert.equal((await t.call('POST', '/api/routines/flow-templates/nope', {}))?.status, 404);
+    // «flow-templates» занят разделом API: рутина с таким слагом не открылась бы
+    assert.equal((await t.call('PUT', '/api/routines/flow-templates', { spec }))?.status !== 200, true);
+  } finally {
+    t.done();
+  }
+});

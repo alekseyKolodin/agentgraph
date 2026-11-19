@@ -26,7 +26,7 @@ export function ConnectSource() {
   const [mode, setMode] = useState<Mode>((params.get('mode') as Mode | null) ?? 'words');
   return (
     <>
-      <Link to={fromNew ? '/routines/new' : '/routines'} className={styles.back}>‹ {fromNew ? t('Новая рутина') : t('Рутины')}</Link>
+      <Link to={fromNew ? `/routines/new${tplQuery(params).replace(/^&/, '?')}` : '/routines'} className={styles.back}>‹ {fromNew ? t('Новая рутина') : t('Рутины')}</Link>
       <header className="view-head">
         <h1>{t('Подключить сервис')}</h1>
       </header>
@@ -58,16 +58,24 @@ export function ConnectSource() {
   );
 }
 
+/** «&tpl=…» шаблона «Новой рутины», с которого пришли подключать источник; нет — ''. */
+const tplQuery = (params: URLSearchParams): string => {
+  const tpl = params.get('tpl');
+  return tpl && /^[a-z-]{1,32}$/.test(tpl) ? `&tpl=${tpl}` : '';
+};
+
 /** Сохранить источник и вернуться туда, откуда пришли. */
 function useSaveSource(data: RoutinesOverview, fromNew: boolean) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const tplBack = tplQuery(useSearchParams()[0]);
   return async (spec: SourceSpec, secrets?: Record<string, string>, slugHint?: string) => {
     const taken = data.sources.map((s) => s.slug);
     const slug = slugHint && !taken.includes(slugHint) ? slugHint : slugify(spec.title, taken);
     await saveSource(slug, spec, secrets);
     await qc.invalidateQueries({ queryKey: routineKeys.all });
-    void navigate(fromNew ? `/routines/new?source=${encodeURIComponent(slug)}` : '/routines#sources');
+    // шаблон «Новой рутины» (?tpl=) переживает подключение источника: форма откроется с ним и с новым источником
+    void navigate(fromNew ? `/routines/new?source=${encodeURIComponent(slug)}${tplBack}` : '/routines#sources');
   };
 }
 

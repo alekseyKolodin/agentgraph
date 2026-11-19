@@ -86,7 +86,9 @@ export function sentence(d: RoutineDraft, source: { title: string; kind: string 
         ? t(' Остановится перед {blocks}.', { blocks: d.pauseBefore.map((b) => t('«{block}»', { block: b })).join(', ') })
         : '';
   const reply = { draft: t(' Ответ уходит после твоей проверки.'), auto: t(' О результате пишет сама.'), off: '' }[d.reply];
-  return `${when}${run}${space}.${wait}${reply}`;
+  // блок task: дело на доске «Мои дела» — из события или от flow
+  const task = !d.taskOn ? '' : d.taskFrom === 'flow' ? t(' Дела «{kind}» заводит flow.', { kind: d.taskKind }) : t(' Событие станет делом «{kind}».', { kind: d.taskKind });
+  return `${when}${run}${space}.${task}${wait}${reply}`;
 }
 
 /** Название рутины по умолчанию: «Fireflies.ai → meeting-to-tasks». */
