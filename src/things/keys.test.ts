@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { branchKey, jiraKey, keyLabel, mrKey, normHost, ownKey, parseKey, runKey, sessionKey, threadKey, twKey } from './keys.js';
 
@@ -60,4 +63,20 @@ test('подпись по ключу: MR и PR, задача, ветка', () =>
   assert.equal(keyLabel('jira:acme.atlassian.net/ABC-1'), 'ABC-1');
   assert.equal(keyLabel('branch:/repo#feat'), 'ветка feat');
   assert.equal(keyLabel('что-то'), 'что-то');
+});
+
+test('ключ ветки: корень через ссылку и настоящий путь (`pwd -P` во flow) — один ключ; папки нет — разрешается родитель', () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-keys-')));
+  try {
+    fs.mkdirSync(path.join(dir, 'repo'));
+    fs.symlinkSync(path.join(dir, 'repo'), path.join(dir, 'link'));
+    assert.equal(branchKey(path.join(dir, 'link'), 'feat'), branchKey(path.join(dir, 'repo'), 'feat'));
+    assert.equal(branchKey(path.join(dir, 'link') + '/', 'feat'), `branch:${dir}/repo#feat`);
+    // удалённый репозиторий за ссылкой на папку: родитель разрешается, имя остаётся
+    assert.equal(branchKey(path.join(dir, 'link', 'gone'), 'x'), `branch:${dir}/repo/gone#x`);
+    // относительный путь и несуществующий корень — как есть
+    assert.equal(branchKey('/no/such/root', 'x'), 'branch:/no/such/root#x');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

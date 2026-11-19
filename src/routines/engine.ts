@@ -890,7 +890,8 @@ export class RoutineEngine {
 
   /**
    * Источник-снимок (SourceKind.snapshot): записи прошлой проверки, которых в этой нет, забываются (вернутся — придут
-   * новыми и откроют дело снова) и закрывают свои дела у рутин с task. Закрывается дело, где есть сигнал этого источника;
+   * новыми и откроют дело снова) и закрывают свои дела у рутин с task. Закрывается дело, которое эта рутина завела (createdBy,
+   * у старых — первый сигнал);
    * ключ, который держит другая запись этой проверки (ветка из «грязной» стала «не отправлена»), остаётся открытым.
    * Доска не ответила — пропавшее остаётся в снимке, закрытие повторит следующая проверка.
    */
@@ -909,8 +910,10 @@ export class RoutineEngine {
       for (const [key, list] of byKey) {
         try {
           const item = await this.deskApi().get(key);
-          // правило «только руками» (task.close: never, условие словами) пропажа записи не обходит
-          if (!item || item.closed || !closesWithThing(item) || !item.signals.some((x) => x.source === source)) continue;
+          // правило «только руками» (task.close: never, условие словами) пропажа записи не обходит; закрываются только
+          // дела, которые завела эта рутина (flow обхода, руками, другая рутина — не её: их закрывают они)
+          const mine = item?.createdBy ? item.createdBy.routine === r.slug : item?.signals[0]?.routine === r.slug;
+          if (!item || item.closed || !closesWithThing(item) || !mine) continue;
           await this.deskApi().close(key, `больше нет в «${clip(title, 80)}»`, 'routine');
           this.changed();
         } catch (err) {
@@ -986,6 +989,8 @@ export class RoutineEngine {
       ...(thing ? { thing: deskThing(thing) } : {}),
       onRepeat: task.on_repeat ?? 'plan',
       ...(own ? { close: task.close ?? 'thing' } : {}),
+      // кто завёл — только новому делу (rules.ts): по нему снимок закрывает лишь свои дела рутины
+      createdBy: { routine: slug },
     };
     await this.deskApi().put(key, patch, 'routine');
     this.changed();
