@@ -35,6 +35,9 @@ export function closedWorkFrom(items: readonly DeskItem[]): ClosedWork | null {
   };
 }
 
+/** Причина закрытия своего дела, переложенного на вещь (LINKED_REASON в src/desk/rules.ts): дело живо под ключом вещи. */
+const LINKED_REASON = 'привязано к ';
+
 /** Предложение записать знание живёт столько после закрытия. */
 export const LEARN_WINDOW_MS = 3 * 24 * 3600_000;
 const LEARN_SHOWN = 3;
@@ -48,8 +51,12 @@ export const hadWork = (i: DeskItem): boolean => runsOf(i).length > 0 || session
  * отклонённых. Свежие сверху, не больше трёх.
  */
 export function learnCandidates(items: readonly DeskItem[], skip: ReadonlySet<string>, now: Date = new Date()): DeskItem[] {
+  // дело живо — знание записывать рано: своё, переложенное на вещь, и закрытая запись под открытым делом с тем же ключом (защита:
+  // список поставщиков такие записи обычно уже убирает)
+  const openKeys = new Set(items.filter((i) => !i.closed).map((i) => i.key));
   return items
-    .filter((i) => i.closed && hadWork(i) && !skip.has(i.id) && now.getTime() - Date.parse(i.closed.at) < LEARN_WINDOW_MS)
+    .filter((i) => i.closed && !i.closed.reason.startsWith(LINKED_REASON) && !openKeys.has(i.key))
+    .filter((i) => hadWork(i) && !skip.has(i.id) && now.getTime() - Date.parse(i.closed!.at) < LEARN_WINDOW_MS)
     .sort((a, b) => b.closed!.at.localeCompare(a.closed!.at))
     .slice(0, LEARN_SHOWN);
 }

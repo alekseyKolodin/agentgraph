@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore, type DeskStore } from './store.js';
-import { deskRoute, LINKED_REASON } from './routes.js';
+import { deskRoute } from './routes.js';
+import { LINKED_REASON } from './rules.js';
 import type { DeskItem, DeskListReply } from './types.js';
 
 function setup(t: { after: (fn: () => void) => void }) {
@@ -130,14 +131,30 @@ test('POST /api/desk/link: своё дело переезжает на вещь 
   assert.equal((await link({ key: item.key, url: 'https://jira.example.com/browse/PAY-1' }))?.status, 409);
 });
 
-test('POST /api/desk/link: у вещи уже есть дело (даже закрытое) — 409, своё не трогается; вид не «Своё» остаётся', async (t) => {
+test('POST /api/desk/link: у вещи уже есть дело (даже закрытое) — своё сливается в него: сигналы и ссылки, закрытое открывается; вид не «Своё» остаётся', async (t) => {
   const { store } = setup(t);
   const link = (body: unknown) => deskRoute('POST', new URL('http://x/api/desk/link'), async () => body, { store, jiraHosts: () => ['jira.example.com'] });
-  await store.put('mr:gitlab.example.com/g/app/12', { title: 'MR', column: 'plan' }, 'watcher');
-  await store.close('mr:gitlab.example.com/g/app/12', 'смержен', 'watcher');
-  await store.put('own:a', { title: 'a' }, 'me');
-  assert.equal((await link({ key: 'own:a', url: 'https://gitlab.example.com/g/app/-/merge_requests/12' }))?.status, 409);
-  assert.equal((await store.get('own:a'))?.closed, undefined);
+  const MR = 'mr:gitlab.example.com/g/app/12';
+  await store.put(MR, { title: 'MR', column: 'plan', signal: { source: 'gitlab', at: '2026-11-17T10:00:00.000Z', text: 'ревью' } }, 'watcher');
+  await store.close(MR, 'смержен', 'watcher');
+  await store.put('own:a', { title: 'Доделать ретраи', due: '2026-11-30', links: { sessions: ['s1'] }, signal: { source: 'slack', at: '2026-11-18T10:00:00.000Z', text: 'сделаешь?' } }, 'me');
+  const r = await link({ key: 'own:a', url: 'https://gitlab.example.com/g/app/-/merge_requests/12' });
+  assert.equal(r?.status, 200);
+  const merged = r!.body as DeskItem;
+  assert.deepEqual(
+    [merged.key, merged.title, merged.column, merged.closed, merged.due, merged.links.sessions, merged.signals.map((s) => s.text)],
+    [MR, 'MR', 'plan', undefined, '2026-11-30', ['s1'], ['ревью', 'сделаешь?']],
+  );
+  assert.equal((await store.get('own:a'))?.closed?.reason, `${LINKED_REASON}MR g/app!12`);
+  // в журнале: своё закрыто, дело вещи открыто из своего — это не новое дело
+  const moves = store.readLog().slice(-2);
+  assert.deepEqual(moves.map((m) => [m.key, m.from, m.to]), [['own:a', 'new', 'done'], [MR, 'done', 'plan']]);
+  // «Готово» ⇔ closed у обоих
+  for (const i of await store.list({})) assert.equal(i.column === 'done', Boolean(i.closed), i.key);
+  // ключ вещи совпал со своим — не сливается само в себя
+  await store.put('own:b', { title: 'b' }, 'me');
+  assert.equal(await store.relink('own:b', { key: 'own:b', kind: 'Своё', type: 'mr', ref: {} }, 'x'), 'missing');
+  assert.equal((await store.get('own:b'))?.closed, undefined);
   await store.put('own:m', { title: 'Созвон', kind: 'Встреча' }, 'me');
   const j = (await link({ key: 'own:m', url: 'https://jira.example.com/browse/pay-7' }))!.body as DeskItem;
   assert.deepEqual([j.key, j.kind, j.column], ['jira:jira.example.com/PAY-7', 'Встреча', 'new']);

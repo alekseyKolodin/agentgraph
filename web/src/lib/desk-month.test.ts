@@ -38,6 +38,13 @@ test('записать знание: закрытые за три дня дел�
     closed('own:session', { links: { runs: [], sessions: [] }, createdBy: { session: 's3' }, closed: { at: '2026-11-19T11:00:00.000Z', reason: 'готово' } }),
   ];
   assert.deepEqual(learnCandidates(items, new Set(['own:skip']), NOW).map((i) => i.key), ['own:session', 'own:a']);
+  // дело живо: своё, переложенное на вещь, и закрытая запись под открытым делом поставщика с тем же ключом
+  const alive = [
+    closed('own:linked', { links: { runs: ['r1'], sessions: [] }, closed: { at: '2026-11-19T10:00:00.000Z', reason: 'привязано к MR g/app!12' } }),
+    closed('tw:t/p/PAY-1', { links: { runs: [], sessions: ['s1'] }, closed: { at: '2026-11-19T10:00:00.000Z', reason: 'стала задачей Teamwork' } }),
+    item('tw:t/p/PAY-1', { links: { runs: [], sessions: ['s1'] } }),
+  ];
+  assert.deepEqual(learnCandidates(alive, new Set(), NOW), []);
 });
 
 test('тег по виду работы: найденный по заголовку или слагу; нет — новый со слагом латиницей', () => {

@@ -163,6 +163,39 @@ function put(item: DeskItem | undefined, e: Extract<DeskEvent, { type: 'put' }>,
   return changed(item, next) ? { item: next } : undefined;
 }
 
+/** Причина закрытия своего дела, переложенного на вещь («Привязать вещь»): дело живо под ключом вещи. */
+export const LINKED_REASON = 'привязано к ';
+/** why строки журнала о деле вещи, в которое переехало своё: это не новое дело. */
+export const RELINK_WHY = 'из своего дела ';
+
+/**
+ * «Привязать вещь», а у вещи уже есть дело: своё дело own сливается в него — сигналы (без повторов, по времени), ссылки
+ * (и кто завёл своё: запуск — в mentionedBy, сессия — в sessions, иначе их работа ушла бы с глаз с закрытым своим),
+ * срок и проект, если их не было; вещь — если у дела её не было (заведено по ключу без вещи); заголовок своего — если у
+ * дела вместо заголовка ключ. Вид и правило close — дела вещи. Закрытое дело вещи открывается в «В плане», как от
+ * повторного сигнала (отпечаток закрытой вещи забывается — сверка закроет снова, если вещь закрыта); из «Ждёт других» в
+ * «В плане» — если пришли новые сигналы. Иначе колонка та же, а строка журнала (from = to) отмечает слияние.
+ */
+export function absorb(target: DeskItem, own: DeskItem, ctx: RuleCtx, thing?: DeskItem['thing']): Step {
+  const fresh = own.signals.filter((s) => !target.signals.some((t) => sameSignal(t, s)));
+  const by = own.createdBy;
+  const next: DeskItem = {
+    ...target,
+    ...(!target.thing && thing ? { thing } : {}),
+    ...(target.title === target.key ? { title: own.title } : {}),
+    ...(!target.project && own.project ? { project: own.project } : {}),
+    ...(!target.due && own.due ? { due: own.due } : {}),
+    signals: fresh.length ? [...target.signals, ...fresh].sort((a, b) => a.at.localeCompare(b.at)).slice(-SIGNALS_MAX) : target.signals,
+    links: mergeLinks(mergeLinks(target.links, own.links), { mentionedBy: by?.run ? [by.run] : [], sessions: by?.session ? [by.session] : [] }),
+  };
+  const why = `${RELINK_WHY}${own.key}`;
+  if (target.closed || (fresh.length && target.column === 'waiting')) {
+    if (target.closed && target.seen && !target.seen.startsWith('|')) delete next.seen;
+    return moved(next, 'plan', 'me', ctx.now, why);
+  }
+  return { item: next, move: { at: ctx.now, key: target.key, from: target.column, to: target.column, by: 'me', why } };
+}
+
 /**
  * Состояние вещи от наблюдателя. Срабатывает один раз на изменение (seen). Вещь закрыта — «Готово» (если правило
  * close дела — 'thing'; иначе дело ждёт руки); ход мой — из «Ждёт
