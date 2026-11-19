@@ -125,6 +125,11 @@ export interface DeskProvider {
   close(key: string, reason: string, by: DeskBy): Promise<DeskItem | undefined>;
   /** Дела поставщика изменились (pull команды, своя запись). Возвращает отписку. */
   onChange(fn: () => void): () => void;
+  /**
+   * Дело хранилища о вещи, которая теперь у поставщика (его завели, пока задача была чужой): сигналы, ссылки и срок —
+   * в дело поставщика. Возвращает причину, с которой index.ts закрывает дело хранилища.
+   */
+  adopt?(item: DeskItem): Promise<string>;
 }
 
 /** Строка журнала движений desk/log.jsonl. */

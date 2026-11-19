@@ -50,12 +50,35 @@ export function withProviders(store: DeskStore, providers: readonly DeskProvider
       console.error(`[дела] поставщик ${p.prefix} не отдал дела: ${errMsg(err)}`);
       return [] as DeskItem[];
     })))).flat();
+  /**
+   * Открытые дела хранилища о вещах, которые теперь у поставщика (завели, пока задача была чужой, — потом её назначили на
+   * меня): при первом показе их сигналы и ссылки уходят в дело поставщика, а дело хранилища закрывается — иначе оно
+   * пряталось бы под делом поставщика и вернулось в старой колонке, когда задачу снимут. Сколько слито.
+   */
+  const adoptShadows = async (provided: readonly DeskItem[]): Promise<number> => {
+    const keys = new Set(provided.map((i) => i.key));
+    if (!keys.size) return 0;
+    let n = 0;
+    for (const shadow of (await store.list({ open: true })).filter((i) => keys.has(i.key))) {
+      const p = of(shadow.key);
+      if (!p?.adopt) continue;
+      try {
+        await store.close(shadow.key, await p.adopt(shadow), 'watcher');
+        n++;
+      } catch (err) {
+        console.error(`[дела] ${shadow.key} не слито с поставщиком: ${errMsg(err)}`);
+      }
+    }
+    return n;
+  };
   return {
     ...store,
     dir: store.dir,
     async list(filter = {}) {
-      const [stored, provided] = await Promise.all([store.list(filter), fromProviders()]);
-      // своя вещь поставщика главнее записи о ней в хранилище (её мог завести put до того, как задачу назначили на меня)
+      let provided = await fromProviders();
+      if (await adoptShadows(provided)) provided = await fromProviders();
+      const stored = await store.list(filter);
+      // своя вещь поставщика главнее записи о ней в хранилище (закрытой adoptShadows)
       const keys = new Set(provided.map((i) => i.key));
       return [...stored.filter((i) => !keys.has(i.key)), ...provided.filter((i) => matchesFilter(i, filter))].sort((a, b) => b.movedAt.localeCompare(a.movedAt));
     },

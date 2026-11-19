@@ -369,6 +369,22 @@ export function teamworkProvider(deps: TeamworkProviderDeps): DeskProvider {
     async get(key) {
       return (await serial(load)).items.get(key);
     },
+    adopt: (item) =>
+      serial(async () => {
+        mark(item.key, (m) => {
+          const same = (a: DeskSignal, b: DeskSignal) => a.at === b.at && a.source === b.source && a.text === b.text && a.link === b.link;
+          const signals = [...(m.signals ?? [])];
+          for (const s of item.signals) if (!signals.some((x) => same(x, s))) signals.push(s);
+          if (signals.length) m.signals = signals.sort((a, b) => a.at.localeCompare(b.at)).slice(-SIGNALS_KEEP);
+          const l = m.links ?? { runs: [], sessions: [] };
+          const add = (a: string[] | undefined, b: string[] | undefined) => [...new Set([...(a ?? []), ...(b ?? [])])];
+          const mentionedBy = add(l.mentionedBy, item.links.mentionedBy);
+          m.links = { runs: add(l.runs, item.links.runs), sessions: add(l.sessions, item.links.sessions), ...(mentionedBy.length ? { mentionedBy } : {}) };
+          if (item.due && !m.due) m.due = item.due;
+        });
+        drop();
+        return 'стала задачей Teamwork';
+      }),
     put(key: string, patch: DeskPatch, by: DeskBy) {
       const edit = patch.signal || patch.links || patch.due
         ? (m: Mark) => {
