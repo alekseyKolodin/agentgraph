@@ -11,6 +11,9 @@ export const createTag = (body: { slug: string; title?: string }) => api<TagDeta
 /** description — «когда нужен» тег, inline — «заметки всегда в промпте целиком». */
 export const saveTag = (slug: string, patch: { title?: string; notes?: string; dirs?: string[]; description?: string; inline?: boolean }) =>
   api<TagDetail>('PUT', `/api/tags/${enc(slug)}`, patch);
+/** Знание после дела (SPEC 6.6): строка в конец заметок; тега нет — заведётся с title. */
+export const appendTagNote = (slug: string, text: string, title?: string) =>
+  api<TagDetail>('POST', `/api/tags/${enc(slug)}/notes`, { text, ...(title ? { title } : {}) });
 export const deleteTag = (slug: string) => api<{ ok: true }>('DELETE', `/api/tags/${enc(slug)}`);
 /** Вложение грузится сразу на сервер: лимиты и типы проверяет он же, что и у вложений запуска. data — base64. */
 export const addTagAttachment = (slug: string, name: string, data: string) =>

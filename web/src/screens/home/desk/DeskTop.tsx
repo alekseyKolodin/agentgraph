@@ -1,6 +1,7 @@
 // Полоса над доской (docs/desk/plan-5.md, 5.2; макет — docs/desk/design/DeskPult.dc.html, верх доски): вопросы агентов
 // (ожидания рутин, вопросы запусков, сессии, где ход за тобой — те же данные, что у Главной), «Начни с этого», сверка
-// «N из N» с раскрытием по источникам и срез по проектам. Монтируется над доской в DeskBoard.tsx; выбранный проект —
+// «N из N» с раскрытием по источникам, «Висит дольше N дней» с обзором недели и «Записать знание» после закрытого дела
+// (этап 6, DeskMonth.tsx) и срез по проектам. Монтируется над доской в DeskBoard.tsx; выбранный проект —
 // снаружи (project / onProject), чтобы доска и срез показывали одно. Логика — lib/desk-top.ts.
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
@@ -20,6 +21,7 @@ import { activeWaits } from '../../../lib/routines/view';
 import { homeSessions } from '../../../lib/sessions';
 import { HomeSessions } from '../HomeSessions';
 import { RoutineHome } from '../RoutineWaits';
+import { LearnPrompts, useStaleDays, WeekChip, WeekPanel } from './DeskMonth';
 import styles from './DeskTop.module.css';
 
 const TICK_MS = 30_000;
@@ -37,15 +39,20 @@ export type DeskTopProps = {
 
 export function DeskTop({ project, onProject }: DeskTopProps) {
   const now = useNow(TICK_MS);
+  const [week, setWeek] = useState(false);
+  const [staleDays, setStaleDays] = useStaleDays();
   return (
     <div className={styles.top}>
       <Questions now={now} />
       <StartWith now={now} project={project} />
+      <LearnPrompts now={now} />
       <div className={styles.strip}>
         <CheckStrip now={now} />
+        <WeekChip open={week} onToggle={() => setWeek((v) => !v)} staleDays={staleDays} />
         <span className={styles.gap} />
         <Projects project={project} onProject={onProject} />
       </div>
+      {week && <WeekPanel staleDays={staleDays} onStaleDays={setStaleDays} />}
     </div>
   );
 }

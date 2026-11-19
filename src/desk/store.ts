@@ -49,6 +49,8 @@ export interface DeskStore extends DeskApi {
   onChange(fn: () => void): () => void;
   readCheck(): CheckResult | undefined;
   writeCheck(c: CheckResult): void;
+  /** Журнал движений (log.jsonl) целиком — он обрезается до LOG_KEEP строк; битые строки пропускаются. */
+  readLog(): DeskMove[];
 }
 
 export type DeskStoreDeps = {
@@ -401,6 +403,25 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
       } catch {
         return undefined;
       }
+    },
+    readLog() {
+      let text: string | undefined;
+      try {
+        text = readRegular(logFile, { max: LOG_TRIM_BYTES * 2 });
+      } catch {
+        return []; // дорос сверх обрезки или не обычный файл — обзор без журнала
+      }
+      const out: DeskMove[] = [];
+      for (const l of (text ?? '').split('\n')) {
+        if (!l) continue;
+        try {
+          const m = JSON.parse(l) as DeskMove;
+          if (m && typeof m.at === 'string' && typeof m.key === 'string' && isColumn(m.to)) out.push(m);
+        } catch {
+          /* оборванная строка */
+        }
+      }
+      return out;
     },
     writeCheck(c) {
       fs.mkdirSync(dir, { recursive: true });

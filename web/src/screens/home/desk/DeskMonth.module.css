@@ -1,0 +1,44 @@
+/* Месяц на доске (DeskMonth.tsx): чип «висит», обзор недели, «Записать знание». Тон — как у строки сверки DeskTop. */
+.chip {
+  display: inline-flex; gap: 6px; align-items: center; font: inherit; font-size: var(--fs-meta); color: var(--ink-2);
+  background: none; border: 0; padding: 2px 0; cursor: pointer; white-space: nowrap;
+}
+.chip:hover { color: var(--ink); }
+.chip:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-xs); }
+.caret { font-size: 10px; color: var(--ink-3); }
+
+.panel { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 12px 14px; }
+.head { display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; }
+.head-title { font-weight: 600; }
+.meta { font-size: var(--fs-meta); color: var(--ink-3); }
+.gap { flex: 1; }
+.setting { display: inline-flex; gap: 6px; align-items: center; font-size: var(--fs-meta); color: var(--ink-2); }
+.setting select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 1px 4px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 18px; }
+.col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.col-title { font-size: var(--fs-meta); font-weight: 600; color: var(--ink-2); }
+.n { color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 400; }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.row { display: flex; gap: 8px; align-items: center; font-size: var(--fs-meta); min-height: 22px; min-width: 0; }
+.title { color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.why { color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.empty { font-size: var(--fs-meta); color: var(--ink-3); }
+.kind {
+  font-size: var(--fs-cap); font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: var(--r-xs); white-space: nowrap; flex: none;
+  color: var(--ink-2); background: var(--select);
+}
+
+.learn { display: flex; flex-direction: column; gap: 10px; }
+.card { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: 12px 14px; }
+.card-head { display: flex; gap: 10px; align-items: center; min-width: 0; flex-wrap: wrap; }
+.card-title { font-weight: 600; min-width: 0; }
+.context { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hint { margin: 0; font-size: var(--fs-meta); color: var(--ink-2); }
+.text { width: 100%; padding: 6px 9px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; resize: vertical; }
+.text:focus-visible { outline: none; box-shadow: var(--focus); }
+.actions { display: flex; gap: 8px; }
+
+/* поздние перебивки: висит — цвет «ждёт тебя» */
+.muted { color: var(--ink-3); }
+.warn { color: var(--st-wait); }
+.warn:hover { color: var(--st-wait); }

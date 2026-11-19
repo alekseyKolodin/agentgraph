@@ -83,6 +83,23 @@ test('MR смержен, пока приложение было закрыто: 
   assert.deepEqual(asked[0].map((x) => x.key), [MR]);
 });
 
+test('этап 6: /api/desk/week и POST /api/tags/:slug/notes через сервер; кривой JSON и чужой Origin — без записи', async () => {
+  const features = (await call<{ features: string[] }>('GET', '/api/config')).body.features;
+  assert.ok(features.includes('desk-week') && features.includes('tag-notes'));
+  const week = await call<{ days: number; staleTotal: number }>('GET', '/api/desk/week?stale=3');
+  assert.deepEqual([week.status, week.body.days], [200, 7]);
+  const made = await call<{ slug: string; title: string; notes: string }>('POST', '/api/tags/desk-review/notes', { text: 'проверять миграции', title: 'Ревью' });
+  assert.deepEqual([made.status, made.body.title], [201, 'Ревью']);
+  assert.match(made.body.notes, /· проверять миграции\n$/);
+  assert.equal((await call('POST', '/api/tags/desk-review/notes', { text: 'ещё' })).status, 200);
+  const raw = await fetch(`${base}/api/tags/desk-review/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{кривой' });
+  // кривой JSON общий readJson отклоняет (не 2xx); запись не делается
+  assert.ok(raw.status >= 400);
+  const foreign = await fetch(`${base}/api/tags/desk-review/notes`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{"text":"x"}' });
+  assert.equal(foreign.status, 403);
+  assert.equal((await call<{ notes: string }>('GET', '/api/tags/desk-review')).body.notes.trim().split('\n').length, 2);
+});
+
 test('/api/config объявляет desk; POST /api/desk/put — событие desk в общем потоке', async () => {
   assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('desk'));
   const abort = new AbortController();
