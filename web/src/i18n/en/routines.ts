@@ -494,6 +494,7 @@ export const routines: Record<string, string> = {
   'дело «{kind}»': 'task “{kind}”',
   'На доске было бы {n} {w}': 'The board would have {n} {w}',
   'дело|дела|дел': 'task|tasks',
+  'новое дело|новых дела|новых дел': 'new task|new tasks',
   'запустилось бы {k} из {n}': 'would run {k} of {n}',
   'дело': 'task',
   'в план': 'to plan',

@@ -7,8 +7,9 @@ import type { RoutineWait, WaitAction } from '@server/routines/types';
 import { errorText } from '../../api';
 import { answerWait, routineKeys } from '../../api/routines';
 import { createDelayed } from '../../lib/routines/pending';
+import { decidedDeskKeys } from '../../lib/routines/view';
 
-export type DecisionLine = { id: string; text: string; run: boolean; state: 'pending' | 'sent' | 'failed' };
+export type DecisionLine = { id: string; text: string; run: boolean; state: 'pending' | 'sent' | 'failed'; /** Дело ожидания (рутина с task): его карточка прячет кнопки, пока решение в пути. */ deskKey?: string };
 type Payload = { body: WaitAction; line: Omit<DecisionLine, 'state'> };
 
 let ctx: { qc: QueryClient; toast: (text: string) => void } | null = null;
@@ -55,8 +56,9 @@ if (typeof window !== 'undefined') {
 
 /** Решение по карточке: строка «Запуск продолжен…» сразу, запрос — через 5 секунд. */
 export function decide(w: RoutineWait, body: WaitAction, text: string): void {
-  lines.set(w.id, { id: w.id, text, run: body.action === 'run', state: 'pending' });
-  queue.schedule(w.id, { body, line: { id: w.id, text, run: body.action === 'run' } });
+  const line = { id: w.id, text, run: body.action === 'run', ...(w.deskKey ? { deskKey: w.deskKey } : {}) };
+  lines.set(w.id, { ...line, state: 'pending' });
+  queue.schedule(w.id, { body, line });
 }
 
 /** «Отменить»: true — успели, карточка вернулась. */
@@ -75,8 +77,8 @@ export function dismiss(id: string): void {
   bump();
 }
 
-/** Строки решений и id карточек, которые прятать (решение ждёт или ушло). */
-export function useDecisions(): { lines: DecisionLine[]; hidden: Set<string> } {
+/** Строки решений, id карточек ожиданий, которые прятать (решение ждёт или ушло), и дела с принятым решением. */
+export function useDecisions(): { lines: DecisionLine[]; hidden: Set<string>; decidedKeys: Set<string> } {
   useSyncExternalStore(
     (fn) => {
       subs.add(fn);
@@ -85,5 +87,5 @@ export function useDecisions(): { lines: DecisionLine[]; hidden: Set<string> } {
     () => version,
   );
   const list = [...lines.values()];
-  return { lines: list.filter((l) => l.state !== 'failed'), hidden: new Set(list.filter((l) => l.state !== 'failed').map((l) => l.id)) };
+  return { lines: list.filter((l) => l.state !== 'failed'), hidden: new Set(list.filter((l) => l.state !== 'failed').map((l) => l.id)), decidedKeys: decidedDeskKeys(list) };
 }

@@ -103,6 +103,10 @@ export function useRenameSession(): (id: string, name: string) => Promise<void> 
   };
 }
 
+/**
+ * Подписчиков много (сайдбар, Главная, формы) — запрос один: ключ общий, интервалы выровнены, запрос, который уже идёт, не
+ * дублируется. Замер на Главной при живой сессии: 10 запросов за 30 с при LIVE_POLL_MS = 3 с. Общего таймера не нужно.
+ */
 export function useSessions(enabled: boolean) {
   return useQuery({
     queryKey: sessionKeys.list,

@@ -1,7 +1,7 @@
 // «Задачи и код» (свой раздел /code) и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски
 // и выбор flow. Без React и DOM.
 import type { FlowListItem, IntegrationsInfo, JiraIssueBrief, MergeRequestView, ProjectInfo, RunSummary, SessionView, Thing } from '@server/api-types';
-import { jiraKey, mrKey, normHost } from '../../../src/things/keys';
+import { branchKey, jiraKey, mrKey, normHost } from '../../../src/things/keys';
 import { t } from './i18n';
 
 /** Сколько строк списка видно сразу; остальные — по «Ещё N». */
@@ -53,6 +53,9 @@ export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thi
   const key = host ? keyOr(() => jiraKey(host, issue)) : undefined;
   return key ? { type: 'jira', key, ref: { host: normHost(host), key: issue }, url: i.url, title: i.title } : undefined;
 }
+
+/** Ключ вещи ветки проекта: branch:<корень репозитория>#<ветка>; пустая или битая — undefined. Дело о ветке находят по нему. */
+export const branchThingKey = (projectPath: string, branch: string): string | undefined => keyOr(() => branchKey(projectPath, branch));
 
 /**
  * Вещь MR/PR проекта: mr:<host>/<путь проекта>/<номер>. Хост — из адреса MR, как у сервера (адрес origin бывает ssh-алиасом),

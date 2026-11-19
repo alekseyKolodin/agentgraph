@@ -14,7 +14,7 @@ import { Badge } from '../../components/Badge';
 import { useToast } from '../../components/Toast';
 import { useMemoryState } from '../../components/useMemoryState';
 import {
-  DASH_STALE_MS, dashCap, dashMore, jiraSessionCwd, jiraThing, mrThing, PRESET_LABEL, runsForBranch, runsForJira, sessionsForThing, thingSessionName, thingSessionPrompt,
+  branchThingKey, DASH_STALE_MS, dashCap, dashMore, jiraSessionCwd, jiraThing, mrThing, PRESET_LABEL, runsForBranch, runsForJira, sessionsForThing, thingSessionName, thingSessionPrompt,
   type JiraPreset,
 } from '../../lib/dash';
 import { deskByKey, deskHref, deskLinkText } from '../../lib/desk';
@@ -378,6 +378,7 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
                   {b.worktree && <span title={b.worktree}>{t('в worktree')} · </span>}
                   {when(b.updated)}
                 </span>
+                <DeskLink item={desk.get(branchThingKey(path, b.name) ?? '')} />
                 <LaunchButton target={{ type: 'branch', key: b.name, project: path }} onLaunch={onLaunch} />
               </div>
               <RelatedRuns runs={runsForBranch(runs, path, b.name)} />

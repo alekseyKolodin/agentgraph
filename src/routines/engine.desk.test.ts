@@ -342,7 +342,8 @@ test('3.9: проверка на истории — дело, в план, за�
     assert.equal(byId.get('review:3')?.action, 'new');
     assert.equal(byId.get('review:4')?.action, 'closed');
     assert.match(byId.get('review:4')?.note ?? '', /MR смержен/);
-    assert.equal(res.tasks, 3);
+    // новых дел два: !14 закрыто, review:1 и comment:2 — одно дело
+    assert.equal(res.tasks, 2);
     // без flow — ни оценки запусков, ни «Что получит flow»
     assert.equal(res.estimate, undefined);
     assert.equal(res.preview, undefined);
@@ -352,6 +353,25 @@ test('3.9: проверка на истории — дело, в план, за�
     const none = await t.engine.history('plain', {});
     assert.equal(none.tasks, undefined);
     assert.equal(none.events[0].task, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('3.9: «было бы дел» считает только новые — дело, которое уже есть на доске, в счёт не идёт', async () => {
+  const t = setup();
+  try {
+    t.routine('plain', 'gl', { run: { flow: 'review' }, task: undefined, enabled: false });
+    const mr13 = 'https://gitlab.company.com/grp/app/-/merge_requests/13';
+    const mr14 = 'https://gitlab.company.com/grp/app/-/merge_requests/14';
+    await t.push('gl', t.gl('review:3', { link: mr13 }), t.gl('review:4', { link: mr14 }));
+    // по !13 дело уже открыто: событие допишет сигнал к нему
+    await t.desk.api.put('mr:gitlab.company.com/grp/app/13', { kind: 'Ревью', title: '!13' }, 'routine');
+    const res = await t.engine.history('plain', { spec: { title: 'x', when: { source: 'gl' }, mode: 'auto', task: { kind: 'Ревью' } } });
+    const byId = new Map(res.events.map((x) => [x.event.id, x.task]));
+    assert.equal(byId.get('review:3')?.action, 'plan');
+    assert.equal(byId.get('review:4')?.action, 'new');
+    assert.equal(res.tasks, 1);
   } finally {
     t.done();
   }
