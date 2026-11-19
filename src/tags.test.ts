@@ -7,6 +7,7 @@ import {
   addTagAttachmentReply,
   appendTagNoteReply,
   createTag,
+  planTagNote,
   createTagReply,
   deleteTagAttachmentReply,
   deleteTagReply,
@@ -342,5 +343,14 @@ test(
     createTag('meetings');
     assert.equal(appendTagNoteReply('meetings', { text: 'итоги — в тред', title: 'Встреча' }).status, 200);
     assert.equal(readTag('meetings')?.title, 'Встреча');
+    // проверка до записи (вопрос перед knowledge_note): что допишет и куда; не пройдёт — тег не заведён
+    const plan = planTagNote('fresh-kind', ' вывод\n в строку ', { title: 'Свежий' });
+    assert.match(plan.line, /^- \d{4}-\d{2}-\d{2} · вывод в строку$/);
+    assert.deepEqual([plan.exists, plan.title], [false, 'Свежий']);
+    assert.equal(readTag('fresh-kind'), undefined);
+    assert.throws(() => planTagNote('fresh-kind', 'я'.repeat(1001)), /длиннее/);
+    assert.throws(() => planTagNote('../x', 'x'), /Слаг тега/);
+    assert.equal(appendTagNoteReply('fresh-kind', { text: ' ' }).status, 400);
+    assert.equal(readTag('fresh-kind'), undefined);
   }),
 );

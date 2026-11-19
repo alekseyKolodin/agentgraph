@@ -49,7 +49,7 @@ const launch = (o: Partial<SessionLaunch> = {}): SessionLaunch => ({
 
 const flagValue = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
 /** Инструменты agentgraph с вопросом в любом режиме — порядок как в sessionSettings. */
-const ASK_FULL = ['session_new', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'team_task_update', 'team_doc_write'].map((t) => `mcp__agentgraph__${t}`);
+const ASK_FULL = ['session_new', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'team_task_update', 'team_doc_write', 'knowledge_note'].map((t) => `mcp__agentgraph__${t}`);
 
 test('sessionArgs: новый разговор — --session-id, название через =, хуки и MCP одним JSON, без модели и режима', () => {
   const args = sessionArgs(launch({ name: '-dash name' }));

@@ -246,22 +246,43 @@ export function updateTag(slug: string, patch: TagPatch): Tag | undefined {
 /** Запись знания за раз — не больше: одна мысль после дела, а не транскрипт. */
 export const TAG_NOTE_MAX = 1000;
 
+/** Что допишет запись знания: строка заметок, есть ли тег и его заголовок (у нового — переданный). */
+export type TagNotePlan = { slug: string; line: string; exists: boolean; title?: string };
+
+/**
+ * Проверка записи знания без записи — для appendTagNote и для вопроса человеку перед knowledge_note из сессии: слаг,
+ * текст, тег знаний (не старый тег задачи, не чужая папка) и место в заметках. Не пройдёт — ошибка.
+ */
+export function planTagNote(slug: string, text: string, o: { title?: string; now?: Date } = {}): TagNotePlan {
+  if (!TAG_SLUG_RE.test(slug)) throw new Error('Слаг тега — строчные латинские буквы, цифры и дефис');
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) throw new Error('Пустая запись');
+  if (clean.length > TAG_NOTE_MAX) throw new Error(`Запись длиннее ${TAG_NOTE_MAX} знаков`);
+  const existing = readMeta(slug);
+  if (existing && existing.kind !== 'knowledge') throw new Error(`${slug} — слаг старого тега задачи (он перенесён в пространство ${slug}): выбери другой слаг`);
+  if (!existing && foreignFolder(tagDir(slug))) throw new Error(`Папка ${tagDir(slug)} уже есть, но это не тег: удали её или выбери другой слаг`);
+  const day = (o.now ?? new Date()).toISOString().slice(0, 10);
+  const line = `- ${day} · ${clean}`;
+  const notes = [(existing ? readTag(slug)?.notes ?? '' : '').trim(), line].filter(Boolean).join('\n');
+  if (notes.length > TAG_NOTES_MAX) throw new Error(`Заметки тега ${slug} не влезут в ${TAG_NOTES_MAX} знаков: сократи их на странице «Знания»`);
+  const title = existing?.title ?? o.title?.trim();
+  return { slug, line, exists: Boolean(existing), ...(title ? { title } : {}) };
+}
+
 /**
  * Знание по виду работы после дела (docs/desk/SPEC.md, 6.6): строка «- ГГГГ-ММ-ДД · текст» в конец заметок тега.
- * Тега нет — заводится тег знаний с title (вид работы). Текст — то, что пользователь подтвердил кликом; модель его не
- * пишет. Заметки не влезают в TAG_NOTES_MAX — ошибка, файл прежний.
+ * Тега нет — заводится тег знаний с title (вид работы). Текст — то, что пользователь подтвердил: кликом на доске или
+ * ответом на вопрос перед knowledge_note в сессии. Не пройдёт проверку (planTagNote) — ошибка, ничего не заведено.
  */
 export function appendTagNote(slug: string, text: string, o: { title?: string; now?: Date } = {}): Tag {
-  const line = text.replace(/\s+/g, ' ').trim();
-  if (!line) throw new Error('Пустая запись');
-  if (line.length > TAG_NOTE_MAX) throw new Error(`Запись длиннее ${TAG_NOTE_MAX} знаков`);
-  // заводит или дописывает заголовок, если его не было; слаг старого тега задачи — понятная ошибка
+  const plan = planTagNote(slug, text, o);
   const tag = createTag(slug, o.title);
-  const day = (o.now ?? new Date()).toISOString().slice(0, 10);
-  const notes = [tag.notes.trim(), `- ${day} · ${line}`].filter(Boolean).join('\n');
-  if (notes.length > TAG_NOTES_MAX) throw new Error(`Заметки тега ${slug} не влезут в ${TAG_NOTES_MAX} знаков: сократи их на странице «Знания»`);
+  const notes = [tag.notes.trim(), plan.line].filter(Boolean).join('\n');
   return updateTag(slug, { notes })!;
 }
+
+/** Инструмент сессии: запись знания в тег (всегда с вопросом человеку — ASK_TOOLS в sessions.ts). */
+export const KNOWLEDGE_NOTE_TOOL = 'knowledge_note';
 
 /** POST /api/tags/:slug/notes { text, title? }: 201 — тег заведён, 200 — дописан. */
 export function appendTagNoteReply(slug: string, body: { text?: unknown; title?: unknown }): ApiReply {

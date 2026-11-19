@@ -354,3 +354,12 @@ test('ключ с пробелом (своё дело рутины из desk_lis
   assert.equal(r.item.closed?.reason, 'разобрал');
   await assert.rejects(deskPut(ctxOf(api), { thing: 'own:нет такого файла', title: 'x' }), /Не ключ вещи/);
 });
+
+test('desk_close: afterClose дописывает к ответу (у сессии — предложение записать знание), пусто — только «закрыто»', async () => {
+  const api = memDesk();
+  await api.put('own:a', { title: 'a' }, 'me');
+  await api.put('own:b', { title: 'b' }, 'me');
+  const ctx = { api, by: 'session' as const, afterClose: (i: DeskItem) => (i.key === 'own:a' ? 'Предложи записать вывод' : undefined) };
+  assert.match((await deskClose(ctx, { thing: 'own:a', reason: 'готово' })).text, /^Дело закрыто: .*\nПредложи записать вывод$/);
+  assert.doesNotMatch((await deskClose(ctx, { thing: 'own:b', reason: 'готово' })).text, /\n/);
+});

@@ -69,6 +69,8 @@ export type DeskCallCtx = {
   owns?: (item: DeskItem) => boolean;
   /** Новое дело или сигнал к существующему — для счётчика дел запуска. */
   onPut?: (item: DeskItem, created: boolean) => void;
+  /** Что дописать к ответу desk_close: у сессии — предложить записать вывод в тег вида работы (src/desk/learn.ts). */
+  afterClose?: (item: DeskItem) => string | undefined;
   now?: () => Date;
 };
 
@@ -329,7 +331,7 @@ async function resolveOrExisting(ctx: Pick<DeskCallCtx, 'api' | 'thing' | 'jiraH
 }
 
 /** desk_close: дело по ключу или ссылке на вещь; нет такого или оно чужое месту вызова (owns) — ошибка. */
-export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 'jiraHosts' | 'owns'>, a: DeskCloseArgs): Promise<{ item: DeskItem; text: string }> {
+export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 'jiraHosts' | 'owns' | 'afterClose'>, a: DeskCloseArgs): Promise<{ item: DeskItem; text: string }> {
   const { key } = await resolveOrExisting(ctx, a.thing);
   const missing = () => new Error(`Дела ${key} нет: ключи открытых дел — в desk_list`);
   if (ctx.owns) {
@@ -339,7 +341,8 @@ export async function deskClose(ctx: Pick<DeskCallCtx, 'api' | 'by' | 'thing' | 
   }
   const item = await ctx.api.close(key, a.reason, ctx.by);
   if (!item) throw missing();
-  return { item, text: `Дело закрыто: ${itemLine(item)}` };
+  const more = ctx.afterClose?.(item);
+  return { item, text: `Дело закрыто: ${itemLine(item)}${more ? `\n${more}` : ''}` };
 }
 
 /** desk_list: открытые дела (closed: true — и закрытые), по колонкам и проекту; не больше LIST_MAX строк. */
