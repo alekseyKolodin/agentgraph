@@ -253,30 +253,6 @@ export type SpaceEditPart = 'map' | 'state' | 'meta' | 'doc' | 'other';
 /** Сессия терминала в событии session общего потока: её экран, имя и пространство для уведомления. */
 export type HomeSessionWait = { id: string; name: string; space?: string };
 
-/** Событие ленты главной (GET /api/feed): вопрос агента, пауза по его просьбе, конец запуска. */
-export type FeedItem = {
-  /** Стабильный ключ события. */
-  id: string;
-  kind: 'question' | 'pause' | 'end';
-  at: string;
-  runId: string;
-  flow: string;
-  /** Вопрос: заголовок; пауза: этап, который её попросил. */
-  title?: string;
-  /** Вопрос: сами вопросы; пауза: что нужно от пользователя; конец: ошибка. */
-  text?: string;
-  /** Вопрос: когда ответили; пауза: когда запуск пошёл дальше. */
-  doneAt?: string;
-  /** Вопрос ждёт ответа или запуск стоит на этой паузе прямо сейчас. */
-  open?: boolean;
-  status?: string;
-  costUsd?: number;
-  /** Проект запуска — как у RunSummary. */
-  projectRef?: ProjectRef;
-};
-
-export type FeedResponse = { items: FeedItem[] };
-
 // ---------- flow: список, сводка, коннекторы и теги для конструктора
 
 export type PhaseSummary = { name: string; title?: string; tools: string[]; group?: string };

@@ -111,7 +111,6 @@ export function RunList() {
   const qc = useQueryClient();
   const { askConfirm, notify } = useConfirm();
   const manage = useFeature('run-manage');
-  const feed = useFeature('feed');
 
   // открыли запуск (по ссылке, из «Сейчас», после «Запустить»): раздел и его проект раскрыты, как в openRun
   const activeRun = activeId ? all.find((r) => r.id === activeId) : undefined;
@@ -121,7 +120,6 @@ export function RunList() {
   }, [activeId, activeKnown]);
 
   const refresh = async () => {
-    if (feed) void qc.invalidateQueries({ queryKey: keys.feed });
     await qc.invalidateQueries({ queryKey: keys.runs });
   };
   const hide = async (id: string, hidden: boolean) => {

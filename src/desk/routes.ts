@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { readSpaceMeta, spaceSlug } from '../spaces.js';
 import { settingsJiraHosts, thingLabel, thingOfUrl } from '../things/resolve.js';
 import { deskCheck } from './check.js';
+import { runSeen } from './run-end.js';
 import { isColumn, RELINK_WHY } from './rules.js';
 import { canonicalKey, resolveThing } from './tools.js';
 import { DAYS_MAX, deskWeek, STALE_DAYS, WEEK_DAYS } from './week.js';
@@ -175,6 +176,13 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
     else if (link && patch.signal && !patch.signal.link) patch.signal = { ...patch.signal, link };
     else if (link && !exists && !patch.signal) patch.signal = { source: 'ui', at: new Date().toISOString(), link };
     return ok(await store.put(key, patch, 'me'));
+  }
+  if (p === '/api/desk/run-seen') {
+    // страницу запуска открыли: дело «<flow> готов» этой цепочки закрывается (упавшее — нет). id запуска и первого запуска цепочки
+    const b = obj(await readBody());
+    const ids = [b.runId, b.root].filter((v): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(v));
+    if (!ids.length) return bad('runId: id запуска');
+    return ok({ closed: await runSeen(store, ids) });
   }
   if (p === '/api/desk/move') {
     const b = obj(await readBody());

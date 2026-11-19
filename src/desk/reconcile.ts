@@ -26,9 +26,9 @@ export type TypeCheck = { total: number; errors: string[] };
 const ERRORS_SHOWN = 2;
 const UNTRACKED = 'состояние не отслеживается';
 
-/** Вещи открытых дел, за которыми есть кому следить: у разговора и своего дела наблюдателя нет. */
+/** Вещи открытых дел, за которыми есть кому следить: у разговора, своего дела и запуска (его конец — сигнал сервера) наблюдателя нет. */
 export function thingsOf(items: Awaited<ReturnType<DeskStore['list']>>): Thing[] {
-  return items.flatMap((i) => (i.thing && i.thing.type !== 'thread' && i.thing.type !== 'own' ? [{ type: i.thing.type, key: i.key, ref: i.thing.ref, ...(i.thing.url ? { url: i.thing.url } : {}), title: i.title }] : []));
+  return items.flatMap((i) => (i.thing && i.thing.type !== 'thread' && i.thing.type !== 'own' && i.thing.type !== 'run' ? [{ type: i.thing.type, key: i.key, ref: i.thing.ref, ...(i.thing.url ? { url: i.thing.url } : {}), title: i.title }] : []));
 }
 
 // у ошибок glab/gh внутри строки бывают переносы и ряды пробелов: в итоге — одной строкой

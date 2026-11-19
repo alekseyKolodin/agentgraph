@@ -35,7 +35,6 @@ import { runnerAlive } from './pid.js';
 import { pickRunTitle } from './run-title.js';
 import { RunNameError, runName, writeRunName } from './run-name.js';
 import { writeDigest } from './run-digest.js';
-import { mergeFeed, reportFeed, type FeedItem } from './feed.js';
 import { STATUS_LABEL } from './reporters.js';
 import { integrationsRoute, runLinks } from './integrations.js';
 import { stopTeamwork, teamService, teamworkRoute, type TeamServiceDeps } from './teamwork-server.js';
@@ -52,7 +51,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowHistory, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FlowHistory, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { configDir, loadSettings, profileRoute, updateSettings, type Settings } from './settings.js';
@@ -119,6 +118,7 @@ import { deskStorage, deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
 import { deskCheck } from './desk/check.js';
 import { deskRoute, PROCESS_STARTED } from './desk/routes.js';
+import { noteRunEnd, sweepInterrupted, type RunEndOpts } from './desk/run-end.js';
 import { trackable, watch, watcherFor, watchers } from './things/index.js';
 import type { ThingType } from './things/types.js';
 import { repoRoot } from './git.js';
@@ -282,6 +282,8 @@ let teamChanges: (() => void) | null = null;
 /** Дела: подписка на изменения доски (событие desk общего потока) и сверка по таймеру; снимает stopServer. */
 let deskChanges: (() => void) | null = null;
 let deskLoop: ReconcileLoop | null = null;
+/** Оборвавшиеся запуски разобраны (раз на процесс). */
+let interruptedSwept = false;
 let deskLock: { held: () => boolean; release: () => void } | null = null;
 /** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
 let stopping = false;
@@ -446,6 +448,11 @@ export function startServer(opts: ServerOptions): Promise<string> {
   if (opts.routines) routines(opts).start();
   // дела: любая запись доски этого процесса (рутина, сессия, flow, UI) — событие desk; сверка — вместе с фоном рутин
   deskChanges ??= deskStore().onChange(() => homeBroadcast({ type: 'desk', runId: '', flow: '' }));
+  // запуски, оборвавшиеся вместе с прошлым приложением, — делами «остановился с ошибкой»; старые задним числом не заводятся
+  if (opts.routines && !interruptedSwept) {
+    interruptedSwept = true;
+    void sweepInterrupted(deskStore(), deskStore().dir, interruptedRuns).catch((err) => console.error(`[дела] ${errMsg(err)}`));
+  }
   if (opts.routines && !deskLoop) {
     // одна сверка на папку настроек: десктоп и `agentgraph ui` рядом не опрашивают glab/gh/Jira дважды
     const lock = (deskLock = reconcileLock(deskStore().dir, typeof opts.routines === 'object' ? (opts.routines.lock?.who ?? 'agentgraph') : 'agentgraph'));
@@ -483,6 +490,7 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   // сверка дел: идущий проход прерывается (наблюдатели получают abort)
   const loop = deskLoop;
   deskLoop = null;
+  interruptedSwept = false;
   loop?.stop();
   if (loop) await Promise.race([loop.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(2_000, timeoutMs)).unref())]);
   deskLock?.release();
@@ -544,7 +552,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'routine-assistant', 'desk', 'desk-check', 'desk-week', 'tag-notes', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'routine-assistant', 'desk', 'desk-check', 'desk-week', 'tag-notes', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -788,7 +796,6 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
 
   // --- главная: вопросы, ждущие ответа, и идущие запуски этого сервера
   if (method === 'GET' && p === '/api/home') return sendJson(res, 200, { runs: liveRuns() } satisfies HomeResponse);
-  if (method === 'GET' && p === '/api/feed') return sendJson(res, 200, { items: feed() } satisfies FeedResponse);
   if (method === 'GET' && p === '/api/limits') return sendJson(res, 200, await getLimits(url.searchParams.get('force') === '1'));
   // коннекторы claude.ai и их инструменты: конструктор подсказывает точные имена для tools этапа
   if (method === 'GET' && p === '/api/connectors') return sendJson(res, 200, (await getConnectors(url.searchParams.get('force') === '1')) satisfies ConnectorsView);
@@ -1542,6 +1549,8 @@ function launchRun(
 
   const broadcast = (e: RunEvent) => {
     if (e.type === 'start' || e.type === 'end') lr.report = e.report;
+    // routineRuns чистится ниже, раньше, чем конец дойдёт до дел
+    const wasRoutine = e.type === 'end' && routineRuns.has(id);
     if (e.type === 'phase_start') {
       lr.running.push({ block: e.block, iteration: e.iteration, phase: e.phase, title: e.title, ...(e.group ? { group: e.group } : {}) });
       const first = lr.running[0];
@@ -1616,6 +1625,8 @@ function launchRun(
     }
     if (e.type === 'end') {
       lr.pause = null;
+      // на странице запуска кто-то смотрит прямо сейчас: итог он видит сам, «готов» делом не нужен
+      const watched = lr.clients.size > 0;
       for (const client of lr.clients) client.end();
       lr.clients.clear();
       live.delete(id);
@@ -1634,6 +1645,9 @@ function launchRun(
         const summary = (outcome === 'ok' ? e.report.digest?.text : e.report.error) || e.report.title;
         void Promise.resolve(lr.deskLinked)
           .then(() => deskStore().runEnded(ids, outcome, summary))
+          .catch((err) => console.error(`[дела] ${errMsg(err)}`))
+          // итог, который требует действия, — делом в «Новое»: упал — «остановился с ошибкой», готов — «готов, не открыт»
+          .then(() => noteRunEnd(deskStore(), e.report, { ...runEndOpts(e.report), routine: wasRoutine, watched }))
           .catch((err) => console.error(`[дела] ${errMsg(err)}`));
       }
       if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
@@ -2492,6 +2506,25 @@ function runProject(proj: ReturnType<typeof projectResolver>, r: Pick<RunReport,
   return proj.of({ space: reportSpace(r), path: (r.worktree && worktreeProjectOf(r)) || r.cwd });
 }
 
+/** Что серверу известно о запуске для дела о его конце (src/desk/run-end.ts): пространство и можно ли продолжить с места. */
+function runEndOpts(r: RunReport): Pick<RunEndOpts, 'project' | 'continuable'> {
+  const space = runProject(projectResolver(), r).space;
+  return { ...(space ? { project: space } : {}), ...(continuability(r, false).continuable ? { continuable: true } : {}) };
+}
+
+/** Оборвавшиеся запуски последних запусков: конца они не объявили (процесс умер), доска узнаёт о них при старте. */
+function interruptedRuns(): Array<{ report: RunReport; opts: RunEndOpts }> {
+  if (!fs.existsSync(RUNS_DIR)) return [];
+  const ids = fs.readdirSync(RUNS_DIR).filter((d) => RUN_ID_RE.test(d)).sort().slice(-INTERRUPTED_SCAN);
+  const out: Array<{ report: RunReport; opts: RunEndOpts }> = [];
+  for (const id of ids) {
+    const report = live.has(id) ? undefined : readReport(id);
+    if (report?.status === 'interrupted') out.push({ report, opts: { ...runEndOpts(report), routine: report.source?.type === 'routine' } });
+  }
+  return out;
+}
+const INTERRUPTED_SCAN = 50;
+
 /**
  * Вердикты проверок блока, который идёт (или последнего начатого), — для строки запуска на главной:
  * мини-лента итераций, «итерация N не прошла: …» и «буксует». text — начало замечаний (разметку чистит UI, «буксует»
@@ -2511,27 +2544,6 @@ function homeConds(r: RunReport) {
       ...(c.summary ? { summary: c.summary } : {}),
     }));
 }
-
-const FEED_RUNS = 50;
-
-/** Лента главной: события последних запусков и всех идущих, от новых к старым. */
-function feed(): FeedItem[] {
-  if (!fs.existsSync(RUNS_DIR)) return [];
-  // имя папки начинается с даты старта: последние по имени — последние запуски
-  const ids = new Set(fs.readdirSync(RUNS_DIR).filter((d) => RUN_ID_RE.test(d)).sort().slice(-FEED_RUNS));
-  for (const id of live.keys()) ids.add(id);
-  const items: FeedItem[] = [];
-  const proj = projectResolver();
-  for (const id of ids) {
-    const lr = live.get(id);
-    const r = lr?.report ?? readReport(id);
-    if (!r) continue;
-    const projectRef = runProject(proj, r);
-    items.push(...reportFeed(id, r, lr && { pending: (qid) => lr.pending.has(qid) }).map((x) => ({ ...x, projectRef })));
-  }
-  return mergeFeed(items);
-}
-
 
 /** Основной checkout worktree: из привязки к источнику, иначе из файла .git worktree («gitdir: <repo>/.git/worktrees/<имя>»). */
 const worktreeRoots = new Map<string, string | null>();

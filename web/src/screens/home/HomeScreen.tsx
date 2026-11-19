@@ -1,7 +1,7 @@
 // Главная — доска дел (docs/desk/SPEC.md, этап 5; макет docs/desk/design/DeskPult.dc.html). Полосу над доской — ожидания
 // рутин и «догнать», вопросы агентов, сессии, ждущие ответа, сверку «N из N», «Начни с этого» и срез по проектам — рисует
 // сама доска (DeskTop внутри DeskBoard). Одна вещь — одно место: свои MR, «Не доделано», «Мои задачи», «Ждёт тебя» и «Идут»
-// стали карточками; идущие запуски и сессии — в «Сейчас» боковой панели. Справа — журнал (Feed). Ни дел, ни рутин — плитки
+// стали карточками; идущие запуски и сессии — в «Сейчас» боковой панели. Журнала событий нет: итог запуска, который требует действия, приходит делом на доску (src/desk/run-end.ts); «Все запуски» в шапке открывает список запусков в боковой панели. Ни дел, ни рутин — плитки
 // шаблонов рутин «Моих дел». `/?desk=<ключ>` (ссылка из «Кода») показывает карточку, `?project=<слаг>` — срез по проекту
 // ('' — без проекта).
 import { useEffect, useState } from 'react';
@@ -11,6 +11,7 @@ import { useDesk } from '../../api/desk';
 import { useRoutines } from '../../api/routines';
 import { useSessions } from '../../api/sessions';
 import { requestNotify, useNotifyPermission } from '../../components/shell/notifications';
+import { setPanel } from '../../components/shell/panel';
 import { useNow } from '../../components/useNow';
 import { hasConnections } from '../../lib/dash';
 import { DESK_PARAM, deskEmpty, deskMeta } from '../../lib/desk';
@@ -21,7 +22,6 @@ import { RoutineTemplates } from '../routines/RoutineTemplates';
 import { useIntegrations } from './Dash';
 import { DashSettings } from './DashSettings';
 import { DeskBoard } from './desk/DeskBoard';
-import { Feed } from './Feed';
 import { Limits } from './Limits';
 import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
@@ -35,7 +35,6 @@ export function HomeScreen() {
   // ничего не подключено — строка с «Подключениями»; пока не знаем — без неё
   const integrations = useIntegrations(dashOn);
   const connected = integrations.data ? hasConnections(integrations.data) : undefined;
-  const feedOn = useFeature('feed');
   // сервер старше доски: /api/config ответил, а дел в нём нет
   const config = useConfig().data;
   const oldServer = config !== undefined && !config.features.includes('desk');
@@ -76,25 +75,23 @@ export function HomeScreen() {
         {limits && <Limits />}
         <div className="row">
           <NotifyControl />
+          <button type="button" className="btn small ghost" title={t('Список всех запусков в боковой панели: поиск, статусы, скрытые')} onClick={() => setPanel({ panel: 'runs', hidden: false })}>
+            {t('Все запуски')}
+          </button>
         </div>
       </header>
-      <div className={`${styles.homeGrid}${feedOn ? '' : ` ${styles.noFeed}`}`}>
-        <div className={styles.homeMain}>
-          {/* пустая доска сама говорит, с чего начать: вторая подсказка рядом — шум */}
-          {fresh && !empty && <Start sessions={sessionsOn} />}
-          {empty && <DeskEmpty />}
-          {/* сервер старше доски: у него нет /api/desk — честно говорим, а не рисуем пустые колонки */}
-          {oldServer ? (
-            <p className={`run-paused ${styles.homeDown}`}>
-              {t('Доска заработает после перезапуска UI-сервера: этот сервер запущен до её появления. Перезапуск остановит идущие запуски — дождись их конца.')}
-            </p>
-          ) : (
-            <DeskBoard project={project} onProject={onProject} />
-          )}
-          {dashOn && connected === false && <Connect onSettings={() => setSettings(true)} />}
-        </div>
-        {feedOn && <Feed now={now} />}
-      </div>
+      {/* пустая доска сама говорит, с чего начать: вторая подсказка рядом — шум */}
+      {fresh && !empty && <Start sessions={sessionsOn} />}
+      {empty && <DeskEmpty />}
+      {/* сервер старше доски: у него нет /api/desk — честно говорим, а не рисуем пустые колонки */}
+      {oldServer ? (
+        <p className={`run-paused ${styles.homeDown}`}>
+          {t('Доска заработает после перезапуска UI-сервера: этот сервер запущен до её появления. Перезапуск остановит идущие запуски — дождись их конца.')}
+        </p>
+      ) : (
+        <DeskBoard project={project} onProject={onProject} />
+      )}
+      {dashOn && connected === false && <Connect onSettings={() => setSettings(true)} />}
       {dashOn && <DashSettings open={settings} onClose={() => setSettings(false)} />}
     </>
   );

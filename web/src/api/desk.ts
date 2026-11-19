@@ -34,6 +34,12 @@ export const closeDesk = (key: string, reason?: string) => api<DeskItem>('POST',
  */
 export const linkDesk = (key: string, url: string) => api<DeskItem>('POST', '/api/desk/link', { key, url });
 
+/**
+ * Открыли страницу запуска: дело «<flow> готов» этой цепочки закрывается (упавшее — нет). root — первый запуск цепочки.
+ * Не удалось — молча: дело просто останется на доске, закроется кнопкой.
+ */
+export const markRunSeen = (runId: string, root?: string) => api<{ closed: number }>('POST', '/api/desk/run-seen', { runId, ...(root ? { root } : {}) }).catch(() => undefined);
+
 /** Открытые дела (или по фильтру). Сервер без дел (старая версия) — запроса нет, data пустая. */
 export function useDesk(q: DeskQuery = { open: true }) {
   const on = useFeature('desk');

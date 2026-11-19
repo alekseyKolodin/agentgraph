@@ -11,6 +11,7 @@ import {
   abortRun, ApiError, continueRun, deleteRun, errorText, keys, pauseRun, resumeRun, runFileUrl, RUN_NAME_MAX, RUN_RENAMED, setRunHidden, setRunStreamOpen, useConfig,
   useEventStream, useFeature, useRenameRun, useRuns,
 } from '../../api';
+import { markRunSeen } from '../../api/desk';
 import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { InlineRename } from '../../components/InlineRename';
@@ -79,8 +80,8 @@ function RunPage({ id }: { id: string }) {
   const canChat = useFeature('run-chat');
   const canRenameRun = useFeature('run-rename');
   const artOn = useFeature('artifacts');
+  const deskOn = useFeature('desk');
   art.on = artOn;
-  const feedOn = useFeature('feed');
   const runs = useRuns().data;
   const renameRun = useRenameRun();
   const [saveOpen, setSaveOpen] = useState(false);
@@ -125,6 +126,12 @@ function RunPage({ id }: { id: string }) {
 
   const st = runState.id === id ? runState.st : null;
   const r = st?.run;
+
+  // страницу открыли: дело «<flow> готов» об этом запуске закрывается (src/desk/run-end.ts)
+  const seenRoot = r && r.id === id ? (r.root ?? '') : undefined;
+  useEffect(() => {
+    if (seenRoot !== undefined && deskOn) void markRunSeen(id, seenRoot || undefined);
+  }, [id, seenRoot, deskOn]);
 
   // ---------- поток
   const runsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -279,7 +286,6 @@ function RunPage({ id }: { id: string }) {
       runState.st.run.hidden = hidden;
       bump();
     }
-    if (feedOn) void qc.invalidateQueries({ queryKey: keys.feed });
     await qc.invalidateQueries({ queryKey: keys.runs });
   };
   const remove = async () => {
@@ -292,7 +298,6 @@ function RunPage({ id }: { id: string }) {
       return;
     }
     void navigate('/');
-    if (feedOn) void qc.invalidateQueries({ queryKey: keys.feed });
     await qc.invalidateQueries({ queryKey: keys.runs });
   };
   const cont = async () => {

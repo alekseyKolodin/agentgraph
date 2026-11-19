@@ -13,7 +13,6 @@ import { sessionKeys } from '../../api/sessions';
 import { routineKeys } from '../../api/routines';
 import { emitSpaceChanged } from '../../api/spaces';
 import { teamKeys } from '../../api/teamwork';
-import { FEED_EVENTS } from '../../lib/feed';
 import { statusLabel, usd } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { useToast } from '../Toast';
@@ -28,7 +27,6 @@ export function useHomeEvents(): void {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const toast = useToast();
-  const feedOn = useFeature('feed');
   const permission = useNotifyPermission();
   // уведомления показывает приложение-хост: вкладка молчит и серверу о своих не говорит
   const hostNotifies = useFeature('host-notify');
@@ -117,7 +115,6 @@ export function useHomeEvents(): void {
       soon(keys.home);
       soon(routineKeys.all);
       soon(keys.runs);
-      if (feedOn) soon(keys.feed);
     },
     onEvent: (e) => {
       // в клоне команды Teamwork что-то поменялось (запись или pull): все запросы команд — заново; запусков это не касается
@@ -150,7 +147,6 @@ export function useHomeEvents(): void {
       if (e.type === 'question' && e.question) announceQuestion(e);
       if (e.type === 'end') announceEnd(e);
       soon(keys.home);
-      if (feedOn && FEED_EVENTS.has(e.type)) soon(keys.feed);
       if (RUN_LIST_EVENTS.has(e.type)) soon(keys.runs);
     },
   });

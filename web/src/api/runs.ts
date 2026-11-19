@@ -31,7 +31,7 @@ export function useRenameRun(): (id: string, title: string) => Promise<void> {
     const v = await renameRun(id, title);
     await qc.cancelQueries({ queryKey: keys.runs, exact: true });
     qc.setQueryData<RunSummary[]>(keys.runs, (list) => list?.map((x) => (x.id === v.id ? { ...x, title: v.title } : x)));
-    for (const queryKey of [keys.runs, keys.home, keys.feed, keys.spaces]) void qc.invalidateQueries({ queryKey });
+    for (const queryKey of [keys.runs, keys.home, keys.spaces]) void qc.invalidateQueries({ queryKey });
   };
 }
 

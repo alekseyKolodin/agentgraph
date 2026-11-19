@@ -2,7 +2,7 @@
 import { useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
-  AttentionResult, BranchView, ConfigResponse, FeedResponse, FlowListItem, HomeResponse, IntegrationsInfo, Intake, JiraIssueBrief, Limits,
+  AttentionResult, BranchView, ConfigResponse, FlowListItem, HomeResponse, IntegrationsInfo, Intake, JiraIssueBrief, Limits,
   MergeRequestView, RunSource, RunSummary, Suggestion,
 } from '@server/api-types';
 import { api } from './client';
@@ -12,7 +12,6 @@ export const keys = {
   limits: ['limits'] as const,
   home: ['home'] as const,
   runs: ['runs'] as const,
-  feed: ['feed'] as const,
   flows: ['flows'] as const,
   /** GET /api/tags: страница «Знания», подсказки тегов знаний формы запуска, сессии и конструктора. */
   tags: ['tags'] as const,
@@ -71,11 +70,6 @@ const useRunStreamOpen = () =>
 export function useRuns() {
   const streaming = useRunStreamOpen();
   return useQuery({ queryKey: keys.runs, queryFn: () => api<RunSummary[]>('GET', '/api/runs'), refetchInterval: streaming ? false : RUNS_POLL_MS });
-}
-
-/** GET /api/feed: лента событий главной. */
-export function useFeed(enabled: boolean) {
-  return useQuery({ queryKey: keys.feed, queryFn: () => api<FeedResponse>('GET', '/api/feed'), enabled });
 }
 
 /** GET /api/flows: список flow (выбор flow для «Запустить…»). */

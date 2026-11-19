@@ -188,3 +188,19 @@ test('GET /api/desk/item: закрытое дело читается; у дел�
   const own = (await call('GET', '/api/desk/item?key=own:w'))!.body as DeskItemReply;
   assert.deepEqual(own.moves.map((m) => m.key), ['own:w', 'own:w']);
 });
+
+test('POST /api/desk/run-seen: закрывает дело «готов» по id запуска и первого запуска цепочки, упавшее не трогает', async (t) => {
+  const { store, call } = setup(t);
+  const ref = (runId: string, status: 'done' | 'failed') => ({ type: 'run' as const, ref: { runId, flow: 'f', status, costUsd: 0 } });
+  await store.put('run:ok', { title: 'f готов', thing: ref('ok', 'done') }, 'flow');
+  await store.put('run:bad', { title: 'f остановился с ошибкой', thing: ref('bad', 'failed') }, 'flow');
+  let r = await call('POST', '/api/desk/run-seen', { runId: 'bad' });
+  assert.deepEqual([r?.status, r?.body], [200, { closed: 0 }]);
+  assert.equal((await store.get('run:bad'))?.column, 'new');
+  r = await call('POST', '/api/desk/run-seen', { runId: 'next', root: 'ok' });
+  assert.deepEqual(r?.body, { closed: 1 });
+  assert.equal((await store.get('run:ok'))?.column, 'done');
+  // id не из запуска — отказ
+  assert.equal((await call('POST', '/api/desk/run-seen', { runId: '../x' }))?.status, 400);
+  assert.equal((await call('POST', '/api/desk/run-seen', {}))?.status, 400);
+});

@@ -18,8 +18,10 @@ import {
   movedByText,
   neighborColumn,
   replySignal,
+  runEndOf,
   thingLabel,
 } from '../../../lib/desk-board';
+import { usd } from '../../../lib/format';
 import { t } from '../../../lib/i18n';
 import { waitButtons } from '../../../lib/routines/view';
 import { askNote } from '../../../lib/sessions';
@@ -43,6 +45,8 @@ export type CardActions = {
   runFlow?: (btn: HTMLElement) => void;
   /** «Привязать вещь»: адрес MR, PR или задачи Jira. */
   link?: (url: string) => Promise<void>;
+  /** «Продолжить» у упавшего запуска: продолжение с места и переход на страницу нового запуска. */
+  continueRun?: (runId: string) => Promise<void>;
   /** Решение по ожиданию рутины, которое и есть это дело («Запустить / Не сейчас / Не то»). */
   decide?: (wait: RoutineWait, action: 'run' | 'later' | 'reject', keyboard: boolean) => void;
 };
@@ -79,6 +83,8 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
   const session = sessions[0];
   const liveRun = runs.find((r) => LIVE_STATUSES.includes(r.status));
   const canLink = !done && !item.thing && item.key.startsWith('own:') && act.link;
+  // конец запуска: свои кнопки вместо «В план / Не моё» и сессий
+  const end = runEndOf(item);
 
   const onKey = (e: KeyboardEvent) => {
     // Enter на самой карточке (не на кнопке внутри) — подробности
@@ -100,9 +106,9 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
   };
 
   const menu: MenuEntry[] = [
-    ...(act.runFlow && !done ? [{ key: 'flow', label: t('Запустить flow…'), data: 'to-flow', onSelect: (btn: HTMLElement) => act.runFlow!(btn) }] : []),
+    ...(act.runFlow && !done && !end ? [{ key: 'flow', label: t('Запустить flow…'), data: 'to-flow', onSelect: (btn: HTMLElement) => act.runFlow!(btn) }] : []),
     // у «Нового» на карточке только «В план» и «Не моё» (макет): сессия — из меню
-    ...(act.startSession && !done && (session || item.column === 'new') ? [{ key: 'new-session', label: session ? t('Начать новую сессию') : t('Начать сессию'), onSelect: () => run(act.startSession!) }] : []),
+    ...(act.startSession && !done && !end && (session || item.column === 'new') ? [{ key: 'new-session', label: session ? t('Начать новую сессию') : t('Начать сессию'), onSelect: () => run(act.startSession!) }] : []),
     ...(canLink ? [{ key: 'link', label: t('Привязать вещь…'), onSelect: () => setLinking(true) }] : []),
     { sep: 'm' },
     { cap: t('Перенести в') },
@@ -152,7 +158,9 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
           </span>
         )}
       </div>
-      {url ? (
+      {end ? (
+        <Link className={styles.title} to={end.to} draggable={false} title={t('Открыть страницу запуска')}>{item.title}</Link>
+      ) : url ? (
         <a className={styles.title} href={url} target="_blank" rel="noreferrer" draggable={false}>{item.title}</a>
       ) : (
         <span className={styles.title}>{item.title}</span>
@@ -162,6 +170,7 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
       <div className={styles.meta}>
         {due && <span className={DUE_CLASS[due.state]} title={due.title}>{due.text}</span>}
         <span title={new Date(done && item.closed ? item.closed.at : item.movedAt).toLocaleString()}>{ageLine(item, now)}</span>
+        {end && end.costUsd > 0 && <span title={t('Сколько стоил запуск')}>{usd(end.costUsd)}</span>}
         {done && item.closed ? <span className={styles.by}>{item.closed.reason}</span> : <span className={styles.by}>{movedByText(item)}</span>}
       </div>
       {linking && act.link ? (
@@ -175,19 +184,32 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
               <button type="button" className="btn small ghost" title={t('Дело закроется; рутина запомнит и учтёт в проверке словами')} onClick={(e) => act.decide!(wait, 'reject', byKey(e))}>{waitButtons(wait).reject}</button>
             </>
           )}
-          {item.column === 'new' && !(wait && act.decide) && !decided && (
+          {end && !done && (
+            <>
+              <Link className={`btn small${end.status === 'failed' ? ' primary' : ''}`} to={end.to} draggable={false} title={end.status === 'failed' ? t('Страница запуска: где остановился и почему') : t('Страница запуска: итог')}>
+                {end.status === 'failed' ? t('Что сломалось') : t('Открыть запуск')}
+              </Link>
+              {end.status === 'failed' && end.continuable && act.continueRun && (
+                <button type="button" className="btn small" disabled={busy} title={t('Продолжить с места, где остановился: уже пройденное не повторяется')} onClick={() => run(() => act.continueRun!(end.runId))}>
+                  {busy ? t('Продолжаю…') : t('Продолжить')}
+                </button>
+              )}
+              <button type="button" className="btn small ghost" title={t('Убрать дело с доски: сам запуск останется в списке запусков')} onClick={(e) => act.close('убрано', byKey(e))}>{t('Убрать')}</button>
+            </>
+          )}
+          {item.column === 'new' && !end && !(wait && act.decide) && !decided && (
             <>
               <button type="button" className="btn small" onClick={(e) => act.move('plan', byKey(e))}>{t('В план')}</button>
               <button type="button" className="btn small ghost" title={t('Закрыть дело: оно не твоё')} onClick={(e) => act.close('не моё', byKey(e))}>{t('Не моё')}</button>
             </>
           )}
           {done && <button type="button" className="btn small ghost" onClick={(e) => act.move('plan', byKey(e))}>{t('Вернуть в план')}</button>}
-          {!done && session && act.continueSession && (
+          {!done && !end && session && act.continueSession && (
             <button type="button" className="btn small" disabled={busy} title={session.name} onClick={() => run(() => act.continueSession!(session))}>
               {busy ? t('Открываю…') : session.live ? t('Открыть сессию') : t('Продолжить сессию')}
             </button>
           )}
-          {!done && !session && item.column !== 'new' && act.startSession && (
+          {!done && !end && !session && item.column !== 'new' && act.startSession && (
             <button type="button" className="btn small" disabled={busy} title={t('Сессия Claude по этому делу: оно перейдёт в «В работе»')} onClick={() => run(act.startSession!)}>
               {busy ? t('Открываю…') : t('Начать сессию')}
             </button>

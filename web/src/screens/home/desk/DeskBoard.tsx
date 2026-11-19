@@ -13,6 +13,7 @@ import { closeDesk, linkDesk, moveDesk, refreshDesk, useDesk, useDeskCheck } fro
 import { useRoutines } from '../../../api/routines';
 import { continueSession, createSession, defaultSessionCwd, sessionKeys, thingIntake, useSessions } from '../../../api/sessions';
 import { useSpaces } from '../../../api/spaces';
+import { continueRun } from '../../../api/run';
 import { useToast } from '../../../components/Toast';
 import { useNow } from '../../../components/useNow';
 import { thingSessionPrompt } from '../../../lib/dash';
@@ -231,6 +232,18 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
     }
   };
 
+  /** «Продолжить» у упавшего запуска: продолжение с места, страница нового запуска. */
+  const continueEnded = async (runId: string) => {
+    try {
+      const next = await continueRun(runId);
+      void qc.invalidateQueries({ queryKey: keys.runs });
+      void navigate(`/run/${encodeURIComponent(next.id)}`);
+    } catch (err) {
+      toast(t('Запуск не продолжился: {error}', { error: errorText(err) }));
+      throw err;
+    }
+  };
+
   /** Решение по ожиданию рутины: уходит через 5 секунд, до этого — «Отменить» (то же, что у карточки ожидания в полосе). */
   const decideWait = (w: RoutineWait, action: 'run' | 'later' | 'reject', keyboard: boolean) => {
     const text = decisionText(action, w, false);
@@ -251,6 +264,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
       move: (to, keyboard) => move(i, to, keyboard),
       close: (reason, keyboard) => close(i, reason, keyboard),
       decide: decideWait,
+      continueRun: continueEnded,
       ...(sessionsOn ? { startSession: () => startSession(i), continueSession: resume } : {}),
       ...(target ? { runFlow: (btn: HTMLElement) => setPicker(pickerAt({ ...target, ...deskRunLink(i) }, btn)) } : {}),
       link: (url) =>
