@@ -378,8 +378,11 @@ export function teamworkProvider(deps: TeamworkProviderDeps): DeskProvider {
           if (signals.length) m.signals = signals.sort((a, b) => a.at.localeCompare(b.at)).slice(-SIGNALS_KEEP);
           const l = m.links ?? { runs: [], sessions: [] };
           const add = (a: string[] | undefined, b: string[] | undefined) => [...new Set([...(a ?? []), ...(b ?? [])])];
-          const mentionedBy = add(l.mentionedBy, item.links.mentionedBy);
-          m.links = { runs: add(l.runs, item.links.runs), sessions: add(l.sessions, item.links.sessions), ...(mentionedBy.length ? { mentionedBy } : {}) };
+          // кто завёл дело хранилища — тоже работа по делу: запуск в mentionedBy, сессия в sessions (иначе фильтр «работа
+          // закрытых дел» спрятал бы их, хотя дело живо у поставщика)
+          const mentionedBy = add(l.mentionedBy, [...(item.links.mentionedBy ?? []), ...(item.createdBy?.run ? [item.createdBy.run] : [])]);
+          const sessions = add(l.sessions, [...item.links.sessions, ...(item.createdBy?.session ? [item.createdBy.session] : [])]);
+          m.links = { runs: add(l.runs, item.links.runs), sessions, ...(mentionedBy.length ? { mentionedBy } : {}) };
           if (item.due && !m.due) m.due = item.due;
         });
         drop();

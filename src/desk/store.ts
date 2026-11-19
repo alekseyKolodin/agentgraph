@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { readRegular, UnsafeFileError, writeAtomic } from '../safe-fs.js';
 import type { CheckResult } from '../routines/types.js';
 import type { ThingState } from '../things/types.js';
-import { isColumn, step, type DeskEvent, type RunOutcome, type Step } from './rules.js';
+import { absorb, isColumn, RELINK_WHY, step, type DeskEvent, type RunOutcome, type Step } from './rules.js';
 import type { DeskApi, DeskBy, DeskColumn, DeskFilter, DeskItem, DeskMove, DeskPatch } from './types.js';
 
 /** items.json пишем не больше этого: сверх — у дел остаются только последние сигналы, дальше — понятная ошибка. */
@@ -51,10 +51,11 @@ export interface DeskStore extends DeskApi {
   writeCheck(c: CheckResult): void;
   /**
    * «Привязать вещь» (POST /api/desk/link): своё открытое дело from переезжает на ключ вещи одной записью — сигналы, ссылки,
-   * срок, колонка и возраст те же, вид «Своё» становится видом вещи; своё закрывается с reason. Своего открытого нет —
-   * 'missing', у вещи уже есть дело (открытое или закрытое) — 'taken'.
+   * срок, колонка и возраст те же, вид «Своё» становится видом вещи; своё закрывается с reason. У вещи уже есть дело
+   * (открытое или закрытое) — своё сливается в него (rules.ts → absorb: сигналы, ссылки; закрытое открывается). Своего
+   * открытого нет — 'missing'.
    */
-  relink(from: string, thing: Required<Pick<DeskItem, 'thing'>>['thing'] & { key: string; kind: string }, reason: string): Promise<DeskItem | 'missing' | 'taken'>;
+  relink(from: string, thing: Required<Pick<DeskItem, 'thing'>>['thing'] & { key: string; kind: string }, reason: string): Promise<DeskItem | 'missing'>;
   /** Журнал движений (log.jsonl) целиком — он обрезается до LOG_KEEP строк; битые строки пропускаются. */
   readLog(): DeskMove[];
 }
@@ -415,20 +416,32 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
         const { items, foreign } = readAll();
         const idx = items.findIndex((i) => i.key === from);
         const own = idx >= 0 ? items[idx] : undefined;
-        if (!own || own.closed || own.thing) return 'missing' as const;
-        if (items.some((i) => i.key === thing.key)) return 'taken' as const;
+        if (!own || own.closed || own.thing || thing.key === from) return 'missing' as const;
         const at = now().toISOString();
         const { key, kind, ...t } = thing;
-        // seen/turn — состояния прежней вещи (своей у дела не было): наблюдатель новой вещи начнёт с чистого листа
-        const { seen: _seen, turn: _turn, ...rest } = own;
-        const next: DeskItem = { ...rest, id: newId(), key, thing: t, kind: own.kind === 'Своё' ? kind : own.kind };
+        const tIdx = items.findIndex((i) => i.key === key);
+        let next: DeskItem;
+        let move: DeskMove;
+        if (tIdx >= 0) {
+          // у вещи уже есть дело: своё сливается в него, закрытое открывается — сигналы не теряются, тупика «закрой то» нет
+          const { key: _k, kind: _kind, ...thingOnly } = thing;
+          const r = absorb(items[tIdx]!, own, { now: at, id: newId }, thingOnly);
+          next = r.item;
+          move = r.move!;
+          items[tIdx] = next;
+        } else {
+          // seen/turn — состояния прежней вещи (своей у дела не было): наблюдатель новой вещи начнёт с чистого листа
+          const { seen: _seen, turn: _turn, ...rest } = own;
+          next = { ...rest, id: newId(), key, thing: t, kind: own.kind === 'Своё' ? kind : own.kind };
+          items.push(next);
+          // from — колонка своего дела: это переезд, а не новое дело (обзор недели не считает его пришедшим)
+          move = { at, key, from: own.column, to: next.column, by: 'me', why: `${RELINK_WHY}${from}` };
+        }
         items[idx] = { ...own, column: 'done', closed: { at, reason }, movedAt: at, movedBy: 'me' };
-        items.push(next);
-        write(items, foreign, false); // перенос дела на вещь: сигналов не прибавилось — пишется и на переполненной доске
-        log([
-          { at, key: from, from: own.column, to: 'done', by: 'me', why: reason },
-          { at, key, to: next.column, by: 'me', why: `из своего дела ${from}` },
-        ]);
+        // перенос дела на вещь: новых дел и сигналов извне нет (при слиянии сигналы своего копируются в дело вещи и остаются у
+        // закрытого своего — файл чуть растёт), — пишется и на переполненной доске: привязка не должна упираться в потолок
+        write(items, foreign, false);
+        log([{ at, key: from, from: own.column, to: 'done', by: 'me', why: reason }, move]);
         emit();
         return next;
       })),

@@ -324,7 +324,7 @@ test('слияние: list — дела хранилища и поставщик
 test('слияние: дело хранилища о задаче, которая стала моей, — сигналы и ссылки в дело поставщика, своё закрыто; сняли с меня — не возвращается', async (t) => {
   const store = openStore(tmp(t));
   // пока задача была чужой: сессия и рутина завели дело в хранилище
-  await store.put(key('PAY-1'), { title: 'Задача bob', signal: { source: 'session', at: at(8), text: 'посмотрел схему' }, links: { sessions: ['s1'], mentionedBy: ['run-1'] }, due: '2026-11-30' }, 'session');
+  await store.put(key('PAY-1'), { title: 'Задача bob', signal: { source: 'session', at: at(8), text: 'посмотрел схему' }, links: { sessions: ['s1'], mentionedBy: ['run-1'] }, due: '2026-11-30', createdBy: { run: 'run-0', session: 's0' } }, 'session');
   await store.put(key('PAY-1'), { signal: { source: 'slack', author: 'carol', at: at(9), text: 'когда?' } }, 'routine');
   const f = fakeService();
   f.add(task('PAY-1', { assignee: BOB }));
@@ -340,7 +340,8 @@ test('слияние: дело хранилища о задаче, котора�
   const item = all[0]!;
   assert.equal(item.kind, 'Teamwork');
   assert.deepEqual(item.signals.map((s) => s.text), ['посмотрел схему', 'когда?', 'назначил(а) задачу на тебя']);
-  assert.deepEqual([item.links.sessions, item.links.mentionedBy, item.due], [['s1'], ['run-1'], '2026-11-30']);
+  // кто завёл дело хранилища — тоже работа по делу: запуск и сессия не уходят с глаз, пока дело живо у поставщика
+  assert.deepEqual([item.links.sessions, item.links.mentionedBy, item.due], [['s1', 's0'], ['run-1', 'run-0'], '2026-11-30']);
   const shadow = await store.get(key('PAY-1'));
   assert.equal(shadow?.closed?.reason, 'стала задачей Teamwork');
   // повторный показ не дублирует сигналы

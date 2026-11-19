@@ -1,5 +1,6 @@
 // Обзор недели и «висит дольше N дней» (SPEC 6.1): из дел (closed, movedAt) и журнала движений desk/log.jsonl. Чистая
 // функция без модели; маршрут — GET /api/desk/week (routes.ts).
+import { LINKED_REASON, RELINK_WHY } from './rules.js';
 import type { DeskBy, DeskColumn, DeskItem, DeskMove, DeskWeekItem, DeskWeekReply } from './types.js';
 
 /** Колонки, где дело может зависнуть: «Новое» ждёт разбора, «Готово» — закрыто. */
@@ -31,7 +32,11 @@ export function deskWeek(items: readonly DeskItem[], log: readonly DeskMove[], n
   // кто закрыл: последнее движение в «Готово» по журналу
   const closer = new Map<string, DeskBy>();
   for (const m of recent) if (m.to === 'done') closer.set(m.key, m.by);
-  const closedAll = items.filter((i) => i.closed && inside(i.closed.at));
+  // закрытое, но живое дело — не «закрыто»: своё, переложенное на вещь, и запись хранилища под открытым делом с тем же
+  // ключом (слито в дело поставщика; список поставщиков такие записи обычно уже убирает — это защита на случай, когда
+  // запись и открытое дело пришли вместе, например из хранилища без поставщика)
+  const openKeys = new Set(items.filter((i) => !i.closed).map((i) => i.key));
+  const closedAll = items.filter((i) => i.closed && inside(i.closed.at) && !i.closed.reason.startsWith(LINKED_REASON) && !openKeys.has(i.key));
   const closed = closedAll
     .sort((a, b) => b.closed!.at.localeCompare(a.closed!.at))
     .slice(0, LIST_MAX)
@@ -48,7 +53,8 @@ export function deskWeek(items: readonly DeskItem[], log: readonly DeskMove[], n
   const perRoutine = new Map<string, number>();
   let other = 0;
   for (const m of recent) {
-    if (m.from !== undefined || created.has(m.key)) continue;
+    // переезд своего дела на вещь (старые строки — без from) — не новое дело
+    if (m.from !== undefined || created.has(m.key) || m.why?.startsWith(RELINK_WHY)) continue;
     created.add(m.key);
     const r = m.by === 'routine' ? routineOf(byKey.get(m.key)) : undefined;
     if (r) perRoutine.set(r, (perRoutine.get(r) ?? 0) + 1);

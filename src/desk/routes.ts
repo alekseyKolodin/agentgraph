@@ -45,7 +45,7 @@ const spaceExists = (slug: string): boolean => {
 };
 
 /** Причина закрытия своего дела, которое переложено на вещь («Привязать вещь»): доска такие в «Готово» не показывает. */
-export const LINKED_REASON = 'привязано к ';
+import { LINKED_REASON } from './rules.js';
 
 /** Вид дела вещи вместо «Своё» (как у нового дела в rules.ts). */
 const KIND_OF_THING: Record<string, string> = { mr: 'MR', jira: 'Jira' };
@@ -168,7 +168,6 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
     if (!thing) return bad('Адрес не узнан: нужна ссылка на MR, PR или задачу Jira');
     const r = await store.relink(key, { key: thing.key, kind: KIND_OF_THING[thing.type] ?? 'Своё', type: thing.type, ref: thing.ref, ...(thing.url ? { url: thing.url } : {}) }, `${LINKED_REASON}${thingLabel(thing)}`);
     if (r === 'missing') return bad('Открытого своего дела без вещи нет', 409);
-    if (r === 'taken') return bad(`У ${thingLabel(thing)} уже есть дело: закрой это или открой то`, 409);
     return ok(r);
   }
   if (p === '/api/desk/close') {

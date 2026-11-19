@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ThingState } from '../things/types.js';
-import { fingerprint, LINKS_MAX, SIGNALS_MAX, step, type RuleCtx } from './rules.js';
+import { absorb, fingerprint, LINKS_MAX, SIGNALS_MAX, step, type RuleCtx } from './rules.js';
 import type { DeskColumn, DeskItem, DeskSignal } from './types.js';
 
 const KEY = 'mr:gitlab.example.com/grp/app/7';
@@ -278,4 +278,40 @@ test('createdBy — только у нового дела и только стр
   // первый запуск (корень цепочки) остаётся: по нему продолжение находит дело
   assert.deepEqual([i.links.runs[0], i.links.runs.at(-1)], ['run-0', `run-${LINKS_MAX + 4}`]);
   assert.equal(i.links.mentionedBy?.length, LINKS_MAX);
+});
+
+test('absorb: своё сливается в открытое дело вещи — сигналы без повторов по времени, ссылки и кто завёл своё; колонка та же, журнал from = to', () => {
+  const target = item('work', { signals: [sig('посмотри MR', '2026-11-18T09:00:00.000Z')] });
+  const own = item('new', {
+    key: 'own:a', title: 'Доделать ретраи', kind: 'Своё', thing: undefined, due: '2026-11-30',
+    signals: [sig('посмотри MR', '2026-11-18T09:00:00.000Z'), sig('сделаешь?', '2026-11-17T09:00:00.000Z', 'slack')],
+    links: { runs: [], sessions: ['s1'] }, createdBy: { run: 'r0', session: 's0' },
+  });
+  const r = absorb(target, own, ctx());
+  assert.deepEqual(r.item.signals.map((s) => s.text), ['сделаешь?', 'посмотри MR']);
+  assert.deepEqual([r.item.column, r.item.kind, r.item.title, r.item.due, r.item.links.sessions, r.item.links.mentionedBy], ['work', 'Ревью', 'Починить вход', '2026-11-30', ['s1', 's0'], ['r0']]);
+  assert.deepEqual(r.move, { at: '2026-11-19T10:00:00.000Z', key: KEY, from: 'work', to: 'work', by: 'me', why: 'из своего дела own:a' });
+});
+
+test('absorb: «Ждёт других» — в «В плане» только при новых сигналах; дело без вещи получает вещь и заголовок своего', () => {
+  const own = item('new', { key: 'own:a', title: 'Своё', thing: undefined, signals: [sig('новое', '2026-11-19T09:00:00.000Z', 'slack')] });
+  assert.equal(absorb(item('waiting'), own, ctx()).item.column, 'plan');
+  assert.equal(absorb(item('waiting'), { ...own, signals: [] }, ctx()).item.column, 'waiting');
+  const bare = item('plan', { thing: undefined, title: KEY });
+  const thing = { type: 'mr' as const, ref: { host: 'gitlab.example.com', project: 'grp/app', number: 7 } };
+  const r = absorb(bare, own, ctx(), thing);
+  assert.deepEqual([r.item.thing, r.item.title], [thing, 'Своё']);
+});
+
+test('absorb: закрытое наблюдателем — открывается без отпечатка (сверка закроет снова); закрытое руками при открытой вещи — с отпечатком', () => {
+  const merged = state({ closed: 'merged', turn: 'none', why: 'смержен' });
+  const byWatcher = step(item('work'), { type: 'state', state: merged }, ctx())!.item;
+  const own = item('new', { key: 'own:a', thing: undefined, signals: [] });
+  const reopened = absorb(byWatcher, own, ctx()).item;
+  assert.deepEqual([reopened.column, reopened.closed, reopened.seen], ['plan', undefined, undefined]);
+  assert.equal(step(reopened, { type: 'state', state: merged }, ctx())!.item.column, 'done');
+  const seenOpen = step(item('plan'), { type: 'state', state: state({ turn: 'others' }) }, ctx())!.item;
+  const byHand = step(seenOpen, { type: 'close', reason: 'не моё', by: 'me' }, ctx())!.item;
+  const back = absorb(byHand, own, ctx()).item;
+  assert.deepEqual([back.column, back.closed, back.seen], ['plan', undefined, seenOpen.seen]);
 });

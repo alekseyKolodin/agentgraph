@@ -51,6 +51,23 @@ test('закрыто за неделю: свежие сверху, кто зак
   assert.equal(w.moves, 2);
 });
 
+test('живое закрытое — не «закрыто»: своё, переложенное на вещь, и запись под открытым делом с тем же ключом; переезд — не «пришло»', () => {
+  const items = [
+    item('own:w', { column: 'done', closed: { at: ago(1), reason: 'привязано к MR g/app!12' } }),
+    item('mr:12', { column: 'plan' }),
+    item('own:x', { column: 'done', closed: { at: ago(1), reason: 'стала задачей Teamwork' } }),
+    item('own:x', { column: 'work' }),
+    item('own:done', { column: 'done', closed: { at: ago(1), reason: 'сделано' } }),
+  ];
+  const log: DeskMove[] = [
+    { at: ago(1), key: 'own:w', from: 'plan', to: 'done', by: 'me' },
+    { at: ago(1), key: 'mr:12', to: 'plan', by: 'me', why: 'из своего дела own:w' },
+    { at: ago(1), key: 'mr:13', from: 'plan', to: 'plan', by: 'me', why: 'из своего дела own:v' },
+  ];
+  const w = deskWeek(items, log, NOW);
+  assert.deepEqual([w.closed.map((c) => c.key), w.closedTotal, w.arrived.total], [['own:done'], 1, 0]);
+});
+
 test('пришло за неделю: по строкам заведения журнала, рутина — из createdBy или сигнала; заведённые руками — other', () => {
   const items = [
     item('mr:1', { createdBy: { routine: 'review-slack' } }),
