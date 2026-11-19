@@ -23,8 +23,11 @@ function fakeWatcher(over: Partial<Watcher> & { calls?: Thing[][] } = {}): Watch
   };
 }
 
-test('реестр: по одному наблюдателю на MR, задачу Jira и ветку', () => {
-  assert.deepEqual(watchers().map((w) => w.type).sort(), ['branch', 'jira', 'mr']);
+test('реестр: по наблюдателю на MR, задачу Jira и ветку, создаются один раз', () => {
+  assert.deepEqual(watchers().map((w) => w.type), ['mr', 'jira', 'branch']);
+  assert.equal(watchers()[0], watchers()[0]);
+  // у разговора наблюдателя нет по устройству
+  assert.match(String(trackable({ type: 'thread', key: 'thread:s/c/1', ref: {} })), /наблюдателя нет/);
 });
 
 test('watch: повторы ключей — один запрос, каждый наблюдатель получает только свои вещи', async () => {

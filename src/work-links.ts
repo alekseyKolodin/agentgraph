@@ -1,7 +1,6 @@
 // Работа помнит вещь (docs/desk/SPEC.md, этап 2, 2.6–2.7): вещь события рутины для источника запуска, ветка MR для
 // worktree, первый запуск цепочки продолжений, источник сессии и уборка worktree рутины, когда вещь закрыта.
-// Ключи пока собираются строкой по формату src/things/types.ts — при слиянии с things-core перейти на src/things/keys.ts
-// (mrKey, jiraKey). Внешние эффекты (git, список запусков) — через deps.
+// Ключи — src/things/keys.ts (mrKey, jiraKey). Внешние эффекты (git, список запусков) — через deps.
 import fs from 'node:fs';
 import path from 'node:path';
 import { isInside } from './artifacts.js';
@@ -10,6 +9,7 @@ import type { RunSource, RunWorktree, SessionSource } from './api-types.js';
 import { RUN_ID_RE } from './adhoc.js';
 import { SLUG_RE } from './routines/schema.js';
 import type { RoutineEvent } from './routines/types.js';
+import { jiraKey, mrKey, normHost } from './things/keys.js';
 import type { Thing, ThingType } from './things/types.js';
 
 const THING_TYPES: Record<ThingType, string> = { mr: 'mr', jira: 'jira', teamwork: 'tw', branch: 'branch', session: 'session', run: 'run', thread: 'thread', own: 'own' };
@@ -20,14 +20,23 @@ const URL_MAX = 500;
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]+-\d+$/i;
 
-/** Ключ MR/PR: mr:<host>/<путь проекта>/<номер> (формат src/things/types.ts; заменить на keys.ts → mrKey). */
-export const mrThingKey = (host: string, project: string, number: number): string => `mr:${host.toLowerCase()}/${project.replace(/^\/+|\/+$/g, '')}/${number}`;
-/** Ключ задачи Jira: jira:<host>/<KEY-123> (заменить на keys.ts → jiraKey). */
-export const jiraThingKey = (host: string, key: string): string => `jira:${host.toLowerCase()}/${key.toUpperCase()}`;
+/** Ключ MR/PR — mrKey из keys.ts; не собирается (путь без «/», номер не тот) — undefined. */
+export const mrThingKey = (host: string, project: string, number: number): string | undefined => orUndefined(() => mrKey(host, project, number));
+/** Ключ задачи Jira — jiraKey из keys.ts; не ключ — undefined. */
+export const jiraThingKey = (host: string, key: string): string | undefined => orUndefined(() => jiraKey(host, key));
 
+function orUndefined<T>(f: () => T): T | undefined {
+  try {
+    return f();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Хост ссылки так же, как в ключах (normHost: порт не по умолчанию остаётся). */
 const hostOfUrl = (u: string): string => {
   try {
-    return new URL(u).hostname.toLowerCase();
+    return normHost(new URL(u).host);
   } catch {
     return '';
   }
@@ -38,7 +47,9 @@ const hostOfUrl = (u: string): string => {
  * (MR/PR, не задача) и Jira (replyTo.key + хост из ссылки). Ничего знакомого — undefined.
  */
 export function eventThing(e: Pick<RoutineEvent, 'things' | 'replyTo' | 'fields' | 'link'>): Thing | undefined {
-  if (e.things?.length) return e.things[0];
+  // угаданная по голому ключу в тексте задача (ref.guess) — не та вещь, о которой работа
+  const known = e.things?.find((t) => t.ref.guess !== true);
+  if (known) return known;
   const r = e.replyTo ?? {};
   const f = e.fields ?? {};
   const forge = str(r.forge);
@@ -50,7 +61,9 @@ export function eventThing(e: Pick<RoutineEvent, 'things' | 'replyTo' | 'fields'
     if (r.type === 'issue' || f.is_pr === false || !host || !project || !Number.isInteger(number) || number <= 0) return undefined;
     const branch = str(f.branch);
     const url = e.link ? e.link.replace(/#.*$/, '').slice(0, URL_MAX) : '';
-    return { type: 'mr', key: mrThingKey(host, project, number), ref: { host: host.toLowerCase(), project, number, forge, ...(branch ? { branch } : {}) }, ...(url ? { url } : {}) };
+    const key = mrThingKey(host, project, number);
+    if (!key) return undefined;
+    return { type: 'mr', key, ref: { host: normHost(host), project, number, forge, ...(branch ? { branch } : {}) }, ...(url ? { url } : {}) };
   }
   // ключ — только из replyTo.key: его ставит лишь источник Jira; у записей коннектора fields.key бывает чем угодно
   const key = str(r.key);
@@ -58,7 +71,9 @@ export function eventThing(e: Pick<RoutineEvent, 'things' | 'replyTo' | 'fields'
     const host = e.link ? hostOfUrl(e.link) : '';
     if (!host || !e.link) return undefined;
     const title = str(f.summary);
-    return { type: 'jira', key: jiraThingKey(host, key), ref: { host, key: key.toUpperCase() }, url: e.link.slice(0, URL_MAX), ...(title ? { title: title.slice(0, TITLE_MAX) } : {}) };
+    const thingKey = jiraThingKey(host, key);
+    if (!thingKey) return undefined;
+    return { type: 'jira', key: thingKey, ref: { host, key: key.toUpperCase() }, url: e.link.slice(0, URL_MAX), ...(title ? { title: title.slice(0, TITLE_MAX) } : {}) };
   }
   return undefined;
 }

@@ -11,11 +11,16 @@
 import { exec, forgeOf, forgeUser, type Exec, type Forge } from '../git.js';
 import type { Profile } from '../api-types.js';
 import { loadProfile } from '../settings.js';
-import type { Thing, ThingState, Turn, Watcher } from './types.js';
 import { mrKey } from './keys.js';
+import type { Thing, ThingState, Turn, Watcher } from './types.js';
 
-/** Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое). */
-export type ForgeRef = { host: string; project: string; number: number; me?: string; notesCount?: number };
+/**
+ * Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое).
+ * forge — из вещи (resolve знает его по адресу: GitHub Enterprise на своём хосте); нет — по хосту (forgeOf).
+ */
+export type ForgeRef = { host: string; project: string; number: number; forge?: Forge; me?: string; notesCount?: number };
+
+const forgeOfRef = (ref: Pick<ForgeRef, 'host' | 'forge'>): Forge => ref.forge ?? forgeOf(ref.host);
 
 export type ForgeDeps = {
   exec?: Exec;
@@ -48,7 +53,7 @@ export function forgeRefOf(thing: Thing): ForgeRef | string {
   const host = typeof r.host === 'string' ? r.host : undefined;
   const project = typeof r.project === 'string' ? r.project : undefined;
   const number = typeof r.number === 'number' ? r.number : typeof r.number === 'string' ? Number(r.number) : undefined;
-  const base = { ...(typeof r.me === 'string' && r.me ? { me: r.me } : {}), ...(typeof r.notesCount === 'number' ? { notesCount: r.notesCount } : {}) };
+  const base = { ...(r.forge === 'gitlab' || r.forge === 'github' ? { forge: r.forge as Forge } : {}), ...(typeof r.me === 'string' && r.me ? { me: r.me } : {}), ...(typeof r.notesCount === 'number' ? { notesCount: r.notesCount } : {}) };
   if (host && project && number && Number.isInteger(number) && number > 0) return { host, project, number, ...base };
   const m = KEY_RE.exec(thing.key);
   if (m && Number(m[3]) > 0) return { host: m[1], project: m[2], number: Number(m[3]), ...base };
@@ -379,7 +384,7 @@ export function forgeError(host: string, forge: Forge, err: unknown, what = 'MR'
 /** Мои логины на хосте: профиль, плюс логин из glab/gh (с кэшем в git.ts). ref.me — единственный, если задан. */
 async function myLogins(ref: ForgeRef, deps: ForgeDeps, x: Exec): Promise<Set<string>> {
   if (ref.me) return new Set([ref.me.toLowerCase()]);
-  const forge = forgeOf(ref.host);
+  const forge = forgeOfRef(ref);
   const p = (deps.profile ?? loadProfile)();
   const out = new Set<string>();
   const fromProfile = forge === 'github' ? p.github : p.gitlab;
@@ -393,7 +398,7 @@ async function myLogins(ref: ForgeRef, deps: ForgeDeps, x: Exec): Promise<Set<st
 /** Состояние одного MR. Не бросает: сбой — exists: false с error. */
 export async function mrState(ref: ForgeRef, deps: ForgeDeps & { depth?: Depth } = {}): Promise<ThingState> {
   const x = deps.exec ?? exec;
-  const forge = forgeOf(ref.host);
+  const forge = forgeOfRef(ref);
   const depth = deps.depth ?? 'full';
   try {
     const model = await (forge === 'github' ? githubModel(ref, x, depth) : gitlabModel(ref, x, depth));
@@ -404,8 +409,8 @@ export async function mrState(ref: ForgeRef, deps: ForgeDeps & { depth?: Depth }
 }
 
 /** Только открыт, смёржен или закрыт: один запрос. Ошибка запроса — исключение (его ловит вызывающий). */
-export async function mrLifecycle(ref: Pick<ForgeRef, 'host' | 'project' | 'number'>, x: Exec = exec): Promise<MrModel['lifecycle']> {
-  if (forgeOf(ref.host) === 'github') {
+export async function mrLifecycle(ref: Pick<ForgeRef, 'host' | 'project' | 'number' | 'forge'>, x: Exec = exec): Promise<MrModel['lifecycle']> {
+  if (forgeOfRef(ref) === 'github') {
     const p = await ghApi<GhPull>(x, ref.host, [`repos/${ref.project}/pulls/${ref.number}`]);
     return lifecycleOf(p.state, Boolean(p.merged || p.merged_at));
   }

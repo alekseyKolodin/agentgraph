@@ -24,13 +24,43 @@ export const hasConnections = (info: Pick<IntegrationsInfo, 'jira' | 'projects'>
 /** Знак номера по ref: PR GitHub (owner/repo#N) — «#», MR GitLab (group/project!N) — «!». */
 export const mrSign = (ref: string): '#' | '!' => (/#\d+$/.test(ref) ? '#' : '!');
 
-// Ключи вещей — по формату src/things/types.ts (на сервере их собирает src/things/keys.ts; веб рантайм из src не берёт).
+// Ключи вещей — по формату src/things/types.ts. На сервере их собирает src/things/keys.ts, веб рантайм из src не берёт —
+// нормализация здесь та же (keyHost, keyProject), иначе запуск рутины не найдётся у своего MR: сервер пишет путь в
+// нижнем регистре, а «Подключения» отдают его как в git remote.
+
+/** Хост в ключе — как normHost в keys.ts: нижний регистр, без «www.» и порта по умолчанию. */
+const keyHost = (h: string): string => h.trim().toLowerCase().replace(/:(80|443)$/, '').replace(/\.$/, '').replace(/^www\./, '');
+/** Путь проекта в ключе — как normProject в keys.ts: без «/» по краям и «.git», нижний регистр. */
+const keyProject = (p: string): string => p.trim().replace(/\/{2,}/g, '/').replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '').toLowerCase();
+
+/**
+ * Ключ MR по веб-адресу — как thingOfUrl в src/things/resolve.ts (сервер строит ключ вещи по адресу: GitLab с корнем не
+ * в «/», SSH-remote на другом хосте). Адрес не разобрался — undefined.
+ */
+function mrKeyOfUrl(url: string, iid: number): string | undefined {
+  try {
+    const u = new URL(url);
+    let path = u.pathname;
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      /* как есть */
+    }
+    const gl = /^\/(.+?)\/(?:-\/)?merge_requests\/([1-9]\d*)(?:\/.*)?$/.exec(path);
+    const gh = /^\/([^/]+\/[^/]+)\/pull\/([1-9]\d*)(?:\/.*)?$/.exec(path);
+    const glProject = gl?.[1];
+    const [project, num] = glProject && glProject.includes('/') && !glProject.startsWith('groups/') ? [glProject, gl?.[2]] : [gh?.[1], gh?.[2]];
+    return project && Number(num) === iid ? `mr:${keyHost(u.host)}/${keyProject(project)}/${iid}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Вещь задачи Jira: jira:<host>/<KEY>; хост — из ссылки задачи. Ссылка не разобралась — undefined. */
 export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thing | undefined {
   let host = '';
   try {
-    host = new URL(i.url).hostname.toLowerCase();
+    host = keyHost(new URL(i.url).host);
   } catch {
     return undefined;
   }
@@ -41,11 +71,11 @@ export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thi
 /** Вещь MR/PR проекта: mr:<host>/<путь проекта>/<номер>; у проекта без origin — undefined. */
 export function mrThing(p: Pick<ProjectInfo, 'remote' | 'forge'>, m: Pick<MergeRequestView, 'iid' | 'url' | 'title' | 'sourceBranch'>): Thing | undefined {
   if (!p.remote) return undefined;
-  const host = p.remote.host.toLowerCase();
+  const host = keyHost(p.remote.host);
   const project = p.remote.path.replace(/^\/+|\/+$/g, '');
   return {
     type: 'mr',
-    key: `mr:${host}/${project}/${m.iid}`,
+    key: mrKeyOfUrl(m.url, m.iid) ?? `mr:${host}/${keyProject(project)}/${m.iid}`,
     ref: { host, project, number: m.iid, branch: m.sourceBranch, ...(p.forge ? { forge: p.forge } : {}) },
     url: m.url,
     title: m.title,

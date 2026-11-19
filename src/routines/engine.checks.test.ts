@@ -35,7 +35,7 @@ function setup(o: { root?: string; now?: string; check?: () => CheckResult } = {
     describe: () => 'фейк',
   };
   const mk = () =>
-    new RoutineEngine({
+    new RoutineEngine({ jiraHosts: () => [],
       store,
       kinds: () => [kind],
       startRun: async (r) => {
@@ -458,7 +458,7 @@ test('live-источник: соединение, которое падает �
       await new Promise<void>((resolve) => ctx.signal.addEventListener('abort', () => resolve()));
     },
   };
-  const engine = new RoutineEngine({
+  const engine = new RoutineEngine({ jiraHosts: () => [],
     store, kinds: () => [kind], startRun: async () => 'x', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => [], now: () => clock.now,
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
     notify: (n) => void notices.push(n), reconnectMs: 1, lock: { who: 'test', deps: { alive: () => false } },

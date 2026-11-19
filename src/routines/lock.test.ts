@@ -48,7 +48,7 @@ test('замок: второй движок на той же папке не о�
     const intervals: Array<() => void> = [];
     const started: string[] = [];
     const engine = (pid: number, who: string) =>
-      new RoutineEngine({
+      new RoutineEngine({ jiraHosts: () => [],
         store,
         kinds: () => [kind],
         startRun: async (r) => (started.push(r.event.id), `run-${pid}`),

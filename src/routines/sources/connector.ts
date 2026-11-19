@@ -269,11 +269,13 @@ export async function runScript(script: ConnectorScript, caller: McpCaller, sinc
       if (step.json) {
         if (typeof r.data === 'string') throw new Error('ответ не JSON');
         const json = step.json;
-        // fields события — сама запись: нить и канал по путям FieldMap
-        events = mapItems(r.data, json, source).map((e) => {
+        events = mapItems(r.data, json, source);
+        // fields события — сама запись: нить и канал по путям FieldMap. На месте, не копией: отметка stampAt (время
+        // подставлено) держится за сам объект
+        for (const e of events) {
           const thread = threadOfItem(source, e.fields, json);
-          return thread ? { ...e, thread } : e;
-        });
+          if (thread) e.thread = thread;
+        }
       } else events = textItems(plainText(r), step.text!, source);
     } catch (e) {
       throw new Error(`Шаг ${i + 1} (${name}): ${(e as Error).message}`);
