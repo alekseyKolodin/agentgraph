@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SourceView } from '@server/routines/types';
 import { buildSpec, draftMissing, SCHEDULE } from './spec';
-import { isSlackConnector, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateDraft } from './templates';
+import { connectHref, connectParam, isSlackConnector, profileLine, ROUTINE_TEMPLATES, servicesFor, sourceForTemplate, templateDraft, templateOf } from './templates';
 
 const src = (slug: string, kind: string, extra: Partial<SourceView['spec']> = {}, canReply = false): SourceView => ({
   slug,
@@ -80,4 +80,21 @@ test('Jira и встречи: назначили на меня → дело и �
 test('«кто я» из профиля: имена, почта, логины без повторов', () => {
   assert.equal(profileLine({ names: ['Аня'], emails: ['a@x.io'], jiraEmail: 'a@x.io', gitlab: 'anya' }), 'Аня, a@x.io, @anya (GitLab)');
   assert.equal(profileLine(undefined), '');
+});
+
+test('«Подключить сервис» у Slack-ревью ведёт сразу к коннектору Claude со Slack, у остальных — обычная страница', () => {
+  const slack = new URL(connectHref(templateOf('review-slack')!), 'http://x');
+  assert.equal(slack.pathname, '/routines/connect');
+  assert.deepEqual(Object.fromEntries(slack.searchParams), { from: 'new', tpl: 'review-slack', mode: 'ready', kind: 'connector', service: 'slack' });
+  assert.equal(connectHref(templateOf('jira')!), '/routines/connect?from=new&tpl=jira');
+});
+
+test('параметры адреса «Подключить сервис» — только слаг; сервисы по подсказке — подключённые с этим именем', () => {
+  assert.equal(connectParam('connector'), 'connector');
+  assert.equal(connectParam('Slack'), undefined);
+  assert.equal(connectParam('a b'), undefined);
+  assert.equal(connectParam(null), undefined);
+  const ready = [{ server: 'claude.ai Slack', title: 'Slack' }, { server: 'notion', title: 'Notion' }, { server: 'x-slack-bot', title: 'Bot' }];
+  assert.deepEqual(servicesFor(ready, 'slack'), ['claude.ai Slack', 'x-slack-bot']);
+  assert.deepEqual(servicesFor(ready, undefined), []);
 });

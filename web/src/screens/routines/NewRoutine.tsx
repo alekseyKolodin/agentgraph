@@ -19,7 +19,7 @@ import { defaultTitle, eventNoun, replyHint, replyLabel, replyWhere, sentence, s
 import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset } from '../../lib/routines/schedule';
 import { foundRow } from '../../lib/routines/source';
 import { buildSpec, draftMissing, isSchedule, REPLY_CHOICES, SCHEDULE, slugify, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
-import { isMeetingSource, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateDraft, templateOf } from '../../lib/routines/templates';
+import { connectHref, isMeetingSource, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateDraft, templateOf } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
 import { CwdField } from './CwdField';
 import { Conditions, cx, Seg, useFlowBlocks, WaitClause } from './parts';
@@ -141,7 +141,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
             )}
             {needSource && tplInfo?.connect && (
               <span className={styles.hint}>
-                {t('Для шаблона нужен источник: {what}.', { what: t(tplInfo.connect) })} <Link to={`/routines/connect?from=new&tpl=${tplInfo.tpl}`}>{t('Подключить сервис')}</Link>
+                {t('Для шаблона нужен источник: {what}.', { what: t(tplInfo.connect) })} <Link to={connectHref(tplInfo)}>{t('Подключить сервис')}</Link>
               </span>
             )}
             <div className={styles.picks} role="group" aria-labelledby="s1">

@@ -1,7 +1,8 @@
 // «Подключить сервис» (/routines/connect, docs/routines/design/Source.dc.html): три способа — «Описать словами» (агент
 // находит API, просит ключ, собирает проверку и показывает, что нашёл: черновик /api/routines/sources/draft), «Готовые»
 // (виды и рецепты: форма из setup вида) и «Своя команда» (команда, поля записи, ключи окружения, проверка). Сохранённый
-// источник возвращает на «Новую рутину» (?from=new) уже выбранным, иначе — к списку источников.
+// источник возвращает на «Новую рутину» (?from=new) уже выбранным, иначе — к списку источников. Шаблон может сразу открыть
+// нужный вид в «Готовых» (?mode=ready&kind=connector&service=slack — connectHref в lib/routines/templates.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -12,6 +13,7 @@ import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
 import { DEFAULT_REPLY_ARGS, parseReply } from '../../lib/routines/reply';
 import { slugify } from '../../lib/routines/spec';
+import { connectParam, servicesFor } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
 import { ReplyStep } from './ReplySetup';
 import { cx, Dot, Seg } from './parts';
@@ -23,7 +25,9 @@ export function ConnectSource() {
   const q = useRoutines();
   const [params] = useSearchParams();
   const fromNew = params.get('from') === 'new';
-  const [mode, setMode] = useState<Mode>((params.get('mode') as Mode | null) ?? 'words');
+  const kind = connectParam(params.get('kind'));
+  const service = connectParam(params.get('service'));
+  const [mode, setMode] = useState<Mode>((params.get('mode') as Mode | null) ?? (kind ? 'ready' : 'words'));
   return (
     <>
       <Link to={fromNew ? `/routines/new${tplQuery(params).replace(/^&/, '?')}` : '/routines'} className={styles.back}>‹ {fromNew ? t('Новая рутина') : t('Рутины')}</Link>
@@ -44,7 +48,7 @@ export function ConnectSource() {
         <div className={styles.connectMain}>
           {q.isError && <NotAvailable error={q.error} />}
           {q.data && mode === 'words' && <Words data={q.data} fromNew={fromNew} />}
-          {q.data && mode === 'ready' && <Ready data={q.data} fromNew={fromNew} />}
+          {q.data && mode === 'ready' && <Ready data={q.data} fromNew={fromNew} kind={kind} service={service} />}
           {q.data && mode === 'cmd' && <Command data={q.data} fromNew={fromNew} />}
         </div>
         <aside className={styles.aside} aria-label={t('Как это работает')}>
@@ -286,10 +290,14 @@ function Words({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) 
 
 type Picked = { kind: SourceKindView } | { recipe: RecipeView };
 
-function Ready({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
+/** kind — вид, который выбрать сразу (шаблон рутины), service — подсказка сервиса для коннектора. */
+function Ready({ data, fromNew, kind, service }: { data: RoutinesOverview; fromNew: boolean; kind?: string; service?: string }) {
   const recipes = useRecipes();
   const qc = useQueryClient();
-  const [picked, setPicked] = useState<Picked | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(() => {
+    const k = kind && data.kinds.find((x) => x.kind === kind && x.kind !== 'command' && !x.recipe);
+    return k ? { kind: k } : null;
+  });
   const [yaml, setYaml] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [error, setError] = useState('');
@@ -325,7 +333,7 @@ function Ready({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) 
         {!kinds.length && !recipes.data?.length && <span className={styles.hint}>{recipes.isPending ? t('Загрузка…') : t('Готовых источников пока нет: подключи словами или своей командой.')}</span>}
       </div>
       <span className={styles.hint}>{t('Каждый источник — небольшой файл. Свой можно сохранить и отдать коллеге, он появится здесь.')}</span>
-      {picked && ('kind' in picked && picked.kind.kind === 'connector' ? <ConnectorForm key={key(picked)} data={data} fromNew={fromNew} /> : <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />)}
+      {picked && ('kind' in picked && picked.kind.kind === 'connector' ? <ConnectorForm key={key(picked)} data={data} fromNew={fromNew} service={service} /> : <KindForm key={key(picked)} data={data} picked={picked} fromNew={fromNew} />)}
       <div>
         <button type="button" className="btn small ghost" aria-expanded={importOpen} onClick={() => setImportOpen(!importOpen)}>
           {importOpen ? '▾' : '▸'} {t('Добавить файл источника')}
@@ -453,7 +461,7 @@ const notReady = (s: McpServiceView): string =>
  * словами — что нужно. Модель один раз собирает скрипт, agentgraph прогоняет его без модели и показывает, что нашлось
  * и что будет выполняться; дальше проверка идёт по скрипту без модели.
  */
-function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
+function ConnectorForm({ data, fromNew, service }: { data: RoutinesOverview; fromNew: boolean; service?: string }) {
   const qc = useQueryClient();
   const q = useMcpTools();
   const [servers, setServers] = useState<string[]>([]);
@@ -485,6 +493,17 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   const v = build.data;
   const result = v?.state === 'ready' ? v : undefined;
   const working = busy || v?.state === 'working';
+  // шаблон просил сервис (Slack-ревью): отметить подключённые сервисы с этим именем, как только они появятся в списке
+  // (в т.ч. после входа в сервис и «Обновить список»); один раз и не поверх выбора руками
+  const hinted = useRef(false);
+  useEffect(() => {
+    if (hinted.current || !q.data) return;
+    const pick = servicesFor(ready, service);
+    if (!pick.length) return;
+    hinted.current = true;
+    setServers(pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data]);
 
   // поменяли сервисы, галочки или просьбу — собранный скрипт уже не про то
   const reset = () => {
@@ -492,6 +511,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
     setError('');
   };
   const toggleService = (s: McpServiceView) => {
+    hinted.current = true;
     setServers(servers.includes(s.server) ? servers.filter((x) => x !== s.server) : [...servers, s.server]);
     reset();
   };
