@@ -6,7 +6,8 @@
 // PR ничего не пишет (у двух участников — одинаковое значение, конфликта нет). PR ищутся через gh или glab (git.ts) раз в
 // PR_POLL_MS и только пока есть задачи «В работе» или «Ревью» с веткой; без gh и glab переходы по PR не работают.
 // Раннер и сессии про Teamwork не знают: сервер зовёт started/ended после старта и после события end.
-import { exec, forgeOf, listMergeRequests, parseRemote, type Exec, type MergeRequest, type Remote } from './git.js';
+import { exec, listMergeRequests, parseRemote, type Exec, type MergeRequest, type Remote } from './git.js';
+import { mrLifecycle } from './things/forge.js';
 import { TeamError, TeamRepo } from './teamwork-repo.js';
 import type { TeamService } from './teamwork-server.js';
 import { parseProject, TASK_ID_RE, TEAM_SLUG_RE } from './teamwork.js';
@@ -99,18 +100,14 @@ export function prBelongsTo(remote: Remote, url: string): boolean {
 }
 
 /**
- * Состояние одного PR по ссылке: в списке открытых его уже нет, и нужно понять, смёржен он или закрыт. gh: state closed
- * с merged_at — merged; glab: state merged | closed | opened. Ссылка без номера — undefined.
+ * Состояние одного PR по ссылке: в списке открытых его уже нет, и нужно понять, смёржен он или закрыт. Разбор ответа gh
+ * и glab — в общем наблюдателе MR (things/forge.ts → mrLifecycle): state closed с merged_at — merged, state merged |
+ * closed | opened у GitLab. Ссылка без номера — undefined.
  */
 export async function fetchPrState(remote: Remote, url: string, x: Exec = exec): Promise<TeamPr['state'] | undefined> {
   const n = prNumber(url);
   if (!n) return undefined;
-  if (forgeOf(remote.host) === 'github') {
-    const p = JSON.parse(await x('gh', ['api', '--hostname', remote.host, `repos/${remote.path}/pulls/${n}`], { timeoutMs: 30_000 })) as { state?: string; merged?: boolean; merged_at?: string | null };
-    return p.merged || p.merged_at ? 'merged' : p.state === 'closed' ? 'closed' : 'open';
-  }
-  const m = JSON.parse(await x('glab', ['api', '--hostname', remote.host, `projects/${encodeURIComponent(remote.path)}/merge_requests/${n}`], { timeoutMs: 30_000 })) as { state?: string };
-  return m.state === 'merged' ? 'merged' : m.state === 'closed' ? 'closed' : 'open';
+  return mrLifecycle({ host: remote.host, project: remote.path, number: n }, x);
 }
 
 // ---------- сервис

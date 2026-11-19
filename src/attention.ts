@@ -2,7 +2,9 @@
 // Подсказка flow — один фоновый вызов haiku на все новые MR; имя не из списка flow отбрасывается.
 import { createHash } from 'node:crypto';
 import os from 'node:os';
-import { exec, forgeUser, getMergeRequest, listMergeRequests, mrDiscussions, type Discussion, type Exec, type MergeRequest } from './git.js';
+import { exec, forgeUser, listMergeRequests, type Discussion, type Exec, type MergeRequest } from './git.js';
+import { mrState } from './things/forge.js';
+import type { ThingState } from './things/types.js';
 import { runSession, type SessionRequest, type SessionResult } from './agent.js';
 import { reasonsLine, wrapData } from './intake.js';
 import type { FlowSummary } from './flows.js';
@@ -25,6 +27,16 @@ export function attentionReasons(mr: MergeRequest, discussions: Discussion[], me
     replies,
     // has_conflicts и detailed_merge_status бывают устаревшими поодиночке: хватает любого
     conflicts: mr.hasConflicts || mr.mergeStatus === 'conflict',
+  };
+}
+
+/** Причины внимания из состояния общего наблюдателя MR (src/things/forge.ts): те же CI, ответы и конфликты, что считает attentionReasons. */
+export function reasonsOfState(state: ThingState): AttentionReasons {
+  const f = state.facts;
+  return {
+    ci: f.ci === 'failed' ? { status: 'failed', url: String(f.ciUrl ?? '') } : undefined,
+    replies: Number(f.replies ?? 0),
+    conflicts: Boolean(f.conflicts),
   };
 }
 
@@ -95,31 +107,28 @@ async function fetchAttention(projects: Project[], x: Exec): Promise<AttentionRe
       }
       const items = await Promise.all(
         mrs.map(async (m): Promise<AttentionItem | undefined> => {
-          try {
-            // пайплайн есть только в ответе одного MR; обсуждения без заметок не запрашиваем (у PR GitHub число в списке неизвестно — запрашиваем)
-            const [full, discussions] = await Promise.all([
-              limit(() => getMergeRequest(remote, m.iid, x)),
-              m.notesCount !== 0 ? limit(() => mrDiscussions(remote, m.iid, x)) : Promise.resolve([]),
-            ]);
-            const reasons = attentionReasons({ ...full, notesCount: m.notesCount }, discussions, me);
-            if (!hasReasons(reasons)) return undefined;
-            return {
-              ref: full.ref,
-              iid: full.iid,
-              title: full.title,
-              url: full.url,
-              draft: full.draft,
-              sourceBranch: full.sourceBranch,
-              targetBranch: full.targetBranch,
-              updated: full.updated,
-              project: p.path,
-              projectName: p.name,
-              reasons,
-            };
-          } catch (err) {
-            fail(err, `!${m.iid}: `);
+          // пайплайн, обсуждения и конфликты снимает общий наблюдатель MR; обсуждения без заметок не запрашиваем (у PR GitHub число в списке неизвестно — запрашиваем)
+          const state = await limit(() => mrState({ host: remote.host, project: remote.path, number: m.iid, me, notesCount: m.notesCount }, { exec: x, depth: 'attention' }));
+          if (!state.exists) {
+            fail(state.error ?? 'MR не прочитан', `!${m.iid}: `);
             return undefined;
           }
+          const reasons = reasonsOfState(state);
+          if (!hasReasons(reasons)) return undefined;
+          const f = state.facts;
+          return {
+            ref: String(f.ref ?? m.ref),
+            iid: m.iid,
+            title: state.title,
+            url: String(f.url ?? m.url),
+            draft: Boolean(f.draft),
+            sourceBranch: String(f.branch ?? m.sourceBranch),
+            targetBranch: String(f.targetBranch ?? m.targetBranch),
+            updated: state.updatedAt || undefined,
+            project: p.path,
+            projectName: p.name,
+            reasons,
+          };
         }),
       );
       return items.filter((i): i is AttentionItem => Boolean(i));
