@@ -100,6 +100,12 @@ export const CHAT_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write'];
 /** Без Agent: его описание со списком сабагентов почти удваивает контекст каждого хода, а чат должен отвечать быстро и дёшево. */
 const CHAT_IMPLICIT = ['Skill'];
 const MESSAGE_MAX = 20_000;
+/** Ответ с виджетами короче этого, когда все они — варианты реплик, считается пустым: ни причины, ни вывода пользователь не получил. */
+const ANSWER_MIN = 80;
+/** Ответ, начатый отсылкой к кнопкам, — не ответ, какие бы виджеты ни были. */
+const REFERS_TO_BUTTONS = /^\s*(выберите|выбери|choose|select|pick)(?![\p{L}\p{N}])/iu;
+/** Сообщение единственного повторного хода при пустом ответе (та же сессия). */
+const RETRY_MESSAGE = 'Ответ не дан: ты отослал к вариантам, не ответив. Ответь пользователю текстом на его последний вопрос: что нашёл, почему так, что можно сделать. Варианты уже показаны, заново их не вызывай.';
 /** Больше шагов за ход не пишем: трасса — подсказка, а не транскрипт. */
 const STEPS_MAX = 300;
 /** Текст артефакта в ответе инструмента: дальше — Read по пути. */
@@ -225,16 +231,19 @@ export function chatSystemPrompt(r: RunReport, runDir: string, cwd: string, caps
 - show_table, show_links, offer_replies — таблица, ссылки (файлы запуска, артефакты, этапы, пути проекта) и варианты ответа под твоим ответом.
 - Read, Grep, Glob — файлы запуска и репозитория; Bash — git status/diff, тесты и т.п.; Edit, Write — правки в директории проекта.
 
+Главное правило, важнее остальных: сначала ответь на вопрос текстом. Это причина или факт с подробностями: что идёт, какая команда, сколько времени, почему так. Затем — что можно сделать. Таблицы, ссылки и варианты ответа под ответом только дополняют текст и не заменяют его. Ответ, который только отсылает к кнопкам или вариантам («выберите вариант»), — ошибка.
+
 Правила:
 1. Отвечай коротко, по делу и на языке пользователя. Называй сущности так же, как в интерфейсе: flow, этап, блок, условие, замечания, задача, запуск, директория проекта, артефакт. Этапы, блоки и итерации называй так, как они в отчёте. Не пересказывай весь отчёт, когда спрашивают об одном.
 2. Имена инструментов пользователю не называй: он их не вызывает. Говори, что можешь сделать сам: «могу возобновить запуск», «подниму лимит итераций до 40».
-3. Безопасное — пауза, возобновление, лимит итераций, ответ на вопрос агента словами пользователя${caps.note ? ', указание этапу' : ''} — делай сам, когда пользователь об этом попросил. Опасное и общее — остановить запуск, записать артефакт, ответить на паузу, сохранить flow, продолжить или запустить заново${caps.runFlow ? ', поменять flow идущего запуска, перезапустить итерацию' : ''} — сам не делай никогда: предложи кнопку (propose_actions) и одной фразой скажи, что она сделает. Правки файлов проекта и команды, меняющие репозиторий, — только по прямой просьбе. После действия скажи, что сделал и что будет дальше.
+3. Безопасное — пауза, возобновление, лимит итераций, ответ на вопрос агента словами пользователя${caps.note ? ', указание этапу' : ''} — делай сам, когда пользователь об этом попросил. Опасное и общее — остановить запуск, записать артефакт, ответить на паузу, сохранить flow, продолжить или запустить заново${caps.runFlow ? ', поменять flow идущего запуска, перезапустить итерацию' : ''} — сам не делай никогда: предложи кнопку (propose_actions) и одной фразой скажи, что она сделает. Так же опасно остановить или убить процесс идущего этапа (kill, pkill и т.п.): сам — никогда; в тексте объясни, что будет с этапом (команда упадёт, этап увидит ошибку и продолжит или нет), и делай только после прямой просьбы; предлагать такое чипом можно только вместе с этим объяснением. Правки файлов проекта и команды, меняющие репозиторий, — только по прямой просьбе. После действия скажи, что сделал и что будет дальше.
 4. Инструментами Edit и Write в папку запуска не пиши: run.json, выводы и транскрипты пишут раннер и сервер. Артефакт меняется только кнопкой write_artifact: в том же ответе прочитай его (artifacts) и предложи весь новый текст. Если файл изменится до клика, кнопка устареет.
 5. Идущий запуск работает в той же директории проекта. Правка файлов или git-команды посреди этапа столкнутся с ним: предупреди и предложи сначала паузу (текущий этап доработает, следующий не начнётся).
 ${flowRule(r, caps)}
 ${pauseRule(r, caps)}
 8. На вопрос агента (pendingQuestions) отвечай answer_question, когда пользователь дал ответ: ключ — текст вопроса, значение — label варианта или его текст. Ответ за пользователя не придумывай.
-9. Таблицы, списки файлов и выбор из вариантов показывай виджетами (show_table, show_links, offer_replies), а не текстом: они видны под ответом. Их содержимое в тексте не повторяй. Файлы папки запуска давай ссылкой run_file с путём от неё.`;
+9. Таблицы и списки ссылок построчно в тексте не дублируй — показывай их виджетами (show_table, show_links), они видны под ответом, но вывод из них пиши текстом. Варианты ответа (offer_replies) — это короткие следующие реплики пользователя к уже данному ответу, а не сам ответ. Файлы папки запуска давай ссылкой run_file с путём от неё.
+10. На вопросы «почему завис», «почему так долго», «что он делает» посмотри run_status, run_log и процессы этапа (Bash: ps). В ответе назови текущую команду или инструмент, сколько он идёт, почему так долго (если видно) и что можно сделать: подождать, указание этапу, пауза, остановка.`;
 }
 
 /**
@@ -601,7 +610,7 @@ export function uiTools(ctl: ChatControls, sink: ChatTurnSink, runDir: string): 
         }
         return show({ type: 'actions', ...(title ? { title } : {}), items: actions }, `Кнопки показаны: ${actions.map((x) => `«${x.label}»`).join(', ')}. Сработают после клика пользователя.`);
       }),
-    tool('offer_replies', 'Варианты ответа чипами под ответом: клик отправит текст от имени пользователя.',
+    tool('offer_replies', 'Варианты следующей реплики пользователя чипами под ответом: клик отправит текст от его имени. Только в дополнение к ответу текстом, не вместо него.',
       { items: z.array(z.string().min(1).max(120)).min(1).max(6) },
       async ({ items }) => show({ type: 'replies', items }, 'Варианты показаны.')),
   ];
@@ -821,6 +830,8 @@ export async function chatTurn(o: ChatTurnOptions, deps: ChatDeps = DEPS): Promi
   const ctx = { runDir: o.runDir, cwd };
   const steps: ChatStep[] = [];
   const stepOf = new Map<string, number>();
+  // все текстовые блоки главного агента за ход (SessionResult.text — только последний)
+  let texts: string[] = [];
   const onEvent = (e: SessionEvent) => {
     if (e.kind === 'tool_use') {
       // виджеты видны сами, в трассе они — шум
@@ -835,14 +846,15 @@ export async function chatTurn(o: ChatTurnOptions, deps: ChatDeps = DEPS): Promi
       steps[i] = { ...steps[i]!, error: truncate(e.text.replace(/<\/?tool_use_error>/g, ''), 200) || 'ошибка' };
       o.onStep?.(i, steps[i]!);
     } else if (e.kind === 'text' && !e.parent && e.text.trim()) {
+      texts.push(e.text.trim());
       o.onText?.(truncate(e.text, 600));
     }
   };
   const mcpServers = { [SERVER]: deps.mcpServer(SERVER, runTools(o.controls, sink)), [UI]: deps.mcpServer(UI, uiTools(o.controls, sink, o.runDir)) };
   const inside = realpath(o.runDir).startsWith(realpath(cwd) + path.sep) || realpath(o.runDir) === realpath(cwd);
-  const ask = (resumeId: string | undefined) =>
+  const ask = (resumeId: string | undefined, prompt = `${statusLine(v)}\n\n${message}`) =>
     deps.runSession({
-      prompt: `${statusLine(v)}\n\n${message}`,
+      prompt,
       cwd,
       additionalDirectories: inside ? undefined : [o.runDir],
       system: chatSystemPrompt(v.report, o.runDir, cwd, capsOf(o.controls)),
@@ -868,26 +880,49 @@ export async function chatTurn(o: ChatTurnOptions, deps: ChatDeps = DEPS): Promi
   }
   // SDK при resume отдаёт стоимость с начала сессии: за ход — разница с прошлым значением
   const prev = resume ? chat.sessionCostUsd ?? 0 : 0;
-  const cost = r.costUsd >= prev ? r.costUsd - prev : r.costUsd;
-  const aborted = Boolean(o.abort?.signal.aborted);
-  const answered = r.ok && (r.text.trim() || sink.widgets.length);
+  let cost = r.costUsd >= prev ? r.costUsd - prev : r.costUsd;
+  const turnText = (res: SessionResult) => texts.join('\n\n') || res.text.trim();
+  let text = turnText(r);
+  const aborted = () => Boolean(o.abort?.signal.aborted);
+  let last = r;
+  if (r.ok && r.sessionId && !aborted() && emptyAnswer(text, sink.widgets)) {
+    // ответ-отсылка к кнопкам: один повторный ход той же сессии; живой текст заменит текст повтора
+    texts = [];
+    const r2 = await ask(r.sessionId, RETRY_MESSAGE);
+    cost += r2.costUsd >= r.costUsd ? r2.costUsd - r.costUsd : r2.costUsd;
+    if (r2.ok) {
+      last = r2;
+      text = turnText(r2);
+    }
+  }
+  const answered = last.ok && (text || sink.widgets.length);
   chat.messages.push({
     role: 'assistant',
-    text: answered ? r.text.trim() : aborted ? 'Прервано.' : `Ошибка: ${r.errors.join('; ') || r.subtype}`,
+    text: answered ? text : aborted() ? 'Прервано.' : `Ошибка: ${last.errors.join('; ') || last.subtype}`,
     at: now(),
     costUsd: cost,
-    ...(r.ok ? {} : { error: true }),
+    ...(last.ok ? {} : { error: true }),
     ...(steps.length ? { steps } : {}),
     ...(sink.widgets.length ? { widgets: sink.widgets } : {}),
   });
-  if (r.sessionId) {
-    chat.sessionId = r.sessionId;
+  if (last.sessionId) {
+    chat.sessionId = last.sessionId;
     chat.cwd = cwd;
-    chat.sessionCostUsd = r.costUsd;
+    chat.sessionCostUsd = last.costUsd;
   }
   chat.totalCostUsd += cost;
   saveChat(o.runDir, chat);
   return chat;
+}
+
+/**
+ * Ответ пустой, если пользователь остался без текста: начат отсылкой к кнопкам (при любых виджетах), либо короче ANSWER_MIN
+ * при виджетах-вариантах, либо пуст при любых виджетах. Без виджетов не проверяется; короткая фраза с кнопкой действия — нормальный ответ.
+ */
+function emptyAnswer(text: string, widgets: ChatWidget[]): boolean {
+  if (!widgets.length) return false;
+  if (!text) return true;
+  return REFERS_TO_BUTTONS.test(text) || (text.length < ANSWER_MIN && widgets.every((w) => w.type === 'replies'));
 }
 
 /**
