@@ -153,7 +153,7 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, waitDeci
         <div className={styles.acts}>
           {wait && act.decide && !done && !waitDecided && (
             <>
-              <button type="button" className="btn small primary" onClick={() => act.decide!(wait, 'run')}>{waitButtons(wait).run}</button>
+              <button type="button" className="btn small primary" title={`${wait.routineTitle}: ${wait.question}`} onClick={() => act.decide!(wait, 'run')}>{waitButtons(wait).run}</button>
               <button type="button" className="btn small" title={t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины')} onClick={() => act.decide!(wait, 'later')}>{waitButtons(wait).later}</button>
               <button type="button" className="btn small ghost" title={t('Дело закроется; рутина запомнит и учтёт в проверке словами')} onClick={() => act.decide!(wait, 'reject')}>{waitButtons(wait).reject}</button>
             </>

@@ -39,7 +39,7 @@
 .list { list-style: none; margin: 0; padding: 6px 0 0; display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; min-width: 0; max-width: 100%; }
 .row { display: flex; gap: 8px; align-items: flex-start; font-size: var(--fs-meta); min-height: 26px; padding-top: 4px; }
 .row .dot { margin-top: 4px; }
-.row-title { color: var(--ink); font-weight: 500; white-space: nowrap; }
+.row-title { color: var(--ink); font-weight: 500; white-space: nowrap; flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
 /* итог проверки переносится: длинная причина поломки («Jira не подключена: …») — как раз то, что надо прочитать целиком */
 .row-text { color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
 

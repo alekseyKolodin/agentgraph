@@ -151,7 +151,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
               {data.sources.map((s) => {
                 const k = data.kinds.find((x) => x.kind === s.spec.kind);
                 return (
-                  <button key={s.slug} type="button" className={styles.pick} aria-pressed={d.source === s.slug} onClick={() => set({ source: s.slug, conds: templateConds(tpl, matchFields(data.kinds.find((k) => k.kind === s.spec.kind))), check: '', mode: d.mode === 'auto' && isSchedule(d) ? 'suggest' : d.mode })}>
+                  <button key={s.slug} type="button" className={styles.pick} aria-pressed={d.source === s.slug} onClick={() => set({ source: s.slug, conds: templateConds(tpl, matchFields(k)), check: '', mode: d.mode === 'auto' && isSchedule(d) ? 'suggest' : d.mode })}>
                     <b>{s.spec.title}</b>
                     <span>{s.spec.description || k?.summary || s.spec.kind}</span>
                   </button>
@@ -302,7 +302,7 @@ function SourceStep({ d, set, source, fields, kindTitle }: StepProps & { source:
       {/* рутина с делом: первый опрос заводит дела по текущему списку (SPEC 3.4), flow на них не запустится */}
       <span className={styles.hint}>
         {d.taskOn && d.taskFrom === 'event'
-          ? t('Эти записи не запустят flow, но станут делами: первый опрос заведёт дела по текущему списку источника, до {n} записей. Дальше — только новые.', { n: SEED_MAX })
+          ? t('Эти записи не запустят flow: подходящие под условия станут делами — первый опрос заведёт их по текущему списку источника, из {n} последних записей. Дальше — только новые.', { n: SEED_MAX })
           : t('Эти записи не запустятся. Рутина начнёт с тех, что появятся после включения.')}
       </span>
     </>

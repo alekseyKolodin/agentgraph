@@ -6,6 +6,7 @@ import type { ProjectInfo, RunSource, RunSummary, SessionView, SpaceListItem } f
 import type { RoutineWait } from '@server/routines/types';
 import type { DeskBy, DeskColumn, DeskItem, DeskSignal } from '@server/desk/types';
 import { normHost, parseKey } from '../../../src/things/keys';
+import { LIVE_STATUSES } from './home';
 import { locale, plural, t } from './i18n';
 
 export const DESK_COLUMNS: readonly DeskColumn[] = ['new', 'plan', 'work', 'waiting', 'done'];
@@ -304,7 +305,7 @@ export function deskBoard(items: readonly DeskItem[], o: BoardOpts): DeskBoardVi
 
 // ---------- действия карточки
 
-type SessionLike = Pick<SessionView, 'id' | 'live' | 'lastActivityAt'> & Partial<Pick<SessionView, 'source'>>;
+type SessionLike = Pick<SessionView, 'id' | 'live' | 'lastActivityAt'> & Partial<Pick<SessionView, 'source' | 'status' | 'ask'>>;
 type RunLike = Pick<RunSummary, 'id' | 'startedAt' | 'status'> & Partial<Pick<RunSummary, 'root' | 'source'>>;
 
 /** Сессии дела: из его ссылок, начатые с карточки (source.item) или из той же вещи; живые и свежие — первыми. */
@@ -315,12 +316,33 @@ export function itemSessions<S extends SessionLike>(i: Pick<DeskItem, 'id' | 'ke
 }
 
 /**
- * Сессии, которых нет ни на одной карточке: «одна вещь — одно место». Сессия открытого дела ждёт тебя на самой карточке
- * (там же и её вопрос), в полосе над доской остаются только чужие для доски — начатые не с карточки.
+ * Сессия, которую карточка показывает вместе с её вопросом: самая свежая сессия дела (itemSessions), если она живая и
+ * спрашивает, а по делу не идёт запуск flow (карточка тогда показывает запуск). Та же логика у DeskCard.Activity.
  */
-export function sessionsOffBoard<S extends SessionLike>(sessions: readonly S[], openItems: readonly Pick<DeskItem, 'id' | 'key' | 'links' | 'column'>[]): S[] {
-  const open = openItems.filter((i) => i.column !== 'done');
-  return sessions.filter((s) => !open.some((i) => itemSessions(i, [s]).length > 0));
+export function cardAskSession<S extends SessionLike>(i: Pick<DeskItem, 'id' | 'key' | 'links'>, sessions: readonly S[], itemRunList: readonly Pick<RunSummary, 'status'>[]): S | undefined {
+  if (itemRunList.some((r) => LIVE_STATUSES.includes(r.status))) return undefined;
+  const s = itemSessions(i, sessions)[0];
+  return s?.live && s.status === 'waiting' && s.ask ? s : undefined;
+}
+
+/**
+ * Ждущие сессии, которых нет на карточках: «одна вещь — одно место». Сессия, чей вопрос виден на карточке открытого дела
+ * (cardAskSession), из полосы над доской уходит; остальные — вторая сессия дела, сессия при живом запуске, ждущая доверия
+ * к папке — остаются в полосе, иначе их не видно нигде. all — все сессии (по ним карточка выбирает свою), runs — все запуски.
+ */
+export function sessionsOffBoard<S extends SessionLike>(
+  waiting: readonly S[],
+  all: readonly S[],
+  openItems: readonly Pick<DeskItem, 'id' | 'key' | 'links' | 'column'>[],
+  runs: readonly RunLike[],
+): S[] {
+  const shown = new Set<string>();
+  for (const i of openItems) {
+    if (i.column === 'done') continue;
+    const s = cardAskSession(i, all, itemRuns(i, runs));
+    if (s) shown.add(s.id);
+  }
+  return waiting.filter((s) => !shown.has(s.id));
 }
 
 /**
@@ -331,9 +353,12 @@ export function deskWaitOf<W extends Pick<RoutineWait, 'kind' | 'deskKey' | 'sno
   return waits.find((w) => w.kind === 'suggest' && w.deskKey === key && !w.snoozedAt);
 }
 
-/** Ожидания, которых нет ни на одной карточке: в полосе над доской остаются они — «одна вещь — одно место». */
+/**
+ * Ожидания, которых нет ни на одной карточке: в полосе над доской остаются они — «одна вещь — одно место». Если у одного дела
+ * два ожидания (ревью из двух рутин), карточка показывает первое, второе остаётся в полосе до решения по первому.
+ */
 export function waitsOffBoard<W extends Pick<RoutineWait, 'kind' | 'deskKey' | 'snoozedAt'>>(waits: readonly W[], openItems: readonly Pick<DeskItem, 'key'>[]): W[] {
-  return waits.filter((w) => !openItems.some((i) => deskWaitOf(i.key, [w])));
+  return waits.filter((w) => !openItems.some((i) => deskWaitOf(i.key, waits) === w));
 }
 
 /** Запуски дела: из ссылок (и продолжения их цепочек), начатые с карточки (source.item) и запуски той же вещи; свежие — первыми. */

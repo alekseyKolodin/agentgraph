@@ -96,11 +96,18 @@ export function sourceForTemplate(tpl: string | null | undefined, sources: Sourc
 
 /**
  * Условия шаблона, которые умеет выбранный источник: человек сам выбрал источник (а не подставился подходящий) — условие
- * шаблона («ссылка на MR в тексте», «событие — ревью») остаётся, если у источника есть такое поле; иначе оно не сработает
+ * шаблона («ссылка на MR в тексте», «событие — ревью») остаётся, если у источника есть такое поле (и такое значение, когда
+ * значения перечислены); иначе оно не сработает
  * никогда и рутина молчала бы, поэтому его нет. Без шаблона и у расписания — пусто.
  */
 export function templateConds(tpl: string | null | undefined, fields: readonly MatchField[]): Condition[] {
-  return templateOf(tpl) ? templateDraft(tpl).conds.filter((c) => fields.some((f) => f.key === c.field)) : [];
+  if (!templateOf(tpl)) return [];
+  // поле есть, а значения («review») у него нет — условие не сработает никогда, как и без поля
+  const ok = (c: Condition) => {
+    const f = fields.find((x) => x.key === c.field);
+    return Boolean(f) && (!f!.options?.length || c.value.split(',').every((v) => f!.options!.includes(v.trim())));
+  };
+  return templateDraft(tpl).conds.filter(ok);
 }
 
 /** Ссылка на MR (GitLab) или PR (GitHub) в тексте сообщения: условие без модели для «кинули ссылку в Slack». */

@@ -1,5 +1,6 @@
 // Полоса над доской (docs/desk/plan-5.md, 5.2; макет — docs/desk/design/DeskPult.dc.html, верх доски): вопросы агентов
-// (ожидания рутин, вопросы запусков, сессии, где ход за тобой — те же данные, что у Главной), «Начни с этого», сверка
+// (вопросы запусков, «догнать», ожидания рутин и сессии, где ход за тобой, — но не те, что уже на карточке дела: ожидание
+// рутины с делом и вопрос сессии дела решаются на самой карточке), «Начни с этого», сверка
 // «N из N» с раскрытием по источникам, «Висит дольше N дней» с обзором недели и «Записать знание» после закрытого дела
 // (этап 6, DeskMonth.tsx) и срез по проектам. Монтируется над доской в DeskBoard.tsx; выбранный проект —
 // снаружи (project / onProject), чтобы доска и срез показывали одно. Логика — lib/desk-top.ts.
@@ -8,7 +9,7 @@ import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { HomeResponse } from '@server/api-types';
 import type { DeskCheckSource } from '@server/desk/types';
-import { keys, useFeature, useHome, useSpaces } from '../../../api';
+import { keys, useFeature, useHome, useRuns, useSpaces } from '../../../api';
 import { useDesk, useDeskCheck } from '../../../api/desk';
 import { useRoutines } from '../../../api/routines';
 import { useSessions } from '../../../api/sessions';
@@ -50,7 +51,7 @@ export function DeskTop({ project, onProject, busy }: DeskTopProps) {
   const [staleDays, setStaleDays] = useStaleDays();
   return (
     <div className={styles.top}>
-      <Questions now={now} />
+      <Questions now={now} project={project} />
       <StartWith now={now} project={project} busy={busy} />
       <LearnPrompts now={now} />
       <div className={styles.strip}>
@@ -65,19 +66,23 @@ export function DeskTop({ project, onProject, busy }: DeskTopProps) {
 }
 
 /**
- * Вопросы агентов: ожидания рутин (и «догнать»), вопросы запусков с ответом на месте, сессии терминала, ждущие ответа.
+ * Вопросы агентов: «догнать», ожидания рутин, вопросы запусков с ответом на месте, сессии терминала, ждущие ответа.
+ * Одна вещь — одно место: ожидание рутины с делом («Запустить / Не сейчас / Не то») и вопрос сессии дела — на карточке
+ * дела, здесь остаётся то, чего на доске не нарисовано (дела нет, чужой срез, вторая сессия дела, пауза, ответ-черновик).
  * Сломанные источники здесь не повторяются — они в сверке «N из N».
  */
-function Questions({ now }: { now: number }) {
+function Questions({ now, project }: { now: number; project?: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const home = useHome();
   const routines = useRoutines(useFeature('routines'));
   const sessionsOn = useFeature('sessions');
   const sessionList = useSessions(sessionsOn);
-  const openItems = useDesk({ open: true }).data?.items ?? [];
-  // сессия открытого дела ждёт тебя на его карточке (с вопросом) — в полосе её нет: одна вещь — одно место
-  const waitingSessions = sessionsOffBoard(homeSessions(sessionList.data?.sessions ?? []).waiting, openItems);
+  // что нарисовано на доске: открытые дела выбранного среза — прятать из полосы можно только их ожидания и сессии
+  const openItems = (useDesk({ open: true }).data?.items ?? []).filter((i) => inProject(i, project));
+  const runs = useRuns().data ?? [];
+  const allSessions = sessionList.data?.sessions ?? [];
+  const waitingSessions = sessionsOffBoard(homeSessions(allSessions).waiting, allSessions, openItems, runs);
   const items = inbox(home.data?.runs ?? []);
   // ожидание рутины с task — само дело: «Запустить / Не сейчас / Не то» на его карточке, в полосе его нет
   const waits = waitsOffBoard(activeWaits(routines.data?.waits ?? []), openItems);

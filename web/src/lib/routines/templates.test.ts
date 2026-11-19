@@ -108,6 +108,9 @@ test('источник выбран руками: условие шаблона 
   // событие review — только у GitLab/GitHub; у своей команды такого поля нет
   assert.deepEqual(templateConds('review-forge', forge).map((c) => c.field), ['event']);
   assert.deepEqual(templateConds('review-forge', plain), []);
+  // поле есть, а значения «review» в его списке нет — условие не сработает никогда
+  const other = matchFields({ match: [{ key: 'event', label: 'Событие', type: 'enum', options: ['push', 'tag'] }] });
+  assert.deepEqual(templateConds('review-forge', other), []);
   // без шаблона и у неизвестного — пусто
   assert.deepEqual(templateConds(null, forge), []);
   assert.deepEqual(templateConds('nope', forge), []);
