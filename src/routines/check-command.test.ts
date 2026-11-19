@@ -1,7 +1,7 @@
 // Проверка словами (подменённая сессия) и вид command: разбор вывода, map, ключи в env, таймаут.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkEvent, checkPrompt, parseCheck, REJECTED_EXAMPLES } from './check.js';
+import { checkEvent, checkPrompt, eventText, parseCheck, REJECTED_EXAMPLES } from './check.js';
 import { commandKind, mapItems, parseOutput, runCommand } from './command.js';
 import type { SessionRequest, SessionResult } from '../agent.js';
 import type { SourceCtx } from './kind.js';
@@ -93,4 +93,53 @@ test('map без at: время подставлено agentgraph и помеч�
   const [a, b] = mapItems([{ id: 1 }, { id: 2, ts: '2026-11-17T10:00:00Z' }], { id: 'id', at: 'ts' }, 'src');
   assert.equal(isStampedAt(a), true);
   assert.equal(isStampedAt(b), false);
+});
+
+const meeting = (extra: Partial<RoutineEvent> = {}): RoutineEvent => ({
+  source: 'ff',
+  id: 't1',
+  at: '2026-11-10T10:00:00.000Z',
+  title: 'Billing sync',
+  text: 'Итог: договорились по счетам',
+  fields: { summary: { action_items: '**Борис Иванов**\nПодготовить отчёт до пятницы\n**Анна**\nПроверить деплой' } },
+  ...extra,
+});
+const me = { names: ['Борис Иванов'], emails: [] };
+
+test('встреча: в событии дата встречи (от неё сроки) и мои пункты по профилю', () => {
+  const t = eventText(meeting(), { profile: me });
+  assert.match(t, /Пункты действий: дата встречи 2026-11-10T10:00:00\.000Z; сроки вроде «до пятницы» или «завтра» считай от неё/);
+  assert.match(t, /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+  assert.ok(!/- Проверить деплой/.test(t.split('Поля:')[0]), 'чужой пункт в блоке «мои» не попадает');
+});
+
+test('встреча: нет моих пунктов и пустой профиль — об этом сказано, а не молча', () => {
+  assert.match(eventText(meeting(), { profile: { names: ['Пётр Сидоров'], emails: [] } }), /Мои пункты: среди пунктов нет подписанных или названных по профилю \(Пётр Сидоров\)/);
+  assert.match(eventText(meeting(), { profile: { names: [], emails: [] } }), /Профиль «кто я» не заполнен/);
+});
+
+test('не встреча — текст события без изменений, профиль не читается', () => {
+  const t = eventText(ev('1'), {
+    profile: () => {
+      throw new Error('профиль читать не нужно');
+    },
+  });
+  assert.ok(!t.includes('Пункты действий'));
+  assert.ok(!t.includes('Мои пункты'));
+});
+
+test('встреча: пункты берутся и из текста записи («Action items»), профиль только с почтой Jira — не «пустой»', () => {
+  const e = meeting({ fields: {}, text: 'Итог: договорились\n\n## Action items\n**Борис Иванов**\nПодготовить отчёт до пятницы' });
+  assert.match(eventText(e, { profile: me }), /Мои пункты \(по профилю Борис Иванов\):\n- Подготовить отчёт до пятницы/);
+  assert.ok(!/Профиль «кто я» не заполнен/.test(eventText(meeting(), { profile: { names: [], emails: [], jiraEmail: 'boris@example.com' } })));
+});
+
+test('проверка словами: у повторяющейся встречи с тем же названием другая дата — не дубль (правило в промпте), даты видны модели', async () => {
+  let req: SessionRequest | undefined;
+  const earlier = meeting({ id: 't0', at: '2026-11-03T10:00:00.000Z' });
+  await checkEvent({ condition: 'встреча с обещаниями', event: meeting(), recent: [earlier], rejected: [], profile: me }, { session: async (q) => ((req = q), result({ structured: { match: true, duplicate: false, reason: 'другая встреча' } })) });
+  assert.match(req!.system ?? '', /recurring meeting, report or stand-up with the same title but another date is NOT a duplicate/);
+  assert.ok(req!.prompt.includes('2026-11-03T10:00:00.000Z') && req!.prompt.includes('2026-11-10T10:00:00.000Z'));
+  // недавние события сравниваются кратко: блок встречи (мои пункты) повторяется только у самого события
+  assert.equal((req!.prompt.match(/Мои пункты/g) ?? []).length + (req!.prompt.match(/Профиль «кто я»/g) ?? []).length, 1);
 });

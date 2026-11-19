@@ -51,13 +51,17 @@ export const kinds: Record<string, string> = {
   'владелец/репозиторий': 'owner/repository',
   'Черновик (PR)': 'Draft (PR)',
   // Jira
-  'Новые и обновлённые задачи по запросу JQL': 'New and updated issues matching a JQL query',
+  'Задачи Jira: назначили на меня и что изменилось': 'Jira issues: assigned to me and what changed',
   'Запрос JQL': 'JQL query',
-  'Адрес, email и токен Jira берутся из «Подключений». Пусто — ваши незакрытые задачи.': 'The Jira address, email and token come from “Connections”. Empty means your open issues.',
+  'Адрес, email и токен Jira берутся из «Подключений». Пусто — ваши незакрытые задачи («назначено на меня»).': 'The Jira address, email and token come from “Connections”. Empty means your open issues (“assigned to me”).',
   'Статус': 'Status',
   'Тип задачи': 'Issue type',
   'Приоритет': 'Priority',
   'Ключ задачи': 'Issue key',
+  'Что случилось: assigned, changed, comment, new': 'What happened: assigned, changed, comment, new',
+  'Назначили на меня': 'Assigned to me',
+  'Исполнитель': 'Assignee',
+  'Что изменилось (status, assignee, priority…)': 'What changed (status, assignee, priority…)',
   // RSS
   'Новые записи в ленте RSS или Atom': 'New entries in an RSS or Atom feed',
   'Адрес ленты': 'Feed address',
@@ -94,6 +98,6 @@ export const kinds: Record<string, string> = {
   // рецепты
   'Задачи Linear, назначенные на вас': 'Linear issues assigned to you',
   'Новые уведомления GitHub (ревью, упоминания, CI)': 'New GitHub notifications (reviews, mentions, CI)',
-  'Новые записи встреч в Fireflies.ai': 'New meeting recordings in Fireflies.ai',
+  'Новые записи встреч в Fireflies.ai — итог и пункты действий': 'New meeting recordings in Fireflies.ai — summary and action items',
   'Новые необработанные ошибки (issues) в Sentry': 'New unresolved issues in Sentry',
 };

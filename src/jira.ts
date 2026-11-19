@@ -18,7 +18,7 @@ export type JqlPreset = keyof typeof JQL_PRESETS;
 
 /** Без явных fields поиск вернёт только id. */
 export const LIST_FIELDS = ['summary', 'status', 'issuetype', 'priority', 'updated', 'parent'];
-const ISSUE_FIELDS = [...LIST_FIELDS, 'description', 'subtasks', 'issuelinks', 'labels', 'assignee'];
+const ISSUE_FIELDS = [...LIST_FIELDS, 'description', 'subtasks', 'issuelinks', 'labels', 'assignee', 'created'];
 
 // задача в списке — общая с UI: src/api-types.ts
 export type { JiraIssueBrief } from './api-types.js';
@@ -31,6 +31,8 @@ export type JiraChange = { at: string; author: string; field: string; from: stri
 export type JiraIssue = JiraIssueBrief & {
   /** Исполнитель; нет — задача не назначена. email Jira Cloud часто скрывает. */
   assignee?: JiraPerson;
+  /** Когда задачу создали (ISO). */
+  created?: string;
   description: string;
   labels: string[];
   subtasks: { key: string; title: string; status: string }[];
@@ -123,6 +125,7 @@ export function jiraClient(cfg: JiraSettings, token: string, fetchFn: FetchFn = 
       const f = raw.fields ?? {};
       return {
         ...brief(raw),
+        created: f.created,
         assignee: f.assignee?.accountId ? { accountId: f.assignee.accountId, displayName: f.assignee.displayName ?? '', email: f.assignee.emailAddress || undefined } : undefined,
         description: adfToMarkdown(f.description).trim(),
         labels: f.labels ?? [],
@@ -178,6 +181,7 @@ type RawIssue = {
     issuetype?: { name?: string };
     priority?: { name?: string };
     updated?: string;
+    created?: string;
     parent?: RawIssueRef;
     assignee?: { accountId?: string; displayName?: string; emailAddress?: string } | null;
     description?: unknown;
