@@ -49,6 +49,9 @@ import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
 import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
+import { desk } from './desk/index.js';
+import type { DeskApi } from './desk/types.js';
+import { branchKeyOf } from './desk/tools.js';
 
 /** Открытое пространство проекта папки (projectOf по папке); закрытое или «Без проекта» — undefined. */
 function openProjectSpace(cwd: string): string | undefined {
@@ -216,6 +219,8 @@ export type SessionDeps = {
    * (parseRunTitle): одна строка до TITLE_MAX знаков — его присваивают как есть.
    */
   title: (text: string, signal: AbortSignal) => Promise<RunTitleReport>;
+  /** Хранилище дел для desk_* сессии; по умолчанию — общее (desk()). Шов для тестов. */
+  desk?: () => DeskApi;
 };
 
 const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -1126,6 +1131,22 @@ export class SessionManager {
         return file;
       },
       ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args, s.rec.id), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
+      // дела: сессия, проект (явное пространство, иначе по папке) и ветка папки — сами, в момент вызова
+      desk: () => ({
+        api: (this.deps.desk ?? desk)(),
+        by: 'session',
+        source: 'session',
+        session: s.rec.id,
+        project: () => projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined,
+        branch: () => branchKeyOf(s.rec.cwd),
+        why: `из сессии «${s.rec.name}»`,
+        ...(s.rec.source?.thing ? { thing: s.rec.source.thing } : {}),
+      }),
+      deskHint: () => {
+        const thing = s.rec.source?.thing;
+        const project = projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined;
+        return { ...(thing ? { thing: { key: thing.key, ...(thing.title ? { title: thing.title } : {}) } } : {}), ...(project ? { project } : {}) };
+      },
     });
   }
 

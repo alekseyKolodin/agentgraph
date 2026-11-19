@@ -40,6 +40,9 @@ test('коннекторы: сессия, которая может вызват
     assert.equal(wait({ prompt: 'x', cwd: '/w' }), 'false');
     // MCP артефактов живёт в процессе — ждать нечего, как и сессии без MCP
     assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['Read'], allow: ['mcp__artifacts__artifact_read'] }), 'true');
+    // и MCP дел у каждого этапа запуска из сервера: этап без своих MCP не ждёт MCP пользователя
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: [], allow: ['mcp__desk__desk_put', 'mcp__desk__desk_close', 'mcp__desk__desk_list'] }), 'true');
+    assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['mcp__wiki__search'], allow: ['mcp__desk__desk_put'] }), 'false');
     assert.equal(wait({ prompt: 'x', cwd: '/w', tools: ['Read'] }), 'true');
   } finally {
     if (before === undefined) delete process.env.MCP_CONNECTION_NONBLOCKING;

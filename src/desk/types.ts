@@ -3,6 +3,7 @@
 // Только типы — файл читает и веб. Контракт этапа 3: менять только дописывая поля.
 
 import type { ThingType } from '../things/types.js';
+import type { CheckResult } from '../routines/types.js';
 
 export type DeskColumn = 'new' | 'plan' | 'work' | 'waiting' | 'done';
 
@@ -102,3 +103,6 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  * Изменения доски приходят в общий поток событий как { type: 'desk' }.
  */
 export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
+
+/** GET /api/desk: дела по фильтру и итог последней сверки (нет — сверки ещё не было). */
+export type DeskListReply = { items: DeskItem[]; check?: CheckResult };

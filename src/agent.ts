@@ -301,10 +301,13 @@ export function wantsClaudeAiConnectors(req: Pick<SessionRequest, 'tools' | 'all
 
 export const NO_CLAUDEAI_CONNECTORS_ENV = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
 
-/** Сессия может вызвать MCP: коннекторы claude.ai или MCP пользователя. MCP артефактов живёт в процессе и не ждёт. */
+/** MCP-серверы agentgraph внутри процесса (artifact-tools.ts, desk/tools.ts): подключать их не нужно — ждать нечего. */
+const IN_PROCESS_MCP = ['mcp__artifacts__', 'mcp__desk__'];
+
+/** Сессия может вызвать MCP: коннекторы claude.ai или MCP пользователя. MCP артефактов и дел живут в процессе и не ждут. */
 export function waitsForMcp(req: Pick<SessionRequest, 'tools' | 'allow' | 'permissionMode'>): boolean {
   if (wantsClaudeAiConnectors(req)) return true;
-  return [...(req.tools ?? []), ...(req.allow ?? [])].some((t) => t.startsWith('mcp__') && !t.startsWith('mcp__artifacts__'));
+  return [...(req.tools ?? []), ...(req.allow ?? [])].some((t) => t.startsWith('mcp__') && !IN_PROCESS_MCP.some((p) => t.startsWith(p)));
 }
 
 /**

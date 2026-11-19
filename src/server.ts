@@ -115,11 +115,16 @@ import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './sessio
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
+import { deskStore } from './desk/index.js';
+import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
+import { deskRoute } from './desk/routes.js';
+import { trackable, watch, watcherFor, watchers } from './things/index.js';
 import { repoRoot } from './git.js';
 import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type DropWorktreesDeps, type DropWorktreesResult } from './work-links.js';
 import { findProject } from './projects.js';
 import { worktreesDir } from './settings.js';
 import { readHead } from './safe-fs.js';
+import { desk } from './desk/index.js';
 
 export type ServerOptions = {
   port: number;
@@ -152,6 +157,11 @@ export type ServerOptions = {
    * Включают CLI `ui` и десктоп.
    */
   routines?: boolean | Partial<Omit<EngineDeps, 'startRun' | 'resumeRun' | 'stopRun' | 'flowBlocks' | 'onChange'>>;
+  /**
+   * Сверка дел (src/desk/reconcile.ts): наблюдатели обходят вещи открытых дел при старте и по таймеру. Идёт вместе с
+   * фоновой работой рутин (опция routines); объект — подмена наблюдателей и интервала (тесты). Маршруты /api/desk есть всегда.
+   */
+  desk?: { watch?: WatchFn; everyMs?: number; startMs?: number };
 };
 
 type Pending = { resolve: (a: AskAnswers) => void; reject: (e: Error) => void };
@@ -204,7 +214,7 @@ type LiveRun = {
 };
 
 /** Событие общего потока /api/events (тип — в src/api-types.ts, общий с UI). */
-type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows' | 'routines'>;
+type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | 'flows' | 'routines' | 'desk'>;
 
 /**
  * Идущий ход чата запуска: один на запуск. Живёт на сервере: закрыли вкладку или ушли на другой запуск — ответ всё равно ляжет в историю.
@@ -257,8 +267,18 @@ const RUN_WORKDIRS = 'workdirs';
 const runWorkdir = (id: string): string => path.join(configDir(), RUN_WORKDIRS, id);
 /** Подписка на изменения команд Teamwork: одна на процесс, снимает stopServer. */
 let teamChanges: (() => void) | null = null;
+/** Дела: подписка на изменения доски (событие desk общего потока) и сверка по таймеру; снимает stopServer. */
+let deskChanges: (() => void) | null = null;
+let deskLoop: ReconcileLoop | null = null;
+let deskLock: { held: () => boolean; release: () => void } | null = null;
 /** stopServer идёт: сервис команд уже останавливается, и запрос не должен завести новый (с таймерами и pull) — 503. */
 let stopping = false;
+/**
+ * Сверка дел — по таймеру наблюдателей (src/things/index.ts): раз в самый короткий их интервал, но не чаще раза в
+ * минуту — наблюдатели MR и Jira ходят в сеть.
+ */
+const deskEveryMs = (): number => Math.max(60_000, Math.min(5 * 60_000, ...watchers().map((w) => w.everyMs)));
+
 /** Движок рутин: один на процесс, создаёт первый запрос к /api/routines или startServer с routines; снимает stopServer. */
 let routineEngine: RoutineEngine | null = null;
 /** Запуски, начатые движком рутин: только их события уходят в движок (продолжение и повтор копируют source, но не это). */
@@ -404,6 +424,21 @@ export function startServer(opts: ServerOptions): Promise<string> {
   }
   // рутины: фоновая работа (опрос, расписание) — только по опции; маршруты есть всегда
   if (opts.routines) routines(opts).start();
+  // дела: любая запись доски этого процесса (рутина, сессия, flow, UI) — событие desk; сверка — вместе с фоном рутин
+  deskChanges ??= deskStore().onChange(() => homeBroadcast({ type: 'desk', runId: '', flow: '' }));
+  if (opts.routines && !deskLoop) {
+    // одна сверка на папку настроек: десктоп и `agentgraph ui` рядом не опрашивают glab/gh/Jira дважды
+    const lock = (deskLock = reconcileLock(deskStore().dir, typeof opts.routines === 'object' ? (opts.routines.lock?.who ?? 'agentgraph') : 'agentgraph'));
+    deskLoop = startReconcile({
+      store: deskStore(),
+      watch: opts.desk?.watch ?? ((things, signal) => watch(things, signal)),
+      trackable: opts.desk?.watch ? undefined : (thing) => trackable(thing),
+      everyMs: opts.desk?.everyMs ?? deskEveryMs(),
+      every: (type) => watcherFor(type)?.everyMs,
+      lock: lock.held,
+      ...(opts.desk?.startMs !== undefined ? { startMs: opts.desk.startMs } : {}),
+    });
+  }
   return new Promise((resolve, reject) => {
     server.on('error', reject);
     server.listen(opts.port, opts.host, () => resolve(`http://${opts.host}:${opts.port}`));
@@ -423,6 +458,15 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   engine?.stop();
   if (engine) await Promise.race([engine.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(5_000, timeoutMs)).unref())]);
   routineEngine = null;
+  // сверка дел: идущий проход прерывается (наблюдатели получают abort)
+  const loop = deskLoop;
+  deskLoop = null;
+  loop?.stop();
+  if (loop) await Promise.race([loop.idle(), new Promise<void>((resolve) => setTimeout(resolve, Math.min(2_000, timeoutMs)).unref())]);
+  deskLock?.release();
+  deskLock = null;
+  deskChanges?.();
+  deskChanges = null;
   // сессии терминала: WebSocket рвутся сразу (открытый держит server.close), claude получают SIGHUP и успевают отправить SessionEnd
   const sessionsStopped = stopSessions();
   updater?.stop();
@@ -478,7 +522,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -540,6 +584,12 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       },
       flows: listFlows,
     });
+    if (r) return sendJson(res, r.status, r.body);
+  }
+
+  // --- дела: список с итогом сверки, put/move/close с карточки (src/desk/routes.ts)
+  if (p === '/api/desk' || p.startsWith('/api/desk/')) {
+    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore() });
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -1483,6 +1533,14 @@ function launchRun(
       // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
       // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
       // (автоматика уже снята остановкой сервера — конец опоздавшего запуска просто не записывается)
+      // дела, к которым привязан запуск: колонка та же, why — итог (SPEC 3.2 «Запуск по делу закончился»)
+      // продолжение — новый id, а в links лежит первый запуск цепочки (root); остановка руками и выключение — не падение
+      if (!parent) {
+        const st = e.report.status;
+        const outcome = st === 'done' ? 'ok' : st === 'aborted' || st === 'interrupted' ? 'stopped' : 'failed';
+        const ids = [id, ...(e.report.root && e.report.root !== id ? [e.report.root] : [])];
+        void deskStore().runEnded(ids, outcome, (outcome === 'ok' ? e.report.digest?.text : e.report.error) || e.report.title).catch((err) => console.error(`[дела] ${errMsg(err)}`));
+      }
       if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
   };
@@ -1507,7 +1565,8 @@ function launchRun(
       if (lr.child === c.id) delete lr.child;
     });
   };
-  const done = deps.runFlow(spec, { ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
+  // дела: у этапов — desk_put/desk_close/desk_list, хранилище общее (откроется при первом вызове)
+  const done = deps.runFlow(spec, { desk, ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
     const report: RunReport = lr.report ?? {
       id,
       flow: spec.name,

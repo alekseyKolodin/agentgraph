@@ -57,7 +57,7 @@ test('sessionArgs: новый разговор — --session-id, названи�
   assert.ok(!args.includes('--model') && !args.includes('--permission-mode'));
   assert.ok(!args.some((a) => a.includes('append-system-prompt') || a === '--bare' || a === '--strict-mcp-config'));
   // без подтверждения — только чтение тегов знаний: space_write и session_new спрашивают человека
-  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read');
+  assert.equal(flagValue(args, '--allowedTools'), 'mcp__agentgraph__knowledge_read,mcp__agentgraph__desk_list');
   assert.deepEqual(args.flatMap((a, i) => (a === '--add-dir' ? [args[i + 1]] : [])), ['/data/tags/a', '/files']);
 
   const settings = JSON.parse(flagValue(args, '--settings'));

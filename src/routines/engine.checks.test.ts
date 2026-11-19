@@ -467,7 +467,8 @@ test('live-источник: соединение, которое падает �
     store.writeSource('ls', { title: 'Чат', kind: 'live', config: {} });
     engine.saveRoutine('r', { spec: { title: 'r', when: { source: 'ls' }, run: { flow: 'demo' }, mode: 'auto' } });
     engine.start();
-    await new Promise((r) => setTimeout(r, 30));
+    // Под нагрузкой три переподключения за фиксированные 30 мс не успевают — ждём условие, до 2 с.
+    for (let waited = 0; calls < 3 && waited < 2000; waited += 10) await new Promise((r) => setTimeout(r, 10));
     await engine.tick();
     const view = () => engine.sourceViews().find((s) => s.slug === 'ls')!;
     assert.ok(calls >= 3);

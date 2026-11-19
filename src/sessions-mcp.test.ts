@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { SessionView } from './api-types.js';
 import { mcpReply, type FlowWriteArgs, type McpCtx, type SessionNewArgs, type SpaceSettingsArgs } from './sessions-mcp.js';
 import { createTag, deleteTag, updateTag } from './tags.js';
+import type { DeskApi, DeskBy, DeskItem, DeskPatch } from './desk/types.js';
 
 function withConfigDir(fn: () => Promise<void>) {
   return async () => {
@@ -231,4 +232,50 @@ test('MCP: инструменты задачи Teamwork — только у се
   const failing: McpCtx = { ...withTask, teamDoc: async () => { throw new Error('ТЗ из сессии не пишется'); } };
   const f = await callWith(failing, 'team_doc_write', { name: 'prd', text: 'x' });
   assert.deepEqual([f.isError, f.content[0].text], [true, 'ТЗ из сессии не пишется']);
+});
+
+test('MCP: desk_put, desk_close, desk_list — только с контекстом дел; сессия, проект и ветка подставлены; ошибка — текстом модели', async () => {
+  type Tool = { name: string; description: string; annotations: unknown; inputSchema: { properties: Record<string, unknown>; additionalProperties?: boolean } };
+  const names = async (c: McpCtx) => ((await mcpReply(rpc('tools/list'), c)).body as { result: { tools: Tool[] } }).result.tools;
+  assert.ok(!(await names(ctx)).some((t) => t.name.startsWith('desk_')), 'без контекста дел инструментов нет');
+  assert.equal((await callWith(ctx, 'desk_list', {})).isError, true);
+
+  const puts: { key: string; patch: DeskPatch; by: DeskBy }[] = [];
+  const item = (key: string, patch: DeskPatch): DeskItem => ({
+    id: '1', key, kind: patch.kind ?? '', title: patch.title ?? key, column: 'new', why: patch.why ?? '', signals: [], links: { runs: [], sessions: [] }, createdAt: '', movedAt: '', movedBy: 'session',
+  });
+  const api: DeskApi = {
+    put: async (key, patch, by) => (puts.push({ key, patch, by }), item(key, patch)),
+    close: async () => undefined,
+    move: async () => undefined,
+    list: async () => [],
+    get: async () => undefined,
+  };
+  let opened = 0;
+  const withDesk: McpCtx = {
+    ...ctx,
+    desk: () => (opened++, { api, by: 'session', source: 'session', session: 'abc', project: () => 'shop', branch: async () => 'branch:/repo#feat/x', why: 'из сессии «s»' }),
+    deskHint: () => ({ thing: { key: 'mr:gitlab.com/grp/app/5', title: 'Фикс' }, project: 'shop' }),
+  };
+  const list = await names(withDesk);
+  assert.deepEqual(list.slice(-3).map((t) => [t.name, t.annotations]), [
+    ['desk_put', { readOnlyHint: false, destructiveHint: false }],
+    ['desk_close', { readOnlyHint: false, destructiveHint: false }],
+    ['desk_list', { readOnlyHint: true }],
+  ]);
+  assert.equal(opened, 0, 'список инструментов хранилище не открывает');
+  assert.match(list.at(-3)!.description, /thing: "mr:gitlab\.com\/grp\/app\/5"/);
+  assert.equal(list.at(-3)!.inputSchema.additionalProperties, false);
+
+  const r = await callWith(withDesk, 'desk_put', { thing: 'https://gitlab.com/grp/app/-/merge_requests/5', text: 'посмотреть замечания' });
+  assert.equal(r.isError, undefined);
+  assert.match(r.content[0].text, /^Дело заведено: mr:gitlab\.com\/grp\/app\/5 — \[Новое\]/);
+  assert.equal(puts[0].by, 'session');
+  assert.deepEqual(puts[0].patch.links, { sessions: ['abc'], branch: 'branch:/repo#feat/x', mr: 'https://gitlab.com/grp/app/-/merge_requests/5' });
+  assert.equal(puts[0].patch.project, 'shop');
+  assert.equal(puts[0].patch.signal?.source, 'session');
+  assert.deepEqual([(await callWith(withDesk, 'desk_list', {})).content[0].text], ['Дел нет.']);
+  const c = await callWith(withDesk, 'desk_close', { thing: 'own:x', reason: 'не нужно' });
+  assert.deepEqual([c.isError, c.content[0].text], [true, 'Дела own:x нет: ключи открытых дел — в desk_list']);
+  assert.equal((await callWith(withDesk, 'desk_put', { title: 'x', extra: 1 })).isError, true);
 });
