@@ -17,15 +17,24 @@ const LOCAL_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
 const SERVER_SRC = path.resolve(import.meta.dirname, '..', 'src');
 
 /**
+ * Модули src/ без Node-импортов, которые веб берёт рантаймом (относительным путём): одни правила с сервером. Только
+ * `import type` внутри — иначе в браузер потянется сервер. Сейчас один — ключи вещей (src/things/keys.ts).
+ */
+const SHARED_SRC = new Set([path.join(SERVER_SRC, 'things', 'keys')]);
+
+/**
  * Типы сервера берутся через `import type` из @server/* и стираются до сборки. Если Vite всё же резолвит @server/*
  * или относительный путь в src/, это рантайм-импорт из сервера: он потянул бы Node-модули в браузер (и не заработал
- * бы в Electron).
+ * бы в Electron). Исключение — SHARED_SRC.
  */
 const noServerRuntime = (): Plugin => ({
   name: 'agentgraph:no-server-runtime',
   enforce: 'pre',
   resolveId(id, importer) {
-    const fromServer = id.startsWith('@server/') || (id.startsWith('.') && importer !== undefined && path.resolve(path.dirname(importer), id).startsWith(SERVER_SRC + path.sep));
+    const target = id.startsWith('.') && importer !== undefined ? path.resolve(path.dirname(importer), id) : '';
+    // общий модуль сам импортирует из src/ только типы: его рантайм-импорт в src/ — тоже ошибка
+    const shared = SHARED_SRC.has(target.replace(/\.(ts|js)$/, '')) && !importer?.startsWith(SERVER_SRC + path.sep);
+    const fromServer = id.startsWith('@server/') || (target.startsWith(SERVER_SRC + path.sep) && !shared);
     if (fromServer) this.error(`Рантайм-импорт ${id} из ${importer ?? '?'}: из src/ в web/ можно только import type`);
   },
 });

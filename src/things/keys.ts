@@ -105,11 +105,12 @@ export function parseKey(key: string): { type: ThingType; ref: Record<string, un
     }
     case 'jira': {
       const m = /^([^/]+)\/([^/]+)$/.exec(rest);
-      return m && JIRA_KEY_RE.test(m[2]) ? { type, ref: { host: m[1], key: m[2] } } : undefined;
+      return m && JIRA_KEY_RE.test(m[2] ?? '') ? { type, ref: { host: m[1], key: m[2] } } : undefined;
     }
     case 'teamwork': {
       const parts = rest.split('/');
-      return parts.length === 3 && parts.every(Boolean) ? { type, ref: { team: decPart(parts[0]), project: decPart(parts[1]), id: decPart(parts[2]) } } : undefined;
+      const [team = '', project = '', id = ''] = parts;
+      return parts.length === 3 && parts.every(Boolean) ? { type, ref: { team: decPart(team), project: decPart(project), id: decPart(id) } } : undefined;
     }
     case 'branch': {
       const h = rest.indexOf('#');

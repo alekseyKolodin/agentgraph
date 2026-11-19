@@ -1,6 +1,7 @@
 // «Задачи и код» (свой раздел /code) и «MR · нужно внимание» на главной (ui/dash.js, ui/attention.js): связанные запуски
 // и выбор flow. Без React и DOM.
 import type { FlowListItem, IntegrationsInfo, JiraIssueBrief, MergeRequestView, ProjectInfo, RunSummary, SessionView, Thing } from '@server/api-types';
+import { jiraKey, mrKey, normHost } from '../../../src/things/keys';
 import { t } from './i18n';
 
 /** Сколько строк списка видно сразу; остальные — по «Ещё N». */
@@ -24,29 +25,49 @@ export const hasConnections = (info: Pick<IntegrationsInfo, 'jira' | 'projects'>
 /** Знак номера по ref: PR GitHub (owner/repo#N) — «#», MR GitLab (group/project!N) — «!». */
 export const mrSign = (ref: string): '#' | '!' => (/#\d+$/.test(ref) ? '#' : '!');
 
-// Ключи вещей — по формату src/things/types.ts (на сервере их собирает src/things/keys.ts; веб рантайм из src не берёт).
+// Ключи вещей — через src/things/keys.ts (общий с сервером модуль без Node, разрешён в web/vite.config.ts): регистр пути,
+// www. и порт по умолчанию — как у ключей, которые пишет сервер.
 
-/** Вещь задачи Jira: jira:<host>/<KEY>; хост — из ссылки задачи. Ссылка не разобралась — undefined. */
-export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thing | undefined {
-  let host = '';
+/** Хост ссылки (с портом, если он не по умолчанию); не адрес — ''. */
+const hostOf = (url: string): string => {
   try {
-    host = new URL(i.url).hostname.toLowerCase();
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+};
+
+/** Ключ, а не исключение: keys.ts бросает на битых частях. */
+const keyOr = (f: () => string): string | undefined => {
+  try {
+    return f();
   } catch {
     return undefined;
   }
-  const key = i.key.toUpperCase();
-  return { type: 'jira', key: `jira:${host}/${key}`, ref: { host, key }, url: i.url, title: i.title };
+};
+
+/** Вещь задачи Jira: jira:<host>/<KEY>; хост — из ссылки задачи. Ссылка или ключ не разобрались — undefined. */
+export function jiraThing(i: Pick<JiraIssueBrief, 'key' | 'url' | 'title'>): Thing | undefined {
+  const host = hostOf(i.url);
+  const issue = i.key.trim().toUpperCase();
+  const key = host ? keyOr(() => jiraKey(host, issue)) : undefined;
+  return key ? { type: 'jira', key, ref: { host: normHost(host), key: issue }, url: i.url, title: i.title } : undefined;
 }
 
-/** Вещь MR/PR проекта: mr:<host>/<путь проекта>/<номер>; у проекта без origin — undefined. */
+/**
+ * Вещь MR/PR проекта: mr:<host>/<путь проекта>/<номер>. Хост — из адреса MR, как у сервера (адрес origin бывает ssh-алиасом),
+ * нет адреса — из origin; у проекта без origin — undefined.
+ */
 export function mrThing(p: Pick<ProjectInfo, 'remote' | 'forge'>, m: Pick<MergeRequestView, 'iid' | 'url' | 'title' | 'sourceBranch'>): Thing | undefined {
   if (!p.remote) return undefined;
-  const host = p.remote.host.toLowerCase();
+  const host = hostOf(m.url) || p.remote.host;
   const project = p.remote.path.replace(/^\/+|\/+$/g, '');
+  const key = keyOr(() => mrKey(host, project, m.iid));
+  if (!key) return undefined;
   return {
     type: 'mr',
-    key: `mr:${host}/${project}/${m.iid}`,
-    ref: { host, project, number: m.iid, branch: m.sourceBranch, ...(p.forge ? { forge: p.forge } : {}) },
+    key,
+    ref: { host: normHost(host), project, number: m.iid, branch: m.sourceBranch, ...(p.forge ? { forge: p.forge } : {}) },
     url: m.url,
     title: m.title,
   };

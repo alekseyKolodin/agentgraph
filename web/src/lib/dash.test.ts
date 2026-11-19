@@ -47,6 +47,19 @@ test('вещи «Кода»: ключи задачи Jira и MR по форма�
   assert.equal(mrThing({}, mr), undefined);
 });
 
+test('ключи «Кода» — те же, что у сервера (keys.ts): регистр пути, www., порт по умолчанию, хост из адреса MR', () => {
+  // проект Group/App: сервер пишет запуск рутины с ключом в нижнем регистре — строка MR должна его найти
+  const t = mrThing({ remote: { host: 'gitlab-ssh.example.com', path: 'Group/App' } }, { iid: 3, url: 'https://www.GitLab.example.com:443/Group/App/-/merge_requests/3', title: '', sourceBranch: 'b' });
+  assert.equal(t?.key, 'mr:gitlab.example.com/group/app/3');
+  assert.equal(t?.ref.project, 'Group/App');
+  // адреса нет — хост origin
+  assert.equal(mrThing({ remote: { host: 'GitLab.example.com', path: 'G/A' } }, { iid: 3, url: '', title: '', sourceBranch: 'b' })?.key, 'mr:gitlab.example.com/g/a/3');
+  assert.equal(jiraThing({ key: 'pay-7', url: 'https://www.Jira.example.com:443/browse/PAY-7', title: '' })?.key, 'jira:jira.example.com/PAY-7');
+  assert.equal(jiraThing({ key: 'не ключ', url: 'https://jira.example.com/browse/x', title: '' }), undefined);
+  const runs = [run('rt', { source: { type: 'routine', key: 'review', title: '', thing: { type: 'mr', key: 'mr:gitlab.example.com/group/app/3', ref: {} } } })];
+  assert.deepEqual(runsForBranch(runs, '/p', 'b', 'Group/App!3', t?.key).map((r) => r.id), ['rt']);
+});
+
 test('связанные запуски по вещи: запуск рутины у своего MR и задачи, чужая вещь — нет', () => {
   const thing = (key: string): Thing => ({ type: key.startsWith('mr:') ? 'mr' : 'jira', key, ref: {} });
   const runs = [
