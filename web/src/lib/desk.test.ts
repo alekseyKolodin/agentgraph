@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DeskItem } from '@server/desk/types';
-import { deskLeftRows, deskMrRows } from './desk';
+import { deskByKey, deskEmpty, deskHref, deskLinkText, deskMeta } from './desk';
 
 const item = (o: Partial<DeskItem>): DeskItem => ({
   id: 'x',
@@ -18,43 +18,34 @@ const item = (o: Partial<DeskItem>): DeskItem => ({
   ...o,
 });
 
-const mr = (n: number, o: Partial<DeskItem> = {}) =>
-  item({ key: `mr:gitlab.example.com/grp/app/${n}`, kind: 'Ревью', title: `MR ${n}`, thing: { type: 'mr', ref: { forge: 'gitlab', host: 'gitlab.example.com', project: 'grp/app', number: n }, url: `https://gitlab.example.com/grp/app/-/merge_requests/${n}` }, ...o });
-
-test('дела о MR на Главной: открытые с моим ходом, без уже показанных «Подключениями»', () => {
-  const rows = deskMrRows(
-    [mr(1, { why: 'автор ответил' }), mr(2, { column: 'waiting' }), mr(3, { column: 'done', closed: { at: 'x', reason: 'смержен' } }), mr(4), item({ key: 'own:a' })],
-    ['https://gitlab.example.com/grp/app/-/merge_requests/4/'],
-  );
-  assert.deepEqual(rows.map((r) => [r.key, r.sign, r.num, r.why]), [['mr:gitlab.example.com/grp/app/1', '!', '1', 'автор ответил']]);
+test('дело по ключу вещи: только открытые', () => {
+  const m = deskByKey([item({ key: 'mr:h/g/1', column: 'plan' }), item({ key: 'jira:h/A-1', closed: { at: 'x', reason: 'смержен' } })]);
+  assert.equal(m.get('mr:h/g/1')?.column, 'plan');
+  assert.equal(m.has('jira:h/A-1'), false);
+  assert.equal(deskByKey(undefined).size, 0);
 });
 
-test('дела о PR GitHub — со знаком #', () => {
-  const pr = item({ key: 'mr:github.com/o/r/5', thing: { type: 'mr', ref: { forge: 'github', number: 5 } } });
-  assert.deepEqual(deskMrRows([pr], []).map((r) => [r.sign, r.num, r.url]), [['#', '5', undefined]]);
+test('ссылка на дело: ключ в параметре адреса, подпись — колонка', () => {
+  assert.equal(deskHref('mr:gitlab.example.com/grp/app/7'), '/?desk=mr%3Agitlab.example.com%2Fgrp%2Fapp%2F7');
+  assert.equal(new URLSearchParams(deskHref('branch:/r#feat').slice(2)).get('desk'), 'branch:/r#feat');
+  assert.equal(deskLinkText({ column: 'waiting' }), 'Дело · Ждёт других');
 });
 
-test('«Не доделано»: сессии, ветки и «Забытое»; сессии из разбора не дублируются', () => {
-  const rows = deskLeftRows(
-    [
-      item({ key: 'session:s1', kind: 'Сессия', thing: { type: 'session', ref: { id: 's1' } } }),
-      item({ key: 'session:s2', kind: 'Сессия', thing: { type: 'session', ref: { id: 's2' } }, why: 'кончилась вопросом' }),
-      item({ key: 'branch:/r#feat', kind: 'Ветка', thing: { type: 'branch', ref: {} }, column: 'plan' }),
-      item({ key: 'own:f', kind: 'Забытое' }),
-      item({ key: 'own:g', kind: 'Своё' }),
-      item({ key: 'branch:/r#old', thing: { type: 'branch', ref: {} }, column: 'waiting' }),
-    ],
-    ['s1'],
-  );
-  assert.deepEqual(rows.map((r) => [r.key, r.session]), [['session:s2', 's2'], ['branch:/r#feat', undefined], ['own:f', undefined]]);
+test('шапка: число открытых дел без готовых и сколько новых', () => {
+  const now = new Date('2026-11-18T10:00:00');
+  const day = now.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  const items = [item({ column: 'new' }), item({ column: 'new' }), item({ column: 'plan' }), item({ column: 'done' }), item({ column: 'plan', closed: { at: 'x', reason: 'y' } })];
+  assert.equal(deskMeta(items, now), `${day} · 3 дела, 2 новых`);
+  assert.equal(deskMeta([item({ column: 'work' })], now), `${day} · 1 дело`);
+  assert.equal(deskMeta([item({ column: 'new' })], now), `${day} · 1 дело, 1 новое`);
+  assert.equal(deskMeta([], now), `${day} · дел нет`);
+  assert.equal(deskMeta(undefined, now), day);
 });
 
-test('дел нет — строк нет', () => {
-  assert.deepEqual(deskMrRows(undefined, []), []);
-  assert.deepEqual(deskLeftRows([], []), []);
-});
-
-test('ссылка дела — только http(s)', () => {
-  const x = item({ key: 'mr:h/g/a/9', thing: { type: 'mr', ref: { number: 9 }, url: 'javascript:alert(1)' }, signals: [{ source: 's', at: 'x', link: 'https://h/g/a/-/merge_requests/9' }] });
-  assert.equal(deskMrRows([x], [])[0]?.url, 'https://h/g/a/-/merge_requests/9');
+test('пустая доска — только когда ответили и дел, и рутин нет', () => {
+  assert.equal(deskEmpty([], []), true);
+  assert.equal(deskEmpty(undefined, []), false);
+  assert.equal(deskEmpty([], undefined), false);
+  assert.equal(deskEmpty([item({})], []), false);
+  assert.equal(deskEmpty([], [{}]), false);
 });

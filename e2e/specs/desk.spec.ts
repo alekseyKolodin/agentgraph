@@ -1,8 +1,8 @@
 // Дела, этап 3 (docs/desk/SPEC.md): две рутины на один MR — Slack и заявки со ссылкой в тексте — дают одно дело с двумя
-// сигналами; дело, заведённое `agentgraph desk add` из другого процесса, и дело о MR видны в блоках Главной.
+// сигналами; дело, заведённое `agentgraph desk add` из другого процесса, и дело о MR видны на доске Главной (карточка
+// помечена data-desk-key — по нему ведёт ссылка «Дело · …» из «Кода»).
 // Наблюдатель MR здесь настоящий и до вымышленного хоста не достучится: его движение проверяет src/server.desk.stage3.test.ts.
 import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 import type { DeskListReply } from '../../src/desk/types.js';
 import { expect, test } from '../support/env.js';
@@ -34,14 +34,8 @@ test('две рутины на один MR — одно дело; оно и де
   const out = execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'desk', 'add', 'Ответить Пете про релиз', '--kind', 'Забытое', '--why', 'обещал в четверг'], { cwd: ROOT, env, encoding: 'utf8' });
   expect(out).toContain('Дело заведено');
 
-  // блок MR на главной — при «Подключениях»: проект — пустой git-репозиторий
-  const repo = path.join(e2e.dir, 'repo');
-  fs.mkdirSync(repo, { recursive: true });
-  execFileSync('git', ['init', '-q'], { cwd: repo });
-  await e2e.api('POST', '/api/projects', { path: repo });
-
   await page.goto('/');
   await expect(page.getByText('Ответить Пете про релиз')).toBeVisible();
   await expect(page.getByText('обещал в четверг')).toBeVisible();
-  await expect(page.getByRole('link', { name: '!12' })).toBeVisible();
+  await expect(page.locator(`[data-desk-key="${MR_KEY}"]`)).toBeVisible();
 });

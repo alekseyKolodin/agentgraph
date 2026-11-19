@@ -73,13 +73,6 @@
 .empty { max-width: 760px; }
 .empty h1 { margin: 0 0 6px; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.01em; }
 .empty p { margin: 0 0 18px; color: var(--ink-2); max-width: 600px; text-wrap: pretty; }
-.tpls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
-.tpl { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink); text-decoration: none; text-align: left; font: inherit; cursor: pointer; transition: border-color .12s; }
-.tpl:hover { border-color: var(--line-strong); }
-.tpl b { font-weight: 500; }
-.tpl span { font-size: var(--fs-meta); color: var(--ink-2); }
-/* шаблон «Моих дел»: заводит дела — чуть заметнее остальных */
-.tpl.tpl-desk { border-color: var(--line-strong); }
 /* «С шаблона:» над шагами «Новой рутины» — ряд чипов-ссылок */
 .tpl-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: -6px 0 16px; }
 .tpl-row a.chip { text-decoration: none; display: inline-flex; align-items: center; }

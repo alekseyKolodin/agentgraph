@@ -245,5 +245,18 @@ export const home: Record<string, string> = {
   'Заполнено само; правка оставит твоё значение': 'Filled automatically; your edit is kept',
   'Пустые строки agentgraph заполняет сам из glab, gh, git config и Jira. Введённое руками не перетирается.': 'Empty fields are filled from glab, gh, git config and Jira. What you type is never overwritten.',
   // доска дел (этап 5)
+  'Мои дела': 'My tasks',
+  'дел нет': 'no tasks',
+  'новое|новых|новых': 'new|new',
+  'Дело · {column}': 'Task · {column}',
+  'Пустая доска': 'Empty board',
+  'Дел пока нет': 'No tasks yet',
+  'Дела заводят рутины: назначили ревью, пришла задача Jira, прошла встреча. Выбери шаблон — flow к нему уже готов.': 'Routines create tasks: a review was assigned, a Jira issue arrived, a meeting ended. Pick a template — its flow is ready.',
+  'Все шаблоны и своя рутина': 'All templates and a custom routine',
+  'Доска заработает после перезапуска UI-сервера: этот сервер запущен до её появления. Перезапуск остановит идущие запуски — дождись их конца.': 'The board will work after the UI server restarts: this server was started before it existed. Restarting stops running runs — wait for them to finish.',
+  'Подключи Jira или git-репозиторий: задачи, MR и ветки появятся в разделе «Код», а дела о них — на доске': 'Connect Jira or a git repository: issues, MRs and branches appear under “Code”, and tasks about them — on the board',
+  'Журнал': 'Log',
+  'Что было: вопросы агентов, паузы и концы запусков. Отвечать — на доске': 'What happened: agent questions, pauses and run ends. Answer on the board',
+  'Пока пусто: здесь будут вопросы агентов, паузы и концы запусков': 'Empty so far: agent questions, pauses and run ends will appear here',
   'Ждёт других': 'Waiting on others',
 };

@@ -19,13 +19,11 @@ a.dash-key { color: var(--live); text-decoration: none; }
 .dash-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-meta { color: var(--ink-2); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38%; }
 .dash-row :global(.btn) { flex: none; }
+/* ссылка на дело строки: метка-навигация, не действие — чип, не сжимается */
+a.dash-desk { flex: none; text-decoration: none; color: var(--ink-2); }
+a.dash-desk:hover { color: var(--ink); }
 .dash-runs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; padding-left: 2px; }
 .dash-runs :global(.badge) { margin-left: 6px; padding: 0 6px; font-size: var(--fs-cap); }
-.att-reasons { display: flex; gap: 4px; flex: none; }
-.att-reasons :global(.badge) { margin-left: 0; padding: 0 7px; font-size: var(--fs-cap); text-decoration: none; }
-.att-suggest { flex: none; }
-.att-suggest:empty { display: none; }
-.att-flow { white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .flow-picker { position: fixed; z-index: 20; width: 340px; max-height: 60vh; display: flex; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px; box-shadow: var(--shadow-pop); }
 .flow-picker input { padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; }
 .flow-picker ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
@@ -57,6 +55,6 @@ a.dash-key { color: var(--live); text-decoration: none; }
 /* ---------- «Пульт»: заголовки секций — тихие подписи, а не капс (system.md → «Иерархия») */
 .dash-head h2 { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); letter-spacing: .01em; }
 
-/* «MR · нужно внимание» без единого MR — одна строка без карточки (Attention.tsx) */
+/* тихая строка без карточки: «Задачи и код — ничего не подключено» на Главной (Connect в HomeScreen.tsx) */
 .dash-quiet { margin-bottom: 0; }
 .dash-quiet h2 :global(.small) { font-weight: 400; }

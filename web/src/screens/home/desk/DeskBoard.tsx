@@ -5,7 +5,8 @@ import { t } from '../../../lib/i18n';
 
 const COLUMNS = [['new', 'Новое'], ['plan', 'В плане'], ['work', 'В работе'], ['waiting', 'Ждёт других'], ['done', 'Готово']] as const;
 
-export function DeskBoard({ project }: { project?: string }) {
+/** project — срез по проекту (из адреса Главной), onProject — сменить срез (пилюли проектов над доской). */
+export function DeskBoard({ project }: { project?: string; onProject?: (slug: string | undefined) => void }) {
   const items = (useDesk().data?.items ?? []).filter((i) => !project || i.project === project);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 8 }}>

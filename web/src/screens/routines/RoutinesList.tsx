@@ -17,7 +17,7 @@ import { describeSchedule } from '../../lib/routines/schedule';
 import { everyLabel, foundText } from '../../lib/routines/source';
 import { activeWaits, overviewMeta, pollCostText, routineNote, routineState, routineSub, sourceState, stateLabel, stateTone, strip, type RunStatuses } from '../../lib/routines/view';
 import { cx, Dot, EngineOwnerNote, Strip, Switch } from './parts';
-import { ROUTINE_TEMPLATES } from '../../lib/routines/templates';
+import { RoutineTemplates } from './RoutineTemplates';
 import styles from './Routines.module.css';
 
 
@@ -162,14 +162,7 @@ function Empty() {
     <section className={styles.empty} aria-label={t('Пустой список')}>
       <p>{t('Рутина запускает flow, когда что-то происходит: пришло сообщение, в сервисе появилось новое, наступило время.')}</p>
       <p className="muted small">{t('«Мои дела» наполняются сами за четыре первых шаблона — ревью, задачи Jira и встречи; flow писать не нужно.')}</p>
-      <div className={styles.tpls}>
-        {ROUTINE_TEMPLATES.map((x) => (
-          <Link key={x.tpl} className={cx(styles.tpl, x.desk && styles.tplDesk)} to={`/routines/new?tpl=${x.tpl}`}>
-            <b>{t(x.title)}</b>
-            <span>{t(x.sub)}</span>
-          </Link>
-        ))}
-      </div>
+      <RoutineTemplates />
       <Link className="btn primary" to="/routines/new">{t('Новая рутина')}</Link>
     </section>
   );

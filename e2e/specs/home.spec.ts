@@ -1,5 +1,5 @@
-// Главная и рутины: решение по карточке уходит через 5 секунд и до этого отменяется; «Не сейчас» оставляет ожидание;
-// запуск рутины в «Идут» помечен ↯ со ссылкой на срабатывания.
+// Главная и рутины: решение по карточке уходит через 5 секунд и до этого отменяется; «Не сейчас» оставляет ожидание.
+// Блока «Идут» на Главной больше нет (этап 5: доска дел) — идущие запуски в «Сейчас» боковой панели.
 import { expect, test } from '../support/env.js';
 
 test.beforeEach(async ({ e2e }) => {
@@ -64,16 +64,4 @@ test('пауза, продолженная со страницы запуска,
   await e2e.until(async () => (await e2e.runStatus(started.runId!)) === 'done');
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Чинить: Пропадает корзина/ })).toHaveCount(0);
-});
-
-test('запуск рутины в «Идут» помечен ↯ и ведёт на срабатывания рутины', async ({ page, e2e }) => {
-  e2e.slack.say('bugs', 'Не уходит письмо');
-  await e2e.logEntry('bug', 'started', 'письмо');
-  await page.goto('/');
-  const mark = page.getByRole('link', { name: '↯ Баг в #bugs → фикс' }).and(page.getByTitle(/Запущено рутиной/));
-  await expect(mark).toBeVisible();
-  await expect(mark).toHaveAttribute('title', /Не уходит письмо/);
-  await mark.click();
-  await expect(page).toHaveURL(/\/routines\/bug\/log$/);
-  await expect(page.getByRole('button', { name: 'Не уходит письмо' })).toBeVisible();
 });

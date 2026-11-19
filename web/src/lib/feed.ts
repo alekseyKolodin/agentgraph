@@ -1,4 +1,5 @@
-// Лента событий главной (ui/feed.js): вопросы агентов, паузы по их просьбе и концы запусков. Без React и DOM.
+// Журнал Главной (ui/feed.js): вопросы агентов, паузы по их просьбе и концы запусков — что было, а не входящие: отвечают
+// на доске. Без React и DOM.
 import type { FeedItem } from '@server/api-types';
 import { clock } from './format';
 import { t } from './i18n';
@@ -7,17 +8,9 @@ import { t } from './i18n';
 export const FEED_SHOWN = 20;
 /** События общего потока, после которых в ленте появляется или меняется событие. */
 export const FEED_EVENTS = new Set(['question', 'answer', 'pause', 'end']);
-/** localStorage: время самого нового прочитанного события. */
-export const FEED_SEEN_KEY = 'agentgraph.feedSeen';
-
-/** Новых после отметки «прочитано»: время события позже seen. */
-export const isUnread = (x: FeedItem, seen: string): boolean => x.at > seen;
-export const unreadCount = (items: FeedItem[], seen: string): number => items.filter((x) => isUnread(x, seen)).length;
-
-/** Цвет точки: ждёт пользователя — waiting, итог запуска — по статусу, остальное приглушено. */
+/** Цвет точки: итог запуска — по статусу, вопросы и паузы приглушены (ждущее зовёт доска, а не журнал). */
 export function feedTone(x: FeedItem): string {
-  if (x.kind === 'end') return x.status ?? '';
-  return x.open ? 'waiting' : 'closed';
+  return x.kind === 'end' ? (x.status ?? '') : 'closed';
 }
 
 /**

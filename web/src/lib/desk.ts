@@ -1,51 +1,38 @@
-// Дела в существующих блоках Главной (SPEC этап 3, 3.10): доски ещё нет, и открытые дела, где ход мой, видны в «MR ·
-// нужно внимание» (дела о MR) и в «Не доделано» (сессии, ветки, «Забытое»). Чистая логика без React.
+// Дела вне доски (docs/desk/SPEC.md, этап 5): шапка Главной («N дел, M новых»), пустая доска (ни дел, ни рутин — ведём
+// к шаблонам) и ссылка на дело у строк MR и задач в «Коде». Одна вещь — одно место: «Код» только ссылается на карточку.
+// Чистая логика без React.
 import type { DeskColumn, DeskItem } from '@server/desk/types';
+import { locale, plural, t } from './i18n';
 
-/** Ход мой: «Ждёт других» и «Готово» на Главную не выносим. */
-const MINE: readonly DeskColumn[] = ['new', 'plan', 'work'];
+export const DESK_COLUMN_LABEL: Record<DeskColumn, string> = { new: 'Новое', plan: 'В плане', work: 'В работе', waiting: 'Ждёт других', done: 'Готово' };
 
-const open = (i: DeskItem) => !i.closed && MINE.includes(i.column);
+/** Параметр адреса Главной: какую карточку показать (`/?desk=<ключ>`). */
+export const DESK_PARAM = 'desk';
+export const deskHref = (key: string): string => `/?${DESK_PARAM}=${encodeURIComponent(key)}`;
 
-/** Адрес без хвостового «/» и «#…» — чтобы MR из «Подключений» и дело о нём совпали. */
-const normUrl = (u: string | undefined): string => (u ?? '').trim().replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase();
-
-export type DeskMrRow = { key: string; sign: '!' | '#'; num: string; title: string; url?: string; project?: string; why: string; kind: string };
-
-/** Адрес для ссылки — только http(s): ссылки сигналов приходят от рутин как есть. */
-const web = (u: string | undefined): string | undefined => (u && /^https?:\/\//i.test(u) ? u : undefined);
-const urlOf = (i: DeskItem): string | undefined => web(i.thing?.url) ?? web(i.links.mr) ?? i.signals.map((s) => web(s.link)).find(Boolean);
-
-/**
- * Дела о MR для блока «MR · нужно внимание»: открытые, ход мой, и не те, что блок уже показал из «Подключений»
- * (сравнение по адресу MR). Свежие сверху — как отдаёт сервер.
- */
-export function deskMrRows(items: readonly DeskItem[] | undefined, shownUrls: readonly string[]): DeskMrRow[] {
-  if (!items?.length) return [];
-  const shown = new Set(shownUrls.map(normUrl));
-  return items.flatMap((i) => {
-    if (i.thing?.type !== 'mr' || !open(i)) return [];
-    const url = urlOf(i);
-    if (url && shown.has(normUrl(url))) return [];
-    const ref = i.thing.ref;
-    const num = typeof ref.number === 'number' || typeof ref.number === 'string' ? String(ref.number) : (i.key.match(/\/(\d+)$/)?.[1] ?? '');
-    return [{ key: i.key, sign: ref.forge === 'github' ? '#' : '!', num, title: i.title, ...(url ? { url } : {}), ...(i.project ? { project: i.project } : {}), why: i.why, kind: i.kind }];
-  });
+/** Открытые дела по ключу вещи: строка MR или задачи в «Коде» находит своё дело по ключу из mrThing/jiraThing. */
+export function deskByKey(items: readonly DeskItem[] | undefined): Map<string, DeskItem> {
+  return new Map((items ?? []).filter((i) => !i.closed).map((i) => [i.key, i]));
 }
 
-export type DeskLeftRow = { key: string; title: string; session?: string; project?: string; why: string; kind: string };
+/** Подпись ссылки на дело: «Дело · В плане». */
+export const deskLinkText = (i: Pick<DeskItem, 'column'>): string => t('Дело · {column}', { column: t(DESK_COLUMN_LABEL[i.column]) });
 
-/** Что относится к «Не доделано»: сессии, ветки и «Забытое». */
-const LEFT_TYPES = new Set(['session', 'branch']);
+/** Шапка Главной: «среда, 18 ноября · 13 дел, 4 новых». Готовые в счёт не идут — они уже не дела. */
+export function deskMeta(items: readonly DeskItem[] | undefined, now: Date = new Date()): string {
+  const day = now.toLocaleDateString(locale(), { weekday: 'long', day: 'numeric', month: 'long' });
+  if (!items) return day;
+  const open = items.filter((i) => !i.closed && i.column !== 'done');
+  const fresh = open.filter((i) => i.column === 'new').length;
+  const n = open.length;
+  const count = n ? `${n} ${plural(n, 'дело', 'дела', 'дел')}` : t('дел нет');
+  return fresh ? `${day} · ${count}, ${fresh} ${plural(fresh, 'новое', 'новых', 'новых')}` : `${day} · ${count}`;
+}
 
-/** Дела для «Не доделано»: открытые, ход мой; сессии, которые уже показал разбор модели, — не дублируем. */
-export function deskLeftRows(items: readonly DeskItem[] | undefined, shownSessions: readonly string[]): DeskLeftRow[] {
-  if (!items?.length) return [];
-  const shown = new Set(shownSessions);
-  return items.flatMap((i) => {
-    if (!open(i) || !(LEFT_TYPES.has(i.thing?.type ?? '') || i.kind === 'Забытое')) return [];
-    const session = i.thing?.type === 'session' && typeof i.thing.ref.id === 'string' ? i.thing.ref.id : i.key.startsWith('session:') ? i.key.slice('session:'.length) : undefined;
-    if (session && shown.has(session)) return [];
-    return [{ key: i.key, title: i.title, ...(session ? { session } : {}), ...(i.project ? { project: i.project } : {}), why: i.why, kind: i.kind }];
-  });
+/**
+ * Пустая доска: ни одного открытого дела (список useDesk() — открытые) и ни одной рутины. Только по ответам: пока
+ * грузится или выключено — не пусто (undefined), чтобы не мигать подсказкой.
+ */
+export function deskEmpty(items: readonly DeskItem[] | undefined, routines: readonly unknown[] | undefined): boolean {
+  return Boolean(items && routines && !items.length && !routines.length);
 }
