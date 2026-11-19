@@ -364,8 +364,10 @@ export function RunForm({ intake, intakeKey }: { intake: Intake | undefined; int
     );
 
   // ---------- «Где работать» свёрнутой строкой: пространство или папка, что будет после «готово», worktree
-  const whereHead = spaceSlug ? (chosenSpace ? spaceLabel(chosenSpace) : spaceSlug) : f.cwd.trim() ? tilde(f.cwd.trim()) : t('папка не выбрана');
-  const wherePath = spaceSlug && f.cwd.trim() ? tilde(f.cwd.trim()) : '';
+  // без пространства жирным — имя папки, полный путь — мелкой строкой под ним, как у пространства
+  const cwdPath = f.cwd.trim().replace(/\/+$/, '');
+  const whereHead = spaceSlug ? (chosenSpace ? spaceLabel(chosenSpace) : spaceSlug) : cwdPath ? cwdPath.split('/').pop() || cwdPath : t('папка не выбрана');
+  const wherePath = cwdPath ? tilde(cwdPath) : '';
   const whereNote = [
     spaceSlug
       ? newSpace
