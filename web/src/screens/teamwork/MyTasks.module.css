@@ -14,6 +14,9 @@
 .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; min-width: 0; font-size: var(--fs-meta); color: var(--ink-2); }
 .where { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; flex: 0 1 auto; }
 .q { color: var(--ink-3); white-space: nowrap; font-family: var(--font-mono); }
+/* «новое» с причиной: назначил коллега или его комментарий — пока не открыл */
+.fresh { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.freshTag { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--live); }
 .work { display: inline-flex; align-items: center; gap: 6px; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; flex: 0 1 auto; }
 .work:hover { text-decoration: underline; }
 .work.fail { color: var(--st-fail); }

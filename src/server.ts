@@ -115,7 +115,7 @@ import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './sessio
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
-import { deskStore } from './desk/index.js';
+import { deskStorage, deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
 import { deskRoute } from './desk/routes.js';
 import { trackable, watch, watcherFor, watchers } from './things/index.js';
@@ -431,7 +431,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
     // одна сверка на папку настроек: десктоп и `agentgraph ui` рядом не опрашивают glab/gh/Jira дважды
     const lock = (deskLock = reconcileLock(deskStore().dir, typeof opts.routines === 'object' ? (opts.routines.lock?.who ?? 'agentgraph') : 'agentgraph'));
     deskLoop = startReconcile({
-      store: deskStore(),
+      // сверка — только дел хранилища: дела поставщиков (Teamwork) берут состояние из своей системы
+      store: deskStorage(),
       watch: opts.desk?.watch ?? ((things, signal) => watch(things, signal)),
       trackable: opts.desk?.watch ? undefined : (thing) => trackable(thing),
       everyMs: opts.desk?.everyMs ?? deskEveryMs(),

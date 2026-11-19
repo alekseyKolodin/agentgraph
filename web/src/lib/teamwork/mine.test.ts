@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import type { DeskItem } from '@server/desk/types';
 import type { TeamMine, TeamMineProject, TeamMineTeam } from '@server/api-types';
 import { task } from './fixtures';
-import { canSendToWork, mineWorkLive, myTaskRows, unknownMe, workHref } from './mine';
+import { canSendToWork, mineWorkLive, myTaskRows, rowColumn, rowWhere, unknownMe, workHref } from './mine';
 
 const team = (slug: string, over: Partial<TeamMineTeam> = {}): TeamMineTeam => ({ slug, title: slug, prefix: 'PAY', flows: [], me: 'alex@x.io', ...over });
 const project = (t: string, slug: string): TeamMineProject => ({ team: t, slug, title: slug, sprint: { number: 1, title: 'Спринт 1' }, repos: [] });
 
-test('мои задачи: готовые — только числом; ждущие ответа и упавшие — первыми, дальше «В работе», «Ревью», «К работе»', () => {
+test('мои задачи: готовые — только числом; ждущие ответа и упавшие — первыми, дальше «В работе», «Ждёт других», «В плане»', () => {
   const mine: TeamMine = {
     teams: [team('pay'), team('ops', { prefix: 'OPS' })],
     projects: [project('pay', 'export'), project('ops', 'infra')],
@@ -23,9 +24,10 @@ test('мои задачи: готовые — только числом; жду�
   };
   const { rows, done } = myTaskRows(mine);
   assert.equal(done, 1);
-  assert.deepEqual(rows.map((r) => r.key), ['ops/OPS-2', 'pay/PAY-4', 'ops/OPS-1', 'pay/PAY-5', 'pay/PAY-3', 'pay/PAY-1']);
+  // без дел: колонка из статуса, todo с незавершённым предшественником — «Ждёт других», как у поставщика
+  assert.deepEqual(rows.map((r) => r.key), ['ops/OPS-2', 'pay/PAY-4', 'ops/OPS-1', 'pay/PAY-5', 'pay/PAY-1', 'pay/PAY-3']);
   assert.deepEqual(rows.map((r) => r.badge?.state ?? ''), ['waiting', 'failed', '', 'working', '', '']);
-  assert.deepEqual(rows.at(-1)!.waiting, ['PAY-9']);
+  assert.deepEqual(rows.at(-2)!.waiting, ['PAY-9']);
   assert.equal(rows[0]!.team.prefix, 'OPS');
   assert.equal(rows[0]!.project.slug, 'infra');
 });
@@ -62,4 +64,31 @@ test('мои задачи: перечитывать по таймеру, тол�
   assert.equal(mineWorkLive(mine('running')), true);
   assert.equal(mineWorkLive(mine('waiting')), true);
   assert.equal(mineWorkLive(mine('working')), true);
+});
+
+const item = (team: string, project: string, id: string, over: Partial<DeskItem> = {}): DeskItem => ({
+  id: `tw:${team}/${project}/${id}`, key: `tw:${team}/${project}/${id}`, thing: { type: 'teamwork', ref: { team, project, id } }, kind: 'Teamwork', title: id,
+  column: 'plan', why: '', signals: [], links: { runs: [], sessions: [] }, createdAt: '', movedAt: '', movedBy: 'watcher', ...over,
+});
+
+test('мои задачи читают дела: колонка и «новое» — из дела поставщика, «Новое» — первым; бэклог и не активный спринт — в «где»', () => {
+  const p = project('pay', 'export');
+  const mine: TeamMine = {
+    teams: [team('pay')], projects: [p, { team: 'pay', slug: 'idle', title: 'idle', repos: [] }],
+    tasks: [
+      { team: 'pay', project: 'export', task: task({ id: 'PAY-1', sprint: 1, status: 'in_progress' }), waiting: [] },
+      { team: 'pay', project: 'export', task: task({ id: 'PAY-2' }), waiting: [] },
+      { team: 'pay', project: 'idle', task: task({ id: 'PAY-3', sprint: 4 }), waiting: [] },
+    ],
+  };
+  const items = [
+    item('pay', 'export', 'PAY-1', { column: 'work' }),
+    item('pay', 'export', 'PAY-2', { column: 'new', why: 'bob@x.io: назначил(а) задачу на тебя' }),
+    // дело не Teamwork и чужая задача — мимо
+    { ...item('pay', 'export', 'PAY-9'), thing: { type: 'mr' as const, ref: {} } },
+  ];
+  const { rows } = myTaskRows(mine, items);
+  assert.deepEqual(rows.map((r) => [r.task.id, rowColumn(r), r.item?.why ?? '']), [['PAY-2', 'new', 'bob@x.io: назначил(а) задачу на тебя'], ['PAY-1', 'work', ''], ['PAY-3', 'plan', '']]);
+  const where = (r: (typeof rows)[number]) => rowWhere(r, 'бэклог', (n) => `спринт ${n}`);
+  assert.deepEqual(rows.map(where), ['pay · export · бэклог', 'pay · export · Спринт 1', 'pay · idle · спринт 4']);
 });

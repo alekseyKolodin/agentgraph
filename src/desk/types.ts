@@ -91,6 +91,24 @@ export interface DeskApi {
   get(key: string): Promise<DeskItem | undefined>;
 }
 
+/**
+ * Поставщик дел (SPEC 3.2, этап 4): отдаёт дела на лету из своей системы (задачи Teamwork), в items.json они не копируются.
+ * Владеет ключами с префиксом prefix: list сливается с делами хранилища, а put/move/close/get по своему ключу идут в
+ * поставщика. undefined из get/put/move/close — вещи у поставщика нет (не моя задача): операция уходит в хранилище.
+ */
+export interface DeskProvider {
+  /** Префикс ключей поставщика, например 'tw:'. */
+  readonly prefix: string;
+  /** Все дела поставщика, открытые и закрытые, — фильтр накладывает index.ts. */
+  list(): Promise<DeskItem[]>;
+  get(key: string): Promise<DeskItem | undefined>;
+  put(key: string, patch: DeskPatch, by: DeskBy): Promise<DeskItem | undefined>;
+  move(key: string, column: DeskColumn, by: DeskBy, why?: string): Promise<DeskItem | undefined>;
+  close(key: string, reason: string, by: DeskBy): Promise<DeskItem | undefined>;
+  /** Дела поставщика изменились (pull команды, своя запись). Возвращает отписку. */
+  onChange(fn: () => void): () => void;
+}
+
 /** Строка журнала движений desk/log.jsonl. */
 export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskColumn; by: DeskBy; why?: string };
 

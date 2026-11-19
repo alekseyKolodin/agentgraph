@@ -1750,15 +1750,19 @@ export type TeamDetail = TeamSummary & {
  */
 export type TeamMineTeam = Pick<TeamDetail, 'slug' | 'title' | 'prefix' | 'flows'> & { columns?: TeamColumns; defaultFlow?: string; me?: string; readonly?: true; error?: string };
 
-/** Проект с моими задачами: активный спринт и репо кода с моими папками (как TeamProject.repos). */
-export type TeamMineProject = { team: string; slug: string; title: string; sprint: { number: number; title: string }; repos: TeamRepoRef[] };
+/**
+ * Проект с моими задачами: активный спринт (нет — у проекта его сейчас нет), пространство проекта из local.json →
+ * projectSpaces (есть только у привязанного) и репо кода с моими папками (как TeamProject.repos).
+ */
+export type TeamMineProject = { team: string; slug: string; title: string; sprint?: { number: number; title: string }; space?: string; repos: TeamRepoRef[] };
 
-/** Моя задача активного спринта; waiting — номера предшественников, которые ещё не в «Готово». */
+/** Моя задача; waiting — номера предшественников, которые ещё не в «Готово». */
 export type TeamMineTask = { team: string; project: string; task: TeamTask; waiting: string[] };
 
 /**
- * GET /api/teams/mine — блок «Мои задачи» на главной (spec §11): задачи активных спринтов, где исполнитель я (email git config
- * клона), во всех командах, одним запросом; архивные проекты не входят. teams — все мои команды: пусто — блока нет.
+ * GET /api/teams/mine — блок «Мои задачи» на главной (spec §11) и поставщик дел (docs/desk/SPEC.md 4.3): все мои незакрытые
+ * задачи (исполнитель — я по email git config клона) во всех командах — в спринтах и в бэклоге — и «Готово» активного
+ * спринта, одним запросом; архивные проекты не входят. teams — все мои команды: пусто — блока нет.
  */
 export type TeamMine = { teams: TeamMineTeam[]; projects: TeamMineProject[]; tasks: TeamMineTask[] };
 
