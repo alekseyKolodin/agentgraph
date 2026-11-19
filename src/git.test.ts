@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { commandOf, copyUntracked, ensureWorktree, exec, forgeOf, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
+import { aheadBehind, checkoutStatus, commandOf, copyUntracked, ensureWorktree, exec, forgeOf, findBranchMr, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
 
 test('remote: https, scp, ssh с портом, вложенные группы', () => {
   assert.deepEqual(parseRemote('https://gitlab.example.com/cafe/App.git'), { host: 'gitlab.example.com', path: 'cafe/App' });
@@ -270,4 +270,47 @@ test('review-треды PR через GraphQL: resolved и автор после
     { resolvable: true, resolved: false, notes: [{ author: 'rev', system: false }] },
     { resolvable: true, resolved: true, notes: [{ author: '', system: false }] },
   ]);
+});
+
+test('грязный checkout: git status --porcelain считается по файлам, конфликты и новые отдельно', async () => {
+  const calls: string[][] = [];
+  const x: Exec = async (cmd, args, opts) => {
+    calls.push([cmd, opts?.cwd ?? '', ...args]);
+    return ' M a.ts\nA  b.ts\n?? c.ts\n?? d/e.ts\nUU f.ts\nAA g.ts\n';
+  };
+  assert.deepEqual(await checkoutStatus('/wt', x), { total: 6, untracked: 2, conflicted: 2 });
+  assert.deepEqual(calls[0], ['git', '/wt', 'status', '--porcelain', '--untracked-files=all']);
+  assert.deepEqual(await checkoutStatus('/wt', async () => ''), { total: 0, untracked: 0, conflicted: 0 });
+});
+
+test('впереди/позади: rev-list для любой ветки; нет ref — undefined', async () => {
+  const calls: string[][] = [];
+  const x: Exec = async (_cmd, args) => {
+    calls.push(args);
+    if (args.at(-1)!.endsWith('...origin/gone')) throw new Error('unknown revision');
+    return '3\t2\n';
+  };
+  assert.deepEqual(await aheadBehind('/r', 'feat/x', 'origin/feat/x', x), { ahead: 3, behind: 2 });
+  assert.deepEqual(calls[0], ['rev-list', '--left-right', '--count', 'refs/heads/feat/x...origin/feat/x']);
+  assert.equal(await aheadBehind('/r', 'feat/x', 'origin/gone', x), undefined);
+  assert.equal(await aheadBehind('/r', 'b', 'o/b', async () => 'мусор'), undefined);
+});
+
+test('MR по ветке: GitLab любого состояния, открытый важнее смерженного; GitHub — head owner:ветка', async () => {
+  const gl: Exec = async (_cmd, args) => {
+    assert.match(args.at(-1)!, /^projects\/g%2Fa\/merge_requests\?source_branch=feat%2Fx&state=all/);
+    return JSON.stringify([
+      { iid: 1, title: 'a', web_url: 'u1', state: 'closed', source_branch: 'feat/x', target_branch: 'main' },
+      { iid: 2, title: 'b', web_url: 'u2', state: 'merged', source_branch: 'feat/x', target_branch: 'main' },
+      { iid: 3, title: 'c', web_url: 'u3', state: 'opened', source_branch: 'feat/x', target_branch: 'main' },
+    ]);
+  };
+  assert.deepEqual(await findBranchMr({ host: 'gitlab.example.com', path: 'g/a' }, 'feat/x', gl), { iid: 3, url: 'u3', title: 'c', state: 'opened' });
+  assert.equal(await findBranchMr({ host: 'gitlab.example.com', path: 'g/a' }, 'feat/x', async () => '[]'), undefined);
+  const gh: Exec = async (cmd, args) => {
+    assert.equal(cmd, 'gh');
+    assert.match(args.at(-1)!, /^repos\/acme\/app\/pulls\?state=all&per_page=10&head=acme%3Afeat%2Fx$/);
+    return JSON.stringify([{ number: 9, html_url: 'p9', title: 'P', state: 'closed', merged_at: '2026-11-01T00:00:00Z', head: { ref: 'feat/x' }, base: { ref: 'main' } }]);
+  };
+  assert.deepEqual(await findBranchMr({ host: 'github.com', path: 'acme/app' }, 'feat/x', gh), { iid: 9, url: 'p9', title: 'P', state: 'merged' });
 });
