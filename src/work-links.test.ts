@@ -16,34 +16,52 @@ test('eventThing: первая вещь из things главнее разбор�
   assert.deepEqual(eventThing(ev({ things: [thing, { type: 'own', key: 'own:x', ref: {} }], replyTo: { forge: 'gitlab', host: 'h', project: 'p/q', number: 3 } })), thing);
 });
 
-test('eventThing: ревью GitLab — MR с веткой, ключ mr:<host>/<проект>/<номер>, ссылка без якоря', () => {
+test('eventThing: ревью GitLab без things — MR, ключ через keys.ts (регистр пути, www.), ссылка без якоря', () => {
   const t = eventThing(ev({
-    link: 'https://GitLab.example.com/grp/app/-/merge_requests/12#note_5',
-    fields: { event: 'review', project: 'grp/app', number: 12, branch: 'feature/PAY-1' },
-    replyTo: { forge: 'gitlab', host: 'GitLab.example.com', project: '/grp/app/', number: 12 },
+    link: 'https://www.GitLab.example.com/Grp/App/-/merge_requests/12#note_5',
+    fields: { event: 'review', forge: 'gitlab', project: 'Grp/App', number: 12, branch: 'feature/PAY-1' },
+    replyTo: { forge: 'gitlab', host: 'www.GitLab.example.com', project: '/Grp/App/', number: 12 },
   }));
   assert.deepEqual(t, {
     type: 'mr',
     key: 'mr:gitlab.example.com/grp/app/12',
-    ref: { host: 'gitlab.example.com', project: '/grp/app/', number: 12, forge: 'gitlab', branch: 'feature/PAY-1' },
-    url: 'https://GitLab.example.com/grp/app/-/merge_requests/12',
+    ref: { host: 'gitlab.example.com', project: '/Grp/App/', number: 12, forge: 'gitlab' },
+    url: 'https://www.GitLab.example.com/Grp/App/-/merge_requests/12',
   });
-  assert.equal(mrBranchOf(t, {}), 'feature/PAY-1');
+  // ветка — из полей записи источника forge о самом этом MR
+  assert.equal(mrBranchOf(t, { forge: 'gitlab', project: 'Grp/App', number: 12, branch: 'feature/PAY-1' }), 'feature/PAY-1');
+});
+
+test('mrBranchOf: ветка из ref вещи или своей записи forge; упомянутый MR, чужой MR в полях и форк — без ветки', () => {
+  const mr: Thing = { type: 'mr', key: 'mr:gitlab.example.com/grp/app/12', ref: { host: 'gitlab.example.com', project: 'grp/app', number: 12 } };
+  assert.equal(mrBranchOf({ ...mr, ref: { ...mr.ref, branch: 'feat/x' } }, {}), 'feat/x');
+  // MR упомянут в записи коннектора (Slack, Linear): fields.branch — не ветка этого MR
+  assert.equal(mrBranchOf(mr, { branch: 'feat/x', key: 'ENG-1' }), undefined);
+  // запись forge о другом MR (событие о !13, вещь — упомянутый !12)
+  assert.equal(mrBranchOf(mr, { forge: 'gitlab', project: 'grp/app', number: 13, branch: 'feat/x' }), undefined);
+  // MR из форка: признак fork от источника или разные id проектов
+  const own = { forge: 'gitlab', project: 'grp/app', number: 12, branch: 'develop' };
+  assert.equal(mrBranchOf(mr, { ...own, fork: true }), undefined);
+  assert.equal(mrBranchOf(mr, { ...own, source_project_id: 7, target_project_id: 9 }), undefined);
+  assert.equal(mrBranchOf({ ...mr, ref: { ...mr.ref, branch: 'develop', fork: true } }, {}), undefined);
+  assert.equal(mrBranchOf(mr, { ...own, source_project_id: 9, target_project_id: 9 }), 'develop');
 });
 
 test('eventThing: упоминание в задаче GitLab и в issue GitHub — не MR', () => {
   assert.equal(eventThing(ev({ replyTo: { forge: 'gitlab', host: 'h', project: 'p/q', number: 3, type: 'issue' } })), undefined);
   assert.equal(eventThing(ev({ fields: { is_pr: false }, replyTo: { forge: 'github', host: 'github.com', project: 'o/r', number: 3 } })), undefined);
   assert.equal(eventThing(ev({ replyTo: { forge: 'github', host: 'github.com', project: 'o/r', number: 0 } })), undefined);
-  const pr = eventThing(ev({ fields: { is_pr: true }, replyTo: { forge: 'github', host: 'github.com', project: 'o/r', number: 7 } }));
+  // путь без группы ключа не даёт
+  assert.equal(eventThing(ev({ replyTo: { forge: 'gitlab', host: 'h', project: 'solo', number: 3 } })), undefined);
+  const pr = eventThing(ev({ fields: { is_pr: true }, replyTo: { forge: 'github', host: 'github.com', project: 'O/R', number: 7 } }));
   assert.equal(pr?.key, 'mr:github.com/o/r/7');
   // у PR GitHub ветки в событии нет
   assert.equal(mrBranchOf(pr, {}), undefined);
 });
 
-test('eventThing: задача Jira — ключ по хосту ссылки и ключу в верхнем регистре; без ссылки и чужое — ничего', () => {
-  const t = eventThing(ev({ link: 'https://jira.example.com/browse/pay-7', fields: { key: 'pay-7', summary: 'Падает оплата' }, replyTo: { key: 'pay-7' } }));
-  assert.deepEqual(t, { type: 'jira', key: 'jira:jira.example.com/PAY-7', ref: { host: 'jira.example.com', key: 'PAY-7' }, url: 'https://jira.example.com/browse/pay-7', title: 'Падает оплата' });
+test('eventThing: задача Jira — ключ jiraKey по хосту ссылки; без ссылки и чужое — ничего', () => {
+  const t = eventThing(ev({ link: 'https://Jira.Example.com:443/browse/pay-7', fields: { key: 'pay-7', summary: 'Падает оплата' }, replyTo: { key: 'pay-7' } }));
+  assert.deepEqual(t, { type: 'jira', key: 'jira:jira.example.com/PAY-7', ref: { host: 'jira.example.com', key: 'PAY-7' }, url: 'https://Jira.Example.com:443/browse/pay-7', title: 'Падает оплата' });
   assert.equal(mrBranchOf(t, { branch: 'x' }), undefined);
   assert.equal(eventThing(ev({ fields: { key: 'PAY-7' }, replyTo: { key: 'PAY-7' } })), undefined);
   // запись коннектора с полем key (Linear, YouTrack) — не задача Jira
@@ -51,11 +69,15 @@ test('eventThing: задача Jira — ключ по хосту ссылки и
   assert.equal(eventThing(ev({ fields: { id: 'b1' } })), undefined);
 });
 
-test('originMatches: хост и путь проекта MR, ssh и https; чужой проект — нет', () => {
+test('originMatches: хост без порта с обеих сторон и путь без регистра; ssh и https; чужой проект — нет', () => {
   const t: Thing = { type: 'mr', key: 'mr:gitlab.example.com/grp/app/1', ref: { host: 'gitlab.example.com', project: 'grp/app', number: 1 } };
   assert.equal(originMatches('git@gitlab.example.com:grp/app.git', t), true);
   assert.equal(originMatches('https://GitLab.example.com/Grp/App', t), true);
+  assert.equal(originMatches('ssh://git@gitlab.example.com:2222/grp/app.git', t), true);
+  assert.equal(originMatches('https://gitlab.example.com:8443/grp/app.git', { ...t, ref: { ...t.ref, host: 'gitlab.example.com:8443' } }), true);
+  assert.equal(originMatches('git@gitlab.example.com:grp/app.git', { ...t, ref: { ...t.ref, host: 'www.gitlab.example.com:8443' } }), true);
   assert.equal(originMatches('git@gitlab.example.com:grp/other.git', t), false);
+  assert.equal(originMatches('git@gitlab.other.com:grp/app.git', t), false);
   assert.equal(originMatches(undefined, t), false);
 });
 
@@ -79,15 +101,20 @@ test('parseSessionSource: вещь, дело, запуск, рутина; пус
   assert.equal(parseSessionSource(undefined), undefined);
   assert.equal(parseSessionSource({}), undefined);
   assert.deepEqual(
-    parseSessionSource({ thing: { type: 'mr', key: 'mr:h/p/1', ref: { host: 'h', number: 1, deep: { no: 1 }, ok: true }, url: 'https://h/p/-/merge_requests/1', title: '  Фикс\nоплаты ' }, run: 'demo-20261119', routine: 'review-mr', item: 'd1' }),
-    { thing: { type: 'mr', key: 'mr:h/p/1', ref: { host: 'h', number: 1, ok: true }, url: 'https://h/p/-/merge_requests/1', title: 'Фикс оплаты' }, item: 'd1', run: 'demo-20261119', routine: 'review-mr' },
+    parseSessionSource({ thing: { type: 'mr', key: 'mr:h/g/p/1', ref: { host: 'h', number: 1, deep: { no: 1 }, ok: true }, url: 'https://h/g/p/-/merge_requests/1', title: '  Фикс\nоплаты ' }, run: 'demo-20261119', routine: 'review-mr', item: 'd1' }),
+    { thing: { type: 'mr', key: 'mr:h/g/p/1', ref: { host: 'h', number: 1, ok: true }, url: 'https://h/g/p/-/merge_requests/1', title: 'Фикс оплаты' }, item: 'd1', run: 'demo-20261119', routine: 'review-mr' },
   );
+  // ключи MR и Jira пересобраны keys.ts: как у сервера и наблюдателей, что бы ни прислал клиент
+  assert.equal(parseSessionSource({ thing: { type: 'mr', key: 'mr:WWW.GitLab.example.com:443/Grp/App/12' } })?.thing?.key, 'mr:gitlab.example.com/grp/app/12');
+  assert.equal(parseSessionSource({ thing: { type: 'jira', key: 'jira:Jira.example.com/pay-7' } })?.thing?.key, 'jira:jira.example.com/PAY-7');
+  assert.throws(() => parseSessionSource({ thing: { type: 'mr', key: 'mr:h/solo/1' } }), /не ключ mr/);
+  assert.throws(() => parseSessionSource({ thing: { type: 'jira', key: 'jira:h/нет' } }), /не ключ jira/);
   assert.deepEqual(parseSessionSource({ thing: { type: 'teamwork', key: 'tw:t/p/1' } }), { thing: { type: 'teamwork', key: 'tw:t/p/1', ref: {} } });
   assert.throws(() => parseSessionSource('x'), /объект/);
-  assert.throws(() => parseSessionSource({ thing: { type: 'pr', key: 'mr:h/p/1' } }), /thing.type/);
-  assert.throws(() => parseSessionSource({ thing: { type: 'jira', key: 'mr:h/p/1' } }), /jira:/);
+  assert.throws(() => parseSessionSource({ thing: { type: 'pr', key: 'mr:h/g/p/1' } }), /thing.type/);
+  assert.throws(() => parseSessionSource({ thing: { type: 'jira', key: 'mr:h/g/p/1' } }), /jira:/);
   assert.throws(() => parseSessionSource({ thing: { type: 'jira', key: 'jira:' } }), /jira:/);
-  assert.throws(() => parseSessionSource({ thing: { type: 'mr', key: 'mr:h/p/1', url: 'javascript:alert(1)' } }), /http/);
+  assert.throws(() => parseSessionSource({ thing: { type: 'mr', key: 'mr:h/g/p/1', url: 'javascript:alert(1)' } }), /http/);
   assert.throws(() => parseSessionSource({ run: '../x' }), /id запуска/);
   assert.throws(() => parseSessionSource({ routine: 'Bad Slug' }), /слаг/);
   assert.throws(() => parseSessionSource({ item: '../d' }), /id дела/);
@@ -141,18 +168,70 @@ test('routineWorktree: событие MR — worktree на ветке MR из or
   }
 });
 
-test('routineWorktree: в worktree ветки MR кто-то работает или ветка в основном checkout — новая ветка и заметка без имени ветки', async () => {
-  const { tmp, repo, base } = setup();
+test('routineWorktree: ветку держит другая работа — отдельный worktree на коммите origin (detached), чужую папку не трогаем', async () => {
+  const { tmp, repo, base, seed } = setup();
   try {
+    const head = () => g(seed, 'rev-parse', 'HEAD');
+    const detachedOk = (w: { path: string; branch?: string; branchNote?: string }) => {
+      assert.equal(w.branch, undefined);
+      assert.equal(g(w.path, 'branch', '--show-current'), '');
+      assert.equal(g(w.path, 'rev-parse', 'HEAD'), head());
+      assert.match(w.branchNote ?? '', /^Ветка MR занята другой работой/);
+      assert.ok(w.path.startsWith(path.join(base, 'App') + path.sep));
+    };
     const a = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e1', thing: mr }, { exec: asGitlab() });
+    // в worktree идёт запуск
     const busy = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e2', thing: mr, now: new Date('2026-11-19T10:20:00Z') }, { exec: asGitlab(), busy: (d) => (d === a.path ? 'идёт запуск r1' : undefined) });
-    assert.equal(busy.branch, 'routine/review-20261119-1020-e2');
-    assert.match(busy.branchNote ?? '', /другой запуск или сессия/);
+    detachedOk(busy);
+    // в worktree незакоммиченное: в нём ничего не делаем (ни fetch, ни merge)
+    fs.writeFileSync(path.join(a.path, 'wip.txt'), 'моё');
+    const before = g(a.path, 'rev-parse', 'HEAD');
+    const dirty = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e3', thing: mr, now: new Date('2026-11-19T10:21:00Z') }, { exec: asGitlab() });
+    detachedOk(dirty);
+    assert.equal(g(a.path, 'rev-parse', 'HEAD'), before);
+    assert.ok(fs.existsSync(path.join(a.path, 'wip.txt')));
+    fs.rmSync(path.join(a.path, 'wip.txt'));
+    // ветка — в пользовательском worktree вне папки worktree
     g(a.path, 'checkout', '-q', '--detach');
+    const mine = path.join(tmp, 'my-wt');
+    g(repo, 'worktree', 'add', '-q', mine, 'feature/PAY-1');
+    detachedOk(await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e4', thing: mr, now: new Date('2026-11-19T10:22:00Z') }, { exec: asGitlab() }));
+    g(repo, 'worktree', 'remove', mine);
+    // ветка — в основном checkout
     g(repo, 'checkout', '-q', 'feature/PAY-1');
-    const main = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e3', thing: mr, now: new Date('2026-11-19T10:21:00Z') }, { exec: asGitlab() });
-    assert.match(main.branch ?? '', /^routine\/review-/);
-    assert.match(main.branchNote ?? '', /^Ветку MR выгрузить не удалось/);
+    detachedOk(await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e5', thing: mr, now: new Date('2026-11-19T10:23:00Z') }, { exec: asGitlab() }));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('routineWorktree: отставшая локальная ветка MR подтягивается до origin; разошлась — заметка «может быть не последней версией»', async () => {
+  const { tmp, repo, base, seed } = setup();
+  try {
+    // локальная ветка от старого коммита, автор допушил
+    g(repo, 'branch', 'feature/PAY-1', 'origin/feature/PAY-1');
+    fs.writeFileSync(path.join(seed, 'b.txt'), '2');
+    g(seed, 'add', '.');
+    g(seed, 'commit', '-qm', 'fix');
+    g(seed, 'push', '-q', 'origin', 'HEAD:feature/PAY-1');
+    const a = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e1', thing: mr }, { exec: asGitlab() });
+    assert.equal(g(a.path, 'rev-parse', 'HEAD'), g(seed, 'rev-parse', 'HEAD'));
+    assert.equal(a.branchNote, undefined);
+    g(repo, 'worktree', 'remove', a.path);
+    // своя правка в локальной ветке и новая у автора — ff не выйдет
+    g(repo, 'checkout', '-q', 'feature/PAY-1');
+    for (const [k, v] of [['user.email', 't@t'], ['user.name', 't']]) g(repo, 'config', k, v);
+    fs.writeFileSync(path.join(repo, 'mine.txt'), '1');
+    g(repo, 'add', '.');
+    g(repo, 'commit', '-qm', 'моё');
+    g(repo, 'checkout', '-q', 'dev');
+    fs.writeFileSync(path.join(seed, 'c.txt'), '3');
+    g(seed, 'add', '.');
+    g(seed, 'commit', '-qm', 'fix2');
+    g(seed, 'push', '-q', 'origin', 'HEAD:feature/PAY-1');
+    const b = await routineWorktree({ root: repo, baseDir: base, routine: 'review', eventId: 'e2', thing: mr }, { exec: asGitlab() });
+    assert.equal(b.branch, 'feature/PAY-1');
+    assert.match(b.branchNote ?? '', /не последней версией MR/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

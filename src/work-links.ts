@@ -1,11 +1,11 @@
 // Работа помнит вещь (docs/desk/SPEC.md, этап 2, 2.6–2.7): вещь события рутины для источника запуска, ветка MR для
 // worktree, первый запуск цепочки продолжений, источник сессии и уборка worktree рутины, когда вещь закрыта.
-// Ключи пока собираются строкой по формату src/things/types.ts — при слиянии с things-core перейти на src/things/keys.ts
-// (mrKey, jiraKey). Внешние эффекты (git, список запусков) — через deps.
+// Ключи — только через src/things/keys.ts. Внешние эффекты (git, список запусков) — через deps.
 import fs from 'node:fs';
 import path from 'node:path';
 import { isInside } from './artifacts.js';
-import { ensureWorktree, exec as realExec, originUrl, parseRemote, worktreeList, type Exec, type WorktreeResult } from './git.js';
+import { checkoutStatus, copyUntracked, ensureWorktree, exec as realExec, originUrl, parseRemote, slugify, worktreeList, type Exec, type WorktreeResult } from './git.js';
+import { jiraKey, mrKey, normHost, normProject, parseKey } from './things/keys.js';
 import type { RunSource, RunWorktree, SessionSource } from './api-types.js';
 import { RUN_ID_RE } from './adhoc.js';
 import { SLUG_RE } from './routines/schema.js';
@@ -18,18 +18,21 @@ const TITLE_MAX = 300;
 const URL_MAX = 500;
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
-const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]+-\d+$/i;
-
-/** Ключ MR/PR: mr:<host>/<путь проекта>/<номер> (формат src/things/types.ts; заменить на keys.ts → mrKey). */
-export const mrThingKey = (host: string, project: string, number: number): string => `mr:${host.toLowerCase()}/${project.replace(/^\/+|\/+$/g, '')}/${number}`;
-/** Ключ задачи Jira: jira:<host>/<KEY-123> (заменить на keys.ts → jiraKey). */
-export const jiraThingKey = (host: string, key: string): string => `jira:${host.toLowerCase()}/${key.toUpperCase()}`;
 
 const hostOfUrl = (u: string): string => {
   try {
-    return new URL(u).hostname.toLowerCase();
+    return new URL(u).hostname;
   } catch {
     return '';
+  }
+};
+
+/** Ключ, а не исключение: битые части — undefined. */
+const safeKey = (f: () => string): string | undefined => {
+  try {
+    return f();
+  } catch {
+    return undefined;
   }
 };
 
@@ -48,39 +51,59 @@ export function eventThing(e: Pick<RoutineEvent, 'things' | 'replyTo' | 'fields'
     const number = Number(r.number);
     // упоминание в задаче GitLab (replyTo.type issue) и в issue GitHub (is_pr: false) — не MR
     if (r.type === 'issue' || f.is_pr === false || !host || !project || !Number.isInteger(number) || number <= 0) return undefined;
-    const branch = str(f.branch);
+    const key = safeKey(() => mrKey(host, project, number));
+    if (!key) return undefined;
     const url = e.link ? e.link.replace(/#.*$/, '').slice(0, URL_MAX) : '';
-    return { type: 'mr', key: mrThingKey(host, project, number), ref: { host: host.toLowerCase(), project, number, forge, ...(branch ? { branch } : {}) }, ...(url ? { url } : {}) };
+    return { type: 'mr', key, ref: { host: normHost(host), project, number, forge }, ...(url ? { url } : {}) };
   }
   // ключ — только из replyTo.key: его ставит лишь источник Jira; у записей коннектора fields.key бывает чем угодно
-  const key = str(r.key);
-  if (key && JIRA_KEY_RE.test(key)) {
-    const host = e.link ? hostOfUrl(e.link) : '';
-    if (!host || !e.link) return undefined;
-    const title = str(f.summary);
-    return { type: 'jira', key: jiraThingKey(host, key), ref: { host, key: key.toUpperCase() }, url: e.link.slice(0, URL_MAX), ...(title ? { title: title.slice(0, TITLE_MAX) } : {}) };
-  }
-  return undefined;
+  const issue = str(r.key).toUpperCase();
+  const host = e.link ? hostOfUrl(e.link) : '';
+  const key = issue && host ? safeKey(() => jiraKey(host, issue)) : undefined;
+  if (!key || !e.link) return undefined;
+  const title = str(f.summary);
+  return { type: 'jira', key, ref: { host: normHost(host), key: issue }, url: e.link.slice(0, URL_MAX), ...(title ? { title: title.slice(0, TITLE_MAX) } : {}) };
 }
 
 /** Имя ветки, которое можно отдать git как есть: без пробелов и переводов строк, не с «-», без «..». Ветку задаёт автор MR. */
 const BRANCH_RE = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 
+/** MR из форка: ветка живёт в форке, одноимённая ветка origin — не код MR. Признак fork или разные id проектов. */
+function isFork(o: Record<string, unknown> | undefined): boolean {
+  if (!o) return false;
+  if (o.fork === true) return true;
+  const src = o.source_project_id;
+  const dst = o.target_project_id;
+  return src !== undefined && src !== null && dst !== undefined && dst !== null && String(src) !== String(dst);
+}
+
+/** Поля события — запись источника forge о самом этом MR (а не ссылка на MR в чате или записи коннектора). */
+function ownForgeRecord(thing: Thing, fields: Record<string, unknown>): boolean {
+  const forge = str(fields.forge);
+  if (forge !== 'gitlab' && forge !== 'github') return false;
+  return Number(fields.number) === Number(thing.ref.number) && normProject(str(fields.project)) === normProject(str(thing.ref.project));
+}
+
 /**
- * Ветка MR события: из вещи (ref.branch), иначе из полей forge (fields.branch — у ревью GitLab). У GitHub её в событии
- * пока нет. Имя не по BRANCH_RE — undefined (как будто ветки нет).
+ * Ветка MR события: из вещи (ref.branch), иначе fields.branch — только если поля — запись источника forge о самом этом
+ * MR (у ревью GitLab; у GitHub ветки в событии пока нет). MR из форка и имя не по BRANCH_RE — undefined (как будто ветки нет).
  */
 export function mrBranchOf(thing: Thing | undefined, fields: Record<string, unknown> | undefined): string | undefined {
   if (thing?.type !== 'mr') return undefined;
-  const b = str(thing.ref.branch) || str(fields?.branch);
+  const f = fields ?? {};
+  if (isFork(thing.ref) || isFork(f)) return undefined;
+  const b = str(thing.ref.branch) || (ownForgeRecord(thing, f) ? str(f.branch) : '');
   return b && BRANCH_RE.test(b) ? b : undefined;
 }
 
-/** origin репозитория — тот же проект, что у MR (хост и путь): только тогда ветку MR берём из этого репо. */
+/** Хост без порта (любого) — remote по ssh на своём порту и адрес MR в вебе дают один хост. */
+const bareHost = (h: string): string => normHost(h).replace(/:\d+$/, '');
+
+/** origin репозитория — тот же проект, что у MR (хост без порта и путь): только тогда ветку MR берём из этого репо. */
 export function originMatches(origin: string | undefined, thing: Thing): boolean {
   const rem = origin ? parseRemote(origin) : undefined;
   if (!rem) return false;
-  return rem.host === str(thing.ref.host).toLowerCase() && rem.path.toLowerCase() === str(thing.ref.project).replace(/^\/+|\/+$/g, '').toLowerCase();
+  return bareHost(rem.host) === bareHost(str(thing.ref.host)) && normProject(rem.path) === normProject(str(thing.ref.project));
 }
 
 export type RoutineWorktreeRequest = {
@@ -104,15 +127,44 @@ export type RoutineWorktreeDeps = {
 
 /** Заметки агенту — фиксированный текст: имя ветки и ошибки git пишет не agentgraph, в задачу вне source-data их не кладём. */
 const NOTE_NO_BRANCH = 'Ветку MR выгрузить не удалось: рабочая папка — новая ветка от базовой, а не ветка MR. Код MR смотри через git fetch или glab/gh.';
-const NOTE_BUSY = 'В worktree ветки MR сейчас идёт другой запуск или сессия: рабочая папка — новая ветка от базовой, а не ветка MR. Код MR смотри через git fetch или glab/gh.';
-const NOTE_STALE = 'Worktree ветки MR не удалось подтянуть до origin (локальные правки или ветки разошлись): код в папке может быть не последней версией MR.';
+const NOTE_BUSY = 'Ветка MR занята другой работой (чужой или незакоммиченный worktree, идущий запуск или сессия): рабочая папка — отдельный worktree на коммите origin этой ветки (detached HEAD); коммиты отсюда в ветку MR не попадут.';
+const NOTE_STALE = 'Ветку MR не удалось подтянуть до origin (локальные коммиты или ветки разошлись): код в папке может быть не последней версией MR.';
+
+const stampOf = (d: Date): string => d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
+const tailOf = (id: string): string => id.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x';
+const realOr = (p: string): string => (fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p));
+const hasRef = (dir: string, ref: string, x: Exec): Promise<boolean> =>
+  x('git', ['rev-parse', '--verify', '--quiet', ref], { cwd: dir, timeoutMs: 10_000 }).then(() => true, () => false);
+
+/** Ветка в папке догнала origin/<ветка> (merge --ff-only): нет такой ветки в origin — догонять нечего, true. */
+async function ffToOrigin(dir: string, branch: string, x: Exec): Promise<boolean> {
+  const ref = `refs/remotes/origin/${branch}`;
+  if (!(await hasRef(dir, ref, x))) return true;
+  return x('git', ['merge', '--ff-only', '--quiet', ref], { cwd: dir, timeoutMs: 60_000 }).then(() => true, () => false);
+}
+
+/** Отдельный worktree рутины на коммите origin/<ветка> (detached HEAD): ветку держит другая работа. Нет её в origin — undefined. */
+async function detachedAtOrigin(req: RoutineWorktreeRequest, branch: string, x: Exec): Promise<WorktreeResult | undefined> {
+  await x('git', ['fetch', '--quiet', 'origin'], { cwd: req.root, timeoutMs: 120_000 }).catch(() => undefined);
+  const ref = `refs/remotes/origin/${branch}`;
+  if (!(await hasRef(req.root, ref, x))) return undefined;
+  const dir = path.resolve(req.baseDir, slugify(path.basename(req.root)), slugify(`routine-${req.routine}-${stampOf(req.now ?? new Date())}-${tailOf(req.eventId)}`));
+  if (!isInside(dir, path.resolve(req.baseDir)) || fs.existsSync(dir)) return undefined;
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  await x('git', ['worktree', 'add', '--detach', '--', dir, ref], { cwd: req.root, timeoutMs: 120_000 });
+  const copied = copyUntracked(req.root, dir, req.copyFiles ?? []);
+  return { path: dir, created: true, copied, note: `Директория проекта — новый git worktree ${dir} (detached HEAD на коммите origin ветки MR).` };
+}
 
 /**
- * worktree запуска рутины. У события MR с веткой, если origin репо — проект этого MR, — на ветке MR (существующей,
- * requireExisting): ветка уже выгружена в worktree (прошлое ревью этого MR или форма «Запустить…» — папка та же, что у
- * формы) — он же, подтянутый до origin (fetch + merge --ff-only); в нём кто-то работает, ветка в основном checkout или её
- * нет — новая ветка routine/<слаг>-<время>-<хвост id> от базовой. branchNote — фиксированная строка агенту: почему он
- * не в ветке MR или почему код может быть старым. MR из форка (ветка живёт в форке) так не отличить — см. отчёт этапа.
+ * worktree запуска рутины. У события MR с веткой (mrBranchOf), если origin репо — проект этого MR:
+ * - ветка уже выгружена в свой worktree (внутри baseDir; прошлое ревью этого MR или форма «Запустить…» — папка та же, что
+ *   у формы), чистый, и в нём никто не работает — он же, подтянутый до origin (fetch + merge --ff-only);
+ * - ветку держит другая работа (основной checkout, worktree вне baseDir, незакоммиченное, идущий запуск или сессия) —
+ *   отдельный worktree на коммите origin/<ветка> (detached HEAD), NOTE_BUSY;
+ * - ветка свободна — worktree на ней (requireExisting), отставшая локальная подтягивается ff, не вышло — NOTE_STALE.
+ * Не вышло ничего или ветки нет — новая ветка routine/<слаг>-<время>-<хвост id> от базовой. branchNote — фиксированная
+ * строка агенту: почему он не в ветке MR или почему код может быть старым.
  */
 export async function routineWorktree(req: RoutineWorktreeRequest, deps: RoutineWorktreeDeps = {}): Promise<WorktreeResult & { branchNote?: string }> {
   const x = deps.exec ?? realExec;
@@ -122,20 +174,27 @@ export async function routineWorktree(req: RoutineWorktreeRequest, deps: Routine
   if (branch && req.thing && originMatches(await originUrl(req.root, x), req.thing)) {
     try {
       const held = (await worktreeList(req.root, x)).find((w) => w.branch === branch);
-      if (held?.main) branchNote = NOTE_NO_BRANCH;
-      else if (held && deps.busy?.(held.path)) branchNote = NOTE_BUSY;
-      else if (held) {
-        const synced = await x('git', ['fetch', '--quiet', 'origin'], { cwd: held.path, timeoutMs: 120_000 })
-          .then(() => x('git', ['merge', '--ff-only', '--quiet', `refs/remotes/origin/${branch}`], { cwd: held.path, timeoutMs: 60_000 }))
-          .then(() => true, () => false);
-        return { path: held.path, branch, created: false, copied: [], note: `Директория проекта — существующий git worktree ${held.path} (ветка ${branch}).`, ...(synced ? {} : { branchNote: NOTE_STALE }) };
-      } else return await ensureWorktree({ ...base, branch, requireExisting: true }, x);
+      if (held) {
+        const own = !held.main && isInside(realOr(held.path), realOr(req.baseDir));
+        const free = own && !deps.busy?.(held.path) && (await checkoutStatus(held.path, x)).total === 0;
+        if (free) {
+          await x('git', ['fetch', '--quiet', 'origin'], { cwd: held.path, timeoutMs: 120_000 }).catch(() => undefined);
+          const fresh = await ffToOrigin(held.path, branch, x);
+          return { path: held.path, branch, created: false, copied: [], note: `Директория проекта — существующий git worktree ${held.path} (ветка ${branch}).`, ...(fresh ? {} : { branchNote: NOTE_STALE }) };
+        }
+        const d = await detachedAtOrigin(req, branch, x);
+        if (d) return { ...d, branchNote: NOTE_BUSY };
+        branchNote = NOTE_NO_BRANCH;
+      } else {
+        const wt = await ensureWorktree({ ...base, branch, requireExisting: true }, x);
+        // локальная ветка MR могла отстать от origin: ревью должно видеть последний код
+        return (await ffToOrigin(wt.path, branch, x)) ? wt : { ...wt, branchNote: NOTE_STALE };
+      }
     } catch {
       branchNote = NOTE_NO_BRANCH;
     }
   }
-  const stamp = (req.now ?? new Date()).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
-  const wt = await ensureWorktree({ ...base, branch: `routine/${req.routine}-${stamp}-${req.eventId.replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'x'}` }, x);
+  const wt = await ensureWorktree({ ...base, branch: `routine/${req.routine}-${stampOf(req.now ?? new Date())}-${tailOf(req.eventId)}` }, x);
   return branchNote ? { ...wt, branchNote } : wt;
 }
 
@@ -167,14 +226,30 @@ const cleanStr = (v: unknown, max: number, what: string): string | undefined => 
   return s || undefined;
 };
 
+/** Ключ MR и Jira, пересобранный через keys.ts; другие типы — как есть. Не разобрался — undefined. */
+function canonicalKey(type: ThingType, raw: string): string | undefined {
+  if (type === 'mr') {
+    const p = parseKey(raw);
+    return p?.type === 'mr' ? safeKey(() => mrKey(String(p.ref.host), String(p.ref.project), Number(p.ref.number))) : undefined;
+  }
+  if (type === 'jira') {
+    const m = /^jira:([^/]+)\/([^/]+)$/.exec(raw);
+    return m ? safeKey(() => jiraKey(m[1]!, m[2]!)) : undefined;
+  }
+  return raw;
+}
+
 /** Вещь из тела запроса: тип из списка, ключ с префиксом своего типа, ref — только простые значения, url — http(s). */
 export function parseThing(v: unknown): Thing {
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('thing — объект');
   const o = v as Record<string, unknown>;
   const type = o.type as ThingType;
   if (typeof type !== 'string' || !Object.hasOwn(THING_TYPES, type)) throw new Error(`thing.type — одно из: ${Object.keys(THING_TYPES).join(', ')}`);
-  const key = cleanStr(o.key, KEY_MAX, 'thing.key');
-  if (!key || !key.startsWith(`${THING_TYPES[type]}:`) || key.length <= THING_TYPES[type].length + 1) throw new Error(`thing.key — ${THING_TYPES[type]}:…`);
+  const raw = cleanStr(o.key, KEY_MAX, 'thing.key');
+  if (!raw || !raw.startsWith(`${THING_TYPES[type]}:`) || raw.length <= THING_TYPES[type].length + 1) throw new Error(`thing.key — ${THING_TYPES[type]}:…`);
+  // MR и задача Jira — канонический ключ keys.ts: регистр пути, www., порт по умолчанию — как у сервера и наблюдателей
+  const key = canonicalKey(type, raw);
+  if (!key) throw new Error(`thing.key — не ключ ${type}`);
   const ref: Record<string, unknown> = {};
   if (o.ref !== undefined) {
     if (!o.ref || typeof o.ref !== 'object' || Array.isArray(o.ref)) throw new Error('thing.ref — объект');
