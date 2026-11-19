@@ -48,7 +48,7 @@ import { parseTeamworkLink } from './teamwork-status.js';
 import { teamsCwdProblem } from './teamwork-trust.js';
 import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
-import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
+import type { ReviewKey, ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
 import { desk } from './desk/index.js';
 import type { DeskApi } from './desk/types.js';
@@ -382,10 +382,12 @@ export class SessionManager {
     return { id: r.id, name: r.name, cwd: r.cwd, createdAt: r.createdAt, lastActivityAt: r.lastActivityAt, turns: readTurns(this.turnsFile(r.id)) };
   }
 
-  /** Сессии для разбора моделью (session-review.ts): статус, кто завершил и ходы из журнала. */
-  reviewSources(now = Date.now()): ReviewSource[] {
+  /**
+   * Сессии для разбора моделью и источника «Проекты» (session-review.ts): статус, кто завершил, вопрос последнего хода и
+   * ходы из журнала. turnsFor — кому журнал нужен (не разобранные на текущей активности); нет — всем, у кого есть ходы.
+   */
+  reviewSources(turnsFor: (s: ReviewKey) => boolean = () => true): ReviewSource[] {
     this.load();
-    const since = new Date(now - REVIEW_DAYS * 86_400_000).toISOString();
     return [...this.sessions.values()].map((s) => {
       const v = this.view(s);
       return {
@@ -397,8 +399,9 @@ export class SessionManager {
         status: v.status,
         ...(v.endedBy ? { endedBy: v.endedBy } : {}),
         lastActivityAt: v.lastActivityAt,
-        // журнал читаем только у тех, что войдут в разбор по дате: остальным он не нужен
-        turns: v.turns > 0 && v.lastActivityAt >= since ? readTurns(this.turnsFile(v.id)) : [],
+        ...(v.ask ? { ask: v.ask } : {}),
+        turnCount: v.turns,
+        turns: v.turns > 0 && turnsFor({ id: v.id, lastActivityAt: v.lastActivityAt, turnCount: v.turns }) ? readTurns(this.turnsFile(v.id)) : [],
       };
     });
   }
@@ -1950,9 +1953,9 @@ export async function sessionDraftSource(id: string): Promise<DraftSession | und
   return (await mgr.available()) ? mgr.draftSource(id) : undefined;
 }
 /** Сессии для разбора «Не доделано» на главной. */
-export async function sessionReviewSources(): Promise<ReviewSource[]> {
+export async function sessionReviewSources(turnsFor?: (s: ReviewKey) => boolean): Promise<ReviewSource[]> {
   const mgr = sessionManager();
-  return (await mgr.available()) ? mgr.reviewSources() : [];
+  return (await mgr.available()) ? mgr.reviewSources(turnsFor) : [];
 }
 /** Сессии без пространства для «Предложить пространства». */
 export async function spacelessSessions(): Promise<ReturnType<SessionManager['spacelessSessions']>> {

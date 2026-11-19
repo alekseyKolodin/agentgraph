@@ -25,8 +25,9 @@ import type { Thing } from '../things/types.js';
 import { ownKey, threadKey } from '../things/keys.js';
 import { desk as sharedDesk } from '../desk/index.js';
 import type { DeskApi, DeskItem, DeskPatch } from '../desk/types.js';
+import { closesWithThing } from '../desk/rules.js';
 import { projectOfPath } from '../spaces.js';
-import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait } from './store.js';
+import type { CatchUpRecord, FeedbackRecord, QueueItem, SnapshotEntry, SourceChecks, StoredWait } from './store.js';
 import { LogReadError, RoutineStore } from './store.js';
 import type {
   CatchUp,
@@ -343,12 +344,13 @@ export class RoutineEngine {
     return (spec.secrets ?? []).filter((n) => !extra?.[n] && !this.store.hasSecret(n));
   }
 
-  private ctx(slug: string, spec: SourceSpec, signal: AbortSignal, o: { secrets?: Record<string, string>; readonlyCursor?: boolean; /** Пробная проверка несохранённого источника: расход не к кому записать. */ test?: boolean } = {}): SourceCtx {
+  private ctx(slug: string, spec: SourceSpec, signal: AbortSignal, o: { secrets?: Record<string, string>; readonlyCursor?: boolean; /** Пробная проверка несохранённого источника: расход не к кому записать. */ test?: boolean; /** Опрос по расписанию (pollSource), а не история и не пробная проверка. */ scheduled?: boolean } = {}): SourceCtx {
     let cursor = this.store.cursor(slug);
     return {
       slug,
       spec,
       ...(o.test ? {} : { cost: (usd: number) => this.addSpent(slug, usd) }),
+      ...(o.scheduled ? { scheduled: true } : {}),
       secret: (name) => o.secrets?.[name] || this.store.secret(name),
       fetch: this.deps.fetch ?? fetch,
       run: this.deps.run ?? runCommand,
@@ -488,7 +490,7 @@ export class RoutineEngine {
     try {
       let events: RoutineEvent[];
       try {
-        events = await kind.poll(this.ctx(slug, src.spec, this.pollAbort.signal));
+        events = await kind.poll(this.ctx(slug, src.spec, this.pollAbort.signal, { scheduled: true }));
       } catch (err) {
         if (!this.pollAbort.signal.aborted) this.recordCheck(slug, { ok: false, total: 0, fresh: 0, error: msg(err) });
         return;
@@ -634,6 +636,8 @@ export class RoutineEngine {
           } else this.store.setSeedProgress(r.slug, source, { done: [...done].filter((id) => list.some((e) => e.id === id)), tries });
         }
       }
+      // сервер останавливается — опрос мог оборваться на полпути: неполный список не значит «пропало»
+      if (kind?.snapshot && !this.pollAbort.signal.aborted) await this.closeGone(source, src?.spec?.title || source, events.filter(notSelf));
       if (!fresh.length) return;
       this.store.addHistory(source, fresh);
       const real = fresh.filter(notSelf);
@@ -884,6 +888,42 @@ export class RoutineEngine {
     }
   }
 
+  /**
+   * Источник-снимок (SourceKind.snapshot): записи прошлой проверки, которых в этой нет, забываются (вернутся — придут
+   * новыми и откроют дело снова) и закрывают свои дела у рутин с task. Закрывается дело, где есть сигнал этого источника;
+   * ключ, который держит другая запись этой проверки (ветка из «грязной» стала «не отправлена»), остаётся открытым.
+   * Доска не ответила — пропавшее остаётся в снимке, закрытие повторит следующая проверка.
+   */
+  private async closeGone(source: string, title: string, events: RoutineEvent[]): Promise<void> {
+    const ids = new Set(events.map((e) => e.id));
+    const gone = this.store.snapshot(source).filter((x) => !ids.has(x.id));
+    const failed = new Set<string>();
+    for (const r of gone.length ? this.taskRoutines(source) : []) {
+      const task = taskFromEvent(r.spec)!;
+      const held = new Set(events.map((e) => deskKeyOf(task, e).key));
+      const byKey = new Map<string, string[]>();
+      for (const g of gone) {
+        const key = deskKeyOf(task, g).key;
+        if (!held.has(key)) byKey.set(key, [...(byKey.get(key) ?? []), g.id]);
+      }
+      for (const [key, list] of byKey) {
+        try {
+          const item = await this.deskApi().get(key);
+          // правило «только руками» (task.close: never, условие словами) пропажа записи не обходит
+          if (!item || item.closed || !closesWithThing(item) || !item.signals.some((x) => x.source === source)) continue;
+          await this.deskApi().close(key, `больше нет в «${clip(title, 80)}»`, 'routine');
+          this.changed();
+        } catch (err) {
+          for (const id of list) failed.add(id);
+          this.say(`дело ${key} не закрыто: ${msg(err)}`);
+        }
+      }
+    }
+    this.store.forgetSeen(source, gone.filter((g) => !failed.has(g.id)).map((g) => g.id));
+    const entry = (e: SnapshotEntry): SnapshotEntry => ({ id: e.id, source: e.source, ...(e.things?.length ? { things: e.things.slice(0, 1) } : {}), ...(e.thread ? { thread: e.thread } : {}) });
+    this.store.setSnapshot(source, [...events.map(entry), ...gone.filter((g) => failed.has(g.id)).map(entry)]);
+  }
+
   /** Доска отвечает: засев по текущему списку без неё не начинаем (иначе — строка ошибки на каждую запись). */
   private async deskReady(): Promise<boolean> {
     try {
@@ -923,7 +963,8 @@ export class RoutineEngine {
     const own = !before || before.signals[0]?.routine === slug;
     let project: string | undefined;
     try {
-      project = (this.deps.projectOf ?? defaultProjectOf)(spec);
+      // проект правила, потом проект самого события (источник «Проекты»), потом пространство запуска
+      project = spec.task?.project || e.project || (this.deps.projectOf ?? defaultProjectOf)(spec);
     } catch {
       project = undefined; // пространство не читается — дело без проекта, а не без дела
     }
@@ -932,7 +973,7 @@ export class RoutineEngine {
       title: clip(e.title || thing?.title || e.text || key, 300),
       ...(project ? { project } : {}),
       column: task.column ?? 'new',
-      ...(before ? {} : { why: clip(why || spec.title, 300) }),
+      ...(before ? {} : { why: clip(why || e.why || spec.title, 300) }),
       signal: {
         source: e.source,
         at: e.at,
@@ -1951,6 +1992,7 @@ export class RoutineEngine {
     if (view.usedBy.length) throw new HttpishError(409, `Источник используют рутины: ${view.usedBy.join(', ')}`, { usedBy: view.usedBy });
     this.store.deleteSource(slug);
     this.store.deleteChecks(slug);
+    this.store.deleteSnapshot(slug);
     this.changed();
     if (this.running) this.syncListeners();
   }
@@ -2155,7 +2197,7 @@ const SEED_TRIES = 3;
  * (threadKey); event — own:<источник>/<id события>. same не задан — вещь, если распознана, иначе нить, иначе событие.
  * Нужного нет (thing без вещи, thread без нити) — следующее по этому порядку.
  */
-export function deskKeyOf(task: Pick<TaskRule, 'same'>, e: RoutineEvent): { key: string; thing?: Thing } {
+export function deskKeyOf(task: Pick<TaskRule, 'same'>, e: Pick<RoutineEvent, 'source' | 'id' | 'things' | 'thread'>): { key: string; thing?: Thing } {
   const main = e.things?.[0];
   if (task.same !== 'thread' && task.same !== 'event' && main) return { key: main.key, thing: main };
   if (task.same !== 'event' && e.thread) {

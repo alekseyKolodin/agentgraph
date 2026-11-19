@@ -61,7 +61,7 @@ test('parseRecipe: причина отказа понятна', () => {
 
 test('builtinKinds: все виды-сервисы на месте, у каждого русские подписи и поля условий', () => {
   const kinds = builtinKinds();
-  assert.deepEqual(kinds.map((k) => k.kind), ['slack', 'telegram', 'gitlab', 'github', 'jira', 'rss', 'folder', 'email', 'connector']);
+  assert.deepEqual(kinds.map((k) => k.kind), ['slack', 'telegram', 'gitlab', 'github', 'jira', 'rss', 'folder', 'email', 'connector', 'projects']);
   for (const k of kinds) {
     assert.ok(/[а-яa-z]/i.test(k.title) && /[а-я]/i.test(k.summary), k.kind);
     assert.ok(k.setup.length > 0 && k.setup.every((f) => f.key && /[а-я]/i.test(f.label)), k.kind);
@@ -72,7 +72,7 @@ test('builtinKinds: все виды-сервисы на месте, у кажд�
   }
   const by = Object.fromEntries(kinds.map((k) => [k.kind, k]));
   for (const k of ['slack', 'telegram', 'gitlab', 'github', 'jira']) assert.ok(by[k].reply, `${k} умеет отвечать`);
-  for (const k of ['rss', 'folder', 'email']) assert.equal(by[k].reply, undefined);
+  for (const k of ['rss', 'folder', 'email', 'projects']) assert.equal(by[k].reply, undefined);
   // «Сервис через Claude» отвечает без модели, но только если в источнике выбран инструмент ответа
   assert.ok(by.connector.reply && by.connector.canReplyFor);
   assert.equal(by.connector.canReplyFor!({ title: 't', kind: 'connector', config: {} }), false);

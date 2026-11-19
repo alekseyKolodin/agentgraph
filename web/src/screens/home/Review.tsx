@@ -1,20 +1,21 @@
-// «Не доделано» на главной: недавние сессии разбирает модель (sonnet, POST /api/session-review) — по каждой «не доделано»,
-// «последний шаг» или «готово», что осталось и с чего продолжить. Только по кнопке и с ценой заранее. Разбор идёт в модуле,
-// а не в компоненте: уход с главной его не прерывает (деньги уже тратятся), вернулся — результат на месте. Результат и
-// скрытые строки переживают перезагрузку (agentgraph.sessionReview). «Продолжить» — тот же разговор (--resume) или
+// «Не доделано» на главной: сессии разбирает модель (sonnet, POST /api/session-review) — по каждой «не доделано»,
+// «последний шаг» или «готово», что осталось и с чего продолжить. Кнопкой — с ценой заранее, и по расписанию источника
+// рутин «Проекты»; разбираются только сессии с новыми ходами. Итог копится на сервере (GET /api/session-review, ключ под
+// ['home'] — поток его освежает). Разбор идёт в модуле, а не в компоненте: уход с главной его не прерывает (деньги уже
+// тратятся). Скрытые строки — в браузере (agentgraph.sessionReview). «Продолжить» — тот же разговор (--resume) или
 // открытая сессия; «С чего продолжить» копируется — вставить первым сообщением. Открытые дела о сессиях, ветках и
 // «Забытое», где ход мой (src/desk, SPEC 3.10), — теми же строками после разбора; × у такой строки закрывает дело.
 import { useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
-import type { SessionReviewEstimate, SessionReviewItem, SessionReviewReply } from '@server/api-types';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import type { SessionReviewEstimate, SessionReviewItem, SessionReviewState } from '@server/api-types';
 import { DraftError, errorText } from '../../api';
 import { closeDesk, refreshDesk, useDesk } from '../../api/desk';
-import { continueSession, estimateReview, putSession, reviewSessions, useSessions } from '../../api/sessions';
+import { continueSession, estimateReview, fetchReview, putSession, reviewKey, reviewSessions, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
 import { deskLeftRows, type DeskLeftRow } from '../../lib/desk';
-import { costRange, reviewMeta, reviewRows, VERDICT_LABEL } from '../../lib/session-review';
+import { costRange, reviewHideKey, reviewMeta, reviewRows, VERDICT_LABEL } from '../../lib/session-review';
 import { LS } from '../../lib/storage';
 import styles from './Home.module.css';
 
@@ -22,12 +23,13 @@ const KEY = 'agentgraph.sessionReview';
 const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boolean).join(' ');
 
 type Phase = { kind: 'idle' } | { kind: 'estimating' } | { kind: 'confirm'; est: SessionReviewEstimate } | { kind: 'running'; since: number } | { kind: 'error'; text: string };
-type Saved = { reply?: SessionReviewReply; hidden: string[] };
+// итог разбора — на сервере; в браузере только скрытые строки (старый сохранённый здесь итог не читается)
+type Saved = { hidden: string[] };
 
 // ---------- модуль: разбор переживает уход с главной
 const read = (): Saved => {
   const v = LS.get<Partial<Saved>>(KEY, {});
-  return { ...(v.reply && Array.isArray(v.reply.items) ? { reply: v.reply } : {}), hidden: Array.isArray(v.hidden) ? v.hidden.filter((x) => typeof x === 'string') : [] };
+  return { hidden: Array.isArray(v.hidden) ? v.hidden.filter((x) => typeof x === 'string') : [] };
 };
 let saved: Saved = read();
 let phase: Phase = { kind: 'idle' };
@@ -64,13 +66,14 @@ async function estimate() {
   }
 }
 
-async function run() {
+async function run(qc: QueryClient) {
   abort = new AbortController();
   set({ kind: 'running', since: Date.now() });
   try {
     const reply = await reviewSessions(() => {}, abort.signal);
-    // новый разбор — скрытое прежде снова видно: модель посмотрела на сессии заново
-    set({ kind: 'idle' }, { reply, hidden: [] });
+    // скрытое — по разбору (reviewHideKey): разобранные заново снова видны сами
+    qc.setQueryData<SessionReviewState>(reviewKey, { reply, running: false });
+    set({ kind: 'idle' });
   } catch (err) {
     const spent = err instanceof DraftError && err.failure.costUsd ? ` ${t('Потрачено: ${cost}', { cost: err.failure.costUsd.toFixed(2) })}` : '';
     set(abort?.signal.aborted ? { kind: 'idle' } : { kind: 'error', text: errorText(err) + spent });
@@ -79,10 +82,13 @@ async function run() {
   }
 }
 
-const hide = (ids: string[]) => set(phase, { ...saved, hidden: [...new Set([...saved.hidden, ...ids])] });
+const hide = (ids: string[]) => set(phase, { ...saved, hidden: [...new Set([...saved.hidden, ...ids])].slice(-500) });
 
 export function Review() {
-  const { saved: s, phase: p } = useReview();
+  const qc = useQueryClient();
+  const { saved: s0, phase: p } = useReview();
+  const reply = useQuery({ queryKey: reviewKey, queryFn: fetchReview }).data?.reply ?? undefined;
+  const s = { ...s0, reply };
   const list = useSessions(true).data;
   const rows = reviewRows(s.reply, s.hidden, list?.sessions);
   const deskRows = deskLeftRows(useDesk().data?.items, [...rows.open, ...rows.done].map((x) => x.id));
@@ -93,7 +99,7 @@ export function Review() {
   return (
     <section className={styles.homeSec} aria-label={t('Не доделано')}>
       <div className={styles.reviewHead}>
-        <h2 title={t('Модель читает последние ходы твоих сессий за две недели и говорит, где работа не доведена и с чего продолжить. Только по кнопке; ничего не меняет')}>
+        <h2 title={t('Модель читает последние ходы твоих сессий и говорит, где работа не доведена и с чего продолжить. Кнопкой — с ценой заранее, или по расписанию источника «Проекты»; разбираются только сессии с новыми ходами. Ничего не меняет')}>
           {t('Не доделано')}
           {s.reply && <span className="muted small">{' · '}{reviewMeta(s.reply)}</span>}
         </h2>
@@ -101,7 +107,7 @@ export function Review() {
           <span className={styles.reviewAsk}>
             <span className="muted small">{t('сессий: {n} · sonnet · {cost}', { n: p.est.sessions, cost: costRange(p.est.low, p.est.high, p.est.ceiling) })}</span>
             {p.est.sessions > 0 ? (
-              <button type="button" className="btn small primary" onClick={() => void run()}>{t('Разобрать')}</button>
+              <button type="button" className="btn small primary" onClick={() => void run(qc)}>{t('Разобрать')}</button>
             ) : (
               <span className="muted small">{t('разбирать нечего')}</span>
             )}
@@ -130,7 +136,7 @@ export function Review() {
       {rows.done.length > 0 && (
         <p className={cx('muted small', styles.reviewDone)}>
           {t('Готово: {names}', { names: rows.done.map((x) => `«${x.name}»`).join(', ') })}{' '}
-          <button type="button" className="btn small ghost" onClick={() => hide(rows.done.map((x) => x.id))}>{t('Убрать')}</button>
+          <button type="button" className="btn small ghost" onClick={() => hide(rows.done.map(reviewHideKey))}>{t('Убрать')}</button>
         </p>
       )}
     </section>
@@ -173,7 +179,7 @@ function ReviewRow({ x, live, stale }: { x: SessionReviewItem; live: boolean; st
         <button type="button" className="btn small" disabled={busy} title={live ? t('Сессия открыта — перейти в неё') : t('Тот же разговор (claude --resume); «с чего продолжить» — в буфере обмена')} onClick={() => void resume()}>
           {live ? t('Открыть') : t('Продолжить')}
         </button>
-        <button type="button" className="btn small ghost" aria-label={t('Скрыть «{name}» из «Не доделано»', { name: x.name })} title={t('Скрыть до следующего разбора')} onClick={() => hide([x.id])}>×</button>
+        <button type="button" className="btn small ghost" aria-label={t('Скрыть «{name}» из «Не доделано»', { name: x.name })} title={t('Скрыть до следующего разбора')} onClick={() => hide([reviewHideKey(x)])}>×</button>
       </span>
     </li>
   );
