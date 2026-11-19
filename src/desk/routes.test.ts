@@ -107,6 +107,8 @@ test('POST /api/desk/put: адрес в ключе не теряется — у 
   const byKey = (await call('POST', '/api/desk/put', { key: 'mr:gitlab.example.com/grp/app/8', patch: { title: 'MR 8' } }))!.body as DeskItem;
   assert.deepEqual([byKey.thing?.type, byKey.links.mr], ['mr', undefined]);
   assert.equal(page.signals[0]?.link, 'https://wiki.example.com/page');
+});
+
 test('POST /api/desk/link: своё дело переезжает на вещь по адресу MR одной записью — сигналы, срок, колонка и возраст те же, своё закрыто ссылкой', async (t) => {
   const { store } = setup(t);
   const link = (body: unknown) => deskRoute('POST', new URL('http://x/api/desk/link'), async () => body, { store, jiraHosts: () => ['jira.example.com'] });
