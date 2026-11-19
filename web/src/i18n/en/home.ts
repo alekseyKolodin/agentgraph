@@ -244,4 +244,6 @@ export const home: Record<string, string> = {
   'заполнено само': 'filled automatically',
   'Заполнено само; правка оставит твоё значение': 'Filled automatically; your edit is kept',
   'Пустые строки agentgraph заполняет сам из glab, gh, git config и Jira. Введённое руками не перетирается.': 'Empty fields are filled from glab, gh, git config and Jira. What you type is never overwritten.',
+  // доска дел (этап 5)
+  'Ждёт других': 'Waiting on others',
 };
