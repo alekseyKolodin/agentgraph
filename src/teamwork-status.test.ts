@@ -279,7 +279,8 @@ test('опрос по таймеру: start с интервалом зовёт p
   let ticks = 0;
   const timed = new TeamworkStatus({ service: f.svc, exec: async () => (ticks++, ghList([])), intervalMs: 5 });
   timed.start();
-  await new Promise((r) => setTimeout(r, 40));
+  // Под нагрузкой (полный npm test) таймер на 5 мс может не успеть дважды за фиксированную паузу — ждём условие, до 2 с.
+  for (let waited = 0; ticks < 2 && waited < 2000; waited += 10) await new Promise((r) => setTimeout(r, 10));
   await timed.stop();
   assert.ok(ticks >= 2, `опросов по таймеру: ${ticks}`);
   const stopped = ticks;
