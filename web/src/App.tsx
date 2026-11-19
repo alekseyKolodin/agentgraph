@@ -5,6 +5,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfirmProvider } from './components/ConfirmDialog';
 import { ToastProvider } from './components/Toast';
+import { RouteError } from './components/shell/RouteError';
 import { Shell } from './components/shell/Shell';
 import { HomeScreen } from './screens/home/HomeScreen';
 import { legacyLocation } from './lib/legacy-url';
@@ -49,29 +50,36 @@ const router = createBrowserRouter(
   [
     {
       element: <Shell />,
+      errorElement: <RouteError whole />,
       children: [
-        { index: true, element: <HomeScreen /> },
-        { path: 'spaces/:slug?', element: <Suspense><SpacesScreen /></Suspense> },
-        { path: 'tags/:slug?', element: <Suspense><TagsScreen /></Suspense> },
-        { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
-        { path: 'code', element: <Suspense><CodeScreen /></Suspense> },
-        { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },
-        { path: 'sessions/:id', element: <Suspense><SessionScreen /></Suspense> },
-        // Teamwork (spec §11): команды, команда (вкладка — ?tab=), проект с вкладкой; ?task=ID открывает панель задачи поверх любой вкладки
-        { path: 'teamwork', element: <Suspense><TeamsScreen /></Suspense> },
-        { path: 'teamwork/:team', element: <Suspense><TeamScreen /></Suspense> },
-        { path: 'teamwork/:team/:project/:tab?', element: <Suspense><ProjectScreen /></Suspense> },
-        { path: 'routines', element: <Suspense><RoutinesList /></Suspense> },
-        { path: 'routines/new', element: <Suspense><NewRoutine /></Suspense> },
-        { path: 'routines/connect', element: <Suspense><ConnectSource /></Suspense> },
-        { path: 'routines/:slug', element: <Suspense><RoutineEditor /></Suspense> },
-        { path: 'routines/:slug/log', element: <Suspense><RoutineLog /></Suspense> },
-        { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },
-        // черновик разового запуска: живёт только в памяти вкладки, после перезагрузки — на главную
-        { path: 'draft', element: <Suspense><FlowScreen draft /></Suspense> },
-        { path: 'run/:id', element: <Suspense><RunScreen /></Suspense> },
-        // неизвестный адрес — на главную, как route() в ui/app.js
-        { path: '*', element: <Navigate to="/" replace /> },
+        {
+          // ошибка экрана (в том числе файл экрана стёрт пересборкой dist/web) — на месте экрана, сайдбар остаётся
+          errorElement: <RouteError />,
+          children: [
+            { index: true, element: <HomeScreen /> },
+            { path: 'spaces/:slug?', element: <Suspense><SpacesScreen /></Suspense> },
+            { path: 'tags/:slug?', element: <Suspense><TagsScreen /></Suspense> },
+            { path: 'context', element: <Suspense><ContextScreen /></Suspense> },
+            { path: 'code', element: <Suspense><CodeScreen /></Suspense> },
+            { path: 'sessions', element: <Suspense><SessionsScreen /></Suspense> },
+            { path: 'sessions/:id', element: <Suspense><SessionScreen /></Suspense> },
+            // Teamwork (spec §11): команды, команда (вкладка — ?tab=), проект с вкладкой; ?task=ID открывает панель задачи поверх любой вкладки
+            { path: 'teamwork', element: <Suspense><TeamsScreen /></Suspense> },
+            { path: 'teamwork/:team', element: <Suspense><TeamScreen /></Suspense> },
+            { path: 'teamwork/:team/:project/:tab?', element: <Suspense><ProjectScreen /></Suspense> },
+            { path: 'routines', element: <Suspense><RoutinesList /></Suspense> },
+            { path: 'routines/new', element: <Suspense><NewRoutine /></Suspense> },
+            { path: 'routines/connect', element: <Suspense><ConnectSource /></Suspense> },
+            { path: 'routines/:slug', element: <Suspense><RoutineEditor /></Suspense> },
+            { path: 'routines/:slug/log', element: <Suspense><RoutineLog /></Suspense> },
+            { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },
+            // черновик разового запуска: живёт только в памяти вкладки, после перезагрузки — на главную
+            { path: 'draft', element: <Suspense><FlowScreen draft /></Suspense> },
+            { path: 'run/:id', element: <Suspense><RunScreen /></Suspense> },
+            // неизвестный адрес — на главную, как route() в ui/app.js
+            { path: '*', element: <Navigate to="/" replace /> },
+          ],
+        },
       ],
     },
   ],

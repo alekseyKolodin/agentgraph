@@ -129,4 +129,10 @@ export const shell: Record<string, string> = {
   'Найти сессию': 'Find a session',
   'Найти сессию…': 'Find a session…',
   'Все слова должны найтись в названии, папке, ветке, проекте, тегах или id сессии. Esc — очистить': 'Every word must match the session name, folder, branch, project, tags or id. Esc clears',
+  // RouteError.tsx
+  'Приложение обновилось': 'The app has been updated',
+  'Этот экран собран заново. Перезагрузите страницу — несохранённое на других экранах сначала сохраните.': 'This screen has been rebuilt. Reload the page — save unsaved work on other screens first.',
+  'Экран не открылся': 'The screen failed to open',
+  'Перезагрузить': 'Reload',
+  'Загрузить страницу заново': 'Load the page again',
 };

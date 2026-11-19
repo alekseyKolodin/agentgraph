@@ -1,0 +1,12 @@
+/* Экран ошибки маршрута: карточка как «AgentGraph не отвечает» (Shell.module.css). На месте экрана — сверху слева,
+   на всё окно (упала оболочка) — по центру. */
+.wrap { padding-top: 8px; }
+.whole { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.card { max-width: 460px; padding: 18px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }
+.card h1 { margin: 0 0 8px; font-size: var(--fs-h2); font-weight: 600; }
+.card p { margin: 0 0 14px; color: var(--ink-2); }
+.card .error {
+  margin: 0 0 14px; padding: 8px 10px; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--st-fail);
+  background: var(--raised); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
