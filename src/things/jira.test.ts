@@ -161,3 +161,15 @@ test('Jira: сеть упала — состояние с error, токен в �
   assert.match(st.error!, /Jira недоступна: connect ECONNREFUSED/);
   assert.ok(!st.error!.includes('secret-token-123'));
 });
+
+test('Jira: адрес подключения с «www.», портом по умолчанию и точкой в конце — тот же хост, что в ключе вещи', async () => {
+  const f = fakeJira({ issues: {}, changelog: {} });
+  for (const baseUrl of ['https://www.example.atlassian.net/', 'https://Example.Atlassian.net:443', 'https://example.atlassian.net./']) {
+    const w = jiraWatcher({ creds: () => ({ cfg: { ...cfg, baseUrl }, token: 't' }), profile: () => profile, fetch: f.fn });
+    assert.equal(w.canWatch(thing()), true, baseUrl);
+  }
+  // и обратная сторона: в ref вещи хост записан с «www.» — для той же Jira
+  const w = watcher(f);
+  assert.equal(w.canWatch(thing('ABC-1', 'www.example.atlassian.net')), true);
+  assert.match(String(w.canWatch(thing('ABC-1', 'www.other.atlassian.net'))), /other\.atlassian\.net не подключена/);
+});
