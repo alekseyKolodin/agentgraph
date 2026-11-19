@@ -8,7 +8,7 @@ import type { FlowSaved } from '../../api';
 import type { AiProgress } from '../../lib/flow/ai-progress';
 import { toEditable, type EditBlock, type EditPhase, type EditSpec, type SpecChanges } from '../../lib/flow/edit';
 
-export type Tab = 'builder' | 'run' | 'yaml';
+export type Tab = 'builder' | 'run' | 'yaml' | 'versions';
 export type Msg = { text: string; tone: '' | 'ok' | 'err' | 'warn' };
 export const NO_MSG: Msg = { text: '', tone: '' };
 export const msgClass = (m: Msg, base = 'msg') => `${base}${m.tone ? ` ${m.tone}` : ''}`;
@@ -63,6 +63,8 @@ type State = {
   refit: number;
   /** Растёт, когда YAML в редакторе надо заменить текстом flow (открыли, сохранили). */
   yamlSeq: number;
+  /** В редакторе YAML — версия из снимка запуска (вкладка «Версии»), ещё не сохранённая; null — текст flow. */
+  yamlFrom: { text: string; label: string } | null;
   /** Явное открытие этапа или блока в инспекторе: прокрутка наверх, фокус в название. */
   openSeq: number;
   /** Уход с экрана уже подтверждён (openFlow, удаление): блокировщик перехода не спрашивает второй раз. */
@@ -75,7 +77,7 @@ type State = {
 
 export const flowState: State = {
   flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiProgress: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
-  sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
+  sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, yamlFrom: null, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
 };
 
 let version = 0;
@@ -145,10 +147,12 @@ export function openLoaded(doc: FlowDoc, tab: Tab): void {
     dirty: false,
     sel: null,
     graphSel: null,
-    tab: doc.spec ? tab : 'yaml',
+    // у черновика вкладки «Версии» нет
+    tab: !doc.spec ? 'yaml' : doc.draft && tab === 'versions' ? 'run' : tab,
     bMsg: NO_MSG,
     yamlMsg: doc.error ? { text: doc.error, tone: 'err' } : NO_MSG,
     yamlSeq: flowState.yamlSeq + 1,
+    yamlFrom: null,
     refit: other ? flowState.refit + 1 : flowState.refit,
     formSeq: flowState.formSeq + 1,
     // повторное открытие того же flow вложения не стирает; у черновика они всегда новые
@@ -160,7 +164,7 @@ export function openLoaded(doc: FlowDoc, tab: Tab): void {
 /** Закрыть flow (удалён, черновик брошен). */
 export function closeFlow(): void {
   resetAi();
-  Object.assign(flowState, { flow: null, spec: null, dirty: false, sel: null, graphSel: null, bMsg: NO_MSG, yamlMsg: NO_MSG });
+  Object.assign(flowState, { flow: null, spec: null, dirty: false, sel: null, graphSel: null, bMsg: NO_MSG, yamlMsg: NO_MSG, yamlFrom: null });
   emit();
 }
 
@@ -176,6 +180,7 @@ export function applySaved(r: FlowSaved & { yaml?: string }, yaml: string | unde
   if (from && from.editSeq !== flowState.editSeq) {
     flowState.flow = { ...flow, ...(renameDraft ? { name: r.name } : {}), yaml: yaml ?? r.yaml ?? flow.yaml, summary: r.summary, spec: r.spec, error: undefined };
     flowState.yamlSeq++;
+    flowState.yamlFrom = null;
     emit();
     return true;
   }
@@ -190,6 +195,7 @@ export function applySaved(r: FlowSaved & { yaml?: string }, yaml: string | unde
     sel,
     yamlMsg: NO_MSG,
     yamlSeq: flowState.yamlSeq + 1,
+    yamlFrom: null,
     // как renderFlow после сохранения: форма запуска заново, вложения остаются
     formSeq: flowState.formSeq + 1,
   });
@@ -198,6 +204,16 @@ export function applySaved(r: FlowSaved & { yaml?: string }, yaml: string | unde
 }
 
 export type SaveStart = { flow: FlowDoc | null; editSeq: number };
+
+/** Версия из снимка запуска — в редактор YAML, без сохранения: вернуть её — «Сохранить» там же. */
+export function loadYamlVersion(text: string, label: string, msg: Msg): void {
+  set({ yamlFrom: { text, label }, yamlSeq: flowState.yamlSeq + 1, tab: 'yaml', yamlMsg: msg });
+}
+
+/** Убрать версию из редактора: снова текст flow. */
+export function dropYamlVersion(): void {
+  set({ yamlFrom: null, yamlSeq: flowState.yamlSeq + 1, yamlMsg: NO_MSG });
+}
 /** Что открыто сейчас — запомнить перед запросом сохранения (см. applySaved). */
 export const saveStart = (): SaveStart => ({ flow: flowState.flow, editSeq: flowState.editSeq });
 

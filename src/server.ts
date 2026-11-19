@@ -52,7 +52,7 @@ import { getConnectors } from './connectors.js';
 import { canPickDir, pickDir } from './pickdir.js';
 import { canReveal, resolveReveal, reveal } from './reveal.js';
 import type { RunSource } from './intake.js';
-import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
+import type { ConfigResponse, UpdateStatus, ConnectorsView, FeedResponse, FlowHistory, FlowListItem, HomeEvent as HomeEventOf, HomeResponse, HomeSessionWait, SessionAsk, HomeRun, RecentDir, RunningPhase, RunParent, RunRenamed, RunStarted, RunSummary, RunDetail, RunStreamEvent, ChatPayload, ChatStreamEvent, ChatActionReply, ChatLive, SpaceRun, RunTeamworkLink, TeamTaskWork } from './api-types.js';
 import { attachmentContentType, copyAttachments, saveAttachments, validateAttachments, type Attachment } from './attachments.js';
 import { hideRecentDir, recentDirProblem, recentDirs } from './projects.js';
 import { configDir, loadSettings, profileRoute, updateSettings, type Settings } from './settings.js';
@@ -105,7 +105,7 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionToFlowSkill, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -116,6 +116,7 @@ import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
 import { repoRoot } from './git.js';
+import { flowHistory, SNAPSHOT_FILES, versionYaml } from './flow-history.js';
 import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type DropWorktreesDeps, type DropWorktreesResult } from './work-links.js';
 import { findProject } from './projects.js';
 import { worktreesDir } from './settings.js';
@@ -477,7 +478,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review'] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -621,6 +622,45 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     // закрыли вкладку или нажали «Прервать» — respondFlowAi останавливает и сессию; папка в клоне команды — 400 (resolveDir)
     const cwd = resolveDir(body.cwd, opts.defaultCwd);
     return respondFlowAi(req, res, generations, (ai) => editReply(name, instruction, base, { cwd, model: body.model || undefined }, ai));
+  }
+
+  // Статистика и версии flow для его экрана: запуски за 30 дней, последний, версии из снимков flow.yaml запусков (flow-history.ts)
+  if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/history$/)) && method === 'GET') {
+    let currentYaml: string | undefined;
+    try {
+      currentYaml = readFlowYaml(m[1]);
+    } catch {
+      // файла нет (удалили или переименовали): история его запусков всё равно есть
+    }
+    return sendJson(res, 200, flowHistory(m[1], listRuns(), { runsDir: RUNS_DIR, currentYaml }) satisfies FlowHistory);
+  }
+
+  // Версия flow из снимка запуска — для «В редактор» на вкладке «Версии»: задача запуска заменена задачей файла flow
+  if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/version$/)) && method === 'GET') {
+    const runId = url.searchParams.get('run') ?? '';
+    const file = url.searchParams.get('file') ?? '';
+    if (!RUN_ID_RE.test(runId) || !(SNAPSHOT_FILES as readonly string[]).includes(file)) return sendJson(res, 400, { error: 'Нужны run и file (flow.yaml или flow.0.yaml)' });
+    const r = readReport(runId);
+    if (!r || r.flow !== m[1] || r.adhoc) return sendJson(res, 404, { error: `У flow ${m[1]} нет запуска ${runId}` });
+    const opened = openRunFile(path.join(RUNS_DIR, runId), file);
+    if (!opened) return sendJson(res, 404, { error: 'Снимка flow нет' });
+    let snapshot: string;
+    try {
+      snapshot = fs.readFileSync(opened.fd, 'utf8');
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+    let currentYaml: string | undefined;
+    try {
+      currentYaml = readFlowYaml(m[1]);
+    } catch {
+      // файла flow нет: версия без задачи
+    }
+    try {
+      return sendJson(res, 200, { yaml: versionYaml(snapshot, currentYaml) });
+    } catch (err) {
+      return sendJson(res, 400, { error: errMsg(err) });
+    }
   }
 
   if ((m = p.match(/^\/api\/flows\/([a-z0-9-]+)\/folder$/)) && method === 'PUT') {

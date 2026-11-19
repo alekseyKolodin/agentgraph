@@ -193,4 +193,18 @@ export const session: Record<string, string> = {
   '«{name}» уже завершена: попробуй продолжить ещё раз': '“{name}” has ended already: try continuing again',
   'Завершить и продолжить': 'End and continue',
   'Ещё работают: {n} — их не предлагаем, ход идёт.': 'Still working: {n} — not offered, their turn is running.',
+  // SessionsScreen.tsx: поиск, проект, группы; SessionScreen.tsx: «Flow из сессии»
+  'Все проекты': 'All projects',
+  'Показать сессии одного проекта — пространства, как у запусков': 'Show sessions of one project — a space, like runs',
+  'Группировать сессии по проекту — пространству, как запуски': 'Group sessions by project — a space, like runs',
+  'показано {n} из {total}': 'showing {n} of {total}',
+  'показать сессии закрытых дел: {n}': 'show sessions of closed items: {n}',
+  'убрать сессии закрытых дел': 'hide sessions of closed items',
+  'В этом проекте сессий нет': 'No sessions in this project',
+  'Все сессии — закрытых дел: они убраны с глаз': 'All sessions belong to closed items: they are tucked away',
+  'ветка {branch}': 'branch {branch}',
+  'Flow из сессии': 'Flow from session',
+  'Транскрипта этой сессии нет: flow делать не из чего': 'This session has no transcript: nothing to build a flow from',
+  'Сделать flow из этой сессии: новая сессия со скиллом session-to-flow разберёт её транскрипт — рабочий путь в этапы, грабли в промпты': 'Build a flow from this session: a new session with the session-to-flow skill reads its transcript — the working path becomes phases, the pitfalls go into prompts',
+  'Сделать flow из сессии «{name}»?\nОткроется новая сессия Claude в папке agentgraph со скиллом session-to-flow: он прочитает транскрипт этой сессии, разберёт рабочий путь и грабли и предложит flow. Записать flow в flows/ он спросит разрешения.': 'Build a flow from session “{name}”?\nA new Claude session opens in the agentgraph folder with the session-to-flow skill: it reads this session’s transcript, sorts out the working path and pitfalls and proposes a flow. It asks before writing the flow to flows/.',
 };
