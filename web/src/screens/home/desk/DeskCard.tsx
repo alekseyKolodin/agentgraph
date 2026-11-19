@@ -44,12 +44,12 @@ export type CardActions = {
   /** «Привязать вещь»: адрес MR, PR или задачи Jira. */
   link?: (url: string) => Promise<void>;
   /** Решение по ожиданию рутины, которое и есть это дело («Запустить / Не сейчас / Не то»). */
-  decide?: (wait: RoutineWait, action: 'run' | 'later' | 'reject') => void;
+  decide?: (wait: RoutineWait, action: 'run' | 'later' | 'reject', keyboard: boolean) => void;
 };
 
 export type CardDrag = { dragging: boolean; start: () => void; end: () => void };
 
-export function DeskCard({ item, n, now, project, sessions, runs, wait, waitDecided, act, drag }: {
+export function DeskCard({ item, n, now, project, sessions, runs, wait, decided, act, drag }: {
   item: DeskItem;
   /** Номер в «В плане». */
   n?: number;
@@ -59,8 +59,8 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, waitDeci
   runs: RunSummary[];
   /** Рутина ждёт решения по этому делу (3.8): «Запустить / Не сейчас / Не то» вместо «В план / Не моё». */
   wait?: RoutineWait;
-  /** Решение по ожиданию уже принято и ждёт отправки (5 с до «Отменить»): кнопок нет. */
-  waitDecided?: boolean;
+  /** По ожиданию дела решение принято (ждёт отправки или ушло, доска ещё не перечитана): кнопок нет — ни решения, ни «В план / Не моё». */
+  decided?: boolean;
   act: CardActions;
   drag: CardDrag;
 }) {
@@ -151,14 +151,14 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, waitDeci
         <LinkForm onCancel={() => setLinking(false)} onLink={act.link} />
       ) : (
         <div className={styles.acts}>
-          {wait && act.decide && !done && !waitDecided && (
+          {wait && act.decide && !done && !decided && (
             <>
-              <button type="button" className="btn small primary" title={`${wait.routineTitle}: ${wait.question}`} onClick={() => act.decide!(wait, 'run')}>{waitButtons(wait).run}</button>
-              <button type="button" className="btn small" title={t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины')} onClick={() => act.decide!(wait, 'later')}>{waitButtons(wait).later}</button>
-              <button type="button" className="btn small ghost" title={t('Дело закроется; рутина запомнит и учтёт в проверке словами')} onClick={() => act.decide!(wait, 'reject')}>{waitButtons(wait).reject}</button>
+              <button type="button" className="btn small primary" title={`${wait.routineTitle}: ${wait.question}`} onClick={(e) => act.decide!(wait, 'run', byKey(e))}>{waitButtons(wait).run}</button>
+              <button type="button" className="btn small" title={t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины')} onClick={(e) => act.decide!(wait, 'later', byKey(e))}>{waitButtons(wait).later}</button>
+              <button type="button" className="btn small ghost" title={t('Дело закроется; рутина запомнит и учтёт в проверке словами')} onClick={(e) => act.decide!(wait, 'reject', byKey(e))}>{waitButtons(wait).reject}</button>
             </>
           )}
-          {item.column === 'new' && !(wait && act.decide) && (
+          {item.column === 'new' && !(wait && act.decide) && !decided && (
             <>
               <button type="button" className="btn small" onClick={(e) => act.move('plan', byKey(e))}>{t('В план')}</button>
               <button type="button" className="btn small ghost" title={t('Закрыть дело: оно не твоё')} onClick={(e) => act.close('не моё', byKey(e))}>{t('Не моё')}</button>

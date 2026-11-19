@@ -1801,6 +1801,8 @@ export class RoutineEngine {
     // событию без вещей вещи разбираются здесь (свежий опрос «Проверки» мимо ingest), иначе одно MR дало бы два дела
     this.addThings(out.map((x) => x.event).filter((e) => !e.things));
     const keys = new Set<string>();
+    // новые дела — те, которых на доске ещё нет: уже открытое (сигнал допишется) и закрытое в счёт «было бы дел» не идут
+    const fresh = new Set<string>();
     const repeat = task.on_repeat === 'keep' ? 'same' : 'plan';
     const known = new Map<string, Awaited<ReturnType<DeskApi['get']>> | null>();
     for (const x of [...out].sort((a, b) => a.event.at.localeCompare(b.event.at))) {
@@ -1819,10 +1821,13 @@ export class RoutineEngine {
       if (item?.closed) x.task = { action: 'closed', key, note: `дело уже закрыто: ${item.closed.reason}` };
       else if (keys.has(key)) x.task = { action: repeat, key };
       else if (item) x.task = { action: repeat, key, note: 'дело уже есть: сигнал допишется к нему' };
-      else x.task = { action: 'new', key };
+      else {
+        x.task = { action: 'new', key };
+        fresh.add(key);
+      }
       keys.add(key);
     }
-    return keys.size;
+    return fresh.size;
   }
 
   /** Сколько запусков в неделю дала бы эта частота подходящих событий и во что обойдётся (средняя прошлых запусков). */

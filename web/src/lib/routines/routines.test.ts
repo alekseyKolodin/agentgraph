@@ -7,7 +7,7 @@ import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replyS
 import { logDetail as detailOf, taskVerdict } from './view';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
-  brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
+  brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decidedDeskKeys, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
   sourceState, stateLabel, stateTone, strip, verdict, waitButtons, weekCost,
 } from './view';
 import { commandSpec, everyLabel, everyOptions, foundRow, foundText, kindSpec, missingFields } from './source';
@@ -414,4 +414,16 @@ test('шапка списка: расход опроса источников з
 test('строка журнала: сколько дел завёл запуск', () => {
   const e = { id: '1', at: '2026-11-17T10:00:00.000Z', routine: 'r', event: { source: 's', id: 'e', title: 'x', at: '2026-11-17T10:00:00.000Z' }, outcome: 'started' as const, desk: { created: 2, signals: 1 } };
   assert.match(detailOf(e), /Запуск завёл 2 дела\. Дописал в дела сигналов: 1\./);
+});
+
+test('решение по ожиданию дела: пока оно в пути, карточка без кнопок; не ушло или отменено — кнопки вернулись', () => {
+  const lines = [
+    { state: 'pending', deskKey: 'mr:gitlab.com/a/b/1' },
+    { state: 'sent', deskKey: 'mr:gitlab.com/a/b/2' },
+    { state: 'failed', deskKey: 'mr:gitlab.com/a/b/3' },
+    // решение по ожиданию без дела (чинить баг, пауза запуска): карточки нет — прятать нечего
+    { state: 'pending' },
+  ];
+  assert.deepEqual([...decidedDeskKeys(lines)], ['mr:gitlab.com/a/b/1', 'mr:gitlab.com/a/b/2']);
+  assert.equal(decidedDeskKeys([]).size, 0);
 });

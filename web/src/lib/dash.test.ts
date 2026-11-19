@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FeedItem, FlowListItem, RunSummary, SessionView, Thing } from '@server/api-types';
 import {
-  dashCap, dashMore, hasConnections, jiraSessionCwd, jiraThing, mrSign, mrThing, pickerFlows, pickerPosition, runsForBranch, runsForJira, sessionsForThing, thingSessionName,
+  branchThingKey, dashCap, dashMore, hasConnections, jiraSessionCwd, jiraThing, mrSign, mrThing, pickerFlows, pickerPosition, runsForBranch, runsForJira, sessionsForThing, thingSessionName,
   thingSessionPrompt,
 } from './dash';
 import { feedTone, feedWhat } from './feed';
@@ -147,4 +147,11 @@ test('подключения есть: Jira с токеном или хотя б
   assert.equal(hasConnections({ jira: { baseUrl: 'u', email: 'e', hasToken: false }, projects: [] }), false);
   assert.equal(hasConnections({ jira: { baseUrl: 'u', email: 'e', hasToken: true }, projects: [] }), true);
   assert.equal(hasConnections({ jira: null, projects: [proj] }), true);
+});
+
+test('ключ ветки «Кода» — тот же, что у дела о ветке: корень репозитория и имя ветки; пустое имя — нет ключа', () => {
+  assert.equal(branchThingKey('/work/app/', 'feature/login'), 'branch:/work/app#feature/login');
+  assert.equal(branchThingKey('/work/app', 'refs/heads/main'), 'branch:/work/app#main');
+  assert.equal(branchThingKey('/work/app', '  '), undefined);
+  assert.equal(branchThingKey('/work/a#b', 'main'), undefined);
 });

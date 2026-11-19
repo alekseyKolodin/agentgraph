@@ -51,6 +51,9 @@ function projectTone(slug: string): number {
 /** Точка подсказки пустой доски — цвет сверки (не проверялось — серая). */
 const QUIET_TONE: Record<CheckTone, string | undefined> = { ok: styles.toneOk, wait: styles.toneWait, fail: styles.toneFail, off: undefined };
 
+/** Сколько фокус идёт за карточкой после решения по ожиданию: 5 секунд до отправки и время на перечитывание доски. */
+const FOLLOW_MS = 30_000;
+
 /** Перенос, который сервер ещё не подтвердил: карточка уже в новой колонке; seq — чей (снимает только свой ответ). */
 type Pending = Record<string, { to: Column; seq: number; item: DeskItem }>;
 
@@ -77,7 +80,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   const spaces = useSpaces(useFeature('spaces')).data?.spaces ?? [];
   // ожидание рутины с task — само дело: решение принимается на карточке (в полосе над доской этого ожидания нет)
   const waits = activeWaits(routines.data?.waits ?? []);
-  const { hidden: decided } = useDecisions();
+  const { decidedKeys } = useDecisions();
   const integrationsOn = useFeature('integrations');
   const projects = useQuery({ queryKey: keys.integrations, queryFn: fetchIntegrations, staleTime: 5 * 60_000, enabled: integrationsOn }).data?.projects ?? [];
   const config = useConfig().data;
@@ -90,6 +93,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   const [picker, setPicker] = useState<PickerState>(null);
   const [said, setSaid] = useState('');
   const focusKey = useRef<string | null>(null);
+  const follow = useRef<{ key: string; el: HTMLElement | null; until: number } | null>(null);
   const seq = useRef(0);
 
   const all = useMemo(() => {
@@ -118,9 +122,22 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   useEffect(() => {
     const key = focusKey.current;
     const el = key ? document.querySelector<HTMLElement>(`[data-desk-key="${CSS.escape(key)}"]`) : null;
-    if (!el) return;
-    focusKey.current = null;
-    if (document.activeElement !== el) el.focus();
+    if (el) {
+      focusKey.current = null;
+      if (document.activeElement !== el) el.focus();
+    }
+    // решение по ожиданию: колонка сменится позже, карточка пересоздастся и фокус упадёт в body — вернуть, если он не ушёл сам
+    const f = follow.current;
+    if (!f) return;
+    if (Date.now() > f.until) {
+      follow.current = null;
+      return;
+    }
+    const cur = document.querySelector<HTMLElement>(`[data-desk-key="${CSS.escape(f.key)}"]`);
+    if (cur && cur !== f.el) {
+      if (document.activeElement === document.body || document.activeElement === f.el) cur.focus();
+      f.el = cur;
+    }
   });
 
   if (!on) return null;
@@ -210,8 +227,13 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   };
 
   /** Решение по ожиданию рутины: уходит через 5 секунд, до этого — «Отменить» (то же, что у карточки ожидания в полосе). */
-  const decideWait = (w: RoutineWait, action: 'run' | 'later' | 'reject') => {
+  const decideWait = (w: RoutineWait, action: 'run' | 'later' | 'reject', keyboard: boolean) => {
     const text = decisionText(action, w, false);
+    // кнопки исчезают сразу, а карточка сменит колонку только по ответу сервера (и пересоздастся): фокус идёт за ней
+    if (w.deskKey && keyboard) {
+      focusKey.current = w.deskKey;
+      follow.current = { key: w.deskKey, el: document.querySelector<HTMLElement>(`[data-desk-key="${CSS.escape(w.deskKey)}"]`), until: Date.now() + FOLLOW_MS };
+    }
     decide(w, { action }, text);
     toast(`${text} ${t('Отменить?')}`, () => {
       if (!undo(w.id) && isSent(w.id)) toast(t('Решение уже ушло.'));
@@ -285,7 +307,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
                     runs={r?.runs ?? []}
                     wait={deskWaitOf(i.key, waits)}
                     // решение принято: кнопок уже нет, строка «Запуск…» с «Отменить» — в полосе над доской
-                    waitDecided={Boolean(deskWaitOf(i.key, waits) && decided.has(deskWaitOf(i.key, waits)!.id))}
+                    decided={decidedKeys.has(i.key)}
                     act={actions(i)}
                     drag={{ dragging: dragging === i.key, start: () => setDragging(i.key), end: () => setDragging(undefined) }}
                   />

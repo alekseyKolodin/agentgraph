@@ -629,7 +629,7 @@ function History({ slug, spec, sourceTitle }: { slug: string; spec: ReturnType<t
           <div className={styles.histHead}>
             {tasks !== undefined ? (
               <>
-                <span className={styles.histBig}>{t('На доске было бы {n} {w}', { n: tasks, w: plural(tasks, 'дело', 'дела', 'дел') })}</span>
+                <span className={styles.histBig}>{t('На доске было бы {n} {w}', { n: tasks, w: plural(tasks, 'новое дело', 'новых дела', 'новых дел') })}</span>
                 {spec.run && <span className={styles.mono}>{t('запустилось бы {k} из {n}', { k: runs, n: events.length })}</span>}
               </>
             ) : (

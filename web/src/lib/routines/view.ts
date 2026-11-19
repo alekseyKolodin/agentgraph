@@ -307,6 +307,13 @@ export function waitButtons(w: Pick<RoutineWait, 'question' | 'kind'>): { run: s
 /** Ожидание рутины с task (3.8): это дело в «Новом» — запуск по нему ещё не начат. */
 export const isDeskWait = (w: Pick<RoutineWait, 'kind' | 'deskKey'>): boolean => w.kind === 'suggest' && Boolean(w.deskKey);
 
+/**
+ * Дела, по ожиданию которых решение уже принято (ждёт отправки или ушло): карточка до перечитывания доски не показывает
+ * кнопок — ни решения, ни «В план / Не моё». Отменили или не ушло — строки решения нет, кнопки вернулись.
+ */
+export const decidedDeskKeys = (lines: ReadonlyArray<{ state: string; deskKey?: string }>): Set<string> =>
+  new Set(lines.filter((l) => l.state !== 'failed' && l.deskKey).map((l) => l.deskKey!));
+
 /** Строка после решения по карточке. */
 export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft' | 'deskKey'>, replied: boolean): string {
   const where = w.replyDraft?.where;
