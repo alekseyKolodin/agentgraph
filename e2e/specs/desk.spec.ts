@@ -1,5 +1,6 @@
 // Дела, этап 3 (docs/desk/SPEC.md): две рутины на один MR — Slack и заявки со ссылкой в тексте — дают одно дело с двумя
-// сигналами; дело, заведённое `agentgraph desk add` из другого процесса, и дело о MR видны в блоках Главной.
+// сигналами; дело о MR видно в блоках Главной, а дело, заведённое `agentgraph desk add` из другого процесса, появляется на
+// уже открытой Главной само.
 // Наблюдатель MR здесь настоящий и до вымышленного хоста не достучится: его движение проверяет src/server.desk.stage3.test.ts.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,7 +12,7 @@ const MR = 'https://gitlab.example.com/grp/app/-/merge_requests/12';
 const MR_KEY = 'mr:gitlab.example.com/grp/app/12';
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
-test('две рутины на один MR — одно дело; оно и дело из `agentgraph desk add` — на главной', async ({ page, e2e }) => {
+test('две рутины на один MR — одно дело на главной; дело из `agentgraph desk add` появляется на открытой главной само', async ({ page, e2e }) => {
   test.setTimeout(120_000);
   await e2e.slackSource();
   await e2e.commandSource();
@@ -29,19 +30,18 @@ test('две рутины на один MR — одно дело; оно и де
   expect(item.signals.map((s) => s.routine).sort()).toEqual(['review-reqs', 'review-slack']);
   expect((await e2e.api<DeskListReply>('GET', '/api/desk')).items).toHaveLength(1);
 
-  // дело из командной строки — другой процесс на той же папке настроек
-  const env = { ...process.env, AGENTGRAPH_CONFIG_DIR: e2e.configDir, AGENTGRAPH_HOME: path.join(e2e.dir, 'agentgraph-home') };
-  const out = execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'desk', 'add', 'Ответить Пете про релиз', '--kind', 'Забытое', '--why', 'обещал в четверг'], { cwd: ROOT, env, encoding: 'utf8' });
-  expect(out).toContain('Дело заведено');
-
   // блок MR на главной — при «Подключениях»: проект — пустой git-репозиторий
   const repo = path.join(e2e.dir, 'repo');
   fs.mkdirSync(repo, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: repo });
   await e2e.api('POST', '/api/projects', { path: repo });
-
   await page.goto('/');
-  await expect(page.getByText('Ответить Пете про релиз')).toBeVisible();
-  await expect(page.getByText('обещал в четверг')).toBeVisible();
   await expect(page.getByRole('link', { name: '!12' })).toBeVisible();
+
+  // дело из командной строки — другой процесс на той же папке настроек: главная, уже открытая, видит его сама
+  const env = { ...process.env, AGENTGRAPH_CONFIG_DIR: e2e.configDir, AGENTGRAPH_HOME: path.join(e2e.dir, 'agentgraph-home') };
+  const out = execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'desk', 'add', 'Ответить Пете про релиз', '--kind', 'Забытое', '--why', 'обещал в четверг'], { cwd: ROOT, env, encoding: 'utf8' });
+  expect(out).toContain('Дело заведено');
+  await expect(page.getByText('Ответить Пете про релиз')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('обещал в четверг')).toBeVisible();
 });

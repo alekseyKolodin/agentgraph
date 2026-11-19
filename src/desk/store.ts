@@ -9,13 +9,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { readRegular, writeAtomic } from '../safe-fs.js';
+import { readRegular, UnsafeFileError, writeAtomic } from '../safe-fs.js';
 import type { CheckResult } from '../routines/types.js';
 import type { ThingState } from '../things/types.js';
 import { isColumn, step, type DeskEvent, type RunOutcome, type Step } from './rules.js';
 import type { DeskApi, DeskBy, DeskColumn, DeskFilter, DeskItem, DeskMove, DeskPatch } from './types.js';
 
-const ITEMS_MAX = 8 * 1024 * 1024;
+/** items.json пишем не больше этого: сверх — у дел остаются только последние сигналы, дальше — понятная ошибка. */
+export const ITEMS_MAX = 8 * 1024 * 1024;
+/** Читаем и больше (файл мог дорасти у прошлой версии); сверх этого — файл откладывается, а не ломает доску. */
+const ITEMS_READ_MAX = 64 * 1024 * 1024;
+/** Сколько сигналов остаётся у дела, когда доска не влезает в ITEMS_MAX. */
+const SIGNALS_TIGHT = 5;
+/** Открытых дел не больше: новое сверх — ошибка с подсказкой, а не бесконечный рост файла. */
+export const OPEN_MAX = 2000;
+
+/** Доска переполнена: новое дело не заведено или запись не влезает. Текст — для человека. */
+export class DeskFullError extends Error {}
 /** Журнал дорос до этого размера — запись оставляет последние LOG_KEEP строк. */
 export const LOG_TRIM_BYTES = 512 * 1024;
 export const LOG_KEEP = 2000;
@@ -28,29 +38,49 @@ export interface DeskStore extends DeskApi {
   readonly dir: string;
   /** Состояния вещей от наблюдателей: правила по каждому делу; сколько дел передвинулось (служебные seen/why не в счёт). */
   observe(states: ReadonlyMap<string, ThingState>): Promise<number>;
-  /** Запуск закончился: дела, где в links есть он или первый запуск его цепочки, получают итог в why; сколько изменилось. */
+  /** Запуск закончился: дела, где он (или первый запуск его цепочки) начат по делу (started), получают итог в why; сколько изменилось. */
   runEnded(runIds: readonly string[], outcome: RunOutcome, summary?: string): Promise<number>;
-  /** Изменения доски (любая запись этого процесса). Возвращает отписку. */
+  /** Изменения доски: запись этого процесса сразу, запись другого (CLI) — по mtime items.json. Возвращает отписку. */
   onChange(fn: () => void): () => void;
   readCheck(): CheckResult | undefined;
   writeCheck(c: CheckResult): void;
 }
 
-export type DeskStoreDeps = { now?: () => Date; id?: () => string };
+export type DeskStoreDeps = {
+  now?: () => Date;
+  id?: () => string;
+  /** Как часто смотреть, не записал ли items.json другой процесс (`agentgraph desk add`), мс. */
+  watchMs?: number;
+  /** Сколько ждать чужой замок записи, мс. */
+  lockWaitMs?: number;
+};
 
 type File = { version: 1; items: unknown[] };
 
 /** Замок записи старше этого — от упавшего процесса: запись длится миллисекунды. */
-const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 3_000;
+export const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 5_000;
 
-/** Файловый замок на чтение-правку-запись: O_EXCL, ожидание по 15 мс; висящий дольше LOCK_STALE_MS снимается. */
-async function withFileLock<T>(file: string, fn: () => T): Promise<T> {
+const readToken = (file: string): string | undefined => {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Файловый замок на чтение-правку-запись: O_EXCL со своей меткой внутри, ожидание по 15 мс. Отнимается только висящий
+ * дольше LOCK_STALE_MS (упавший процесс); живой владелец держит дольше LOCK_WAIT_MS — ошибка, а не запись поверх.
+ * Снимается только свой: метка в файле — наша.
+ */
+async function withFileLock<T>(file: string, fn: () => T, wait = LOCK_WAIT_MS): Promise<T> {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const until = Date.now() + LOCK_WAIT_MS;
+  const token = `${process.pid}:${randomBytes(6).toString('hex')}`;
+  const until = Date.now() + wait;
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(file, 'wx', 0o600));
+      fs.writeFileSync(file, token, { flag: 'wx', mode: 0o600 });
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -60,17 +90,20 @@ async function withFileLock<T>(file: string, fn: () => T): Promise<T> {
       } catch {
         continue; // замок только что сняли
       }
-      if (age > LOCK_STALE_MS || Date.now() > until) {
-        fs.rmSync(file, { force: true });
+      if (age > LOCK_STALE_MS) {
+        // чужой упавший: снимаем, только если это всё ещё он (метка та же)
+        const stale = readToken(file);
+        if (stale !== undefined && readToken(file) === stale) fs.rmSync(file, { force: true });
         continue;
       }
+      if (Date.now() > until) throw new Error(`доска занята другим процессом (${path.basename(file)}): попробуй ещё раз`);
       await new Promise((r) => setTimeout(r, 15));
     }
   }
   try {
     return fn();
   } finally {
-    fs.rmSync(file, { force: true });
+    if (readToken(file) === token) fs.rmSync(file, { force: true });
   }
 }
 
@@ -122,21 +155,26 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
   const checkFile = path.join(dir, 'check.json');
   const lockFile = path.join(dir, 'items.lock');
   const subs = new Set<() => void>();
+  /** mtime нашей последней записи items.json: её изменение — не повод для события «другой процесс записал». */
+  let ownMtime = 0;
 
   /** Дела и записи, которых эта версия не понимает: их пишем обратно как есть. */
   const readAll = (): { items: DeskItem[]; foreign: unknown[] } => {
     let text: string | undefined;
-    try {
-      text = readRegular(itemsFile, { max: ITEMS_MAX });
-    } catch (err) {
-      throw new Error(`desk: ${itemsFile} не прочитать: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (text === undefined) return { items: [], foreign: [] };
     let f: Partial<File>;
     try {
+      try {
+        text = readRegular(itemsFile, { max: ITEMS_READ_MAX });
+      } catch (err) {
+        // не обычный файл или неподъёмный — откладываем как битый, доска работает дальше; права и диск — ошибка
+        if (!(err instanceof UnsafeFileError)) throw new Error(`desk: ${itemsFile} не прочитать: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+      if (text === undefined) return { items: [], foreign: [] };
       f = JSON.parse(text) as Partial<File>;
       if (!Array.isArray(f.items)) throw new Error('нет списка items');
     } catch (err) {
+      if (err instanceof Error && err.message.startsWith('desk: ')) throw err;
       // битый файл не затираем: откладываем рядом, доска начинается пустой, а дела можно достать руками
       const bad = path.join(dir, `items.${now().toISOString().replace(/[:.]/g, '-')}.bad.json`);
       try {
@@ -155,9 +193,33 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
   };
   const read = (): DeskItem[] => readAll().items;
 
+  /**
+   * Запись с потолком ITEMS_MAX: не влезает — у дел остаются последние SIGNALS_TIGHT сигналов, потом один; всё равно не
+   * влезает — DeskFullError (запись не делается, файл прежний).
+   */
   const write = (items: DeskItem[], foreign: unknown[]): void => {
     fs.mkdirSync(dir, { recursive: true });
-    writeAtomic(itemsFile, JSON.stringify({ version: 1, items: [...prune(items, now().getTime()), ...foreign] } satisfies File, null, 1) + '\n');
+    let list = prune(items, now().getTime());
+    const text = (l: DeskItem[]) => JSON.stringify({ version: 1, items: [...l, ...foreign] } satisfies File, null, 1) + '\n';
+    let out = text(list);
+    for (const keep of [SIGNALS_TIGHT, 1]) {
+      if (Buffer.byteLength(out) <= ITEMS_MAX) break;
+      list = list.map((i) => (i.signals.length > keep ? { ...i, signals: i.signals.slice(-keep) } : i));
+      out = text(list);
+    }
+    if (Buffer.byteLength(out) > ITEMS_MAX) throw new DeskFullError(`Доска переполнена: ${list.length} дел не влезают в ${ITEMS_MAX / 1024 / 1024} МБ — закрой лишние (agentgraph desk list / close)`);
+    writeAtomic(itemsFile, out);
+    try {
+      ownMtime = fs.statSync(itemsFile).mtimeMs;
+    } catch {
+      /* только что записали — стат не нужен для записи */
+    }
+  };
+
+  /** items.json записал другой процесс (CLI, второй сервер): подписчикам — то же событие, что и на свою запись. */
+  const onFile = (cur: fs.Stats, prev: fs.Stats): void => {
+    if (cur.mtimeMs === prev.mtimeMs || cur.mtimeMs === ownMtime || !cur.mtimeMs) return;
+    emit();
   };
 
   /** Журнал — дополнение: его сбой не отменяет уже записанное дело. */
@@ -216,6 +278,7 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
         const cur = idx >= 0 ? items[idx] : undefined;
         const r: Step | undefined = step(cur, event, { now: at, id: newId });
         if (!r) return cur;
+        if (!cur && items.filter((i) => !i.closed).length >= OPEN_MAX) throw new DeskFullError(`Открытых дел уже ${OPEN_MAX}: новое «${r.item.title}» не заведено — закрой лишние (agentgraph desk list / close)`);
         changed++;
         if (idx >= 0) items[idx] = r.item;
         else items.push(r.item);
@@ -228,7 +291,7 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
         emit();
       }
       return { out, changed, moved: moves.length };
-    }));
+    }, deps.lockWaitMs));
 
   const one = async (key: string, event: DeskEvent) => (await apply(() => [{ key, event }])).out[0];
 
@@ -252,12 +315,16 @@ export function openStore(dir: string, deps: DeskStoreDeps = {}): DeskStore {
       return r.moved;
     },
     async runEnded(runIds, outcome, summary) {
-      const r = await apply((items) => items.filter((i) => runIds.some((id) => i.links.runs.includes(id))).map((i) => ({ key: i.key, event: { type: 'run', runIds: [...runIds], outcome, ...(summary ? { summary } : {}) } })));
+      const r = await apply((items) => items.filter((i) => runIds.some((id) => i.started?.includes(id))).map((i) => ({ key: i.key, event: { type: 'run', runIds: [...runIds], outcome, ...(summary ? { summary } : {}) } })));
       return r.changed;
     },
     onChange(fn) {
       subs.add(fn);
-      return () => subs.delete(fn);
+      if (subs.size === 1) fs.watchFile(itemsFile, { persistent: false, interval: deps.watchMs ?? 2_000 }, onFile);
+      return () => {
+        subs.delete(fn);
+        if (!subs.size) fs.unwatchFile(itemsFile, onFile);
+      };
     },
     readCheck() {
       try {

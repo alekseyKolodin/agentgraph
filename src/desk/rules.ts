@@ -30,6 +30,8 @@ export const isColumn = (v: unknown): v is DeskColumn => typeof v === 'string' &
 
 /** Сигналов в деле: старые уходят, последние остаются. */
 export const SIGNALS_MAX = 50;
+/** Начатых по делу запусков помним столько последних. */
+const STARTED_MAX = 20;
 const WHY_MAX = 300;
 
 const KIND_OF: Record<string, string> = { mr: 'MR', jira: 'Jira', teamwork: 'Teamwork', branch: 'Ветка', session: 'Сессия', run: 'Запуск', thread: 'Разговор', own: 'Своё' };
@@ -103,6 +105,7 @@ function create(key: string, patch: DeskPatch, by: DeskBy, ctx: RuleCtx): Step {
     movedBy: by,
   };
   if (column === 'done') item.closed = { at: ctx.now, reason: line(patch.why ?? 'заведено закрытым', 200) };
+  if ((by === 'routine' || by === 'me') && item.links.runs.length) item.started = item.links.runs.slice(-STARTED_MAX);
   return { item, move: { at: ctx.now, key, to: column, by, ...(item.why ? { why: item.why } : {}) } };
 }
 
@@ -129,7 +132,12 @@ function put(item: DeskItem | undefined, e: Extract<DeskEvent, { type: 'put' }>,
     signals: fresh ? [...item.signals, fresh].slice(-SIGNALS_MAX) : item.signals,
     links: mergeLinks(item.links, p.links),
   };
+  // запуск, привязанный рутиной или с карточки, начат по делу: его конец пишет итог в why
+  const startedNow = e.by === 'routine' || e.by === 'me' ? (p.links?.runs ?? []).filter((id) => typeof id === 'string' && id && !(item.started ?? []).includes(id)) : [];
+  if (startedNow.length) next.started = [...(item.started ?? []), ...startedNow].slice(-STARTED_MAX);
   if (fresh && (p.onRepeat ?? 'plan') === 'plan' && (item.column === 'waiting' || item.column === 'done')) {
+    // переоткрыто сигналом: отпечаток закрытой вещи забываем — вещь всё ещё закрыта, сверка закроет дело снова
+    if (item.closed) delete next.seen;
     return moved(next, 'plan', e.by, ctx.now, p.why ?? (fresh.text ? `новое: ${fresh.text}` : `новое от ${fresh.author ?? fresh.source}`));
   }
   return changed(item, next) ? { item: next } : undefined;
@@ -154,6 +162,8 @@ function state(item: DeskItem, s: ThingState, ctx: RuleCtx): Step | undefined {
   // закрывает вещь только правило close: 'thing' (по умолчанию); 'never' и условие словами — руками
   if (s.closed && closesWithThing(item)) return moved(base, 'done', 'watcher', ctx.now, why, CLOSED_REASON[s.closed]);
   if (s.closed) return { item: base };
+  // перенос руками до первой сверки: первое состояние только запоминаем — перенос держится до изменения вещи
+  if (item.seen === undefined && item.movedBy === 'me') return { item: base };
   if (s.turn === 'me' && item.column === 'waiting') return moved(base, 'plan', 'watcher', ctx.now, why);
   if (s.turn === 'others' && (item.column === 'plan' || item.column === 'work')) return moved(base, 'waiting', 'watcher', ctx.now, why);
   return { item: base };
@@ -172,8 +182,8 @@ export function step(item: DeskItem | undefined, e: DeskEvent, ctx: RuleCtx): St
     case 'close':
       return item.closed ? undefined : moved(item, 'done', e.by, ctx.now, undefined, e.reason || 'закрыто');
     case 'run': {
-      // запуск по делу закончился: колонка та же, why — итог
-      if (!e.runIds.some((id) => item.links.runs.includes(id))) return undefined;
+      // запуск, начатый по делу, закончился: колонка та же, why — итог
+      if (!e.runIds.some((id) => item.started?.includes(id))) return undefined;
       const text = { ok: `агент закончил: ${e.summary || 'готово'}`, failed: `запуск упал: ${e.summary || 'ошибка'}`, stopped: `запуск остановлен${e.summary ? `: ${e.summary}` : ''}` }[e.outcome];
       const why = line(text);
       return why === item.why ? undefined : { item: { ...item, why } };

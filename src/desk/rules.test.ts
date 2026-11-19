@@ -148,7 +148,7 @@ test('с карточки начат запуск или сессия: в «В �
 });
 
 test('запуск по делу закончился: колонка та же, why — «агент закончил» или «запуск упал»', () => {
-  const i = item('work', { links: { runs: ['run-1'], sessions: [] } });
+  const i = item('work', { links: { runs: ['run-1'], sessions: [] }, started: ['run-1'] });
   const okr = step(i, { type: 'run', runIds: ['run-1'], outcome: 'ok', summary: 'замечания поправлены' }, ctx())!;
   assert.deepEqual([okr.item.column, okr.item.why], ['work', 'агент закончил: замечания поправлены']);
   const bad = step(i, { type: 'run', runIds: ['run-1'], outcome: 'failed', summary: 'нет доступа' }, ctx())!;
@@ -228,4 +228,31 @@ test('ссылки дописываются по одной и без повто
     i = step(i, { type: 'put', key: KEY, patch: { links }, by: 'session' }, ctx())?.item ?? i;
   }
   assert.deepEqual(i.links, { runs: ['r1', 'r2'], sessions: ['s1'], branch: 'feat' });
+});
+
+test('дело, переоткрытое сигналом, пока вещь закрыта, сверка закрывает снова', () => {
+  const merged = state({ closed: 'merged', turn: 'none', why: 'смержен' });
+  const done = step(item('work'), { type: 'state', state: merged }, ctx())!.item;
+  const reopened = step(done, { type: 'put', key: KEY, patch: { signal: sig('а что с этим MR?', '2026-11-19T11:00:00.000Z', 'slack') }, by: 'routine' }, ctx())!.item;
+  assert.deepEqual([reopened.column, reopened.seen], ['plan', undefined]);
+  const again = step(reopened, { type: 'state', state: merged }, ctx())!;
+  assert.equal(again.item.column, 'done');
+});
+
+test('перенос руками до первой сверки держится: первое состояние только запоминается', () => {
+  const manual = step(item('plan', { seen: undefined }), { type: 'move', column: 'work', by: 'me' }, ctx())!.item;
+  const r = step(manual, { type: 'state', state: state({ turn: 'others', why: 'жду автора' }) }, ctx())!;
+  assert.deepEqual([r.item.column, r.item.seen !== undefined, r.move], ['work', true, undefined]);
+  // следующее изменение вещи — уже правило
+  const next = step(r.item, { type: 'state', state: state({ turn: 'others', why: 'жду автора', updatedAt: '2026-11-19T12:00:00.000Z' }) }, ctx())!;
+  assert.equal(next.item.column, 'waiting');
+});
+
+test('итог запуска — только у дел, где он начат по делу (рутиной или с карточки), не у заведённых им через desk_put', () => {
+  const byRoutine = step(item('plan'), { type: 'put', key: KEY, patch: { links: { runs: ['r1'] } }, by: 'routine' }, ctx())!.item;
+  assert.deepEqual(byRoutine.started, ['r1']);
+  const byFlow = step(undefined, { type: 'put', key: 'own:f', patch: { title: 'нашёл агент', links: { runs: ['r1'] } }, by: 'flow' }, ctx())!.item;
+  assert.equal(byFlow.started, undefined);
+  assert.equal(step(byFlow, { type: 'run', runIds: ['r1'], outcome: 'ok', summary: 'x' }, ctx()), undefined);
+  assert.equal(step(byRoutine, { type: 'run', runIds: ['r1'], outcome: 'ok', summary: 'x' }, ctx())!.item.why, 'агент закончил: x');
 });

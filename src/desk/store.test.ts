@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openStore, LOG_TRIM_BYTES, CLOSED_TTL_MS } from './store.js';
+import { openStore, LOG_TRIM_BYTES, CLOSED_TTL_MS, DeskFullError, ITEMS_MAX, OPEN_MAX } from './store.js';
 import { openDesk } from './index.js';
 import type { DeskMove } from './types.js';
 
@@ -135,9 +135,12 @@ test('observe: правила по состояниям только у откр
 
 test('runEnded: why дел с этим запуском — итог, колонка та же', async (t) => {
   const d = openStore(tmp(t));
-  await d.put('own:a', { title: 'a', links: { runs: ['r1'] } }, 'flow');
+  await d.put('own:a', { title: 'a', links: { runs: ['r1'] } }, 'routine');
   await d.put('own:b', { title: 'b' }, 'flow');
+  // дело, которое запуск r1 сам завёл через desk_put (by flow): ссылка есть, а итог чужого запуска его не трогает
+  await d.put('own:c', { title: 'c', links: { runs: ['r1'] } }, 'flow');
   assert.equal(await d.runEnded(['r1'], 'failed', 'бюджет кончился'), 1);
+  assert.equal((await d.get('own:c'))?.why, '');
   assert.equal((await d.get('own:a'))?.why, 'запуск упал: бюджет кончился');
   assert.equal((await d.get('own:a'))?.column, 'new');
 });
@@ -195,4 +198,63 @@ test('замок записи: висящий от упавшего процес
   await d.put('own:a', { title: 'a' }, 'me');
   assert.equal((await d.get('own:a'))?.title, 'a');
   assert.equal(fs.existsSync(lock), false);
+});
+
+const bulk = (n: number, o: { closed?: boolean; signals?: number; text?: number } = {}) =>
+  Array.from({ length: n }, (_, k) => ({
+    id: `b${k}`, key: `own:b${k}`, kind: 'Своё', title: `дело ${k}`, column: o.closed ? 'done' : 'new', why: '', createdAt: '2026-11-19T09:00:00.000Z', movedAt: '2026-11-19T09:00:00.000Z', movedBy: 'me',
+    links: { runs: [], sessions: [] },
+    signals: Array.from({ length: o.signals ?? 0 }, (_, j) => ({ source: 'slack', at: `2026-11-19T09:${String(j % 60).padStart(2, '0')}:00.000Z`, text: 'я'.repeat(o.text ?? 10) })),
+    ...(o.closed ? { closed: { at: new Date().toISOString(), reason: 'x' } } : {}),
+  }));
+
+test('открытых дел не больше OPEN_MAX: новое — понятная ошибка, существующие правятся', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ version: 1, items: bulk(OPEN_MAX) }));
+  const d = openDesk(dir);
+  await assert.rejects(d.put('own:new', { title: 'лишнее' }, 'me'), (e: Error) => e instanceof DeskFullError && /Открытых дел уже 2000/.test(e.message));
+  assert.equal((await d.move('own:b1', 'plan', 'me'))?.column, 'plan');
+});
+
+test('доска не влезает в ITEMS_MAX: у дел остаются последние сигналы, дела целы', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  // 120 дел по 50 сигналов по 2000 знаков — больше 8 МБ (файл от прошлой версии)
+  fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify({ version: 1, items: bulk(120, { signals: 50, text: 2000 }) }));
+  assert.ok(fs.statSync(path.join(dir, 'items.json')).size > ITEMS_MAX);
+  const d = openDesk(dir);
+  assert.equal((await d.list()).length, 120);
+  await d.move('own:b0', 'plan', 'me');
+  assert.ok(fs.statSync(path.join(dir, 'items.json')).size <= ITEMS_MAX);
+  const all = await d.list();
+  assert.equal(all.length, 120);
+  assert.ok(all.every((i) => i.signals.length <= 5 && i.signals.length >= 1));
+});
+
+test('замок живого владельца не отнимается: ошибка «доска занята», чужой замок на месте', async (t) => {
+  const dir = tmp(t);
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, 'items.lock');
+  fs.writeFileSync(lock, 'other:1');
+  const d = openStore(dir, { lockWaitMs: 100 });
+  await assert.rejects(d.put('own:a', { title: 'a' }, 'me'), /доска занята другим процессом/);
+  assert.equal(fs.readFileSync(lock, 'utf8'), 'other:1');
+});
+
+test('запись другого процесса (CLI) — событие подписчикам по mtime; своя запись — одно событие', async (t) => {
+  const dir = tmp(t);
+  const server = openStore(dir, { watchMs: 20 });
+  let n = 0;
+  const off = server.onChange(() => n++);
+  t.after(off);
+  await server.put('own:a', { title: 'своё' }, 'me');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(n, 1);
+  // «agentgraph desk add» — другое хранилище (в жизни — другой процесс): своей подписки у сервера на него нет
+  await new Promise((r) => setTimeout(r, 20));
+  await openStore(dir).put('own:cli', { title: 'из CLI' }, 'me');
+  const end = Date.now() + 2000;
+  while (n < 2 && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(n, 2);
 });
