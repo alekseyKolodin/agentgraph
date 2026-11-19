@@ -229,6 +229,22 @@ export type RoutineSpec = {
   mode: RoutineMode;
   reply?: ReplySpec;
   limits?: { usd?: number; per_day?: number; parallel?: number };
+  /** Рутина заводит дела (SPEC этап 3, блок task). С task поле run становится необязательным — правку делает этап 3.3. */
+  task?: TaskRule;
+};
+
+/**
+ * Блок task правила рутины. from: event — событие и есть дело; flow — дела заводит flow инструментом desk_put.
+ * same: что считать тем же (по умолчанию thing, если вещь распознана, иначе thread, иначе event).
+ * close: thing — когда вещь закрыта; never — только руками; иная строка — условие словами.
+ */
+export type TaskRule = {
+  kind: string;
+  column?: 'new' | 'plan';
+  from?: 'event' | 'flow';
+  same?: 'thing' | 'thread' | 'event';
+  on_repeat?: 'plan' | 'keep';
+  close?: 'thing' | 'never' | string;
 };
 
 // ---------------------------------------------------------------- журнал и ожидания
@@ -313,6 +329,8 @@ export type RoutineWait = {
   /** «Не сейчас»: ожидание отложено (сервер помнит). Главная и счётчик рельса его не показывают; в /routines — в полосе ожиданий с пометкой. */
   snoozedAt?: string;
   at: string;
+  /** Ожидание рутины с task — это дело: ключ дела (карточка «Новое» с кнопкой «Запустить»). */
+  deskKey?: string;
 };
 
 /** Ответ на карточку: run — «Чинить»/«Запустить»/«Продолжить», later — «Не сейчас», reject — «Это не баг»/«Не то». */
