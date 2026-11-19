@@ -120,6 +120,7 @@ import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type Drop
 import { findProject } from './projects.js';
 import { worktreesDir } from './settings.js';
 import { readHead } from './safe-fs.js';
+import { desk } from './desk/index.js';
 
 export type ServerOptions = {
   port: number;
@@ -1506,7 +1507,8 @@ function launchRun(
       if (lr.child === c.id) delete lr.child;
     });
   };
-  const done = deps.runFlow(spec, { ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
+  // дела: у этапов — desk_put/desk_close/desk_list, хранилище общее (откроется при первом вызове)
+  const done = deps.runFlow(spec, { desk, ...opts, abort: lr.abort, onEvent: broadcast, onQuestion, control, onArtifactStore, onFix, digest, runChild }).catch((err) => {
     const report: RunReport = lr.report ?? {
       id,
       flow: spec.name,

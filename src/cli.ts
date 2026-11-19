@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI: agentgraph "<задача>" | gen "<задача>" | edit flow "<правка>" | run flow.yaml | show flow.yaml | eval flow --tasks | ui
+// CLI: agentgraph "<задача>" | gen "<задача>" | edit flow "<правка>" | run flow.yaml | show flow.yaml | eval flow --tasks | desk add|list|close | ui
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -19,7 +19,9 @@ import { execveRestart } from './update.js';
 import { RUNS_DIR, WEB_DIST_DIR } from './paths.js';
 import { c, fmtUsd } from './ui.js';
 import { knowledgeTags, listTags, runTagSlugs } from './tags.js';
-import { createSpace, listSpaces, readSpace, setMigrationRunsDir, spaceReadDirs, spaceSlug, type Space } from './spaces.js';
+import { createSpace, listSpaces, projectOfPath, readSpace, readSpaceMeta, setMigrationRunsDir, spaceReadDirs, spaceSlug, type Space } from './spaces.js';
+import { desk } from './desk/index.js';
+import { DESK_CLI_HELP, deskCommand } from './desk/tools.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { pickRunTitle } from './run-title.js';
 import { evalDir, formatEvalTable, loadTasks, runEval } from './eval.js';
@@ -40,6 +42,7 @@ const HELP = `agentgraph — задача -> flow.yaml -> цепочка сес�
                                    сквозной eval: прогнать набор задач через flow, посчитать долю решённых
   agentgraph spaces                список пространств (фича или проект: карта, документы, состояние «где мы сейчас»)
   agentgraph tags                  список тегов знаний с описанием или началом заметок
+${DESK_CLI_HELP}
   agentgraph ui                    поднять веб-интерфейс (по умолчанию http://127.0.0.1:4747)
 
 Опции:
@@ -108,6 +111,12 @@ async function main(): Promise<number> {
       runs: { type: 'string' },
       compare: { type: 'string' },
       json: { type: 'string' },
+      // agentgraph desk …
+      kind: { type: 'string' },
+      due: { type: 'string' },
+      project: { type: 'string' },
+      column: { type: 'string', multiple: true },
+      why: { type: 'string' },
       verbose: { type: 'boolean', short: 'v', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -133,10 +142,12 @@ async function main(): Promise<number> {
     onEvent: consoleReporter(values.verbose),
     onQuestion: askInTerminal,
     runChild: childInTerminal(values.verbose, 1),
+    // дела: у этапов — desk_put/desk_close/desk_list, хранилище откроется при первом вызове
+    desk,
   };
 
   const [cmd, ...rest] = positionals;
-  const noRun = ['gen', 'edit', 'show', 'ui', 'tags', 'spaces', 'eval'];
+  const noRun = ['gen', 'edit', 'show', 'ui', 'tags', 'spaces', 'eval', 'desk'];
   if (values.once && ['run', ...noRun].includes(cmd)) return fail('--once — только для формы agentgraph "<задача>": сгенерировать и запустить без сохранения');
   if (values.once && values.out) return fail('--once не сохраняет flow: убери -o или --once');
   if (values.tag?.length || values['no-save-tag'] || values['auto-tag']) {
@@ -153,7 +164,20 @@ async function main(): Promise<number> {
   if (cmd !== 'eval' && (values.tasks || values.runs || values.compare || values.json)) return fail('--tasks, --runs, --compare и --json — только для eval: agentgraph eval <flow> --tasks <tasks.yaml>');
   if (cmd === 'eval' && values.out) return fail('eval ничего не генерирует: убери -o');
   if (cmd === 'eval' && values.input) return fail('eval берёт задачи из --tasks: убери --input');
+  const deskOpts = { kind: values.kind, due: values.due, project: values.project, column: values.column, why: values.why };
+  if (cmd !== 'desk' && Object.values(deskOpts).some((v) => v !== undefined)) return fail('--kind, --due, --project, --column и --why — только для agentgraph desk');
   switch (cmd) {
+    case 'desk': {
+      const [sub, ...args] = rest;
+      const out = await deskCommand(sub, args, deskOpts, {
+        api: desk,
+        project: () => projectOfPath(cwd).space ?? undefined,
+        // слаг — через spaceSlug, как у --space: не слаг — понятная ошибка до чтения папки
+        hasProject: (slug) => Boolean(readSpaceMeta(spaceSlug(slug) ?? '')),
+      });
+      for (const l of out.lines) console.log(l);
+      return out.code;
+    }
     case 'spaces': {
       const list = listSpaces();
       if (!list.length) console.log(c.dim('Пространств нет: заведи на странице «Пространства» или при запуске, agentgraph run <flow> --space <slug>'));
