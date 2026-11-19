@@ -284,7 +284,7 @@ export async function runScript(script: ConnectorScript, caller: McpCaller, sinc
       if (seen.has(e.id)) continue;
       seen.add(e.id);
       e.text = truncate(e.text, TEXT_MAX);
-      out.push(e);
+      out.push(withActionItems(e));
     }
   }
   return out.slice(0, MAX_RECORDS);
@@ -531,7 +531,7 @@ async function modelPoll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEv
     const id = s('id') || s('link') || recordId(s('title'), s('at'));
     if (!id) continue;
     const thread = threadRef(ctx.slug, s('channel'), s('thread'));
-    out.push({
+    out.push(withActionItems({
       source: ctx.slug,
       id,
       at: isoOf(s('at') || undefined),
@@ -541,7 +541,7 @@ async function modelPoll(ctx: SourceCtx, deps: ConnectorDeps): Promise<RoutineEv
       author: s('author') || undefined,
       fields: { ...rec, costUsd: r.costUsd },
       ...(thread ? { thread } : {}),
-    });
+    }));
   }
   return out;
 }
@@ -609,8 +609,8 @@ export function isMyRecord(p: Profile, e: RoutineEvent): boolean {
 
 // ---------------------------------------------------------------- пункты действий встречи
 
-/** Заголовок раздела с пунктами в тексте записи: «Action items», «## Пункты действий», «**Следующие шаги**». */
-const ITEMS_HEAD = /^(?:#{1,6}\s*|\*\*)?\s*(?:action items?|пункты действий|следующие шаги|next steps)(?![\p{L}\p{N}])[^\n]*$/imu;
+/** Заголовок раздела с пунктами — отдельной строкой: «Action items», «## Пункты действий:», «**Следующие шаги**», «Action items (3)». «Next steps: ждём ревью» — обычная фраза, не раздел. */
+const ITEMS_HEAD = /^(?:#{1,6}\s*|\*\*)?\s*(?:action items?|пункты действий|следующие шаги|next steps)(?![\p{L}\p{N}])[\s:*_]*(?:\(\d+\))?[\s:*_]*$/imu;
 
 /**
  * Пункты действий из записи встречи: Fireflies и похожие сервисы кладут их в summary.action_items или action_items — строкой
@@ -625,6 +625,18 @@ export function actionItemsOf(fields: Record<string, unknown> | undefined, text?
   const m = text ? ITEMS_HEAD.exec(text) : null;
   const rest = m && text ? text.slice(m.index + m[0].length).trim() : '';
   return rest || undefined;
+}
+
+/**
+ * Запись встречи с разделом «Action items» только в тексте (опрос моделью, текстовый скрипт): пункты — ещё и в поле action_items.
+ * По полю check.ts узнаёт встречу; слово «Next steps» в описании MR или задачи Jira поля не даёт.
+ */
+export function withActionItems(e: RoutineEvent): RoutineEvent {
+  if (actionItemsOf(e.fields)) return e;
+  const items = actionItemsOf(undefined, e.text);
+  // не усекаем: текст записи уже обрезан до TEXT_MAX, а пункт человека может стоять в самом конце раздела
+  if (items) e.fields = { ...e.fields, action_items: items };
+  return e;
 }
 
 const BULLET = /^(?:[-*•–]|\d+[.)])\s+/;

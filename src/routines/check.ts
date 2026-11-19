@@ -52,22 +52,24 @@ const SCHEMA = {
 };
 
 /**
- * Встреча с пунктами действий (fields.summary.action_items и подобные): дата встречи, от которой считаются сроки, и мои пункты по профилю.
- * Нет пунктов — не встреча, блока нет.
+ * Встреча с пунктами действий в полях события (fields.summary.action_items, fields.action_items — их кладёт сервис встреч или источник
+ * «Сервис через Claude», когда нашёл раздел в тексте записи): дата встречи, от которой считаются сроки, и мои пункты по профилю.
+ * Слово «Next steps» в тексте самого события (описание MR, задача Jira) встречей его не делает: блока нет.
  */
 function meetingBlock(e: RoutineEvent, getProfile: () => Profile): string | undefined {
-  const items = actionItemsOf(e.fields, e.text);
+  const items = actionItemsOf(e.fields);
   if (!items) return undefined;
   const profile = getProfile();
   const when = isStampedAt(e)
     ? `у сервиса нет даты встречи, время ${e.at} подставлено при получении записи — относительные сроки («до пятницы») от него не считай, если не уверен`
     : `дата встречи ${e.at}; сроки вроде «до пятницы» или «завтра» считай от неё, а не от сегодняшнего дня`;
   const lines = [`Пункты действий: ${when}.`];
-  const who = [...profile.names, ...profile.emails].filter(Boolean).join(', ');
-  if (!who && !profile.gitlab && !profile.github && !profile.jiraEmail) lines.push('Профиль «кто я» не заполнен: какие пункты мои, по профилю определить нельзя.');
+  // чем меня узнают в пунктах: имена, почты, логины — ровно то, что смотрит myActionItems; без этого списка «по профилю» было бы пустым
+  const who = [...new Set([...profile.names, ...profile.emails, profile.gitlab, profile.github, profile.jiraEmail].filter((v): v is string => Boolean(v)))].join(', ');
+  if (!who) lines.push('Профиль «кто я» не заполнен: какие пункты мои, по профилю определить нельзя.');
   else {
     const mine = myActionItems(items, profile);
-    lines.push(mine.length ? `Мои пункты (по профилю ${who || profile.gitlab || profile.github}):\n${mine.map((m) => `- ${m}`).join('\n')}` : `Мои пункты: среди пунктов нет подписанных или названных по профилю (${who || profile.gitlab || profile.github}).`);
+    lines.push(mine.length ? `Мои пункты (по профилю ${who}):\n${mine.map((m) => `- ${m}`).join('\n')}` : `Мои пункты: среди пунктов нет подписанных или названных по профилю (${who}).`);
   }
   return lines.join('\n');
 }

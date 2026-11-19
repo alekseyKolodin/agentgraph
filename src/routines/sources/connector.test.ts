@@ -5,7 +5,7 @@ import type { SessionRequest, SessionResult } from '../../agent.js';
 import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { SourceSpec, SourceTestResult } from '../types.js';
-import { actionItemsByOwner, actionItemsOf, BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, myActionItems, plainText, recordId, sampleProblem, scriptOf, textItems } from './connector.js';
+import { actionItemsByOwner, actionItemsOf, BUILD_MODEL, CONNECTOR_MODEL, buildSpecOf, checkToolName, connectorKind, createConnectorBuilds, fillArgs, mcpServices, myActionItems, plainText, recordId, runScript, sampleProblem, scriptOf, textItems, withActionItems } from './connector.js';
 import { isStampedAt } from '../kind.js';
 import { makeCtx } from './testkit.js';
 
@@ -457,6 +457,32 @@ test('повторяющаяся встреча без id и ссылки: id �
   const events = await kind.poll!(makeCtx({ config: { tools: [TOOL], request: 'встречи' } }));
   assert.equal(events.length, 2);
   assert.notEqual(events[0].id, events[1].id);
+});
+
+test('запись встречи с разделом «Action items» только в тексте: пункты ещё и в поле action_items (опрос моделью и текстовый скрипт); без раздела и с пунктами в полях — поля прежние', async () => {
+  const text = 'Итог: договорились\n\n## Action items\n**Анна**\nПроверить деплой';
+  const kind = connectorKind({
+    session: async () => ok({ records: [{ id: 'm1', title: 'Планёрка', text }, { id: 'm2', title: 'Без раздела', text: 'Обсудили action items позже' }, { id: 'm3', title: 'В полях', text, action_items: 'Свои пункты' }] }),
+  });
+  const events = await kind.poll!(makeCtx({ config: { tools: [TOOL], request: 'встречи' } }));
+  assert.deepEqual(events.map((e) => e.fields?.action_items), ['**Анна**\nПроверить деплой', undefined, 'Свои пункты']);
+
+  const script = { steps: [{ tool: READ, args: {}, say: 'Читает', text: { split: '^Запись ', id: '^(\\d+)', at: 'Дата: (\\S+)' } }] };
+  const { mcp } = fakeMcp({ [READ]: textOf('Запись 1\nДата: 2026-11-10\n## Action items\nСделать A\n\nЗапись 2\nДата: 2026-11-11\nбез пунктов') });
+  const out = await runScript(script as never, mcp(), new Date('2026-11-01T00:00:00Z'), 'ff');
+  assert.deepEqual(out.map((e) => [e.id, e.fields?.action_items]), [['1', 'Сделать A'], ['2', undefined]]);
+});
+
+test('пункты действий из текста записи не усекаются: пункт человека в конце длинного раздела не теряется; «Next steps: …» в середине фразы разделом не считается', () => {
+  const long = Array.from({ length: 120 }, (_, i) => `Общий пункт номер ${i + 1}: проверить, что отчёт отправлен`).join('\n');
+  const e = withActionItems({ source: 's', id: '1', at: '2026-11-10T10:00:00.000Z', title: 'Встреча', fields: {}, text: `Итог\n\n## Action items\n${long}\n**Борис Иванов**\nПодготовить отчёт` });
+  const items = e.fields?.action_items as string;
+  assert.ok(items.length > 2000);
+  assert.deepEqual(myActionItems(items, { names: ['Борис Иванов'], emails: [] }), ['Подготовить отчёт']);
+  for (const text of ['Письмо\n\nNext steps: ждём ревью дизайна\nПозвоните в пятницу', 'Дальше — next steps и сроки', 'Action items — обсудим позже\nпункт']) {
+    assert.equal(withActionItems({ source: 's', id: '2', at: '2026-11-10T10:00:00.000Z', title: 'Письмо', fields: {}, text }).fields?.action_items, undefined, text);
+  }
+  for (const head of ['Action items', 'Action items:', '## Пункты действий:', '**Следующие шаги**', 'Action items (3)']) assert.equal(actionItemsOf({}, `Итог\n\n${head}\n- Сделать A`), '- Сделать A', head);
 });
 
 test('сборщик: подсказка не фильтровать по дате записи, id — из сервиса, at — дата события', async () => {
