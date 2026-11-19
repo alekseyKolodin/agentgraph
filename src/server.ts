@@ -119,6 +119,7 @@ import { deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
 import { deskRoute } from './desk/routes.js';
 import { trackable, watch, watcherFor, watchers } from './things/index.js';
+import type { ThingType } from './things/types.js';
 import { repoRoot } from './git.js';
 import { flowHistory, SNAPSHOT_FILES, versionYaml } from './flow-history.js';
 import { chainRoot, dropRoutineWorktrees, eventThing, routineWorktree, type DropWorktreesDeps, type DropWorktreesResult } from './work-links.js';
@@ -435,7 +436,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
       watch: opts.desk?.watch ?? ((things, signal) => watch(things, signal)),
       trackable: opts.desk?.watch ? undefined : (thing) => trackable(thing),
       everyMs: opts.desk?.everyMs ?? deskEveryMs(),
-      every: (type) => watcherFor(type)?.everyMs,
+      // интервалы — у настоящих наблюдателей; подменённые (тесты) спрашиваются каждый проход
+      ...(opts.desk?.watch ? {} : { every: (type: ThingType) => watcherFor(type)?.everyMs }),
       lock: lock.held,
       ...(opts.desk?.startMs !== undefined ? { startMs: opts.desk.startMs } : {}),
     });
