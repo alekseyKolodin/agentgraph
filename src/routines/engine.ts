@@ -546,7 +546,9 @@ export class RoutineEngine {
     if (!last || Date.parse(last.at) < from) return { ok: false, total: 0, fresh: 0, routines: users.length, ...none, error: 'Проверка не удалась' };
     if (!last.ok) return { ok: false, total: 0, fresh: 0, routines: users.length, ...none, error: last.error ?? 'Источник не отвечает' };
     // что стало с новыми событиями — по строкам журнала, появившимся за эту проверку
-    const out = { ...none };
+    const out = { ...none, retrying: 0 };
+    // строки «запуск не начался, повторю»: не пропуск, а запуск, который ещё будет
+    const queued = new Set(this.store.queue().filter((q) => q.attempts).map((q) => q.logId));
     for (const r of users) {
       for (const e of this.store.log(r.slug, { limit: 200 })) {
         if (before.has(e.id)) break;
@@ -554,6 +556,7 @@ export class RoutineEngine {
         else if (e.outcome === 'waiting') out.waiting++;
         else if (e.outcome === 'task') out.tasks++;
         else if (e.outcome === 'error') out.errors++;
+        else if (e.outcome === 'limit' && queued.has(e.id)) out.retrying++;
         else out.skipped++;
       }
     }
@@ -1094,8 +1097,15 @@ export class RoutineEngine {
       const why = `запуск не начался: ${msg(err)}`;
       const attempts = (o.attempts ?? 0) + 1;
       // сбой до старта ничего не потратил: пока попытки есть, событие ждёт в очереди, а решение человека сразу видит ошибку
-      if (!o.human && attempts < START_TRIES && !this.stopped) {
-        const reason = `${why}; повторю при следующей проверке (попытка ${attempts} из ${START_TRIES})`;
+      if (!o.human && this.stopped) {
+        // сервер останавливается: событие ждёт следующего старта без паузы, как в ветке stopped выше
+        const entry = this.upsertLog(slug, e, 'limit', { reason: `${why}; запуск после следующего старта`, logId: o.logId, ...w });
+        this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.attempts ? { attempts: o.attempts } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
+        this.changed();
+        return { outcome: 'limit', reason: entry.reason };
+      }
+      if (!o.human && attempts < START_TRIES) {
+        const reason = `${why}; повторю через ${START_RETRY_MS / 60_000} мин (попытка ${attempts} из ${START_TRIES})`;
         const entry = this.upsertLog(slug, e, 'limit', { reason, logId: o.logId, ...w });
         const at = this.now();
         this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: at.toISOString(), logId: entry.id, attempts, notBefore: new Date(at.getTime() + START_RETRY_MS).toISOString(), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
@@ -1157,7 +1167,8 @@ export class RoutineEngine {
     for (const item of q) {
       const r = this.store.routine(item.routine);
       if (!r?.spec) continue; // рутину удалили — событие уходит из очереди
-      if (r.spec.enabled === false) {
+      // выключенная рутина не стартует сама; ручной запуск (human) решил человек — он остаётся
+      if (r.spec.enabled === false && !item.human) {
         this.queueDropped(item); // рутину выключили — очередь не стартует сама
         continue;
       }
@@ -1779,8 +1790,9 @@ export class RoutineEngine {
     this.store.writeRoutine(slug, spec);
     if (!enabled) {
       const q = this.store.queue();
-      for (const item of q) if (item.routine === slug) this.queueDropped(item);
-      if (q.some((item) => item.routine === slug)) this.store.setQueue(q.filter((item) => item.routine !== slug));
+      const auto = (item: QueueItem) => item.routine === slug && !item.human;
+      for (const item of q) if (auto(item)) this.queueDropped(item);
+      if (q.some(auto)) this.store.setQueue(q.filter((item) => !auto(item)));
     }
     if (enabled && isSchedule(spec.when)) this.store.setLastCheck(this.scheduleKey(slug), this.now().toISOString());
     // с паузы: что пришло, пока рутина стояла, — в «догнать», а не сразу в запуск

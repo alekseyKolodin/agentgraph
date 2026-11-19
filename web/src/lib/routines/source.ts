@@ -100,6 +100,7 @@ export function checkNowText(r: SourceCheckNow): string {
     r.tasks ? t('заведено дел {n}', { n: r.tasks }) : '',
     r.skipped ? t('пропущено {n}', { n: r.skipped }) : '',
     r.errors ? t('ошибок {n}', { n: r.errors }) : '',
+    r.retrying ? t('повторит запуск {n}', { n: r.retrying }) : '',
   ].filter(Boolean);
   return parts.length ? t('{fresh} новых {w}: {parts}.', { fresh: r.fresh, w: nw, parts: parts.join(', ') }) : t('{fresh} новых {w}, ни одна рутина их не взяла (свои сообщения или чужой источник).', { fresh: r.fresh, w: nw });
 }

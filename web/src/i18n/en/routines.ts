@@ -576,6 +576,7 @@ export const routines: Record<string, string> = {
   'заведено дел {n}': 'tasks created {n}',
   'пропущено {n}': 'skipped {n}',
   'ошибок {n}': 'errors {n}',
+  'повторит запуск {n}': 'will retry start {n}',
   '{fresh} новых {w}: {parts}.': '{fresh} new {w}: {parts}.',
   '{fresh} новых {w}, ни одна рутина их не взяла (свои сообщения или чужой источник).': '{fresh} new {w}, no routine took them (own messages or a foreign source).',
   'Сюда попадает всё, что рутина увидела, но не запустила: событие не подошло под условия или проверку «Если», оказалось повтором, упёрлось в лимит, ты ответил «не то» — а ещё запуски по расписанию, которые не состоялись, пока приложение было закрыто или компьютер спал.': 'Everything the routine saw but did not start lands here: the event did not match the conditions or the “If” check, was a repeat, hit a limit, you answered “not that” — plus scheduled runs that did not happen while the app was closed or the computer slept.',

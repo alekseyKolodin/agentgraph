@@ -379,7 +379,11 @@ export function createComposeRoutes(deps: ComposeDeps, opts: ComposeOptions = {}
       if (!text) throw new Error('Опиши словами, что рутина должна делать');
       while (jobs.size >= MAX_DRAFTS) {
         const oldest = jobs.keys().next().value as string;
-        jobs.get(oldest)?.abort.abort();
+        const old = jobs.get(oldest);
+        if (old) {
+          old.gen++; // как в cancel: опоздавший ответ вытесненной задачи состояние не пишет
+          old.abort.abort();
+        }
         jobs.delete(oldest);
       }
       const j: Job = { id: newId(), description: text, state: { state: 'working', step: 'Читаю описание, смотрю твои источники и flow…' }, gen: 1, abort: new AbortController() };

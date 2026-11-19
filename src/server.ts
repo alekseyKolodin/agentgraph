@@ -142,7 +142,7 @@ export type ServerOptions = {
   notifier?: (n: Notice) => void;
   /**
    * Не давать компьютеру уснуть (десктоп: powerSaveBlocker): сервер берёт удержание на подготовку запуска рутины
-   * (worktree, git fetch) и на время жизни каждого запуска flow и отпускает вернувшейся функцией. Счёт — на стороне хоста.
+   * (worktree, git fetch) и на время работы каждого запуска flow (не на паузе, где он ждёт человека) и отпускает вернувшейся функцией. Счёт — на стороне хоста.
    */
   keepAwake?: () => () => void;
   /**
@@ -233,7 +233,7 @@ type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | '
 type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http.ServerResponse> };
 
 const live = new Map<string, LiveRun>();
-/** Удержание от сна (ServerOptions.keepAwake) по живым запускам: снимается в конце запуска. */
+/** Удержание от сна (ServerOptions.keepAwake) по идущим запускам: снимается в конце запуска и на паузе, где ждут человека. */
 const awakeHolds = new Map<string, () => void>();
 const chats = new Map<string, ChatTurnState>();
 /** Идущие генерации и правки flow ИИ и черновики пространств: живут, пока живо соединение; stopServer прерывает их. */
@@ -1605,6 +1605,14 @@ function launchRun(
         const context = routineContext(e.report);
         toEngine({ type: 'end', status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.digest?.text ? { summary: e.report.digest.text } : {}), ...(context ? { context } : {}), ...(e.report.error ? { error: e.report.error } : {}), ...(e.report.desk ? { desk: { created: e.report.desk.created, signals: e.report.desk.signals } } : {}) });
       }
+    }
+    // запуск стоит и ждёт человека: компьютеру можно спать; продолжили — удержание берём снова
+    if (e.type === 'pause' && e.state === 'paused') {
+      awakeHolds.get(id)?.();
+      awakeHolds.delete(id);
+    } else if (e.type === 'pause' && e.state === 'resumed' && !awakeHolds.has(id) && live.has(id)) {
+      const again = srv.keepAwake?.();
+      if (again) awakeHolds.set(id, again);
     }
     if (e.type === 'end') {
       lr.pause = null;

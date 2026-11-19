@@ -191,6 +191,8 @@ export type SourceCheckNow = {
   tasks: number;
   skipped: number;
   errors: number;
+  /** Запуск не начался, событие ждёт повтора в очереди. */
+  retrying?: number;
   first?: boolean;
 };
 

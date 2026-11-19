@@ -338,7 +338,7 @@ test('запуск не начался — не окончательная ош�
     await t.push(t.event('1'));
     const log = t.engine.logOf('r', {});
     assert.equal(log.length, 1);
-    assert.match(log[0].reason!, /запуск не начался: flow сломан; повторю при следующей проверке \(попытка 1 из 3\)/);
+    assert.match(log[0].reason!, /запуск не начался: flow сломан; повторю через 2 мин \(попытка 1 из 3\)/);
     assert.notEqual(log[0].outcome, 'error');
     const q = t.store.queue();
     assert.equal(q.length, 1);
@@ -432,6 +432,62 @@ test('запуск не начался: ручной «Запустить» за
     t.clock.now = new Date(t.clock.now.getTime() + 5 * 60_000);
     await t.engine.drainQueue();
     assert.equal(t.started.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался при остановке сервера: событие ждёт следующего старта в очереди без паузы', async () => {
+  const t = setup({ startFails: true });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    // сервер останавливается во время повтора: событие не теряется
+    t.clock.now = new Date(t.clock.now.getTime() + 2 * 60_000);
+    const drain = t.engine.drainQueue();
+    await t.engine.stop();
+    await drain;
+    const q = t.store.queue();
+    assert.equal(q.length, 1);
+    assert.equal(q[0].notBefore, undefined);
+    assert.notEqual(t.engine.logOf('r', {})[0].outcome, 'error');
+  } finally {
+    t.done();
+  }
+});
+
+test('«Проверить сейчас»: строка повтора запуска считается отдельно, не пропуском', async () => {
+  const t = setup({ startFails: true });
+  try {
+    t.connected();
+    t.routine('r');
+    t.items.push(t.event('1'));
+    const r = await t.engine.checkNow('src');
+    assert.equal(r.retrying, 1);
+    assert.equal(r.skipped, 0);
+    assert.equal(r.errors, 0);
+  } finally {
+    t.done();
+  }
+});
+
+test('ручной запуск в очереди по parallel переживает выключение рутины', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('r', { limits: { parallel: 1 } });
+    await t.push(t.event('1'));
+    await t.engine.runNow('r', '1').catch(() => {});
+    t.store.setQueue([{ routine: 'r', event: t.event('2'), at: t.clock.now.toISOString(), human: true }, { routine: 'r', event: t.event('3'), at: t.clock.now.toISOString() }]);
+    t.engine.setEnabled('r', false);
+    assert.deepEqual(t.store.queue().map((q) => q.event.id), ['2']);
+    // рутина выключена, место освободилось: решение человека всё равно запускается
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.1 });
+    await t.engine.onRunEvent('run-2', { type: 'end', status: 'done', costUsd: 0.1 });
+    await t.engine.idle();
+    assert.equal(t.store.queue().length, 0);
+    assert.ok(t.started.some((x) => x.event.id === '2'));
   } finally {
     t.done();
   }
