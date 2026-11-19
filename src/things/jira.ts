@@ -5,6 +5,7 @@ import { JiraError, jiraClient, normalizeBaseUrl, parseIssueKey, type FetchFn, t
 import { loadProfile, loadSettings, readJiraToken, type JiraSettings } from '../settings.js';
 import type { Profile } from '../api-types.js';
 import type { Thing, ThingState, Watcher } from './types.js';
+import { normHost } from './keys.js';
 
 export type JiraWatcherDeps = {
   /** Подключение к Jira из «Подключений»; нет — undefined. */
@@ -40,10 +41,11 @@ const FIELD_RU: Record<string, string> = {
   sprint: 'спринт',
 };
 
-/** Хост из адреса Jira (с портом, нижний регистр) — ровно то, что стоит в ключе вещи. */
+/** Хост из адреса Jira — ровно то, что стоит в ключе вещи (normHost: без «www.», порта по умолчанию, точки в конце). */
 function hostOf(baseUrl: string): string | undefined {
   try {
-    return new URL(normalizeBaseUrl(baseUrl)).host.toLowerCase();
+    const url = new URL(normalizeBaseUrl(baseUrl));
+    return normHost(url.host) || undefined;
   } catch {
     return undefined;
   }
@@ -80,7 +82,7 @@ export function jiraWatcher(deps: JiraWatcherDeps = {}): Watcher {
     const c = creds();
     if (!c) return 'Jira не подключена: добавьте адрес, email и токен в «Подключения»';
     const mine = hostOf(c.cfg.baseUrl);
-    const host = lower(String(thing.ref.host ?? ''));
+    const host = normHost(String(thing.ref.host ?? ''));
     const key = parseIssueKey(String(thing.ref.key ?? ''));
     if (!host || !key) return 'у вещи нет адреса Jira или ключа задачи';
     if (host !== mine) return `Jira на ${host} не подключена${mine ? ` (подключена ${mine})` : ''}`;
