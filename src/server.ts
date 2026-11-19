@@ -110,14 +110,15 @@ import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
 } from './space-draft.js';
-import type { SessionReviewEstimate, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
-import { REVIEW_MODEL, reviewEstimate, reviewItems, reviewReply } from './session-review.js';
+import type { SessionReviewEstimate, SessionReviewState, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
+import { readReviewStore, REVIEW_MODEL, reviewedNow, reviewEstimate, reviewItems, reviewNow, reviewRunning, storedReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
 import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
-import { deskStore } from './desk/index.js';
+import { deskStorage, deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
-import { deskRoute } from './desk/routes.js';
+import { deskCheck } from './desk/check.js';
+import { deskRoute, PROCESS_STARTED } from './desk/routes.js';
 import { trackable, watch, watcherFor, watchers } from './things/index.js';
 import type { ThingType } from './things/types.js';
 import { repoRoot } from './git.js';
@@ -432,7 +433,8 @@ export function startServer(opts: ServerOptions): Promise<string> {
     // одна сверка на папку настроек: десктоп и `agentgraph ui` рядом не опрашивают glab/gh/Jira дважды
     const lock = (deskLock = reconcileLock(deskStore().dir, typeof opts.routines === 'object' ? (opts.routines.lock?.who ?? 'agentgraph') : 'agentgraph'));
     deskLoop = startReconcile({
-      store: deskStore(),
+      // сверка — только дел хранилища: дела поставщиков (Teamwork) берут состояние из своей системы
+      store: deskStorage(),
       watch: opts.desk?.watch ?? ((things, signal) => watch(things, signal)),
       trackable: opts.desk?.watch ? undefined : (thing) => trackable(thing),
       everyMs: opts.desk?.everyMs ?? deskEveryMs(),
@@ -525,7 +527,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       tools: KNOWN_TOOLS,
       implicitTools: IMPLICIT_TOOLS,
       // UI новее сервера (фронт отдаётся с диска без перезапуска) прячет то, чего сервер ещё не умеет
-      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
+      features: ['home', 'run-manage', 'integrations', 'run-chat', 'feed', 'limits', 'context', 'attachments', 'run-add-dirs', 'recent-dirs', 'attention', 'artifacts', 'adhoc-runs', 'run-flow', 'tags', 'tag-kinds', 'spaces', 'recent-dirs-hide', 'auto-space', 'space-drafts', 'run-title', 'run-rename', 'connectors', 'run-analysis', 'teamwork', 'routines', 'routine-ask', 'desk', 'desk-check', ...(opts.notifier && opts.notify !== false ? ['host-notify'] : []), ...(updater ? ['update'] : []), ...(canPickDir ? ['pick-dir'] : []), ...(canReveal ? ['reveal'] : []), ...((await sessionsAvailable().catch(() => false)) ? ['sessions', 'session-review', ...(sessionToFlowSkill() ? ['session-to-flow'] : [])] : [])],
     } satisfies ConfigResponse);
   }
 
@@ -590,9 +592,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (r) return sendJson(res, r.status, r.body);
   }
 
-  // --- дела: список с итогом сверки, put/move/close с карточки (src/desk/routes.ts)
+  // --- дела: список с итогом сверки, put/move/close/link с карточки (src/desk/routes.ts)
   if (p === '/api/desk' || p.startsWith('/api/desk/')) {
-    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore() });
+    // сверка «N из N»: итоги источников рутин (движок читает их с диска) и наблюдателей; на остановке — только наблюдатели
+    const check = stopping
+      ? undefined
+      : () => {
+          const eng = routines(opts);
+          return deskCheck({ sources: eng.sourceViews(), arrivals: (s) => eng.store.checks(s).arrivals, watcher: deskStore().readCheck(), startedAt: PROCESS_STARTED });
+        };
+    const r = await deskRoute(method, url, () => readJson(req), { store: deskStore(), ...(check ? { check } : {}) });
     if (r) return sendJson(res, r.status, r.body);
   }
 
@@ -891,7 +900,13 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       spaceDrafts.delete('groups');
     }
   }
-  // «Не доделано» на главной: недавние сессии разбирает модель (sonnet без инструментов); ничего не пишет
+  // «Не доделано» на главной: сессии разбирает модель (sonnet без инструментов); итог копится на сервере
+  // (session-review.ts), тот же разбор по расписанию ведёт источник рутин «Проекты». GET — итог без модели.
+  if (method === 'GET' && p === '/api/session-review') {
+    const store = readReviewStore();
+    const all = await sessionReviewSources(() => false).catch(() => []);
+    return sendJson(res, 200, { reply: storedReply(store, all) ?? null, running: reviewRunning() } satisfies SessionReviewState);
+  }
   if (method === 'POST' && p === '/api/session-review') {
     const body = (await readJson(req)) as { model?: unknown; estimate?: unknown } | null;
     let model: ReturnType<typeof draftModel>;
@@ -900,15 +915,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     } catch (err) {
       return sendJson(res, 400, { error: errMsg(err) });
     }
-    const { items, skipped } = reviewItems(await sessionReviewSources().catch(() => []));
-    if (body?.estimate === true) return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
-    if (spaceDrafts.has('review')) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
-    spaceDrafts.add('review');
-    try {
-      return await respondFlowAi(req, res, generations, (ai) => reviewReply(items, skipped, model, ai, draftDeps(opts)));
-    } finally {
-      spaceDrafts.delete('review');
+    if (body?.estimate === true) {
+      const store = readReviewStore();
+      const done = reviewedNow(store);
+      const { items, skipped } = reviewItems(await sessionReviewSources((s) => !done(s)).catch(() => []), store);
+      return sendJson(res, 200, reviewEstimate(items, skipped, model) satisfies SessionReviewEstimate);
     }
+    if (reviewRunning()) return sendJson(res, 409, { error: 'Разбор сессий уже идёт', code: 'busy' });
+    return await respondFlowAi(req, res, generations, (ai) => reviewNow({ load: (turnsFor) => sessionReviewSources(turnsFor).catch(() => []), model, hooks: ai, deps: draftDeps(opts) }));
   }
   if (method === 'POST' && (m = p.match(/^\/api\/spaces\/([^/]+)\/docs$/))) return reply(res, addSpaceDocReply(m[1], await readJson(req, RUN_BODY_MAX)));
   if ((m = p.match(/^\/api\/spaces\/([^/]+)\/docs\/([^/]+)$/))) {

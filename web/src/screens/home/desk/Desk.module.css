@@ -1,0 +1,93 @@
+/* Доска «Мои дела» (макет docs/desk/design/DeskPult.dc.html): пять колонок-колодцев, в них карточки на панели. Цвет —
+   только смысл: вид дела — категория (--cat-*), срок сегодня — «ждёт», просрочено — сбой, в работе — «идёт». */
+.board { container-type: inline-size; }
+/* колонки не сжимаются в ноль: уже 5 × 196px — прокрутка вбок, а не обрезанные карточки */
+.scroll { overflow-x: auto; padding-bottom: 4px; }
+.cols { display: grid; grid-template-columns: repeat(5, minmax(196px, 1fr)); gap: 12px; align-items: start; }
+
+.col { background: var(--well); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid transparent; transition: border-color .12s, background-color .12s; }
+/* сюда бросают перетаскиваемую карточку */
+.col.over { border-color: var(--live); background: color-mix(in srgb, var(--live) 6%, var(--well)); }
+.col-h { display: flex; gap: 8px; align-items: baseline; padding: 2px 4px; margin: 0; font-size: var(--fs-small); font-weight: 600; color: var(--ink); }
+.col-h:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-xs); }
+.col-n { font-size: var(--fs-meta); font-weight: 400; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.col-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+.col-dot.work { background: var(--live); }
+.col-dot.done { background: var(--st-ok); }
+.cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.empty { padding: 10px 4px; font-size: var(--fs-meta); color: var(--ink-3); }
+
+/* карточка */
+.card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: flex; flex-direction: column; gap: 7px; min-width: 0; transition: border-color .12s, opacity .12s; }
+.card:hover { border-color: var(--line-strong); }
+.card:focus-visible { outline: none; box-shadow: var(--focus); }
+.card[draggable='true'] { cursor: grab; }
+.card.dragging { opacity: .45; }
+/* «Готово» — без подложки: сделанное не спорит с делами */
+.card.done { background: transparent; }
+.card.done .title { color: var(--ink-2); }
+
+.top { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.no { width: 18px; height: 18px; border-radius: 50%; background: var(--ink); color: var(--deck); font-size: var(--fs-cap); font-weight: 700; display: grid; place-items: center; flex: none; font-variant-numeric: tabular-nums; }
+.kind { font-size: var(--fs-cap); font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: var(--r-xs); white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); max-width: 120px; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.rev { --c: var(--cat-4); }
+.jira { --c: var(--cat-5); }
+.meet { --c: var(--cat-7); }
+.bug { --c: var(--cat-6); }
+.lost { --c: var(--st-wait); }
+.own { --c: var(--ink-2); }
+.id { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; max-width: 90px; }
+.grow { flex: 1; }
+.project { display: inline-flex; gap: 6px; align-items: center; font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; min-width: 8px; flex: 0 1000 auto; }
+.project span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.sq { width: 8px; height: 8px; border-radius: 2px; flex: none; background: var(--pc, var(--ink-3)); }
+
+.title { font-size: var(--fs-body); font-weight: 600; line-height: 1.4; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+a.title:hover { color: var(--act-hover); text-decoration: underline; }
+.why { font-size: var(--fs-meta); color: var(--ink-2); overflow-wrap: anywhere; }
+.why.live { color: var(--live); }
+/* что делает агент или сессия по делу — утопленная строка, как в макете */
+.agent { font-size: var(--fs-meta); line-height: 1.45; color: var(--ink-2); background: var(--well); border-radius: var(--r-sm); padding: 6px 9px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+.agent b { color: var(--ink); font-weight: 500; white-space: nowrap; }
+.agent a { color: var(--ink-2); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.agent a:hover { color: var(--ink); text-decoration: underline; }
+.agent.wait b { color: var(--st-wait); }
+.agent.live b { color: var(--live); }
+
+.meta { display: flex; gap: 4px 10px; align-items: center; flex-wrap: wrap; font-size: var(--fs-meta); color: var(--ink-2); }
+.due-today, .due-soon { color: var(--st-wait); font-weight: 500; }
+.due-over { color: var(--st-fail); font-weight: 500; }
+.by { color: var(--ink-3); }
+
+.acts { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.acts :global(.btn) { min-height: 26px; padding: 3px 8px; }
+/* «⋯» — в конце строки действий, даже когда кнопки перенеслись */
+.acts .mw { margin-left: auto; }
+.acts .mw > :global(.btn) { padding: 3px 6px; }
+
+/* «Привязать вещь»: поле ссылки прямо в карточке */
+.link-form { display: flex; flex-direction: column; gap: 6px; }
+.link-form input { width: 100%; font-size: var(--fs-small); padding: 5px 8px; }
+.link-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.link-err { font-size: var(--fs-meta); color: var(--st-fail); }
+
+/* меню «⋯» у карточки */
+.mw { position: relative; display: inline-flex; }
+.menu { position: fixed; z-index: 25; min-width: 200px; max-width: min(320px, 90vw); display: flex; flex-direction: column; padding: 4px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); }
+.mi { display: flex; align-items: baseline; gap: 10px; border: 0; background: transparent; text-align: left; padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer; color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.mi:hover, .mi:focus-visible { background: var(--hover); outline: none; box-shadow: none; }
+.mi[disabled] { color: var(--ink-3); cursor: default; }
+.mi.danger { color: var(--st-fail); }
+.mi-k { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-cap); color: var(--ink-3); }
+.menu-cap { padding: 6px 10px 4px; font-size: var(--fs-cap); color: var(--ink-3); }
+.menu-sep { height: 1px; background: var(--line); margin: 4px 6px; flex: none; }
+
+.msg { margin: 0; font-size: var(--fs-small); color: var(--ink-2); }
+.msg.err { color: var(--st-fail); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* узкая доска (телефон, узкое окно): колонки одна под другой, без прокрутки вбок; шире — пять в ряд, лишнее —
+   прокруткой, чтобы доска оставалась доской */
+@container (max-width: 640px) {
+  .cols { grid-template-columns: minmax(0, 1fr); }
+}

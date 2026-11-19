@@ -109,6 +109,29 @@ export interface DeskApi {
   get(key: string): Promise<DeskItem | undefined>;
 }
 
+/**
+ * Поставщик дел (SPEC 3.2, этап 4): отдаёт дела на лету из своей системы (задачи Teamwork), в items.json они не копируются.
+ * Владеет ключами с префиксом prefix: list сливается с делами хранилища, а put/move/close/get по своему ключу идут в
+ * поставщика. undefined из get/put/move/close — вещи у поставщика нет (не моя задача): операция уходит в хранилище.
+ */
+export interface DeskProvider {
+  /** Префикс ключей поставщика, например 'tw:'. */
+  readonly prefix: string;
+  /** Все дела поставщика, открытые и закрытые, — фильтр накладывает index.ts. */
+  list(): Promise<DeskItem[]>;
+  get(key: string): Promise<DeskItem | undefined>;
+  put(key: string, patch: DeskPatch, by: DeskBy): Promise<DeskItem | undefined>;
+  move(key: string, column: DeskColumn, by: DeskBy, why?: string): Promise<DeskItem | undefined>;
+  close(key: string, reason: string, by: DeskBy): Promise<DeskItem | undefined>;
+  /** Дела поставщика изменились (pull команды, своя запись). Возвращает отписку. */
+  onChange(fn: () => void): () => void;
+  /**
+   * Дело хранилища о вещи, которая теперь у поставщика (его завели, пока задача была чужой): сигналы, ссылки и срок —
+   * в дело поставщика. Возвращает причину, с которой index.ts закрывает дело хранилища.
+   */
+  adopt?(item: DeskItem): Promise<string>;
+}
+
 /** Строка журнала движений desk/log.jsonl. */
 export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskColumn; by: DeskBy; why?: string };
 
@@ -118,9 +141,27 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  *   POST /api/desk/put   { key, patch }     → DeskItem         (by: 'me')
  *   POST /api/desk/move  { key, column }    → DeskItem
  *   POST /api/desk/close { key, reason }    → DeskItem
+ *   POST /api/desk/link  { key, url }       → DeskItem         (своё дело → дело вещи по адресу MR/PR/Jira; 409 — занято)
  * Изменения доски приходят в общий поток событий как { type: 'desk' }.
  */
 export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
 
 /** GET /api/desk: дела по фильтру и итог последней сверки (нет — сверки ещё не было). */
 export type DeskListReply = { items: DeskItem[]; check?: CheckResult };
+
+/**
+ * Состояние источника или наблюдателей в сверке «N из N» (SPEC 3.4): ok — проверено; empty — проверки идут, новых записей
+ * нет дольше обычного; error — проверка не прошла (или вид неизвестен); needs_secret — не хватает ключа; unchecked — не
+ * проверялось с запуска приложения.
+ */
+export type DeskCheckStatus = 'ok' | 'empty' | 'error' | 'needs_secret' | 'unchecked';
+
+/**
+ * Строка сверки: источник рутин (kind 'source', итог — routines-state/checks/<slug>.json) или наблюдатели вещей дел
+ * (kind 'watcher', итог — desk/check.json). result — итог последней проверки (нет — ещё не было); usual — сколько раз в день
+ * обычно приходит новое (по последним приходам; нет — мало данных).
+ */
+export type DeskCheckSource = { slug: string; title: string; kind: 'source' | 'watcher'; status: DeskCheckStatus; result?: CheckResult; usual?: number; error?: string };
+
+/** GET /api/desk/check: из итогов источников и наблюдателей, своего не хранит. at — время самой свежей проверки. */
+export type DeskCheckReply = { sources: DeskCheckSource[]; at?: string };

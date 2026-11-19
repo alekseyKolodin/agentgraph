@@ -36,9 +36,44 @@ export function normProject(raw: string): string {
     .toLowerCase();
 }
 
-/** Корень репо в ключе ветки: «/» вместо «\», без «/» в конце. Worktree к основному checkout сворачивает вызывающий (repoRoot). */
+type RealFs = { realpathSync: { native: (p: string) => string } };
+/** fs в Node без импорта (модуль читает и веб): process.getBuiltinModule; в браузере и на старом Node — нет. */
+function realFs(): RealFs | undefined {
+  try {
+    return (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule?.('node:fs') as RealFs | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Настоящий путь корня: ссылки разрешены (`pwd -P` во flow и путь пространства дают один ключ). Папки нет на диске —
+ * разрешается родитель; не вышло или fs недоступен (веб) — путь как есть.
+ */
+function realRoot(p: string): string {
+  const fs = realFs();
+  if (!fs || !(p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p))) return p;
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+    if (i > 0) {
+      try {
+        return fs.realpathSync.native(p.slice(0, i)) + p.slice(i);
+      } catch {
+        /* нет и родителя — как есть */
+      }
+    }
+    return p;
+  }
+}
+
+/**
+ * Корень репо в ключе ветки: настоящий путь (ссылки разрешены), «/» вместо «\», без «/» в конце. Worktree к основному
+ * checkout сворачивает вызывающий (repoRoot).
+ */
 export function normRoot(raw: string): string {
-  const p = raw.trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const p = realRoot(raw.trim()).replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return p.length > 1 ? p.replace(/\/+$/, '') : p;
 }
 

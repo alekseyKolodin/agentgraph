@@ -1,9 +1,9 @@
-// Главная — доска дел (docs/desk/SPEC.md, этап 5; макет docs/desk/design/DeskPult.dc.html). Над доской — то, что требует
-// ответа за секунды и делом не является: карточки ожиданий рутин и «догнать» (RoutineWaits); вопросы агентов, сверку
-// «N из N» и «Начни с этого» рисует сама доска (DeskTop внутри DeskBoard). Одна вещь — одно место: свои MR, «Не доделано»,
-// «Мои задачи», «Ждёт тебя» и «Идут» стали карточками; идущие запуски и сессии — в «Сейчас» боковой панели. Справа — журнал
-// (Feed). Ни дел, ни рутин — плитки шаблонов рутин «Моих дел». `/?desk=<ключ>` (ссылка из «Кода») показывает карточку,
-// `?project=<слаг>` — срез доски по проекту.
+// Главная — доска дел (docs/desk/SPEC.md, этап 5; макет docs/desk/design/DeskPult.dc.html). Полосу над доской — ожидания
+// рутин и «догнать», вопросы агентов, сессии, ждущие ответа, сверку «N из N», «Начни с этого» и срез по проектам — рисует
+// сама доска (DeskTop внутри DeskBoard). Одна вещь — одно место: свои MR, «Не доделано», «Мои задачи», «Ждёт тебя» и «Идут»
+// стали карточками; идущие запуски и сессии — в «Сейчас» боковой панели. Справа — журнал (Feed). Ни дел, ни рутин — плитки
+// шаблонов рутин «Моих дел». `/?desk=<ключ>` (ссылка из «Кода») показывает карточку, `?project=<слаг>` — срез по проекту
+// ('' — без проекта).
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useConfig, useFeature, useRuns } from '../../api';
@@ -14,8 +14,8 @@ import { requestNotify, useNotifyPermission } from '../../components/shell/notif
 import { useNow } from '../../components/useNow';
 import { hasConnections } from '../../lib/dash';
 import { DESK_PARAM, deskEmpty, deskMeta } from '../../lib/desk';
+import { inProject } from '../../lib/desk-board';
 import { t } from '../../lib/i18n';
-import { activeWaits } from '../../lib/routines/view';
 import { NewFlowDialog } from '../flow/NewFlowDialog';
 import { RoutineTemplates } from '../routines/RoutineTemplates';
 import { useIntegrations } from './Dash';
@@ -23,7 +23,6 @@ import { DashSettings } from './DashSettings';
 import { DeskBoard } from './desk/DeskBoard';
 import { Feed } from './Feed';
 import { Limits } from './Limits';
-import { RoutineHome } from './RoutineWaits';
 import dashStyles from './Dash.module.css';
 import styles from './Home.module.css';
 
@@ -44,12 +43,9 @@ export function HomeScreen() {
   const [settings, setSettings] = useState(false);
   const desk = useDesk();
   const items = desk.data?.items;
-  // рутины: карточки ожидания и «догнать» — над доской (docs/routines/design/Home.dc.html)
+  // рутины — только чтобы понять, пуста ли доска; их ожидания и «догнать» рисует полоса над доской (DeskTop)
   const routinesOn = useFeature('routines');
   const routines = useRoutines(routinesOn);
-  // отложенные («Не сейчас») на главной не показываются — они в полосе ожиданий /routines
-  const routineWaits = activeWaits(routines.data?.waits ?? []);
-  const catchUp = routines.data?.catchUp ?? [];
   const sessionsOn = useFeature('sessions');
   const sessionList = useSessions(sessionsOn);
   const history = useRuns();
@@ -62,12 +58,12 @@ export function HomeScreen() {
   const onProject = (slug: string | undefined) =>
     setParams((p) => {
       const next = new URLSearchParams(p);
-      if (slug) next.set('project', slug);
+      if (slug !== undefined) next.set('project', slug);
       else next.delete('project');
       next.delete(DESK_PARAM);
       return next;
     }, { replace: true });
-  const shown = project ? items?.filter((i) => i.project === project) : items;
+  const shown = project === undefined ? items : items?.filter((i) => inProject(i, project));
   useShowCard(params.get(DESK_PARAM), items !== undefined);
 
   return (
@@ -86,7 +82,6 @@ export function HomeScreen() {
         <div className={styles.homeMain}>
           {/* пустая доска сама говорит, с чего начать: вторая подсказка рядом — шум */}
           {fresh && !empty && <Start sessions={sessionsOn} />}
-          <RoutineHome waits={routineWaits} catchUp={catchUp} sources={routines.data?.sources ?? []} routines={routines.data?.routines ?? []} now={now} />
           {empty && <DeskEmpty />}
           {/* сервер старше доски: у него нет /api/desk — честно говорим, а не рисуем пустые колонки */}
           {oldServer ? (

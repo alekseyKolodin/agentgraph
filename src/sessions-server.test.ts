@@ -15,6 +15,7 @@ import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, tagDir, updateTag } from './tags.js';
 import { createSpace, deleteSpace, migrateTaskTags, queueSpaceState, readSpace, spaceDir, writeSpaceState } from './spaces.js';
 import type { SessionRequest, SessionResult } from './agent.js';
+import { desk } from './desk/index.js';
 
 class FakePty implements PtyProcess {
   pid = 4242;
@@ -484,6 +485,30 @@ test('сессия из вещи: источник в записи и ответ
   const bad = await call<{ error: string }>('POST', '/api/sessions', { cwd: shop, source: { thing: { type: 'jira', key: 'mr:x/y/1' } } });
   assert.deepEqual([bad.status, /thing.key/.test(bad.body.error)], [400, true]);
   assert.equal(spawned.length, before);
+});
+
+test('сессия с карточки дела: дело — в «В работе» от session, сессия — в его ссылках; чужой id дела ничего не трогает', async () => {
+  const store = desk();
+  const item = await store.put('own:card-session', { title: 'Позвонить в банк', column: 'plan' }, 'me');
+  const r = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], name: 'Банк', source: { item: item.id } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const after = (await store.get('own:card-session'))!;
+  assert.deepEqual([after.column, after.movedBy, after.links.sessions, after.why], ['work', 'session', [r.body.id], 'сессия «Банк»']);
+  // у дела есть «почему» — остаётся
+  const why = await store.put('own:card-why', { title: 'Отчёт', column: 'plan', why: 'автор ответил' }, 'me');
+  const w = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], source: { item: why.id } });
+  assert.deepEqual([(await store.get('own:card-why'))!.column, (await store.get('own:card-why'))!.why], ['work', 'автор ответил']);
+  await call('POST', `/api/sessions/${w.body.id}/end`);
+  await call('DELETE', `/api/sessions/${w.body.id}`);
+  await store.close('own:card-why', 'тест', 'me');
+  const other = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), tags: [], source: { item: 'nope' } });
+  assert.equal(other.status, 201);
+  assert.deepEqual((await store.get('own:card-session'))!.links.sessions, [r.body.id]);
+  for (const id of [r.body.id, other.body.id]) {
+    await call('POST', `/api/sessions/${id}/end`);
+    await call('DELETE', `/api/sessions/${id}`);
+  }
+  await store.close('own:card-session', 'тест', 'me');
 });
 
 test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, пространство и тег на ходу ждут следующего шага', async () => {

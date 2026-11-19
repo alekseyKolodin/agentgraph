@@ -9,6 +9,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import type { TeamComment, TeamDetail, TeamDoc, TeamDocRevision, TeamLocal, TeamMine, TeamProject, TeamProjectBrief, TeamRemoteCheck, TeamRepoInfo, TeamSprint, TeamSummary, TeamSync, TeamTask } from './api-types.js';
+import type { DeskListReply } from './desk/types.js';
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-srvteam-')));
 const prevHome = process.env.AGENTGRAPH_HOME;
@@ -505,7 +506,7 @@ test('папка репо кода: repo-info берёт origin, ветку и �
   if (chk.body.kind === 'team') assert.deepEqual(chk.body.localRepos, { [ledger]: code });
 });
 
-test('мои задачи: задачи активных спринтов, где исполнитель я, одним запросом; ждёт — незавершённые предшественники; чужие, бэклог и архив — нет', async () => {
+test('мои задачи: все мои незакрытые — в спринтах и в бэклоге, одним запросом; ждёт — незавершённые предшественники; чужие и архив — нет; «Готово» — только активного спринта', async () => {
   const L = '/api/teams/team/projects/ledger-ui';
   const empty = await call<TeamMine>('GET', '/api/teams/mine');
   assert.equal(empty.status, 200);
@@ -522,27 +523,42 @@ test('мои задачи: задачи активных спринтов, гд�
     ],
   });
   assert.equal(made.status, 201);
-  const [a, b, c] = made.body.tasks.map((x) => x.id);
-  // спринт только запланирован — задач нет
+  const [a, b, c, d] = made.body.tasks.map((x) => x.id);
+  const ids = async () => (await call<TeamMine>('GET', '/api/teams/mine')).body.tasks.map((x) => [x.task.id, x.task.sprint ?? null, x.task.status, x.waiting]);
+  // бэклог — тоже мои дела (docs/desk/SPEC.md 4.3); чужой нет
+  assert.deepEqual(await ids(), [[a, null, 'todo', []], [b, null, 'todo', [a]], [d, null, 'todo', []]]);
+  // спринт только запланирован — задачи в нём, активного спринта у проекта нет
   assert.equal((await call('POST', `${L}/sprints`, { title: 'Счета-1', tasks: [a, b, c] })).status, 201);
-  assert.deepEqual((await call<TeamMine>('GET', '/api/teams/mine')).body.tasks, []);
+  assert.deepEqual((await call<TeamMine>('GET', '/api/teams/mine')).body.projects.map((x) => [x.slug, x.sprint]), [['ledger-ui', undefined]]);
   assert.equal((await call('POST', `${L}/sprints/1/start`, { tasks: [a, b, c] })).status, 200);
   const mine = (await call<TeamMine>('GET', '/api/teams/mine')).body;
   assert.deepEqual(mine.tasks.map((x) => [x.team, x.project, x.task.id, x.task.title, x.task.status, x.waiting]), [
     ['team', 'ledger-ui', a, 'Схема счетов', 'todo', []],
     ['team', 'ledger-ui', b, 'API счетов', 'todo', [a]],
+    ['team', 'ledger-ui', d, 'Моя в бэклоге', 'todo', []],
   ]);
   // репо кода с моими папками — как у проекта: «В работу ▸» на главной берёт их отсюда
   const repos = (await call<TeamProject>('GET', L)).body.repos;
   assert.ok(repos.some((r) => r.local));
   assert.deepEqual(mine.projects, [{ team: 'team', slug: 'ledger-ui', title: 'Счета', sprint: { number: 1, title: 'Счета-1' }, repos }]);
-  // предшественник готов — ждать нечего; готовая задача из списка не пропадает
+  // предшественник готов — ждать нечего; готовая задача активного спринта из списка не пропадает, готовая в бэклоге — уходит
   await call('PATCH', `${L}/tasks/${a}`, { status: 'done' });
+  await call('PATCH', `${L}/tasks/${d}`, { status: 'done' });
   assert.deepEqual((await call<TeamMine>('GET', '/api/teams/mine')).body.tasks.map((x) => [x.task.id, x.task.status, x.waiting]), [[a, 'done', []], [b, 'todo', []]]);
+  await call('PATCH', `${L}/tasks/${d}`, { status: 'todo' });
   // проект в архиве — его задач нет
   await call('PUT', L, { status: 'archived' });
   assert.deepEqual((await call<TeamMine>('GET', '/api/teams/mine')).body.tasks, []);
   await call('PUT', L, { status: 'active' });
+  // поставщик дел: те же задачи — дела доски на лету (docs/desk/SPEC.md 4.3), колонка из статуса
+  const tw = (id: string) => `tw:team/ledger-ui/${id}`;
+  const desk = (await call<DeskListReply>('GET', '/api/desk?kind=Teamwork')).body.items;
+  assert.deepEqual(desk.map((i) => [i.key, i.column]).sort(), [[tw(a), 'done'], [tw(b), 'plan'], [tw(d), 'plan']].sort());
+  // перенос с доски — статус задачи в Teamwork
+  assert.equal((await call('POST', '/api/desk/move', { key: tw(b), column: 'work' })).status, 200);
+  assert.equal((await call<TeamTask>('GET', `${L}/tasks/${b}`)).body.status, 'in_progress');
+  assert.equal((await call<DeskListReply>('GET', '/api/desk?kind=Teamwork&column=work')).body.items[0]?.key, tw(b));
+  await call('PATCH', `${L}/tasks/${b}`, { status: 'todo' });
   // диалог выхода десктопа: неотправленные коммиты видны до отправки и пропадают после неё
   const unsent = await unsentTeams();
   assert.deepEqual(unsent.map((x) => [x.slug, x.title]), [['team', 'Платежи']]);
@@ -557,14 +573,24 @@ test('событие team в /api/events после записи и после �
   const res = await fetch(`${base}/api/events`);
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
+  // изменение команды — ещё и событие доски (поставщик дел Teamwork, src/desk/providers/teamwork.ts): его считаем отдельно
+  let desk = 0;
+  let buf = '';
   const next = async (): Promise<Record<string, unknown>> => {
-    let buf = '';
     for (;;) {
+      const m = buf.match(/^data: (.+)$/m);
+      if (m) {
+        buf = buf.slice(m.index! + m[0].length);
+        const e = JSON.parse(m[1]) as Record<string, unknown>;
+        if (e.type === 'desk') {
+          desk++;
+          continue;
+        }
+        return e;
+      }
       const { value, done } = await reader.read();
       if (done) throw new Error('поток закрылся');
       buf += decoder.decode(value, { stream: true });
-      const m = buf.match(/^data: (.+)$/m);
-      if (m) return JSON.parse(m[1]) as Record<string, unknown>;
     }
   };
   const within = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('события team не было 10 с')), 10_000).unref())]);
@@ -580,6 +606,7 @@ test('событие team в /api/events после записи и после �
   const pushed = within(next());
   assert.equal((await call<TeamSync>('POST', '/api/teams/team/sync')).body.state, 'ok');
   assert.deepEqual(await pushed, { type: 'team', runId: '', flow: '', team: 'team', projects: [] });
+  assert.ok(desk > 0, 'правка задачи команды — событие доски');
   await reader.cancel();
   await call<TeamTask>('PATCH', `${P}/tasks/PAY-2`, { title: 'Экспорт в 1С' });
   assert.equal((await call('GET', '/api/teams/team')).status, 200);

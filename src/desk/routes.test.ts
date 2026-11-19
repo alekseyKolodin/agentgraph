@@ -5,14 +5,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore, type DeskStore } from './store.js';
-import { deskRoute } from './routes.js';
+import { deskRoute, LINKED_REASON } from './routes.js';
 import type { DeskItem, DeskListReply } from './types.js';
 
 function setup(t: { after: (fn: () => void) => void }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-desk-rt-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const store: DeskStore = openStore(dir);
-  const call = (method: string, p: string, body?: unknown) => deskRoute(method, new URL(`http://x${p}`), async () => body, { store });
+  const call = (method: string, p: string, body?: unknown) => deskRoute(method, new URL(`http://x${p}`), async () => body, { store, hasProject: (slug) => slug === 'app', jiraHosts: () => [] });
   return { store, call };
 }
 
@@ -64,4 +64,81 @@ test('чужие пути не забирает, неизвестный мето
   assert.equal(await call('GET', '/api/desks'), undefined);
   assert.equal((await call('DELETE', '/api/desk'))?.status, 405);
   assert.equal((await call('POST', '/api/desk/nope'))?.status, 404);
+});
+
+test('POST /api/desk/put: ключ — канонический, адрес MR — вещь для наблюдателя; move находит дело по ключу в другом регистре', async (t) => {
+  const { call } = setup(t);
+  const a = (await call('POST', '/api/desk/put', { key: 'mr:GitLab.Example.com/Grp/App/7', patch: { title: 'MR' } }))!.body as DeskItem;
+  assert.equal(a.key, 'mr:gitlab.example.com/grp/app/7');
+  assert.equal(a.thing?.type, 'mr');
+  const b = (await call('POST', '/api/desk/put', { key: 'https://gitlab.example.com/grp/app/-/merge_requests/7', patch: { why: 'ещё раз' } }))!.body as DeskItem;
+  assert.equal(b.id, a.id);
+  const m = await call('POST', '/api/desk/move', { key: 'mr:GITLAB.example.com/grp/APP/7', column: 'plan' });
+  assert.equal((m!.body as DeskItem).column, 'plan');
+});
+
+test('POST /api/desk/put: пространства нет — 400', async (t) => {
+  const { call } = setup(t);
+  const r = await call('POST', '/api/desk/put', { patch: { title: 'x', project: 'nope' } });
+  assert.deepEqual([r?.status, (r?.body as { error: string }).error], [400, 'patch.project: пространства nope нет']);
+  assert.equal((await call('POST', '/api/desk/put', { patch: { title: 'x', project: 'app' } }))?.status, 200);
+});
+
+test('ключ, который канон не разбирает (своё дело рутины с пробелом), — как есть: карточку можно двигать и закрыть', async (t) => {
+  const { store, call } = setup(t);
+  await store.put('own:folder/a b.md@1', { title: 'файл' }, 'routine');
+  assert.equal(((await call('POST', '/api/desk/move', { key: 'own:folder/a b.md@1', column: 'plan' }))!.body as DeskItem).column, 'plan');
+  const put = await call('POST', '/api/desk/put', { key: 'own:folder/a b.md@1', patch: { why: 'посмотреть' } });
+  assert.deepEqual([put?.status, (put!.body as DeskItem).why], [200, 'посмотреть']);
+  assert.equal(((await call('POST', '/api/desk/close', { key: 'own:folder/a b.md@1' }))!.body as DeskItem).column, 'done');
+  assert.equal((await call('POST', '/api/desk/put', { key: 'https://кривой адрес', patch: { title: 'x' } }))?.status, 400);
+  // не своё и не заведённое — 400: кривой ключ MR завёл бы дубль без вещи
+  assert.equal((await call('POST', '/api/desk/put', { key: 'mr:gitlab.com/a/b/7 x', patch: { title: 'x' } }))?.status, 400);
+  assert.equal((await call('POST', '/api/desk/put', { key: 'own:новое с пробелом', patch: { title: 'x' } }))?.status, 200);
+});
+
+test('POST /api/desk/put: адрес в ключе не теряется — у MR в links.mr, у другого адреса — ссылкой сигнала', async (t) => {
+  const { call } = setup(t);
+  const mr = (await call('POST', '/api/desk/put', { key: 'https://gitlab.example.com/grp/app/-/merge_requests/7', patch: { title: 'MR' } }))!.body as DeskItem;
+  assert.equal(mr.links.mr, 'https://gitlab.example.com/grp/app/-/merge_requests/7');
+  const page = (await call('POST', '/api/desk/put', { key: 'https://wiki.example.com/page', patch: { title: 'Прочитать' } }))!.body as DeskItem;
+  assert.match(page.key, /^own:url-/);
+  // ключ MR без адреса: вещь есть, links.mr не выдумывается
+  const byKey = (await call('POST', '/api/desk/put', { key: 'mr:gitlab.example.com/grp/app/8', patch: { title: 'MR 8' } }))!.body as DeskItem;
+  assert.deepEqual([byKey.thing?.type, byKey.links.mr], ['mr', undefined]);
+  assert.equal(page.signals[0]?.link, 'https://wiki.example.com/page');
+});
+
+test('POST /api/desk/link: своё дело переезжает на вещь по адресу MR одной записью — сигналы, срок, колонка и возраст те же, своё закрыто ссылкой', async (t) => {
+  const { store } = setup(t);
+  const link = (body: unknown) => deskRoute('POST', new URL('http://x/api/desk/link'), async () => body, { store, jiraHosts: () => ['jira.example.com'] });
+  const own = await store.put('own:w', { title: 'Ретраи вебхуков', column: 'plan', project: 'pay', due: '2026-11-27', why: 'обещал на дейлике', signal: { source: 'slack', at: '2026-11-18T10:00:00.000Z', text: 'сделаешь?', replyTo: { channel: 'C1' } } }, 'me');
+  assert.equal((await link({ key: 'own:w', url: 'https://example.com/x' }))?.status, 400);
+  assert.equal((await link({ key: 'own:nope', url: 'https://gitlab.example.com/g/app/-/merge_requests/12' }))?.status, 409);
+  const r = await link({ key: 'own:w', url: 'https://GitLab.example.com/g/App/-/merge_requests/12/diffs' });
+  assert.equal(r?.status, 200);
+  const item = r!.body as DeskItem;
+  assert.deepEqual(
+    [item.key, item.thing?.type, item.title, item.kind, item.column, item.project, item.due, item.why, item.createdAt, item.movedAt, item.signals],
+    ['mr:gitlab.example.com/g/app/12', 'mr', 'Ретраи вебхуков', 'MR', 'plan', 'pay', '2026-11-27', 'обещал на дейлике', own.createdAt, own.movedAt, own.signals],
+  );
+  assert.notEqual(item.id, own.id);
+  const closed = (await store.get('own:w'))!;
+  assert.deepEqual([closed.column, closed.closed?.reason], ['done', `${LINKED_REASON}MR g/App!12`]);
+  // закрытое своё и дело с вещью — не привязываются
+  assert.equal((await link({ key: 'own:w', url: 'https://jira.example.com/browse/PAY-1' }))?.status, 409);
+  assert.equal((await link({ key: item.key, url: 'https://jira.example.com/browse/PAY-1' }))?.status, 409);
+});
+
+test('POST /api/desk/link: у вещи уже есть дело (даже закрытое) — 409, своё не трогается; вид не «Своё» остаётся', async (t) => {
+  const { store } = setup(t);
+  const link = (body: unknown) => deskRoute('POST', new URL('http://x/api/desk/link'), async () => body, { store, jiraHosts: () => ['jira.example.com'] });
+  await store.put('mr:gitlab.example.com/g/app/12', { title: 'MR', column: 'plan' }, 'watcher');
+  await store.close('mr:gitlab.example.com/g/app/12', 'смержен', 'watcher');
+  await store.put('own:a', { title: 'a' }, 'me');
+  assert.equal((await link({ key: 'own:a', url: 'https://gitlab.example.com/g/app/-/merge_requests/12' }))?.status, 409);
+  assert.equal((await store.get('own:a'))?.closed, undefined);
+  await store.put('own:m', { title: 'Созвон', kind: 'Встреча' }, 'me');
+  const j = (await link({ key: 'own:m', url: 'https://jira.example.com/browse/pay-7' }))!.body as DeskItem;
+  assert.deepEqual([j.key, j.kind, j.column], ['jira:jira.example.com/PAY-7', 'Встреча', 'new']);
 });

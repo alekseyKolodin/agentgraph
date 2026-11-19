@@ -8,7 +8,7 @@
 // Инвариант: колонка «Готово» ⇔ у дела есть closed. Закрытое дело наблюдатели не обходят; новый сигнал о той же вещи
 // открывает его снова («Готово» → «В плане»).
 import type { ThingState } from '../things/types.js';
-import type { DeskBy, DeskColumn, DeskItem, DeskLinks, DeskMove, DeskPatch, DeskSignal } from './types.js';
+import type { DeskBy, DeskColumn, DeskCreatedBy, DeskItem, DeskLinks, DeskMove, DeskPatch, DeskSignal } from './types.js';
 
 export type DeskEvent =
   | { type: 'put'; key: string; patch: DeskPatch; by: DeskBy }
@@ -30,6 +30,8 @@ export const isColumn = (v: unknown): v is DeskColumn => typeof v === 'string' &
 
 /** Сигналов в деле: старые уходят, последние остаются. */
 export const SIGNALS_MAX = 50;
+/** Ссылок каждого вида (запуски, сессии, упоминания) помним столько последних: items.json ограничен. */
+export const LINKS_MAX = 20;
 const WHY_MAX = 300;
 
 const KIND_OF: Record<string, string> = { mr: 'MR', jira: 'Jira', teamwork: 'Teamwork', branch: 'Ветка', session: 'Сессия', run: 'Запуск', thread: 'Разговор', own: 'Своё' };
@@ -65,10 +67,31 @@ function clip(s: DeskSignal): DeskSignal {
 
 const sameSignal = (a: DeskSignal, b: DeskSignal): boolean => a.source === b.source && a.at === b.at && (a.link ?? '') === (b.link ?? '') && (a.text ?? '') === (b.text ?? '');
 
+/**
+ * Ссылки дописываются без повторов, каждого вида — последние LINKS_MAX. runs — запуски по делу (рутина, карточка): их
+ * конец пишет итог в why; mentionedBy — запуски, которые дело завели или дополнили через desk_put, итог их не пишется.
+ */
 function mergeLinks(a: DeskLinks, b: Partial<DeskLinks> | undefined): DeskLinks {
   if (!b) return a;
-  const uniq = (x: string[], y: string[] | undefined) => (y?.length ? [...new Set([...x, ...y.filter((v) => typeof v === 'string' && v)])] : x);
-  return { runs: uniq(a.runs, b.runs), sessions: uniq(a.sessions, b.sessions), ...((b.branch ?? a.branch) ? { branch: b.branch ?? a.branch } : {}), ...((b.mr ?? a.mr) ? { mr: b.mr ?? a.mr } : {}) };
+  const uniq = (x: string[], y: unknown) => (Array.isArray(y) && y.length ? [...new Set([...x, ...y.filter((v): v is string => typeof v === 'string' && !!v)])].slice(-LINKS_MAX) : x);
+  // у запусков по делу первый остаётся: по нему (корню цепочки) продолжение находит дело для итога
+  const runs = Array.isArray(b.runs) && b.runs.length ? [...new Set([...a.runs, ...b.runs.filter((v): v is string => typeof v === 'string' && !!v)])] : a.runs;
+  const mentionedBy = uniq(a.mentionedBy ?? [], b.mentionedBy);
+  return {
+    runs: runs.length > LINKS_MAX ? [runs[0]!, ...runs.slice(-(LINKS_MAX - 1))] : runs,
+    sessions: uniq(a.sessions, b.sessions),
+    ...((b.branch ?? a.branch) ? { branch: b.branch ?? a.branch } : {}),
+    ...((b.mr ?? a.mr) ? { mr: b.mr ?? a.mr } : {}),
+    ...(mentionedBy.length ? { mentionedBy } : {}),
+  };
+}
+
+/** Кто завёл: только строки, только новому делу. */
+function createdByOf(c: DeskCreatedBy | undefined): DeskCreatedBy | undefined {
+  if (!c || typeof c !== 'object') return undefined;
+  const out: DeskCreatedBy = {};
+  for (const k of ['run', 'session', 'routine'] as const) if (typeof c[k] === 'string' && c[k]) out[k] = c[k].slice(0, 200);
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Дело в колонке to: время в колонке заново, «Готово» ⇔ closed. */
@@ -85,6 +108,7 @@ const changed = (a: DeskItem, b: DeskItem): boolean => JSON.stringify(a) !== JSO
 function create(key: string, patch: DeskPatch, by: DeskBy, ctx: RuleCtx): Step {
   const column = patch.column ?? 'new';
   const signal = patch.signal && clip(patch.signal);
+  const createdBy = createdByOf(patch.createdBy);
   const item: DeskItem = {
     id: ctx.id(),
     key,
@@ -101,6 +125,7 @@ function create(key: string, patch: DeskPatch, by: DeskBy, ctx: RuleCtx): Step {
     createdAt: ctx.now,
     movedAt: ctx.now,
     movedBy: by,
+    ...(createdBy ? { createdBy } : {}),
   };
   if (column === 'done') item.closed = { at: ctx.now, reason: line(patch.why ?? 'заведено закрытым', 200) };
   return { item, move: { at: ctx.now, key, to: column, by, ...(item.why ? { why: item.why } : {}) } };
@@ -130,6 +155,9 @@ function put(item: DeskItem | undefined, e: Extract<DeskEvent, { type: 'put' }>,
     links: mergeLinks(item.links, p.links),
   };
   if (fresh && (p.onRepeat ?? 'plan') === 'plan' && (item.column === 'waiting' || item.column === 'done')) {
+    // переоткрыто сигналом, а вещь была закрыта (отпечаток закрытой вещи): забываем его — вещь всё ещё закрыта, сверка
+    // закроет дело снова. Закрытое руками при открытой вещи отпечаток держит: перенос в «В плане» не собьёт сверка.
+    if (item.closed && item.seen && !item.seen.startsWith('|')) delete next.seen;
     return moved(next, 'plan', e.by, ctx.now, p.why ?? (fresh.text ? `новое: ${fresh.text}` : `новое от ${fresh.author ?? fresh.source}`));
   }
   return changed(item, next) ? { item: next } : undefined;
@@ -154,6 +182,8 @@ function state(item: DeskItem, s: ThingState, ctx: RuleCtx): Step | undefined {
   // закрывает вещь только правило close: 'thing' (по умолчанию); 'never' и условие словами — руками
   if (s.closed && closesWithThing(item)) return moved(base, 'done', 'watcher', ctx.now, why, CLOSED_REASON[s.closed]);
   if (s.closed) return { item: base };
+  // перенос руками до первой сверки: первое состояние только запоминаем — перенос держится до изменения вещи
+  if (item.seen === undefined && item.movedBy === 'me') return { item: base };
   if (s.turn === 'me' && item.column === 'waiting') return moved(base, 'plan', 'watcher', ctx.now, why);
   if (s.turn === 'others' && (item.column === 'plan' || item.column === 'work')) return moved(base, 'waiting', 'watcher', ctx.now, why);
   return { item: base };
@@ -172,7 +202,7 @@ export function step(item: DeskItem | undefined, e: DeskEvent, ctx: RuleCtx): St
     case 'close':
       return item.closed ? undefined : moved(item, 'done', e.by, ctx.now, undefined, e.reason || 'закрыто');
     case 'run': {
-      // запуск по делу закончился: колонка та же, why — итог
+      // запуск, начатый по делу (links.runs), закончился: колонка та же, why — итог; упомянувшие (mentionedBy) — нет
       if (!e.runIds.some((id) => item.links.runs.includes(id))) return undefined;
       const text = { ok: `агент закончил: ${e.summary || 'готово'}`, failed: `запуск упал: ${e.summary || 'ошибка'}`, stopped: `запуск остановлен${e.summary ? `: ${e.summary}` : ''}` }[e.outcome];
       const why = line(text);

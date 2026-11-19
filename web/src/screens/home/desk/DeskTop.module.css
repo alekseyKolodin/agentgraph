@@ -1,0 +1,64 @@
+/* Полоса над доской (DeskTop.tsx; макет — docs/desk/design/DeskPult.dc.html, верх доски). */
+.top { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; }
+.questions { display: flex; flex-direction: column; gap: 10px; }
+
+/* «Начни с этого»: обводка цветом «ждёт тебя», фон — его тень на панели */
+.start {
+  display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+  border: 1px solid color-mix(in srgb, var(--st-wait) 45%, transparent);
+  background: color-mix(in srgb, var(--st-wait) 6%, var(--panel));
+  border-radius: var(--r-md); padding: 16px 18px;
+}
+.start-main { flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.start-label { font-size: var(--fs-meta); font-weight: 500; color: var(--st-wait); }
+.start-head { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.start-title { font-size: var(--fs-h2); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.start-why { color: var(--ink-2); }
+.start-reason { font-size: var(--fs-meta); color: var(--ink-3); }
+.start-side { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; max-width: 320px; min-width: 0; }
+.start-next { font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.kind {
+  font-size: var(--fs-cap); font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: var(--r-xs); white-space: nowrap; flex: none;
+  color: var(--ink-2); background: var(--select);
+}
+
+/* строка сверки и среза: слева «N из N», справа проекты */
+.strip { display: flex; gap: 8px 16px; align-items: flex-start; flex-wrap: wrap; }
+.gap { flex: 1; }
+.check { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.ago { font-size: var(--fs-meta); color: var(--ink-3); }
+.chip {
+  display: inline-flex; gap: 6px; align-items: center; font: inherit; font-size: var(--fs-meta); color: var(--ink-2);
+  background: none; border: 0; padding: 2px 0; cursor: pointer; white-space: nowrap;
+}
+.chip:hover { color: var(--ink); }
+.chip:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-xs); }
+.caret { font-size: 10px; color: var(--ink-3); }
+.source { display: inline-flex; gap: 6px; align-items: center; font-size: var(--fs-meta); color: var(--ink-2); min-width: 0; max-width: 520px; white-space: nowrap; }
+.source-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.list { list-style: none; margin: 0; padding: 6px 0 0; display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; }
+.row { display: flex; gap: 8px; align-items: center; font-size: var(--fs-meta); min-height: 26px; }
+.row-title { color: var(--ink); font-weight: 500; white-space: nowrap; }
+.row-text { color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.ok { background: var(--st-ok); }
+.dot.wait { background: var(--st-wait); }
+.dot.fail { background: var(--st-fail); }
+.dot.off { box-shadow: inset 0 0 0 1.4px var(--ink-3); }
+.dot.live { background: var(--live); }
+
+/* срез по проектам — пилюли, как в макете */
+.projects { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill {
+  display: inline-flex; gap: 6px; align-items: center; font: inherit; font-size: var(--fs-small); padding: 4px 11px;
+  border-radius: var(--r-pill); border: 1px solid var(--line-strong); background: none; color: var(--ink-2); cursor: pointer; white-space: nowrap;
+}
+.pill:hover { background: var(--hover); color: var(--ink); }
+.pill:focus-visible { outline: none; box-shadow: var(--focus); }
+.pill.on { background: var(--select); color: var(--ink); font-weight: 500; }
+.n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.pill.on .n { color: var(--ink-2); }
+
+/* поздние перебивки: красный текст поломки */
+.fail-text { color: var(--st-fail); }
