@@ -1,5 +1,6 @@
 // Секция «Запуски» сайдбара (ui/app.js renderRunList, runFilterHtml, foldAll, wireSideSearch, setRunHidden, deleteRun): поиск,
-// фильтр по статусу одной строкой, группы по проектам с «ещё N» и живыми счётчиками, скрытые, скрыть и удалить запуск. Строка
+// «вручную / от рутины», фильтр по статусу одной строкой, группы по проектам с «ещё N» и живыми счётчиками, скрытые,
+// «готовое старше N дней» и работа закрытых дел — с глаз (N — в строке под списком, запоминается), скрыть и удалить запуск. Строка
 // запуска — ссылка (Cmd+клик — в новом окне, Tab и Enter), «Скрыть» и «Удалить» — кнопки поверх неё. Логика — lib/runs.ts;
 // свёрнутость проектов — fold.ts (proj:<слаг пространства>), группировка, скрытые и фильтр — те же ключи localStorage, что у старого UI.
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
@@ -11,8 +12,10 @@ import { useConfirm } from '../ConfirmDialog';
 import { statusLabel } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { ProposeSpaces } from './ProposeSpaces';
-import { deleteRunText, projKey, runDepths, runListView, runManageable, runRowMeta, runRowTitle } from '../../lib/runs';
+import { closedWork, closedWorkStore } from '../../lib/closed-work';
+import { deleteRunText, projKey, RUNS_OLD_CHOICES, RUNS_OLD_DAYS, runDepths, runOrigin, runsOldDays, runListView, runManageable, runRowMeta, runRowTitle, type RunOrigin } from '../../lib/runs';
 import { LS } from '../../lib/storage';
+import { useNow } from '../useNow';
 import { isOpen, reveal, setOpen, useFold } from './fold';
 import { ICON } from './FlowList';
 import styles from './Sidebar.module.css';
@@ -24,6 +27,11 @@ const side = {
   grouped: LS.get('agentgraph.groupRuns', true),
   showHidden: LS.get('agentgraph.showHidden', false),
   statuses: new Set(LS.get<string[]>('agentgraph.runStatuses', [])),
+  origin: runOrigin(LS.get<unknown>('agentgraph.runOrigin', 'all')),
+  /** «Скрыть готовое старше N дней»: 0 — не скрывать. */
+  oldDays: runsOldDays(LS.get<unknown>('agentgraph.runsOldDays', RUNS_OLD_DAYS)),
+  /** Убранное с глаз показано — только в памяти вкладки: в следующий раз список снова чистый. */
+  showOld: false,
   query: '',
   showAll: new Set<string>(),
 };
@@ -47,10 +55,14 @@ const useActiveRun = () => useMatch('/run/:id')?.params.id ?? null;
 
 function useView() {
   const s = useSide();
+  useSyncExternalStore(closedWorkStore.subscribe, closedWorkStore.version);
+  // «старше N дней» — от минуты к минуте не меняется: перерисовка раз в минуту
+  const now = useNow(60_000);
   const runs = useRuns();
   const activeId = useActiveRun();
   const all = runs.data ?? [];
-  return { s, all, activeId, loaded: runs.isSuccess, view: runListView(all, { activeId, showHidden: s.showHidden, statuses: s.statuses, query: s.query }, s.grouped, s.showAll) };
+  const o = { activeId, showHidden: s.showHidden, statuses: s.statuses, query: s.query, origin: s.origin, oldDays: s.oldDays, showOld: s.showOld, closed: closedWork().run, now };
+  return { s, all, activeId, loaded: runs.isSuccess, view: runListView(all, o, s.grouped, s.showAll) };
 }
 
 /** Кнопки в шапке секции: «по проектам», свернуть/развернуть все проекты, ↻. */
@@ -224,6 +236,31 @@ export function RunList() {
         }}
       />
       <div className={styles.sideBody}>
+        {/* откуда запуск: ряд есть, только если в списке есть запуски от рутин (или фильтр уже выбран) */}
+        {(view.routineCount > 0 || s.origin !== 'all') && (
+          <div className={styles.runOrigin} role="group" aria-label={t('Откуда запуск')}>
+            {([
+              ['all', t('все'), t('И ручные запуски, и от рутин'), view.routineCount + view.manualCount],
+              ['manual', t('вручную'), t('Запущенные тобой: из формы, «Кода», сессии'), view.manualCount],
+              ['routine', t('от рутин'), t('Запущенные рутинами по событию или расписанию'), view.routineCount],
+            ] as const).map(([id, label, title, n]) => (
+              <button
+                key={id}
+                type="button"
+                className={cx('chip', s.origin === id && 'on')}
+                aria-pressed={s.origin === id}
+                title={title}
+                onClick={() => {
+                  side.origin = id;
+                  LS.set('agentgraph.runOrigin', id);
+                  changed();
+                }}
+              >
+                {label}{id !== 'all' && <> <span className={styles.n}>{n}</span></>}
+              </button>
+            ))}
+          </div>
+        )}
         {/* фильтр по статусу: несколько выбранных — объединение; «все» сбрасывает */}
         {view.chips.length > 0 && (
           <StatusFilter>
@@ -277,6 +314,7 @@ export function RunList() {
             </div>
           );
         })}
+        <OldRuns oldCount={view.oldCount} searching={view.searching} />
         {/* переключатель скрытых — под списком, как «ещё N»: в шапке раздела ему не хватает места */}
         {view.hiddenCount > 0 && (
           <button
@@ -292,6 +330,48 @@ export function RunList() {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Строка под списком: «готовое старше [7 дней] убрано: 42 · показать». N выбирается здесь же и запоминается; «не
+ * убирать» выключает. Нечего убирать и настройка по умолчанию — строки нет. Показ убранного — до перезагрузки.
+ */
+function OldRuns({ oldCount, searching }: { oldCount: number; searching: boolean }) {
+  const s = useSide();
+  if (!oldCount && s.oldDays === RUNS_OLD_DAYS) return null;
+  const pick = (
+    <select
+      className={styles.oldDays}
+      aria-label={t('Убирать готовое старше')}
+      title={t('Закончившиеся запуски старше этого уходят с глаз: файлы остаются, поиск их находит')}
+      value={s.oldDays}
+      onChange={(e) => {
+        side.oldDays = Number(e.target.value);
+        LS.set('agentgraph.runsOldDays', side.oldDays);
+        changed();
+      }}
+    >
+      {RUNS_OLD_CHOICES.map((d) => <option key={d} value={d}>{t('{n} дн.', { n: d })}</option>)}
+      <option value={0}>{t('не убирать')}</option>
+    </select>
+  );
+  return (
+    <div className={styles.oldRuns}>
+      <span>{s.oldDays ? t('готовое старше') : t('готовое:')} {pick}{oldCount > 0 && !searching && `: ${t('убрано {n}', { n: oldCount })}`}</span>
+      {oldCount > 0 && !searching && (
+        <button
+          type="button"
+          className={styles.moreBtn}
+          onClick={() => {
+            side.showOld = !side.showOld;
+            changed();
+          }}
+        >
+          {s.showOld ? t('убрать') : t('показать')}
+        </button>
+      )}
+    </div>
   );
 }
 

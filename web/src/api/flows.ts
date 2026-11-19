@@ -2,7 +2,7 @@
 // Генерация и правка с ИИ идут потоком NDJSON (FlowAiStreamEvent): модель, повторы, шаги и строки хода — по мере прихода.
 // Ответы со spec типизируются здесь: spec — FlowSpec из src/schema.ts (тип zod), его нет в src/api-types.ts без импортов.
 import { useQuery } from '@tanstack/react-query';
-import type { ConnectorsView, FlowAiDone, FlowAiStreamEvent, FlowSummary, TagListItem } from '@server/api-types';
+import type { ConnectorsView, FlowAiDone, FlowAiStreamEvent, FlowHistory, FlowSummary, TagListItem } from '@server/api-types';
 import type { FlowSpec } from '@server/schema';
 import { t } from '../lib/i18n';
 import { api, streamNdjson } from './client';
@@ -28,6 +28,17 @@ export const saveFlowSpec = (name: string, spec: unknown) => api<FlowSaved & { y
 export const checkFlow = (body: { spec: unknown } | { yaml: string }) => api<FlowSaved & { yaml: string }>('POST', '/api/flows/check', body);
 export const moveFlow = (name: string, folder: string) => api<{ name: string; folder: string }>('PUT', `/api/flows/${enc(name)}/folder`, { folder });
 export const deleteFlow = (name: string) => api<{ ok: true }>('DELETE', `/api/flows/${enc(name)}`);
+
+/**
+ * Статистика и версии flow (GET /api/flows/:name/history). Ключ — под keys.runs: события запусков (старт, конец)
+ * обновляют его вместе со списком; текст файла в ключе — после сохранения отметка «текущая» считается заново.
+ */
+/** Версия flow из снимка запуска для редактора: задача запуска заменена задачей файла flow. */
+export const fetchFlowVersion = (name: string, run: string, file: string) =>
+  api<{ yaml: string }>('GET', `/api/flows/${enc(name)}/version?run=${enc(run)}&file=${enc(file)}`);
+
+export const useFlowHistory = (name: string, yaml: string, on = true) =>
+  useQuery({ queryKey: [...keys.runs, 'flow-history', name, yaml], queryFn: () => api<FlowHistory>('GET', `/api/flows/${enc(name)}/history`), enabled: on && Boolean(name) });
 export const blankFlow = (name: string, folder: string) => api<{ name: string; yaml: string }>('POST', '/api/flows/blank', { name, folder });
 
 /**

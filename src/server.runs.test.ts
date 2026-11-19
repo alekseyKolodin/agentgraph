@@ -135,3 +135,33 @@ test('PUT /api/runs/:id/title: чужой Origin — 403, тело не JSON —
   assert.equal((await rename(DONE, JSON.stringify({ title: 'Чужое' }), { 'Content-Type': 'text/plain' })).status, 415);
   assert.equal(fs.readFileSync(file(DONE), 'utf8'), before);
 });
+
+test('GET /api/flows/:name/history: запуски flow, последний и версии из снимков; текущая — по файлу в flows/', async () => {
+  const { parseFlow } = await import('./flows.js');
+  const { stringify } = await import('yaml');
+  const yaml = 'name: demo\nphases:\n  - name: work\n    prompt: сделай\n    tools: [Read]\n';
+  fs.writeFileSync(path.join(home, 'flows', 'demo.yaml'), yaml);
+  fs.writeFileSync(path.join(runs, DONE, 'flow.yaml'), stringify(parseFlow(yaml), { lineWidth: 0 }));
+  try {
+    const r = await call<import('./api-types.js').FlowHistory>('GET', '/api/flows/demo/history');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.total, 2);
+    assert.equal(r.body.last?.id, RUNNING);
+    // у идущего снимка нет (его пишет раннер другого процесса) — он не версия
+    assert.equal(r.body.noSnapshot, 1);
+    assert.deepEqual(r.body.versions.map((v) => [v.n, v.runs, v.current, v.runId, v.file]), [[1, 1, true, DONE, 'flow.yaml']]);
+    // версия для редактора: задача запуска — из файла flow, чужой запуск и не снимок — отказ
+    const v = await call<{ yaml: string }>('GET', `/api/flows/demo/version?run=${DONE}&file=flow.yaml`);
+    assert.equal(v.status, 200);
+    assert.match(v.body.yaml, /prompt: сделай/);
+    assert.equal((await call('GET', `/api/flows/other/version?run=${DONE}&file=flow.yaml`)).status, 404);
+    assert.equal((await call('GET', `/api/flows/demo/version?run=${DONE}&file=run.json`)).status, 400);
+    assert.equal((await call('GET', `/api/flows/demo/version?run=../x&file=flow.yaml`)).status, 400);
+    // flow без запусков и без файла — пустая история, а не ошибка
+    const none = await call<import('./api-types.js').FlowHistory>('GET', '/api/flows/nope/history');
+    assert.deepEqual([none.status, none.body.total, none.body.versions], [200, 0, []]);
+  } finally {
+    fs.rmSync(path.join(home, 'flows', 'demo.yaml'), { force: true });
+    fs.rmSync(path.join(runs, DONE, 'flow.yaml'), { force: true });
+  }
+});

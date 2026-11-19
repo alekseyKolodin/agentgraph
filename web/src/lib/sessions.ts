@@ -174,6 +174,9 @@ export function pendingNote(chips: Pick<SessionTagChip, 'slug' | 'state'>[]): st
     : t('{what} дойдёт до модели со следующим её шагом или твоим сообщением', { what });
 }
 
+/** Примерный размер терминала новой сессии по окну: claude перерисуется под настоящий при подключении. */
+export const termSize = (w: number, h: number): { cols: number; rows: number } => ({ cols: Math.max(80, Math.floor((w - 380) / 8)), rows: Math.max(24, Math.floor((h - 190) / 17)) });
+
 /** WebSocket экрана сессии на том же хосте, что и страница: Origin совпадёт с Host, и сервер пустит. */
 export const sessionWsUrl = (loc: { protocol: string; host: string }, id: string): string =>
   `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/api/sessions/${encodeURIComponent(id)}/ws`;

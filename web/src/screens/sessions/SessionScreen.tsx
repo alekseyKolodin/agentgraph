@@ -1,5 +1,6 @@
 // Экран сессии терминала /sessions/:id (макеты Main и Ended): шапка — назад, название с правкой, статус, папка,
-// «Обновить состояние», «Завершить» или «Продолжить», меню (перезапуск, удаление); строка контекста — чип пространства
+// «Обновить состояние», «Завершить» или «Продолжить», «Flow из сессии» (новая сессия со скиллом session-to-flow по
+// транскрипту этой), меню (перезапуск, удаление); строка контекста — чип пространства
 // (смена и снятие, в том числе у завершённой — со следующим «Продолжить») и чипы тегов знаний со снятием и «+ тег»;
 // выбранное на ходу помечено «придёт со следующим шагом», справа — состояние пространства; терминал на всю оставшуюся
 // высоту; подвал с подсказкой и версией claude. Состояние приходит потоком WebSocket терминала. Завершённая на вопросе
@@ -12,7 +13,7 @@ import { api, ApiError, errorText, keys, useConfig, useFeature, useSpaces, useTa
 import { ModelPreview } from '../../components/ModelPreview';
 import { SpacePicker } from '../../components/SpacePicker';
 import {
-  deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, setSessionSpace, setSessionTags, updateSessionState,
+  deleteSession, endSession, fetchSession, putSession, renameSession, restartSession, sessionKeys, sessionToFlow, setSessionSpace, setSessionTags, updateSessionState,
 } from '../../api/sessions';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { setDocRunTitle } from '../../components/shell/docTitle';
@@ -22,7 +23,7 @@ import { clock } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { tildePath } from '../../lib/paths';
 import { TAG_SLUG_ERROR, TAG_SLUG_RE } from '../../lib/run-form';
-import { askNote, canUpdateState, chipHint, noTranscriptWhy, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
+import { askNote, canUpdateState, chipHint, termSize, noTranscriptWhy, pendingNote, sessionEndText, sessionExitTitle, sessionStatusLabel, sessionTone, spaceChipHint, stateNote } from '../../lib/sessions';
 import { SPACE_SLUG_ERROR, SPACE_SLUG_RE } from '../../lib/spaces';
 import { SELECT_KEY, SessionTerminal } from './SessionTerminal';
 import { SessionName } from './SessionName';
@@ -84,6 +85,21 @@ function useActions(s: SessionView, setS: (v: SessionView) => void, prompt: stri
     resume: () => run(() => cont.resume(s.id, prompt)),
     restart: () => run(() => restartSession(s.id)),
     state: () => run(() => updateSessionState(s.id)),
+    /** Новая сессия со скиллом session-to-flow — после подтверждения; открывается на её экране. */
+    toFlow: async () => {
+      if (!(await askConfirm(t('Сделать flow из сессии «{name}»?\nОткроется новая сессия Claude в папке agentgraph со скиллом session-to-flow: он прочитает транскрипт этой сессии, разберёт рабочий путь и грабли и предложит flow. Записать flow в flows/ он спросит разрешения.', { name: s.name }), { ok: t('Открыть сессию') }))) return;
+      setBusy(true);
+      try {
+        const v = await sessionToFlow(s.id, termSize(window.innerWidth, window.innerHeight));
+        qc.setQueryData(sessionKeys.one(v.id), v);
+        void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
+        void navigate(`/sessions/${encodeURIComponent(v.id)}`);
+      } catch (err) {
+        toast(errorText(err));
+      } finally {
+        setBusy(false);
+      }
+    },
     remove: async () => {
       if (!(await askConfirm(t('Удалить сессию «{name}» из agentgraph? Журнал ходов и перетащенные файлы удалятся; транскрипт Claude останется.', { name: s.name }), { ok: t('Удалить'), danger: true }))) return;
       try {
@@ -139,6 +155,7 @@ function Session({ s }: { s: SessionView }) {
   }, [stateAt]);
   const tone = sessionTone(s);
   const update = canUpdateState(s);
+  const toFlowOn = useFeature('session-to-flow');
   return (
     <div className={styles.screen}>
       <header className={styles.head}>
@@ -159,6 +176,17 @@ function Session({ s }: { s: SessionView }) {
           {update.show && (
             <button type="button" className="btn" disabled={act.busy || !update.ok} title={update.why} onClick={() => void act.state()}>
               {ICON.refresh}{t('Обновить состояние')}
+            </button>
+          )}
+          {toFlowOn && s.turns > 0 && (
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={act.busy || (!s.live && s.resumable === false)}
+              title={!s.live && s.resumable === false ? t('Транскрипта этой сессии нет: flow делать не из чего') : t('Сделать flow из этой сессии: новая сессия со скиллом session-to-flow разберёт её транскрипт — рабочий путь в этапы, грабли в промпты')}
+              onClick={() => void act.toFlow()}
+            >
+              {t('Flow из сессии')}
             </button>
           )}
           {s.live && (
