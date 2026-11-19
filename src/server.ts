@@ -592,7 +592,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
     if (r) return sendJson(res, r.status, r.body);
   }
 
-  // --- дела: список с итогом сверки, put/move/close с карточки (src/desk/routes.ts)
+  // --- дела: список с итогом сверки, put/move/close/link с карточки (src/desk/routes.ts)
   if (p === '/api/desk' || p.startsWith('/api/desk/')) {
     // сверка «N из N»: итоги источников рутин (движок читает их с диска) и наблюдателей; на остановке — только наблюдатели
     const check = stopping

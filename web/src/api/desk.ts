@@ -28,6 +28,11 @@ export const fetchDesk = (q: DeskQuery = {}) => api<DeskListReply>('GET', `/api/
 export const putDesk = (patch: DeskPatch, key?: string) => api<DeskItem>('POST', '/api/desk/put', { ...(key ? { key } : {}), patch });
 export const moveDesk = (key: string, column: DeskColumn, why?: string) => api<DeskItem>('POST', '/api/desk/move', { key, column, ...(why ? { why } : {}) });
 export const closeDesk = (key: string, reason?: string) => api<DeskItem>('POST', '/api/desk/close', { key, ...(reason ? { reason } : {}) });
+/**
+ * «Привязать вещь» у своего дела: адрес MR, PR или задачи Jira → дело по ключу вещи (вещь собирает сервер), своё
+ * закрывается. Ответ — дело вещи. Адрес не узнан — 400, у дела уже есть вещь — 409.
+ */
+export const linkDesk = (key: string, url: string) => api<DeskItem>('POST', '/api/desk/link', { key, url });
 
 /** Открытые дела (или по фильтру). Сервер без дел (старая версия) — запроса нет, data пустая. */
 export function useDesk(q: DeskQuery = { open: true }) {

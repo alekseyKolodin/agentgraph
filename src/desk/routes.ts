@@ -2,7 +2,7 @@
 // undefined. Проверки Host/Origin/типа тела уже сделал server-guard в handle(). Всё, что приходит из UI, — от 'me'.
 import { randomBytes } from 'node:crypto';
 import { readSpaceMeta, spaceSlug } from '../spaces.js';
-import { settingsJiraHosts } from '../things/resolve.js';
+import { settingsJiraHosts, thingLabel, thingOfUrl } from '../things/resolve.js';
 import { deskCheck } from './check.js';
 import { isColumn } from './rules.js';
 import { canonicalKey, resolveThing } from './tools.js';
@@ -40,6 +40,12 @@ const spaceExists = (slug: string): boolean => {
     return false; // кривое имя — пространства нет
   }
 };
+
+/** Причина закрытия своего дела, которое переложено на вещь («Привязать вещь»): доска такие в «Готово» не показывает. */
+export const LINKED_REASON = 'привязано к ';
+
+/** Вид дела вещи вместо «Своё» (как у нового дела в rules.ts). */
+const KIND_OF_THING: Record<string, string> = { mr: 'MR', jira: 'Jira' };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
@@ -139,6 +145,21 @@ export async function deskRoute(method: string, url: URL, readBody: () => Promis
     if (!isColumn(b.column)) return bad('column: new | plan | work | waiting | done');
     const item = await store.move(key, b.column, 'me', str(b.why, 300));
     return item ? ok(item) : bad('Дела нет', 404);
+  }
+  if (p === '/api/desk/link') {
+    // «Привязать вещь» у своего дела: адрес MR, PR или задачи Jira → дело по ключу вещи (одна вещь — одно дело, следующий
+    // сигнал о ней найдёт его), своё закрывается со ссылкой. Вещь собирает сервер по адресу, не клиент; переезд — одной
+    // записью хранилища (сигналы, ссылки и возраст те же)
+    const b = obj(await readBody());
+    const key = keyOf(b.key);
+    if (!key) return bad('key: ключ вещи вида тип:…');
+    if (!key.startsWith('own:')) return bad('Вещь привязывается только к своему делу', 409);
+    const thing = thingOfUrl(str(b.url, 1000) ?? '', (deps.jiraHosts ?? settingsJiraHosts)());
+    if (!thing) return bad('Адрес не узнан: нужна ссылка на MR, PR или задачу Jira');
+    const r = await store.relink(key, { key: thing.key, kind: KIND_OF_THING[thing.type] ?? 'Своё', type: thing.type, ref: thing.ref, ...(thing.url ? { url: thing.url } : {}) }, `${LINKED_REASON}${thingLabel(thing)}`);
+    if (r === 'missing') return bad('Открытого своего дела без вещи нет', 409);
+    if (r === 'taken') return bad(`У ${thingLabel(thing)} уже есть дело: закрой это или открой то`, 409);
+    return ok(r);
   }
   if (p === '/api/desk/close') {
     const b = obj(await readBody());

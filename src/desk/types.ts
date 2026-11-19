@@ -141,6 +141,7 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  *   POST /api/desk/put   { key, patch }     → DeskItem         (by: 'me')
  *   POST /api/desk/move  { key, column }    → DeskItem
  *   POST /api/desk/close { key, reason }    → DeskItem
+ *   POST /api/desk/link  { key, url }       → DeskItem         (своё дело → дело вещи по адресу MR/PR/Jira; 409 — занято)
  * Изменения доски приходят в общий поток событий как { type: 'desk' }.
  */
 export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
