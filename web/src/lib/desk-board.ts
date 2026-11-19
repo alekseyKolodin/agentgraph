@@ -40,18 +40,28 @@ const startOfDay = (ms: number): number => {
 };
 const dayWord = (n: number): string => plural(n, 'день', 'дня', 'дней');
 
-/** Срок — день по местному времени: «2026-11-27» — этот день, дата со временем — её день. Не дата — undefined. */
+/** Полночь UTC («2026-11-27T00:00:00Z») — так дату без времени присылают сервисы (Jira, рутины). */
+const UTC_MIDNIGHT = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00(?::00(?:\.0+)?)?Z)?$/;
+
+/**
+ * Срок — местный день (полночь, мс), одно правило для доски и полосы над ней: «2026-11-27» и полночь UTC
+ * «2026-11-27T00:00:00Z» — сама дата (иначе западнее Гринвича срок съехал бы на день раньше), срок со временем — его
+ * местный день. Не дата — undefined.
+ */
 export function dueDay(due: string | undefined): number | undefined {
   if (!due) return undefined;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due.trim());
+  const m = UTC_MIDNIGHT.exec(due.trim());
   if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
   const ms = Date.parse(due);
   return Number.isNaN(ms) ? undefined : startOfDay(ms);
 }
 
+/** Момент срока со временем (не датой и не полночью UTC); у срока датой — undefined: он длится весь день. */
+const dueMoment = (due: string): number | undefined => (/T/.test(due) && !UTC_MIDNIGHT.test(due.trim()) ? Date.parse(due) : undefined);
+
 export type DueState = 'over' | 'today' | 'soon' | 'later';
 /** Срок на карточке: days — сколько дней осталось (меньше нуля — просрочено). */
-export type DueView = { state: DueState; days: number; text: string; title: string };
+export type DueView = { state: DueState; days: number; text: string; title: string; /** «27 ноября» */ date: string };
 
 export function dueView(due: string | undefined, now: number): DueView | undefined {
   const day = dueDay(due);
@@ -60,10 +70,16 @@ export function dueView(due: string | undefined, now: number): DueView | undefin
   const days = Math.round((day - startOfDay(now)) / DAY);
   const date = new Date(day).toLocaleDateString(locale(), { day: 'numeric', month: 'long' });
   const title = t('срок {date}', { date });
-  if (days < 0) return { state: 'over', days, text: t('просрочено на {n} {d}', { n: -days, d: dayWord(-days) }), title };
-  if (days === 0) return { state: 'today', days, text: t('сегодня'), title };
-  if (days === 1) return { state: 'soon', days, text: t('завтра'), title };
-  return { state: days <= 3 ? 'soon' : 'later', days, text: t('до {date}', { date }), title };
+  if (days < 0) return { state: 'over', days, text: t('просрочено на {n} {d}', { n: -days, d: dayWord(-days) }), title, date };
+  // срок со временем сегодня уже прошёл — просрочено, хоть день и сегодняшний
+  const at = dueMoment(due!);
+  if (days === 0 && at !== undefined && at < now) {
+    const time = new Date(at).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+    return { state: 'over', days, text: t('просрочено: срок был в {time}', { time }), title, date };
+  }
+  if (days === 0) return { state: 'today', days, text: t('сегодня'), title, date };
+  if (days === 1) return { state: 'soon', days, text: t('завтра'), title, date };
+  return { state: days <= 3 ? 'soon' : 'later', days, text: t('до {date}', { date }), title, date };
 }
 
 /** Сколько прошло: «меньше часа», «5 ч», «3 дня». */
@@ -182,7 +198,7 @@ export type StartOpts = {
  * номера в «В плане».
  */
 export function startQueue(items: readonly DeskItem[], o: StartOpts): StartPick[] {
-  const overdue: Array<{ item: DeskItem; day: number; days: number }> = [];
+  const overdue: Array<{ item: DeskItem; at: number; text: string }> = [];
   const today: DeskItem[] = [];
   const turn: DeskItem[] = [];
   const fresh: DeskItem[] = [];
@@ -190,18 +206,18 @@ export function startQueue(items: readonly DeskItem[], o: StartOpts): StartPick[
     // ход не мой — ни в одной группе: ждём других, готово, ход у других, по делу уже работает агент или сессия
     if (i.closed || i.column === 'done' || i.column === 'waiting' || i.turn === 'others' || o.busy?.(i)) continue;
     const due = dueView(i.due, o.now);
-    if (due?.state === 'over') overdue.push({ item: i, day: dueDay(i.due)!, days: -due.days });
+    if (due?.state === 'over') overdue.push({ item: i, at: dueMoment(i.due!) ?? dueDay(i.due)!, text: due.days < 0 ? t('просрочено: срок был {date}', { date: due.date }) : due.text });
     else if (due?.state === 'today') today.push(i);
     else if (i.column === 'plan' || i.column === 'work') turn.push(i);
     else if (i.column === 'new') fresh.push(i);
   }
   const byMoved = (a: DeskItem, b: DeskItem) => msOf(a.movedAt) - msOf(b.movedAt);
-  overdue.sort((a, b) => a.day - b.day || byMoved(a.item, b.item));
+  overdue.sort((a, b) => a.at - b.at || byMoved(a.item, b.item));
   today.sort(byMoved);
   turn.sort(byMoved);
   fresh.sort((a, b) => freshness(b) - freshness(a));
   return [
-    ...overdue.map(({ item, days }): StartPick => ({ item, reason: 'overdue', text: t('просрочено на {n} {d}', { n: days, d: dayWord(days) }) })),
+    ...overdue.map(({ item, text }): StartPick => ({ item, reason: 'overdue', text })),
     ...today.map((item): StartPick => ({ item, reason: 'today', text: t('срок сегодня') })),
     ...turn.map((item): StartPick => ({ item, reason: 'turn', text: t('твой ход уже {age}', { age: ageText(item.movedAt, o.now) }) })),
     ...fresh.map((item): StartPick => ({ item, reason: 'fresh', text: t('новое, пришло {age} назад', { age: ageText(new Date(freshness(item)).toISOString(), o.now) }) })),

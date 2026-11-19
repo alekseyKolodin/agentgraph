@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SpaceListItem } from '@server/api-types';
 import type { DeskCheckReply, DeskCheckSource, DeskItem } from '@server/desk/types';
-import { checkedAgo, checkSummary, checkText, dueDay, projectSlices, startOrder, startWhyText, usualText } from './desk-top';
+import { checkedAgo, checkSummary, checkText, projectSlices, quietBoard, usualText } from './desk-top';
 
 // полдень по местному времени: срок датой и «сегодня» не зависят от пояса машины, где идут тесты
 const NOW = new Date(2026, 10, 19, 12, 0, 0);
@@ -11,63 +11,6 @@ const iso = (h: number) => new Date(NOW.getTime() - h * 3600_000).toISOString();
 function item(key: string, over: Partial<DeskItem> = {}): DeskItem {
   return { id: key, key, kind: 'Своё', title: key, column: 'plan', why: '', signals: [], links: { runs: [], sessions: [] }, createdAt: iso(48), movedAt: iso(24), movedBy: 'me', ...over };
 }
-
-test('«Начни с этого»: просрочено → срок сегодня → дольше всех мой ход → свежее в «Новом»', () => {
-  const items = [
-    item('own:fresh-old', { column: 'new', createdAt: iso(30) }),
-    item('own:fresh', { column: 'new', createdAt: iso(1) }),
-    item('mr:turn-short', { turn: 'me', movedAt: iso(2) }),
-    item('mr:turn-long', { turn: 'me', movedAt: iso(50) }),
-    item('own:today', { due: '2026-11-19' }),
-    item('own:late-1', { due: '2026-11-18' }),
-    item('own:late-3', { due: '2026-11-16' }),
-    item('own:none'),
-  ];
-  assert.deepEqual(
-    startOrder(items, NOW).map((p) => [p.item.key, p.why]),
-    [
-      ['own:late-3', 'overdue'],
-      ['own:late-1', 'overdue'],
-      ['own:today', 'today'],
-      ['mr:turn-long', 'myTurn'],
-      ['mr:turn-short', 'myTurn'],
-      ['own:fresh', 'fresh'],
-      ['own:fresh-old', 'fresh'],
-    ],
-  );
-});
-
-test('«Начни с этого»: «Ждёт других», «Готово» и закрытые не начинают; дело в двух правилах — один раз', () => {
-  const items = [
-    item('own:wait', { column: 'waiting', due: '2026-11-01' }),
-    item('own:done', { column: 'done', closed: { at: iso(1), reason: 'x' }, due: '2026-11-01' }),
-    item('mr:both', { column: 'new', due: '2026-11-19', turn: 'me' }),
-  ];
-  assert.deepEqual(startOrder(items, NOW).map((p) => [p.item.key, p.why]), [['mr:both', 'today']]);
-  assert.deepEqual(startOrder([], NOW), []);
-});
-
-test('срок: датой — сама дата, со временем — местный день, мусор — нет', () => {
-  assert.equal(dueDay('2026-11-27'), '2026-11-27');
-  assert.equal(dueDay(new Date(2026, 10, 20, 23, 30).toISOString()), '2026-11-20');
-  assert.equal(dueDay('завтра'), undefined);
-  // полночь UTC — это дата (так её присылают сервисы), в любом поясе
-  assert.equal(dueDay('2026-11-27T00:00:00Z'), '2026-11-27');
-  assert.equal(dueDay('2026-11-27T00:00:00.000Z'), '2026-11-27');
-  // срок со временем: прошёл сегодня утром — просрочено; вечером — сегодня
-  assert.equal(startOrder([item('own:a', { due: new Date(2026, 10, 19, 9, 0).toISOString() })], NOW)[0]?.why, 'overdue');
-  assert.equal(startOrder([item('own:a', { due: new Date(2026, 10, 19, 18, 0).toISOString() })], NOW)[0]?.why, 'today');
-  // просроченное с прошлой недели раньше просроченного сегодня утром
-  const order = startOrder([item('own:morning', { due: new Date(2026, 10, 19, 9, 0).toISOString() }), item('own:week', { due: '2026-11-12' })], NOW);
-  assert.deepEqual(order.map((p) => p.item.key), ['own:week', 'own:morning']);
-});
-
-test('почему первым — словами', () => {
-  assert.match(startWhyText({ item: item('a', { due: '2026-11-17' }), why: 'overdue' }, NOW), /^просрочено: срок был 17 ноября$/);
-  assert.equal(startWhyText({ item: item('a'), why: 'today' }, NOW), 'срок сегодня');
-  assert.equal(startWhyText({ item: item('a', { movedAt: iso(50) }), why: 'myTurn' }, NOW), 'твой ход 2 дня');
-  assert.equal(startWhyText({ item: item('a', { createdAt: iso(3) }), why: 'fresh' }, NOW), 'новое, пришло 3 ч назад');
-});
 
 const src = (over: Partial<DeskCheckSource>): DeskCheckSource => ({ slug: 's', title: 'GitLab', kind: 'source', status: 'ok', ...over });
 
@@ -130,4 +73,15 @@ test('«обычно»: в день, раз в день, раз в N дней с
   assert.equal(usualText(0.95), 'обычно раз в день');
   assert.equal(usualText(0.6), 'обычно раз в 2 дня');
   assert.equal(usualText(0.2), 'обычно раз в 5 дней');
+});
+
+test('пустая доска при рутинах: сверки не было — «проверяют»; проверено — сколько в порядке; поломка — первой', () => {
+  assert.deepEqual(quietBoard(undefined, NOW), { title: 'Открытых дел нет', line: 'Рутины проверяют источники: новое появится здесь само.', tone: 'off' });
+  const at = new Date(NOW.getTime() - 2 * 60_000).toISOString();
+  const ok: DeskCheckReply = { at, sources: [src({ slug: 'a' }), src({ slug: 'b', title: 'Jira' })] };
+  assert.deepEqual(quietBoard(ok, NOW), { title: 'Открытых дел нет', line: 'Проверено 2 минуты назад: 2 из 2 в порядке, нового нет.', tone: 'ok' });
+  const broken: DeskCheckReply = { at, sources: [src({ slug: 'a' }), src({ slug: 'm', title: 'Встречи', status: 'error', error: 'ключ не принят' })] };
+  const q = quietBoard(broken, NOW);
+  assert.equal(q.line, 'Встречи: сломано: ключ не принят — пока это не починено, дела оттуда не придут.');
+  assert.equal(q.tone, 'fail');
 });

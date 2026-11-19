@@ -320,4 +320,10 @@ export const home: Record<string, string> = {
   'Сессия открыта:': 'Session is open:',
   'Ссылка на MR, PR или задачу Jira': 'Link to an MR, PR or Jira issue',
   'Привязываю…': 'Linking…',
+  'просрочено: срок был в {time}': 'overdue: was due at {time}',
+  'Открытых дел нет': 'No open tasks',
+  'Рутины проверяют источники: новое появится здесь само.': 'Routines are checking sources: new tasks will show up here.',
+  '{source}: {state} — пока это не починено, дела оттуда не придут.': '{source}: {state} — until this is fixed, no tasks will come from it.',
+  '{checked}: {ok} из {total} в порядке, нового нет.': '{checked}: {ok} of {total} fine, nothing new.',
+  'Шаблоны рутин': 'Routine templates',
 };
