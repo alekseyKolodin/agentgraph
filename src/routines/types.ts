@@ -195,6 +195,37 @@ export type DraftState =
 
 export type DraftView = { id: string; description: string } & DraftState;
 
+// ---------------------------------------------------------------- рутина по описанию словами (compose.ts)
+
+/** Чего в собранном черновике не хватило и что человеку предложить: подключить сервис, собрать flow. */
+export type ComposeNeeds = {
+  /** Нужного источника нет среди подключённых: kind — готовый вид (gitlab, slack…), иначе подключение словами по description. */
+  source?: { description: string; kind?: string };
+  /** Подходящего flow нет: что он должен делать (для «Собрать новый flow…»). */
+  flow?: string;
+};
+
+export type ComposeState =
+  | { state: 'working'; step: string }
+  /** spec — свободная форма: у неё может не быть источника (when.source '') или flow (run.flow ''), см. needs; сохранять её без проверки нельзя. */
+  | { state: 'ready'; spec: RoutineSpec; notes: string[]; problems: string[]; needs: ComposeNeeds; costUsd: number }
+  | { state: 'error'; error: string };
+
+export type ComposeView = { id: string; description: string } & ComposeState;
+
+/** Проверка папки для рутины (GET /api/routines/check-dir): есть ли она, git ли это. */
+export type DirCheck = {
+  /** Путь после «~» и абсолютизации. */
+  path: string;
+  exists: boolean;
+  isDir: boolean;
+  git: boolean;
+  /** Корень репозитория (у worktree — основной checkout). */
+  root?: string;
+  /** Текущая ветка; нет — отсоединённый HEAD или не git. */
+  branch?: string;
+};
+
 // ---------------------------------------------------------------- правило (файл ~/.agentgraph/routines/<slug>.yaml)
 
 /**

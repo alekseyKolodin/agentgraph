@@ -7,6 +7,10 @@ import { getMcpServers, type McpServer } from '../connectors.js';
 import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
 import { ensureTemplateFlow, flowTemplates, NoFlowTemplate } from './flow-templates.js';
+import { createComposeRoutes, type ComposeContext, type ComposeRoutes } from './compose.js';
+import { checkDir } from './dir-check.js';
+import { listFlows } from '../flows.js';
+import { listSpaces } from '../spaces.js';
 import type { LogOutcome, McpServicesView, WaitAction } from './types.js';
 
 export type Reply = { status: number; body: unknown };
@@ -15,7 +19,7 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
-export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates']);
+export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir']);
 
 const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
 
@@ -23,6 +27,10 @@ export type RoutinesRouteDeps = {
   engine: RoutineEngine;
   /** Подключение словами; по умолчанию draftRoutes() видов. null (или draftRoutes вернул undefined) — 501. */
   drafts?: DraftRoutes | null;
+  /** Рутина по описанию словами; по умолчанию — сессия модели над источниками, flow и пространствами человека. null — 501. */
+  compose?: ComposeRoutes | null;
+  /** Проверка папки («Папка проекта» в форме); по умолчанию — настоящая, через git. */
+  checkDir?: typeof checkDir;
   /** MCP-серверы для источника «Сервис через Claude»; по умолчанию getMcpServers (процесс Claude Code без модели). */
   mcpServers?: (force: boolean) => Promise<{ servers: McpServer[]; at: string }>;
   /** Сборка скрипта «Сервиса через Claude»; по умолчанию — сессия модели и проверка источника движком. */
@@ -58,6 +66,35 @@ function drafts(deps: RoutinesRouteDeps): DraftRoutes | undefined {
     draftCache.set(deps.engine, d);
   }
   return d ?? undefined;
+}
+
+/** Что модель видит о человеке при сборке рутины словами: имена и описания, без ключей и настроек источников. */
+export function composeContext(engine: RoutineEngine): ComposeContext {
+  const kinds = engine.kindViews();
+  const flows = listFlows().flatMap((f) => (f.valid ? [{ name: f.name, ...(f.description ? { description: f.description } : {}), blocks: (f.blocks ?? []).map((b) => b.name) }] : []));
+  let spaces: ComposeContext['spaces'] = [];
+  try {
+    spaces = listSpaces().map((x) => ({ slug: x.slug, ...(x.title ? { title: x.title } : {}), ...(x.cwd ? { cwd: x.cwd } : {}) }));
+  } catch {
+    /* пространства недоступны — рутина обойдётся без них */
+  }
+  return {
+    sources: engine.sourceViews().map((s) => ({ slug: s.slug, title: s.spec.title, kind: s.spec.kind, ...(s.spec.description ? { description: s.spec.description } : {}), canReply: s.canReply })),
+    kinds: kinds.filter((k) => k.kind !== 'command').map((k) => ({ kind: k.kind, title: k.title, summary: k.summary, match: k.match, canReply: k.canReply })),
+    flows,
+    spaces,
+  };
+}
+
+const composeCache = new WeakMap<RoutineEngine, ComposeRoutes>();
+function compose(deps: RoutinesRouteDeps): ComposeRoutes | undefined {
+  if (deps.compose !== undefined) return deps.compose ?? undefined;
+  let c = composeCache.get(deps.engine);
+  if (!c) {
+    c = createComposeRoutes({ context: () => composeContext(deps.engine), ...(deps.checkDir ? { dir: (p: string) => deps.checkDir!(p) } : {}) });
+    composeCache.set(deps.engine, c);
+  }
+  return c;
 }
 
 /** Рецепты: готовые (виды) и импортированные в ~/.agentgraph/recipes; поле file наружу не уходит. */
@@ -117,6 +154,33 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       } catch (e) {
         return bad((e as Error).message, e instanceof NoFlowTemplate ? 404 : 500);
       }
+    }
+
+    // --- папка проекта: есть ли, git ли (форма «Новой рутины» говорит словами до первого запуска)
+    if (p === '/api/routines/check-dir' && method === 'GET') {
+      const dir = url.searchParams.get('path')?.trim() ?? '';
+      if (!dir) return bad('Нужен путь к папке');
+      return ok(await (deps.checkDir ?? checkDir)(dir.slice(0, 1000)));
+    }
+
+    // --- рутина по описанию словами: модель собирает черновик, ничего не сохраняется
+    if (p === '/api/routines/compose' || p.startsWith('/api/routines/compose/')) {
+      const c = compose(deps);
+      if (!c) return bad('Сборка рутины словами пока недоступна', 501);
+      if (p === '/api/routines/compose' && method === 'POST') {
+        const b = obj(await readBody());
+        const description = typeof b.description === 'string' ? b.description.trim() : '';
+        if (!description) return bad('Опиши словами, что рутина должна делать');
+        return ok(c.start(description.slice(0, 4000)), 201);
+      }
+      if ((m = p.match(/^\/api\/routines\/compose\/([A-Za-z0-9_-]+)$/))) {
+        if (method === 'GET') return found(c.get(m[1]), 'Черновик не найден');
+        if (method === 'DELETE') {
+          c.cancel(m[1]);
+          return ok({ ok: true });
+        }
+      }
+      return undefined;
     }
 
     // --- подключение словами

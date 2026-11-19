@@ -1,0 +1,29 @@
+/* «Опиши словами» на новой рутине: поле, ход работы модели, что она решила. Токены «Пульта», глубина — линии. */
+.box { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; margin: 4px 0 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); max-width: 1180px; }
+.head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.head h2 { margin: 0; font-size: var(--fs-h3); font-weight: 600; flex: 1 1 auto; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.progress { display: flex; align-items: center; gap: 10px; font-size: var(--fs-small); color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: composePulse 1.2s ease-in-out infinite; flex: none; }
+.notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-small); color: var(--ink-2); }
+.notes li { padding-left: 14px; position: relative; text-wrap: pretty; }
+.notes li::before { content: '·'; position: absolute; left: 3px; color: var(--ink-3); }
+.need { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: var(--fs-small); }
+.need b { font-weight: 500; }
+.problems { margin: 0; padding-left: 16px; color: var(--st-wait); font-size: var(--fs-small); }
+.saved { font-size: var(--fs-meta); color: var(--ink-3); }
+
+/* проверка папки проекта */
+.dirNote { font-size: var(--fs-small); text-wrap: pretty; }
+.dirErr { color: var(--st-fail); }
+.dirOk { color: var(--st-ok); }
+.dirHint { color: var(--ink-2); }
+.wtHelp { font-size: var(--fs-meta); color: var(--ink-2); text-wrap: pretty; }
+
+/* что нужно для GitLab/GitHub */
+.forge { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: var(--fs-small); color: var(--ink-2); }
+.forge ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.forge code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink); background: var(--panel); padding: 1px 5px; border-radius: var(--r-sm); border: 1px solid var(--line); }
+.forgeErr { color: var(--st-fail); font-size: var(--fs-small); text-wrap: pretty; }
+@keyframes composePulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }

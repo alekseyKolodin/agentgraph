@@ -4,24 +4,27 @@
 // «Дальше: проверка на истории» сохраняет рутину выключенной (черновиком) и открывает редактор с проверкой на истории.
 // ?tpl= — шаблон (lib/routines/templates.ts: источник + дело + готовый flow), ?source= — источник, только что подключённый
 // на «Подключить сервис». Готовый flow шаблона, которого у пользователя нет, сервер копирует при сохранении.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { RoutinesOverview, SourceView } from '@server/routines/types';
+import type { ComposeView, RoutinesOverview, SourceView } from '@server/routines/types';
 import { errorText, useFeature, useFlows } from '../../api';
 import { ensureTemplateFlow, routineKeys, saveRoutine, testSource, useFlowTemplates, useProfile, useRoutines } from '../../api/routines';
 import { useSpaces } from '../../api/spaces';
 import { SpacePicker } from '../../components/SpacePicker';
 import { useNow } from '../../components/useNow';
 import { t } from '../../lib/i18n';
+import { dropStash, readStash, stashDraft } from '../../lib/routines/compose';
+import { dirBlocks } from '../../lib/routines/dir';
 import { matchFields } from '../../lib/routines/match';
 import { defaultTitle, eventNoun, replyHint, replyLabel, replyWhere, sentence, step2Title } from '../../lib/routines/phrase';
 import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset } from '../../lib/routines/schedule';
 import { foundRow } from '../../lib/routines/source';
-import { buildSpec, draftMissing, isSchedule, REPLY_CHOICES, SCHEDULE, slugify, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
+import { buildSpec, draftFromSpec, draftMissing, isSchedule, REPLY_CHOICES, SCHEDULE, slugify, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
 import { connectHref, isMeetingSource, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateConds, templateDraft, templateOf } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
-import { CwdField } from './CwdField';
+import { ComposeBox } from './ComposeBox';
+import { CwdField, useDirNote } from './CwdField';
 import { Conditions, cx, Seg, useFlowBlocks, WaitClause } from './parts';
 import styles from './Routines.module.css';
 
@@ -49,7 +52,11 @@ function NewForm({ data }: { data: RoutinesOverview }) {
   const [params] = useSearchParams();
   const tpl = params.get('tpl');
   const tplInfo = templateOf(tpl);
+  // вернулись с «Подключить сервис» из черновика «Опиши словами»: форма открывается с ним и с новым источником
+  const [stash] = useState(() => (params.get('source') ? readStash() : undefined));
+  useEffect(() => dropStash(), []);
   const [d, setD] = useState<RoutineDraft>(() => {
+    if (stash) return { ...stash, source: params.get('source')! };
     const slug = params.get('source') ?? sourceForTemplate(tpl, data.sources);
     const picked = data.sources.find((s) => s.slug === slug);
     return { ...templateDraft(tpl, { source: picked, digestInput: t('Что в моих MR требует ответа сегодня') }), source: slug };
@@ -62,7 +69,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
     const plain = templateDraft(tpl).input;
     setD((x) => (x.input === plain ? { ...x, input: templateDraft(tpl, { me }).input } : x));
   }, [tpl, me]);
-  const [titleEdited, setTitleEdited] = useState(false);
+  const [titleEdited, setTitleEdited] = useState(Boolean(stash));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const set = (patch: Partial<RoutineDraft>) => setD((x) => ({ ...x, ...patch }));
@@ -81,8 +88,12 @@ function NewForm({ data }: { data: RoutinesOverview }) {
   // куда отвечать: в источник, если он умеет; иначе — первый источник с ответом; некуда — «Не сообщать». «Не сообщать»,
   // поставленное здесь, а не человеком, снимается, как только отвечать снова есть куда
   const autoOff = useRef(false);
+  // источник пришёл из черновика «Опиши словами»: ответ и «куда писать» там уже выбраны, не переписываем
+  const fromCompose = useRef<string | null>(stash ? d.source : null);
   useEffect(() => {
-    if (!d.source) return;
+    const skip = fromCompose.current === d.source;
+    fromCompose.current = null;
+    if (!d.source || skip) return;
     const back = autoOff.current && d.reply === 'off' ? { reply: 'draft' as const } : {};
     if (canReplySource || replyTargets[0]) {
       autoOff.current = false;
@@ -99,6 +110,15 @@ function NewForm({ data }: { data: RoutinesOverview }) {
   const missing = [...draftMissing(d), ...(tplInfo?.needsDir && d.flow === tplInfo.flow && !d.cwd.trim() && !d.space ? (['cwd'] as const) : [])];
   const missingText = missing.map((m) => ({ source: t('выбери, что запускает'), flow: t('выбери flow'), block: t('выбери блок, перед которым ждать'), kind: t('назови вид дела'), close: t('напиши, когда закрыть дело'), cwd: t('выбери папку проекта или пространство') })[m]).join(', ');
   const flows = useFlows();
+  const dirNote = useDirNote(d.cwd, d.worktree);
+  const dirErr = dirBlocks(dirNote);
+
+  const applyCompose = useCallback((v: Extract<ComposeView, { state: 'ready' }>) => {
+    const next = draftFromSpec(v.spec);
+    fromCompose.current = next.source;
+    setD(next);
+    setTitleEdited(true);
+  }, []);
 
   const save = async () => {
     setSaving(true);
@@ -126,6 +146,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
       <header className="view-head">
         <h1>{t('Новая рутина')}</h1>
       </header>
+      <ComposeBox onReady={applyCompose} onConnect={() => stashDraft({ ...d, title })} />
       <nav className={styles.tplRow} aria-label={t('Начать с шаблона')}>
         <span className={styles.lbl}>{t('С шаблона:')}</span>
         {ROUTINE_TEMPLATES.map((x) => (
@@ -204,10 +225,11 @@ function NewForm({ data }: { data: RoutinesOverview }) {
               }}
             />
           </label>
-          <button type="button" className="btn primary" disabled={saving || missing.length > 0 || !title.trim()} title={missingText || undefined} onClick={() => void save()}>
+          <button type="button" className="btn primary" disabled={saving || missing.length > 0 || dirErr || !title.trim()} title={missingText || (dirErr ? dirNote?.text : undefined)} onClick={() => void save()}>
             {t('Дальше: проверка на истории')}
           </button>
           {missing.length > 0 && <span className={styles.hint}>{missingText[0]!.toUpperCase() + missingText.slice(1)}.</span>}
+          {!missing.length && dirErr && <span className={styles.err}>{dirNote?.text}</span>}
           {error && <span className={styles.err}>{error}</span>}
           <span className={styles.hint}>{t('Рутина сохранится выключенным черновиком. На следующем экране — проверка на истории, остановки и лимиты, и там её можно включить.')}</span>
         </aside>
@@ -377,7 +399,7 @@ function FlowStep({ d, set, tplFlow }: StepProps & { /** Готовый flow ш�
       )}
       <div className={styles.field}>
         <span className={styles.lbl}>{t('Папка проекта')}</span>
-        <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
+        <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} worktree={d.worktree} onWorktree={(worktree) => set({ worktree })} />
       </div>
       <div className={styles.field}>
         <span className={styles.lbl}>{t('Ждать меня')}</span>

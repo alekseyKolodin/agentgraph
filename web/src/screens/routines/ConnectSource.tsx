@@ -13,10 +13,12 @@ import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
 import { DEFAULT_REPLY_ARGS, parseReply } from '../../lib/routines/reply';
 import { slugify } from '../../lib/routines/spec';
+import { forgeProblem, forgeTool, loginCommand } from '../../lib/routines/forge-help';
 import { connectParam, servicesFor } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
 import { ReplyStep } from './ReplySetup';
 import { cx, Dot, Seg } from './parts';
+import notes from './ComposeBox.module.css';
 import styles from './Routines.module.css';
 
 type Mode = 'words' | 'ready' | 'cmd';
@@ -143,7 +145,9 @@ const minEveryOf = (data: RoutinesOverview, kind: string) => data.kinds.find((k)
 
 function Words({ data, fromNew }: { data: RoutinesOverview; fromNew: boolean }) {
   const qc = useQueryClient();
-  const [want, setWant] = useState('');
+  // ?q= — описание из «Новой рутины» (там нужного источника нет): подставляем, запускает человек
+  const [params] = useSearchParams();
+  const [want, setWant] = useState(() => params.get('q')?.slice(0, 500) ?? '');
   const [id, setId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -401,6 +405,8 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
         <h2>{title || kind?.title}</h2>
         {poll && <EverySelect value={every} min={kind?.minEvery} onChange={setEvery} />}
       </div>
+      {forgeTool(kind?.kind) && <ForgeHelp kind={kind!.kind} host={values.host} />}
+      {kind?.kind === 'projects' && <span className={styles.hint}>{t('Берёт репозитории из твоих пространств: добавь папку репозитория в пространство (раздел «Пространства») — и его ветки с незавершённой работой появятся здесь. Ключей не нужно, git и glab/gh — как у тебя в терминале.')}</span>}
       {kind?.delivery === 'model' && <span className={styles.warn}>{t('Проверка идёт через сессию модели и тратит лимит. Самый частый интервал — {every}.', { every: everyLabel(kind.minEvery) })}</span>}
       <label className={styles.field}>
         <span className={styles.lbl}>{t('Название')}</span>
@@ -431,7 +437,7 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
           {t('Проверить')}
         </button>
         {test?.ok && <span className="ok small">{foundText(test.total)}</span>}
-        {test && !test.ok && <span className={styles.err}>{test.error ?? t('Источник не ответил')}</span>}
+        {test && !test.ok && (forgeProblem(kind?.kind, test.error, values.host) ? <span className={notes.forgeErr}>{forgeProblem(kind?.kind, test.error, values.host)}</span> : <span className={styles.err}>{test.error ?? t('Источник не ответил')}</span>)}
       </div>
       {test?.ok && <Found test={test} />}
       {test && <Exec request={test.request} />}
@@ -442,6 +448,21 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
       )}
       {error && <span className={styles.err}>{error}</span>}
     </section>
+  );
+}
+
+/** GitLab и GitHub читаются утилитой glab / gh, которая уже вошла в аккаунт: ключ в agentgraph вводить не нужно. */
+function ForgeHelp({ kind, host }: { kind: string; host: string | undefined }) {
+  const f = forgeTool(kind)!;
+  return (
+    <div className={notes.forge}>
+      <span>{t('{name} подключается через утилиту {tool}, ключ вводить здесь не нужно. Один раз в терминале:', { name: f.name, tool: f.tool })}</span>
+      <ol>
+        <li>{t('Установи:')} <code>{f.install}</code></li>
+        <li>{t('Войди в аккаунт:')} <code>{loginCommand(f, host)}</code></li>
+      </ol>
+      <span>{t('Потом нажми «Проверить»: agentgraph покажет твои MR на ревью. Адрес сервера нужен, только если GitLab свой (gitlab.company.com).')}</span>
+    </div>
   );
 }
 
