@@ -1,0 +1,347 @@
+// Движок рутин и дела (docs/desk/plan-3.md, 3.3/3.4/3.8/3.9): событие рутины с task заводит дело по ключу same,
+// первый опрос и простой заводят дела без запуска, ожидание с task — дело, «Проверка на истории» — строки дел.
+// Хранилище дел подменено: движок видит только DeskApi.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { deskKeyOf, RoutineEngine, type RoutineRunRequest } from './engine.js';
+import { RoutineStore } from './store.js';
+import type { SourceKind } from './kind.js';
+import type { RoutineEvent, RoutineSpec } from './types.js';
+import type { DeskApi, DeskBy, DeskColumn, DeskItem, DeskPatch } from '../desk/types.js';
+
+const MR = 'https://gitlab.company.com/grp/app/-/merge_requests/12';
+const MR_KEY = 'mr:gitlab.company.com/grp/app/12';
+
+type Call = { op: 'put'; key: string; patch: DeskPatch; by: DeskBy } | { op: 'move'; key: string; column: DeskColumn; by: DeskBy } | { op: 'close'; key: string; reason: string; by: DeskBy };
+
+/** Хранилище дел в памяти: заводит, дописывает сигнал, переносит; журнал вызовов — для проверок. */
+function fakeDesk(o: { fail?: boolean } = {}) {
+  const items = new Map<string, DeskItem>();
+  const calls: Call[] = [];
+  const at = '2026-11-17T10:00:00.000Z';
+  const api: DeskApi = {
+    async put(key, patch, by) {
+      if (o.fail) throw new Error('диск занят');
+      calls.push({ op: 'put', key, patch, by });
+      const was = items.get(key);
+      const item: DeskItem = was
+        ? { ...was, signals: [...was.signals, ...(patch.signal ? [patch.signal] : [])] }
+        : { id: key, key, kind: patch.kind ?? '', title: patch.title ?? key, column: patch.column ?? 'new', why: patch.why ?? '', signals: patch.signal ? [patch.signal] : [], links: { runs: [], sessions: [] }, createdAt: at, movedAt: at, movedBy: by, ...(patch.project ? { project: patch.project } : {}), ...(patch.thing ? { thing: patch.thing } : {}) };
+      items.set(key, item);
+      return item;
+    },
+    async move(key, column, by) {
+      calls.push({ op: 'move', key, column, by });
+      const was = items.get(key);
+      if (was) items.set(key, { ...was, column, movedBy: by });
+      return items.get(key);
+    },
+    async close(key, reason, by) {
+      calls.push({ op: 'close', key, reason, by });
+      const was = items.get(key);
+      if (was) items.set(key, { ...was, column: 'done', closed: { at, reason } });
+      return items.get(key);
+    },
+    async list() {
+      return [...items.values()];
+    },
+    async get(key) {
+      return items.get(key);
+    },
+  };
+  return { api, items, calls, puts: () => calls.filter((c): c is Extract<Call, { op: 'put' }> => c.op === 'put') };
+}
+
+function setup(o: { lastCheck?: boolean; failDesk?: boolean } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-'));
+  const store = new RoutineStore(root);
+  const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
+  const items: Record<string, RoutineEvent[]> = { gl: [], chat: [] };
+  const started: RoutineRunRequest[] = [];
+  const desk = fakeDesk({ fail: o.failDesk });
+  const kind: SourceKind = {
+    kind: 'fake',
+    title: 'Фейк',
+    summary: 'тест',
+    delivery: 'poll',
+    minEveryMs: 0,
+    setup: [],
+    match: [],
+    poll: async (ctx) => [...items[ctx.slug]],
+    describe: () => 'фейк',
+  };
+  const engine = new RoutineEngine({
+    store,
+    kinds: () => [kind],
+    startRun: async (r) => {
+      started.push(r);
+      return `run-${started.length}`;
+    },
+    resumeRun: () => {},
+    stopRun: () => {},
+    flowBlocks: () => ['review'],
+    now: () => clock.now,
+    timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
+    jiraHosts: () => [],
+    desk: () => desk.api,
+    projectOf: (spec) => spec.run?.space,
+    log: () => {},
+    lock: { who: 'test', deps: { alive: () => false } },
+  });
+  for (const slug of ['gl', 'chat']) {
+    store.writeSource(slug, { title: slug === 'gl' ? 'GitLab' : 'Чат', kind: 'fake', config: {} });
+    if (o.lastCheck !== false) store.setLastCheck(slug, '2026-11-17T09:00:00.000Z');
+  }
+  const routine = (slug: string, source: 'gl' | 'chat', spec: Partial<RoutineSpec> = {}) =>
+    engine.saveRoutine(slug, { spec: { title: `Ревью из ${source}`, when: { source }, mode: 'auto', task: { kind: 'Ревью' }, ...spec } });
+  let seq = 0;
+  const at = () => new Date(clock.now.getTime() + 1000 + seq++).toISOString();
+  const gl = (id: string, extra: Partial<RoutineEvent> = {}): RoutineEvent => ({ source: 'gl', id, at: at(), title: 'Ревью: grp/app!12', text: 'описание', link: `${MR}#${id}`, fields: {}, ...extra });
+  const chat = (id: string, text = `глянь ${MR} пожалуйста`): RoutineEvent => ({
+    source: 'chat',
+    id,
+    at: at(),
+    title: text.slice(0, 40),
+    text,
+    author: 'Коллега',
+    link: `https://acme.slack.com/archives/C1/p${id}`,
+    fields: {},
+    thread: { source: 'chat', channel: 'C1', thread: id },
+    replyTo: { channel: 'C1', thread: id },
+  });
+  const push = async (source: 'gl' | 'chat', ...evs: RoutineEvent[]) => {
+    items[source].push(...evs);
+    await engine.pollSource(source);
+    await engine.idle();
+  };
+  const log = (slug: string) => engine.logOf(slug, {}).reverse();
+  return { root, store, engine, items, started, desk, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test('рутина без flow: событие заводит дело по ключу вещи — без запуска, строка журнала «дело»', async () => {
+  const t = setup();
+  try {
+    t.routine('slack', 'chat', { run: undefined, task: { kind: 'Ревью', column: 'plan', close: 'never' } });
+    await t.push('chat', t.chat('1'));
+    const [put] = t.desk.puts();
+    assert.equal(put.key, MR_KEY);
+    assert.equal(put.by, 'routine');
+    assert.equal(put.patch.kind, 'Ревью');
+    assert.equal(put.patch.column, 'plan');
+    assert.equal(put.patch.close, 'never');
+    assert.equal(put.patch.onRepeat, 'plan');
+    // сигнал помнит, куда отвечать и какая рутина его завела; у вещи нет версии сигнала
+    assert.deepEqual(put.patch.signal?.replyTo, { channel: 'C1', thread: '1' });
+    assert.equal(put.patch.signal?.routine, 'slack');
+    assert.equal(put.patch.signal?.author, 'Коллега');
+    assert.equal(put.patch.thing?.type, 'mr');
+    assert.equal(put.patch.thing?.ref.version, undefined);
+    assert.equal(t.started.length, 0);
+    const [line] = t.log('slack');
+    assert.equal(line.outcome, 'task');
+    assert.equal(line.deskKey, MR_KEY);
+  } finally {
+    t.done();
+  }
+});
+
+test('две рутины на один MR (GitLab и ссылка в чате) — одно дело, два сигнала', async () => {
+  const t = setup();
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('slack', 'chat', { run: undefined });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', t.chat('2'));
+    assert.deepEqual(t.desk.puts().map((p) => p.key), [MR_KEY, MR_KEY]);
+    assert.equal(t.desk.items.size, 1);
+    assert.deepEqual(t.desk.items.get(MR_KEY)?.signals.map((s) => s.source), ['gl', 'chat']);
+  } finally {
+    t.done();
+  }
+});
+
+test('ключ дела по same: вещь, нить, событие; нужного нет — следующее по порядку', () => {
+  const thread = { source: 'chat', channel: 'C1', thread: '9' };
+  const thing = { type: 'mr' as const, key: MR_KEY, ref: {} };
+  const e: RoutineEvent = { source: 'chat', id: '9', at: '2026-11-17T10:00:00.000Z', title: 'x', text: '', fields: {}, things: [thing], thread };
+  assert.equal(deskKeyOf({}, e).key, MR_KEY);
+  assert.equal(deskKeyOf({ same: 'thread' }, e).key, 'thread:chat/C1/9');
+  assert.equal(deskKeyOf({ same: 'event' }, e).key, 'own:chat/9');
+  // без вещи — нить; без нити — событие
+  assert.equal(deskKeyOf({ same: 'thing' }, { ...e, things: [] }).key, 'thread:chat/C1/9');
+  assert.equal(deskKeyOf({}, { ...e, things: undefined, thread: undefined }).key, 'own:chat/9');
+  assert.equal(deskKeyOf({ same: 'thread' }, { ...e, thread: undefined }).key, 'own:chat/9');
+});
+
+test('рутина с flow и task: дело заводится, запуск начат — дело «В работе», проект — пространство рутины', async () => {
+  const t = setup();
+  try {
+    t.routine('gitlab', 'gl', { run: { flow: 'review', space: 'billing' } });
+    await t.push('gl', t.gl('review:1'));
+    assert.equal(t.started.length, 1);
+    assert.equal(t.desk.puts()[0].patch.project, 'billing');
+    assert.deepEqual(t.desk.calls.filter((c) => c.op === 'move').map((c) => [c.key, (c as { column: string }).column, c.by]), [[MR_KEY, 'work', 'routine']]);
+    const line = t.log('gitlab')[0];
+    assert.equal(line.outcome, 'started');
+    assert.equal(line.deskKey, MR_KEY);
+  } finally {
+    t.done();
+  }
+});
+
+test('3.8: ожидание рутины с task — дело; «Не сейчас» — в план, «Запустить» — запуск и «В работе», «Не то» — дело закрыто', async () => {
+  const t = setup();
+  try {
+    t.routine('slack', 'chat', { run: { flow: 'review' }, mode: 'suggest', task: { kind: 'Ревью', same: 'thread' } });
+    await t.push('chat', t.chat('1'), t.chat('2', 'посмотри баг в оплате'));
+    const waits = t.engine.waits();
+    assert.deepEqual(waits.map((w) => w.deskKey), ['thread:chat/C1/1', 'thread:chat/C1/2']);
+    assert.equal(t.desk.items.get('thread:chat/C1/1')?.column, 'new');
+    await t.engine.waitAction(waits[0].id, { action: 'later' });
+    assert.equal(t.desk.items.get('thread:chat/C1/1')?.column, 'plan');
+    assert.equal(t.desk.items.get('thread:chat/C1/1')?.movedBy, 'me');
+    // отложенное ожидание по-прежнему можно запустить
+    await t.engine.waitAction(waits[0].id, { action: 'run' });
+    assert.equal(t.started.length, 1);
+    assert.equal(t.desk.items.get('thread:chat/C1/1')?.column, 'work');
+    await t.engine.waitAction(waits[1].id, { action: 'reject' });
+    assert.equal(t.desk.items.get('thread:chat/C1/2')?.closed?.reason, 'человек ответил «не то»');
+  } finally {
+    t.done();
+  }
+});
+
+test('ожидание рутины без task — как раньше: без дела и без вызовов доски', async () => {
+  const t = setup();
+  try {
+    t.routine('slack', 'chat', { run: { flow: 'review' }, mode: 'suggest', task: undefined });
+    await t.push('chat', t.chat('1'));
+    const [w] = t.engine.waits();
+    assert.equal(w.deskKey, undefined);
+    await t.engine.waitAction(w.id, { action: 'later' });
+    assert.equal(t.desk.calls.length, 0);
+  } finally {
+    t.done();
+  }
+});
+
+test('3.4: первый опрос источника заводит дела по текущему списку; рутина без task только запоминает', async () => {
+  const t = setup({ lastCheck: false });
+  try {
+    t.routine('desk', 'gl', { run: { flow: 'review', input: 'дело' } });
+    t.routine('plain', 'gl', { run: { flow: 'review' }, task: undefined });
+    await t.push('gl', t.gl('review:1'), t.gl('review:2', { link: 'https://gitlab.company.com/grp/app/-/merge_requests/13', title: 'Ревью: grp/app!13' }));
+    assert.deepEqual(t.desk.puts().map((p) => p.key), [MR_KEY, 'mr:gitlab.company.com/grp/app/13']);
+    // засев не запускает flow и не ставит ожиданий
+    assert.equal(t.started.length, 0);
+    assert.deepEqual(t.log('desk').map((x) => [x.outcome, x.reason]), [
+      ['task', 'было в источнике, когда рутина начала заводить дела'],
+      ['task', 'было в источнике, когда рутина начала заводить дела'],
+    ]);
+    assert.deepEqual(t.log('plain'), []);
+    // дальше — обычный путь: новое событие запускает, засева второй раз нет
+    await t.push('gl', t.gl('review:3', { link: 'https://gitlab.company.com/grp/app/-/merge_requests/14' }));
+    assert.equal(t.started.length, 2);
+    assert.equal(t.desk.puts().length, 3);
+  } finally {
+    t.done();
+  }
+});
+
+test('3.4: новая рутина с task на старом источнике заводит дела по текущему списку, даже если нового нет', async () => {
+  const t = setup();
+  try {
+    t.routine('plain', 'gl', { run: { flow: 'review' }, task: undefined });
+    await t.push('gl', t.gl('review:1'));
+    assert.equal(t.started.length, 1);
+    t.routine('desk', 'gl', { run: undefined });
+    await t.engine.pollSource('gl');
+    await t.engine.idle();
+    assert.deepEqual(t.desk.puts().map((p) => p.key), [MR_KEY]);
+    await t.engine.pollSource('gl');
+    await t.engine.idle();
+    assert.equal(t.desk.puts().length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('простой: дела заводятся сами без запуска; «догнать» — только у рутин с flow и без второго сигнала', async () => {
+  const t = setup();
+  try {
+    t.routine('only', 'gl', { run: undefined });
+    t.routine('both', 'gl', { run: { flow: 'review', input: 'другое' } });
+    // событие до старта движка — простой
+    await t.push('gl', t.gl('review:1', { at: '2026-11-17T09:30:00.000Z' }));
+    assert.deepEqual(t.desk.puts().map((p) => p.patch.signal?.routine).sort(), ['both', 'only']);
+    assert.equal(t.started.length, 0);
+    const rows = t.engine.catchUps();
+    assert.deepEqual(rows.map((r) => r.routine), ['both']);
+    await t.engine.catchUpAction(rows[0].id, 'run');
+    assert.equal(t.started.length, 1);
+    assert.equal(t.desk.puts().length, 2);
+    assert.equal(t.log('only')[0].reason, 'пришло, пока приложение было закрыто');
+  } finally {
+    t.done();
+  }
+});
+
+test('доска недоступна: рутина без flow пишет ошибку, рутина с flow запускается без дела', async () => {
+  const t = setup({ failDesk: true });
+  try {
+    t.routine('only', 'gl', { run: undefined });
+    t.routine('both', 'gl', { run: { flow: 'review', input: 'другое' } });
+    await t.push('gl', t.gl('review:1'));
+    assert.equal(t.log('only')[0].outcome, 'error');
+    assert.match(t.log('only')[0].reason ?? '', /дело не завелось: диск занят/);
+    assert.equal(t.started.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('«Запустить сейчас» у рутины без flow — 409, запускать нечего', async () => {
+  const t = setup();
+  try {
+    t.routine('only', 'gl', { run: undefined });
+    await t.push('gl', t.gl('review:1'));
+    await assert.rejects(t.engine.runNow('only'), (err: { status?: number }) => err.status === 409);
+  } finally {
+    t.done();
+  }
+});
+
+test('3.9: проверка на истории — дело, в план, закрыто; сколько дел было бы на доске', async () => {
+  const t = setup();
+  try {
+    t.routine('plain', 'gl', { run: { flow: 'review' }, task: undefined, enabled: false });
+    const mr13 = 'https://gitlab.company.com/grp/app/-/merge_requests/13';
+    const mr14 = 'https://gitlab.company.com/grp/app/-/merge_requests/14';
+    await t.push('gl', t.gl('review:1'), t.gl('comment:2'), t.gl('review:3', { link: mr13 }), t.gl('review:4', { link: mr14 }));
+    // по !14 дело уже закрыто
+    await t.desk.api.put('mr:gitlab.company.com/grp/app/14', { kind: 'Ревью', title: '!14' }, 'routine');
+    await t.desk.api.close('mr:gitlab.company.com/grp/app/14', 'MR смержен', 'watcher');
+    const res = await t.engine.history('plain', { spec: { title: 'x', when: { source: 'gl' }, mode: 'auto', task: { kind: 'Ревью' } } });
+    const byId = new Map(res.events.map((x) => [x.event.id, x.task]));
+    assert.equal(byId.get('review:1')?.action, 'new');
+    assert.equal(byId.get('comment:2')?.action, 'plan');
+    assert.equal(byId.get('review:3')?.action, 'new');
+    assert.equal(byId.get('review:4')?.action, 'closed');
+    assert.match(byId.get('review:4')?.note ?? '', /MR смержен/);
+    assert.equal(res.tasks, 3);
+    // без flow — ни оценки запусков, ни «Что получит flow»
+    assert.equal(res.estimate, undefined);
+    assert.equal(res.preview, undefined);
+    // on_repeat: keep — «то же дело»; без task — строк дел нет
+    const keep = await t.engine.history('plain', { spec: { title: 'x', when: { source: 'gl' }, mode: 'auto', task: { kind: 'Ревью', on_repeat: 'keep' } } });
+    assert.equal(keep.events.find((x) => x.event.id === 'comment:2')?.task?.action, 'same');
+    const none = await t.engine.history('plain', {});
+    assert.equal(none.tasks, undefined);
+    assert.equal(none.events[0].task, undefined);
+  } finally {
+    t.done();
+  }
+});

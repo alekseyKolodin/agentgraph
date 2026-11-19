@@ -521,4 +521,11 @@ export const routines: Record<string, string> = {
   'Сохранить ответ': 'Save the reply',
   'Сохранить ответ в источнике «{title}»': 'Save the reply in the source “{title}”',
   'JSON с аргументами инструмента — имена бери из его описания. {{channel}} — канал записи, {{thread}} — её тред (если записи не в треде, аргумент не передаётся и сообщение уйдёт в канал), {{text}} — текст ответа. Вместо {{channel}} можно вписать фиксированный канал.': 'JSON with the tool’s arguments — take the names from its description. {{channel}} is the record’s channel, {{thread}} its thread (if the record is not in a thread the argument is not passed and the message goes to the channel), {{text}} the reply text. Instead of {{channel}} you can put a fixed channel.',
+  // ожидание рутины с task — дело (3.8), строка журнала «дело»
+  'Дело · {kind}': 'Task · {kind}',
+  'Это дело в «Новом»: «Не сейчас» перенесёт его в план, «Не то» — закроет': 'This is a task in “New”: “Not now” moves it to planned, “Not it” closes it',
+  'Дело уйдёт в план, запуск подождёт в срабатываниях рутины': 'The task goes to planned, the run waits in the routine’s firings',
+  'Дело закроется; рутина запомнит и учтёт в проверке словами': 'The task closes; the routine remembers and uses it in the check in words',
+  'Дело — в план. Запуск ждёт в срабатываниях рутины.': 'Task moved to planned. The run waits in the routine’s firings.',
+  'Дело закрыто как «не то». Рутина учтёт это в следующий раз.': 'Task closed as “not it”. The routine will take it into account next time.',
 };

@@ -1,7 +1,8 @@
 // Рутины на главной (docs/routines/design/Home.dc.html): карточка ожидания — рутина ждёт решения («Чинить: …?»): событие,
 // где стоит запуск, черновик ответа наружу с галочкой (уходит вместе с решением), «Чинить / Не сейчас / Это не баг».
 // Над кнопками — что агент уже сделал (context: тикет, критерии, причина). Решение уходит через 5 секунд: до этого строка
-// решения и всплывашка с «Отменить» (routineDecisions.ts). Строка «догнать»: что пришло, пока приложение было закрыто.
+// решения и всплывашка с «Отменить» (routineDecisions.ts). Ожидание рутины с task — это дело в «Новом» (метка «Дело · вид»):
+// «Не сейчас» уносит дело в план, «Не то» — закрывает. Строка «догнать»: что пришло, пока приложение было закрыто.
 // Над карточками — сломанные источники рутин (не отвечает, молчит дольше обычного, нет ключа): рутины их не видят.
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -13,7 +14,7 @@ import { MdText } from '../../components/MdText';
 import { useToast } from '../../components/Toast';
 import { ago, clock, excerpt } from '../../lib/format';
 import { plural, t } from '../../lib/i18n';
-import { brokenSources, catchUpLine, catchUpRunLabel, catchUpText, decisionText, replySent, waitButtons, type BrokenSource } from '../../lib/routines/view';
+import { brokenSources, catchUpLine, catchUpRunLabel, catchUpText, decisionText, isDeskWait, replySent, waitButtons, type BrokenSource } from '../../lib/routines/view';
 import { bindDecisions, decide, dismiss, isSent, undo, useDecisions } from './routineDecisions';
 import styles from './RoutineWaits.module.css';
 
@@ -32,7 +33,7 @@ export function RoutineHome({ waits, catchUp, sources = [], routines = [], now }
         <BrokenRow key={b.slug} b={b} />
       ))}
       {shown.map((w) => (
-        <WaitCard key={w.id} w={w} now={now} />
+        <WaitCard key={w.id} w={w} now={now} kind={routines.find((r) => r.slug === w.routine)?.spec.task?.kind} />
       ))}
       {lines.map((d) => (
         <div key={d.id} className={styles.decided} role="status">
@@ -69,7 +70,7 @@ function BrokenRow({ b }: { b: BrokenSource }) {
   );
 }
 
-function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
+function WaitCard({ w, now, kind }: { w: RoutineWait; now: number; /** Вид дела рутины (task.kind) — для метки ожидания-дела. */ kind?: string }) {
   const toast = useToast();
   const [reply, setReply] = useState(true);
   const [draft, setDraft] = useState(w.replyDraft?.text ?? '');
@@ -86,10 +87,16 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
     });
   };
   const said = excerpt(e.text, 400);
+  const desk = isDeskWait(w);
   return (
     <section className={styles.card} aria-label={t('Ждёт тебя')}>
       <div className={styles.head}>
         <Link className={styles.src} to={`/routines/${encodeURIComponent(w.routine)}/log`} title={t('Открыть срабатывания рутины')}>↯ {w.routineTitle}</Link>
+        {desk && (
+          <span className={styles.desk} title={t('Это дело в «Новом»: «Не сейчас» перенесёт его в план, «Не то» — закроет')}>
+            {kind ? t('Дело · {kind}', { kind }) : t('Дело')}
+          </span>
+        )}
         <span className={styles.gap} />
         <span className={styles.waited}>{t('ждёт {t}', { t: ago(w.at, now) })}</span>
       </div>
@@ -145,8 +152,8 @@ function WaitCard({ w, now }: { w: RoutineWait; now: number }) {
       )}
       <div className="row">
         <button type="button" className="btn primary" onClick={() => choose('run')}>{b.run}</button>
-        <button type="button" className="btn" title={t('Запуск подождёт в срабатываниях рутины')} onClick={() => choose('later')}>{b.later}</button>
-        <button type="button" className="btn ghost" title={t('Рутина запомнит и учтёт в проверке словами')} onClick={() => choose('reject')}>{b.reject}</button>
+        <button type="button" className="btn" title={desk ? t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины') : t('Запуск подождёт в срабатываниях рутины')} onClick={() => choose('later')}>{b.later}</button>
+        <button type="button" className="btn ghost" title={desk ? t('Дело закроется; рутина запомнит и учтёт в проверке словами') : t('Рутина запомнит и учтёт в проверке словами')} onClick={() => choose('reject')}>{b.reject}</button>
       </div>
     </section>
   );

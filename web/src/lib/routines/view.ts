@@ -146,6 +146,8 @@ export function tickOf(e: LogEntry, runs: RunStatuses = new Map()): Tick {
       return startedTick(e, runs);
     case 'waiting':
       return 'w';
+    case 'task':
+      return 'o';
     case 'error':
       return 'e';
     default:
@@ -172,7 +174,7 @@ export type LogChip = 'all' | 'wait' | 'run' | 'skip' | 'error';
 
 export function chipOf(o: LogOutcome): Exclude<LogChip, 'all'> {
   if (o === 'waiting') return 'wait';
-  if (o === 'started') return 'run';
+  if (o === 'started' || o === 'task') return 'run';
   if (o === 'error') return 'error';
   return 'skip';
 }
@@ -184,7 +186,7 @@ export function chipLabel(c: LogChip): string {
 /** Исходы на сервер для фильтра (?outcome=a,b). */
 export function chipOutcomes(c: LogChip): LogOutcome[] | undefined {
   if (c === 'all') return undefined;
-  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
+  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
   return all.filter((o) => chipOf(o) === c);
 }
 
@@ -218,6 +220,8 @@ export function verdict(e: LogEntry, runs: RunStatuses = new Map()): { text: str
       return { text: t('не то'), tone: 'muted' };
     case 'missed':
       return { text: t('простой'), tone: 'muted' };
+    case 'task':
+      return { text: t('дело'), tone: 'ok' };
     case 'error':
       return { text: t('ошибка'), tone: 'fail' };
   }
@@ -298,15 +302,19 @@ export function waitButtons(w: Pick<RoutineWait, 'question' | 'kind'>): { run: s
   return { run, later: t('Не сейчас'), reject };
 }
 
+/** Ожидание рутины с task (3.8): это дело в «Новом» — запуск по нему ещё не начат. */
+export const isDeskWait = (w: Pick<RoutineWait, 'kind' | 'deskKey'>): boolean => w.kind === 'suggest' && Boolean(w.deskKey);
+
 /** Строка после решения по карточке. */
-export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft'>, replied: boolean): string {
+export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft' | 'deskKey'>, replied: boolean): string {
   const where = w.replyDraft?.where;
   if (w.kind === 'reply') return action === 'run' ? t('Ответ ушёл: {where}.', { where: where ?? '' }) : action === 'reject' ? t('Ответ не отправлен.') : t('Отложено. Ответ ждёт в срабатываниях рутины.');
   const tail = !w.replyDraft ? '' : replied ? t(' Ответ ушёл: {where}.', { where: where ?? '' }) : t(' Наружу ничего не ушло.');
   if (action === 'run') return (w.kind === 'pause' ? t('Запуск продолжен.') : t('Запуск начат.')) + tail;
   // «Не сейчас» ответ не отправляет: сервер только откладывает ожидание
-  if (action === 'later') return t('Отложено. Запуск ждёт в срабатываниях рутины.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
-  return t('Закрыто как «не то». Рутина учтёт это в следующий раз.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  // ожидание-дело (3.8): «Не сейчас» — дело в план, «Не то» — дело закрыто
+  if (action === 'later') return (isDeskWait(w) ? t('Дело — в план. Запуск ждёт в срабатываниях рутины.') : t('Отложено. Запуск ждёт в срабатываниях рутины.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  return (isDeskWait(w) ? t('Дело закрыто как «не то». Рутина учтёт это в следующий раз.') : t('Закрыто как «не то». Рутина учтёт это в следующий раз.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
 }
 
 /** Ушёл ли ответ вместе с решением: «Ответ готов» — только «Отправить»; иначе — галочка, кроме «Не сейчас» и отказа. */

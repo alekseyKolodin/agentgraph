@@ -276,6 +276,7 @@ export type LogOutcome =
   | 'limit' // упёрлось в per_day / parallel / usd
   | 'rejected' // человек ответил «не то» («Это не баг»)
   | 'missed' // пришло, пока приложение было закрыто
+  | 'task' // событие завело дело (рутина без flow, первый опрос, простой) — без запуска
   | 'error';
 
 export type LogEntry = {
@@ -307,6 +308,8 @@ export type LogEntry = {
   sameAs?: { routine: string; logId: string };
   /** Чем кончился запуск строки (статус запуска): упавший запуск повтор по вещи не держит. */
   runStatus?: string;
+  /** Рутина с task: ключ дела, которое завело или обновило это событие. */
+  deskKey?: string;
 };
 
 /**

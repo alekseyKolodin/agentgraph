@@ -73,7 +73,8 @@ function Row({ e, slug, spec, runs, open, onToggle, now, wait }: { e: LogEntry; 
   const v = verdict(e, runs);
   // отложенное ожидание («Не сейчас») на главной не видно: решить его можно здесь
   const snoozed = e.outcome === 'waiting' && wait?.snoozedAt ? wait : undefined;
-  const act = snoozed ? { kind: 'resume' as const, label: waitButtons(snoozed).run, primary: true } : logAction(e, runs);
+  // рутина без flow только заводит дела: запускать по строке нечего
+  const act = snoozed ? { kind: 'resume' as const, label: waitButtons(snoozed).run, primary: true } : spec && !spec.run ? null : logAction(e, runs);
   const tone = { ok: styles.tOk, live: styles.tLive, wait: styles.tWait, fail: styles.tFail, off: '', muted: '' }[v.tone];
   const feedback = async (v: Verdict) => {
     setBusy(true);
