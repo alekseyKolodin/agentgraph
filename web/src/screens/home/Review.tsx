@@ -2,15 +2,18 @@
 // «последний шаг» или «готово», что осталось и с чего продолжить. Только по кнопке и с ценой заранее. Разбор идёт в модуле,
 // а не в компоненте: уход с главной его не прерывает (деньги уже тратятся), вернулся — результат на месте. Результат и
 // скрытые строки переживают перезагрузку (agentgraph.sessionReview). «Продолжить» — тот же разговор (--resume) или
-// открытая сессия; «С чего продолжить» копируется — вставить первым сообщением.
+// открытая сессия; «С чего продолжить» копируется — вставить первым сообщением. Открытые дела о сессиях, ветках и
+// «Забытое», где ход мой (src/desk, SPEC 3.10), — теми же строками после разбора; × у такой строки закрывает дело.
 import { useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SessionReviewEstimate, SessionReviewItem, SessionReviewReply } from '@server/api-types';
 import { DraftError, errorText } from '../../api';
+import { closeDesk, refreshDesk, useDesk } from '../../api/desk';
 import { continueSession, estimateReview, putSession, reviewSessions, useSessions } from '../../api/sessions';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
+import { deskLeftRows, type DeskLeftRow } from '../../lib/desk';
 import { costRange, reviewMeta, reviewRows, VERDICT_LABEL } from '../../lib/session-review';
 import { LS } from '../../lib/storage';
 import styles from './Home.module.css';
@@ -82,9 +85,10 @@ export function Review() {
   const { saved: s, phase: p } = useReview();
   const list = useSessions(true).data;
   const rows = reviewRows(s.reply, s.hidden, list?.sessions);
+  const deskRows = deskLeftRows(useDesk().data?.items, [...rows.open, ...rows.done].map((x) => x.id));
   const busy = p.kind === 'estimating' || p.kind === 'running';
-  // разбора ещё не было и сессий нет — блок не нужен
-  if (!s.reply && list && !list.sessions.some((x) => x.turns > 0)) return null;
+  // разбора ещё не было, сессий и дел нет — блок не нужен
+  if (!s.reply && list && !list.sessions.some((x) => x.turns > 0) && !deskRows.length) return null;
 
   return (
     <section className={styles.homeSec} aria-label={t('Не доделано')}>
@@ -116,12 +120,13 @@ export function Review() {
       </div>
       {p.kind === 'error' && <p className="msg err">{p.text}</p>}
       {!s.reply && p.kind === 'idle' && <p className="muted small">{t('Забыл, где остановился? Модель пройдёт по недавним сессиям и скажет, что не доделано и с чего продолжить.')}</p>}
-      {rows.open.length > 0 && (
+      {(rows.open.length > 0 || deskRows.length > 0) && (
         <ul className={styles.homeRuns}>
           {rows.open.map((x) => <ReviewRow key={x.id} x={x} live={Boolean(list?.sessions.find((v) => v.id === x.id)?.live)} stale={rows.stale.includes(x.id)} />)}
+          {deskRows.map((d) => <DeskRow key={d.key} d={d} />)}
         </ul>
       )}
-      {s.reply && !rows.open.length && <p className="muted small">{t('Всё доделано — или уже скрыто.')}</p>}
+      {s.reply && !rows.open.length && !deskRows.length && <p className="muted small">{t('Всё доделано — или уже скрыто.')}</p>}
       {rows.done.length > 0 && (
         <p className={cx('muted small', styles.reviewDone)}>
           {t('Готово: {names}', { names: rows.done.map((x) => `«${x.name}»`).join(', ') })}{' '}
@@ -169,6 +174,41 @@ function ReviewRow({ x, live, stale }: { x: SessionReviewItem; live: boolean; st
           {live ? t('Открыть') : t('Продолжить')}
         </button>
         <button type="button" className="btn small ghost" aria-label={t('Скрыть «{name}» из «Не доделано»', { name: x.name })} title={t('Скрыть до следующего разбора')} onClick={() => hide([x.id])}>×</button>
+      </span>
+    </li>
+  );
+}
+
+/** Дело (src/desk): та же строка, что у разбора; причина — почему сейчас мой ход. × закрывает дело. */
+function DeskRow({ d }: { d: DeskLeftRow }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const to = d.session ? `/sessions/${encodeURIComponent(d.session)}` : undefined;
+  const close = async () => {
+    setBusy(true);
+    try {
+      await closeDesk(d.key, 'убрано с Главной');
+      await refreshDesk(qc);
+    } catch (err) {
+      toast(errorText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <li className={cx(styles.hrun, styles.review, styles.wait)}>
+      <span className={styles.hrunDot} aria-hidden="true" />
+      <div className={styles.hrunMain}>
+        <div className={styles.hrunTop}>
+          {to ? <Link to={to} className={styles.hrunTitle} title={d.title}>{d.title}</Link> : <span className={styles.hrunTitle} title={d.title}>{d.title}</span>}
+          <span className={cx(styles.verdict, styles.vContinue)} title={d.kind}>{VERDICT_LABEL.continue}</span>
+          {d.project && <span className={styles.hrunMeta}>{d.project}</span>}
+        </div>
+        {d.why && <span className={styles.reviewLine}>{d.why}</span>}
+      </div>
+      <span className={styles.reviewActs}>
+        {to && <Link to={to} className="btn small" title={t('Перейти в сессию')}>{t('Открыть')}</Link>}
+        <button type="button" className="btn small ghost" disabled={busy} aria-label={t('Закрыть дело «{name}»', { name: d.title })} title={t('Закрыть дело: больше не покажется')} onClick={() => void close()}>×</button>
       </span>
     </li>
   );
