@@ -1,7 +1,7 @@
 // Запросы дел (docs/desk/SPEC.md 3.2, маршруты — src/desk/types.ts): список с итогом сверки, put/move/close с карточки.
 // Ключи — под ['home']: событие desk общего потока /api/events (useHomeEvents) снимает keys.home, а с ним и дела.
 import { keepPreviousData, useQuery, type QueryClient } from '@tanstack/react-query';
-import type { DeskCheckReply, DeskColumn, DeskItem, DeskListReply, DeskPatch, DeskWeekReply } from '@server/desk/types';
+import type { DeskCheckReply, DeskColumn, DeskItem, DeskItemReply, DeskListReply, DeskPatch, DeskWeekReply } from '@server/desk/types';
 import { api } from './client';
 import { useFeature } from './queries';
 import { routineKeys } from './routines';
@@ -68,4 +68,17 @@ export function useDeskCheck() {
   // сервер без сверки (старая версия) — запроса нет
   const on = useFeature('desk-check');
   return useQuery({ queryKey: [...routineKeys.all, 'desk-check'] as const, queryFn: () => api<DeskCheckReply>('GET', '/api/desk/check'), enabled: on, refetchInterval: 60_000 });
+}
+
+/**
+ * Дело и его движения из журнала (GET /api/desk/item) — подробности карточки. Ключ под deskKeys.all: событие desk снимает
+ * и его, история перечитывается после каждого переноса. Нет key — запроса нет.
+ */
+export function useDeskItem(key: string | undefined) {
+  const on = useFeature('desk');
+  return useQuery({
+    queryKey: [...deskKeys.all, 'item', key ?? ''] as const,
+    queryFn: () => api<DeskItemReply>('GET', `/api/desk/item?key=${encodeURIComponent(key!)}`),
+    enabled: on && Boolean(key),
+  });
 }

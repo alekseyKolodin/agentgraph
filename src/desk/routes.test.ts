@@ -7,7 +7,7 @@ import path from 'node:path';
 import { openStore, type DeskStore } from './store.js';
 import { deskRoute } from './routes.js';
 import { LINKED_REASON } from './rules.js';
-import type { DeskItem, DeskListReply } from './types.js';
+import type { DeskItem, DeskItemReply, DeskListReply } from './types.js';
 
 function setup(t: { after: (fn: () => void) => void }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-desk-rt-'));
@@ -158,4 +158,33 @@ test('POST /api/desk/link: у вещи уже есть дело (даже зак
   await store.put('own:m', { title: 'Созвон', kind: 'Встреча' }, 'me');
   const j = (await link({ key: 'own:m', url: 'https://jira.example.com/browse/pay-7' }))!.body as DeskItem;
   assert.deepEqual([j.key, j.kind, j.column], ['jira:jira.example.com/PAY-7', 'Встреча', 'new']);
+});
+
+test('GET /api/desk/item: дело и его движения из журнала, чужих движений нет; нет дела — 404, кривой ключ — 400', async (t) => {
+  const { store, call } = setup(t);
+  await store.put('own:a', { title: 'a', column: 'plan' }, 'routine');
+  await store.put('own:b', { title: 'b' }, 'me');
+  await store.move('own:a', 'work', 'me', 'начал');
+  const r = await call('GET', '/api/desk/item?key=own:a');
+  assert.equal(r?.status, 200);
+  const reply = r!.body as DeskItemReply;
+  assert.equal(reply.item.key, 'own:a');
+  assert.deepEqual(reply.moves.map((m) => [m.key, m.from, m.to, m.by, m.why]), [['own:a', undefined, 'plan', 'routine', undefined], ['own:a', 'plan', 'work', 'me', 'начал']]);
+  assert.equal((await call('GET', '/api/desk/item?key=own:none'))?.status, 404);
+  assert.equal((await call('GET', '/api/desk/item?key=без-ключа'))?.status, 400);
+  assert.equal((await call('GET', '/api/desk/item'))?.status, 400);
+});
+
+test('GET /api/desk/item: закрытое дело читается; у дела вещи, переехавшего со своего, есть и движения своего', async (t) => {
+  const { store, call } = setup(t);
+  await store.put('own:w', { title: 'Ретраи', column: 'plan' }, 'me');
+  const linked = (await deskRoute('POST', new URL('http://x/api/desk/link'), async () => ({ key: 'own:w', url: 'https://gitlab.example.com/g/app/-/merge_requests/12' }), { store, jiraHosts: () => [] }))!.body as DeskItem;
+  await store.close(linked.key, 'смержен', 'watcher');
+  const r = await call('GET', `/api/desk/item?key=${encodeURIComponent(linked.key)}`);
+  const reply = r!.body as DeskItemReply;
+  assert.equal(reply.item.closed?.reason, 'смержен');
+  assert.deepEqual(reply.moves.map((m) => [m.key, m.to]), [['own:w', 'plan'], ['own:w', 'done'], [linked.key, 'plan'], [linked.key, 'done']]);
+  // у своего закрытого дела — только его движения
+  const own = (await call('GET', '/api/desk/item?key=own:w'))!.body as DeskItemReply;
+  assert.deepEqual(own.moves.map((m) => m.key), ['own:w', 'own:w']);
 });

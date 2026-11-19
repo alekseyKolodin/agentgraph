@@ -49,7 +49,7 @@ export type CardActions = {
 
 export type CardDrag = { dragging: boolean; start: () => void; end: () => void };
 
-export function DeskCard({ item, n, now, project, sessions, runs, wait, decided, act, drag }: {
+export function DeskCard({ item, n, now, project, sessions, runs, wait, decided, act, drag, selected, onOpen }: {
   item: DeskItem;
   /** Номер в «В плане». */
   n?: number;
@@ -63,6 +63,10 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
   decided?: boolean;
   act: CardActions;
   drag: CardDrag;
+  /** Подробности этого дела открыты справа. */
+  selected?: boolean;
+  /** Клик по карточке (не по кнопке и ссылке) или Enter на ней: открыть подробности. */
+  onOpen?: () => void;
 }) {
   const [linking, setLinking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,6 +81,12 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
   const canLink = !done && !item.thing && item.key.startsWith('own:') && act.link;
 
   const onKey = (e: KeyboardEvent) => {
+    // Enter на самой карточке (не на кнопке внутри) — подробности
+    if (e.key === 'Enter' && !e.altKey && !e.ctrlKey && !e.metaKey && e.target === e.currentTarget && onOpen) {
+      e.preventDefault();
+      onOpen();
+      return;
+    }
     if (!e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.target !== e.currentTarget) return;
     e.preventDefault();
     const to = neighborColumn(item.column, e.key === 'ArrowLeft' ? -1 : 1);
@@ -111,8 +121,15 @@ export function DeskCard({ item, n, now, project, sessions, runs, wait, decided,
       tabIndex={0}
       aria-label={[item.kind, label, item.title].filter(Boolean).join(' ')}
       aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
-      title={t('⌥← ⌥→ — в соседнюю колонку')}
-      className={cx(styles.card, done && styles.done, drag.dragging && styles.dragging)}
+      title={onOpen ? t('Enter — подробности, ⌥← ⌥→ — в соседнюю колонку') : t('⌥← ⌥→ — в соседнюю колонку')}
+      aria-current={selected ? 'true' : undefined}
+      className={cx(styles.card, done && styles.done, drag.dragging && styles.dragging, selected && styles.selected)}
+      // клик по карточке — подробности; кнопки, ссылки и поле «Привязать вещь» открывают своё, а не панель
+      onClick={(e) => {
+        if (!onOpen || (e.target as HTMLElement).closest('a, button, input, textarea, select, form, [role="menu"]')) return;
+        if (window.getSelection()?.toString()) return; // протяжка по тексту — выделение, не клик
+        onOpen();
+      }}
       // поле ссылки внутри карточки: протяжка по тексту — выделение, а не перетаскивание
       draggable={!linking}
       onDragStart={(e) => {
@@ -210,7 +227,7 @@ function Activity({ run, session }: { run?: RunSummary; session?: SessionView })
   return null;
 }
 
-function LinkForm({ onLink, onCancel }: { onLink: (url: string) => Promise<void>; onCancel: () => void }) {
+export function LinkForm({ onLink, onCancel }: { onLink: (url: string) => Promise<void>; onCancel: () => void }) {
   const [url, setUrl] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
