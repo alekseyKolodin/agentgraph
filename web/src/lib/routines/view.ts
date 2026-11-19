@@ -281,7 +281,7 @@ export function overviewMeta(routines: RoutineView[], now: Date = new Date(), so
 export function routineSub(r: RoutineView, sources: SourceView[], scheduleText: (cron: string) => string): string {
   const w = r.spec.when;
   const from = 'schedule' in w ? `${t('Расписание')} · ${scheduleText(w.schedule)}` : (sources.find((s) => s.slug === w.source)?.spec.title ?? w.source);
-  return `${from} → ${r.spec.run.flow}`;
+  return `${from} → ${r.spec.run ? r.spec.run.flow : t('дело «{kind}»', { kind: r.spec.task?.kind ?? '' })}`;
 }
 
 /**
@@ -391,4 +391,16 @@ export function historyVerdict(e: HistoryCheck['events'][number]): { text: strin
     ? [{ match: t('Ты отметил это как подходящее, правило пропустило.'), no_match: t('Ты отметил это как неподходящее, правило запустило бы.'), not_duplicate: t('Ты отметил, что это не повтор, правило отсеяло как дубль.') }[e.past!], e.reason ?? ''].filter(Boolean).join(' ')
     : (e.reason ?? '');
   return { text, run, disagrees, why };
+}
+
+/**
+ * Строка «Проверки на истории» о деле (рутина с task): «дело» — новое дело, «в план» — то же дело вернулось в план,
+ * «то же дело» — колонка та же (on_repeat: keep), «закрыто» — дело по этой вещи уже закрыто. Нет task — undefined.
+ */
+export function taskVerdict(task: HistoryCheck['events'][number]['task']): { text: string; why: string } | undefined {
+  if (!task) return undefined;
+  if (task.action === 'new') return { text: t('дело'), why: task.note ?? '' };
+  if (task.action === 'plan') return { text: t('в план'), why: task.note ?? t('то же дело: вернулось в план') };
+  if (task.action === 'same') return { text: t('то же дело'), why: task.note ?? t('то же дело: колонка та же') };
+  return { text: t('закрыто'), why: task.note ?? t('дело по этой вещи уже закрыто') };
 }

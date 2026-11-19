@@ -306,6 +306,7 @@ function routines(srv: ServerOptions): RoutineEngine {
  */
 async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promise<string> {
   const { spec: rs, event } = r;
+  if (!rs.run) throw new Error('рутине нечего запускать: у неё нет run, она только заводит дела');
   assertFlowName(rs.run.flow);
   const spec = loadFlow(rs.run.flow);
   const task = rs.run.input?.trim() || spec.input?.trim() || '';

@@ -1,7 +1,8 @@
 // Редактор рутины (/routines/:slug, docs/routines/design/Editor.dc.html): правило фразами — когда (источник с условиями
 // или расписание), если (проверка словами), запустить (flow в пространстве, задача), ждать меня (перед запуском, перед
-// блоком, не ждать); «Ещё» — где (рабочее дерево, папка), ответить, лимиты, модель, YAML вручную. Справа — «Проверить на
-// истории»: что из последних событий источника запустилось бы по правилу как оно есть сейчас, до сохранения.
+// блоком, не ждать); «Дело» — завести дело в «Моих делах»; «Ещё» — где (рабочее дерево, папка), ответить, лимиты, модель,
+// YAML вручную. Справа — «Проверить на истории»: что из последних событий источника запустилось бы (и какие дела завелись)
+// по правилу как оно есть сейчас, до сохранения.
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -17,8 +18,8 @@ import { plural, t } from '../../lib/i18n';
 import { matchFields } from '../../lib/routines/match';
 import { replyLabel, replyWhere } from '../../lib/routines/phrase';
 import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset } from '../../lib/routines/schedule';
-import { buildSpec, draftFromSpec, draftMissing, isSchedule, REPLY_CHOICES, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
-import { estimateText, historyVerdict, isDraft, type Verdict } from '../../lib/routines/view';
+import { buildSpec, draftFromSpec, draftMissing, draftRuns, isCloseText, isSchedule, REPLY_CHOICES, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
+import { estimateText, historyVerdict, isDraft, taskVerdict, type Verdict } from '../../lib/routines/view';
 import { NotAvailable } from './RoutinesList';
 import { CwdField } from './CwdField';
 import { Conditions, cx, RoutineHead, Seg, useFlowBlocks, WaitClause } from './parts';
@@ -62,6 +63,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
   const dirty = JSON.stringify(spec) !== initial;
   const draft = isDraft(r);
   const missing = draftMissing(d);
+  const runs = draftRuns(d);
 
   // сменили источник: ответ «туда, откуда пришло» возможен, только если новый источник умеет отвечать; иначе — первый
   // источник с ответом или «Не сообщать» (сырое «source» у источника без reply давало бы ошибку в журнале на каждом событии)
@@ -114,7 +116,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
 
   const moreSummary = [
     d.worktree === 'new' ? t('новое рабочее дерево') : d.cwd ? d.cwd : '',
-    d.reply === 'off' ? t('без ответа') : `${t('ответ')} ${replyWhere(source?.spec.kind, d.replyTo, data.sources)} ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
+    !runs ? '' : d.reply === 'off' ? t('без ответа') : `${t('ответ')} ${replyWhere(source?.spec.kind, d.replyTo, data.sources)} ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
     d.usd ? t('до {usd} за запуск', { usd: `$${d.usd}` }) : '',
     d.perDay ? t('{n} в день', { n: d.perDay }) : '',
   ]
@@ -129,9 +131,11 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
         title={r.spec.title || r.slug}
         actions={
           <>
-            <button type="button" className="btn" title={isSchedule(d) ? t('Запустить по расписанию сейчас, не дожидаясь времени') : t('Запустить flow сейчас, без события')} onClick={() => void runNow()}>
-              {t('Запустить сейчас')}
-            </button>
+            {r.spec.run && (
+              <button type="button" className="btn" title={isSchedule(d) ? t('Запустить по расписанию сейчас, не дожидаясь времени') : t('Запустить flow сейчас, без события')} onClick={() => void runNow()}>
+                {t('Запустить сейчас')}
+              </button>
+            )}
             <button type="button" className="btn ghost danger" onClick={() => void remove()}>{t('Удалить')}</button>
           </>
         }
@@ -184,12 +188,15 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
             </div>
           )}
           <RunClause d={d} set={set} />
-          <div className={styles.clause}>
-            <span className={styles.k}>{t('Ждать меня')}</span>
-            <div className={styles.clauseBody}>
-              <WaitBlocks d={d} set={set} />
+          <TaskClause d={d} set={set} />
+          {runs && (
+            <div className={styles.clause}>
+              <span className={styles.k}>{t('Ждать меня')}</span>
+              <div className={styles.clauseBody}>
+                <WaitBlocks d={d} set={set} />
+              </div>
             </div>
-          </div>
+          )}
           <button type="button" className={styles.more} aria-expanded={more} onClick={() => setMore(!more)}>
             <span>{more ? '▾' : '▸'} {t('Ещё')}</span>
             {!more && <span className={styles.moreSum}>{moreSummary}</span>}
@@ -202,6 +209,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
         {dirty && <span className="warn small">{t('есть несохранённые изменения')}</span>}
         <span className={styles.barGap} />
         {missing.includes('block') && <span className="warn small">{t('Выбери блок, перед которым ждать.')}</span>}
+        {missing.includes('kind') && <span className="warn small">{t('Назови вид дела.')}</span>}
         {draft || r.spec.enabled === false ? (
           <>
             <button type="button" className="btn" disabled={saving || !dirty || missing.length > 0} onClick={() => void save(false)}>
@@ -254,29 +262,144 @@ function RunClause({ d, set }: ClauseProps) {
   const spacesOn = useFeature('spaces');
   const spaces = useSpaces(spacesOn);
   const list = (flows.data ?? []).filter((f) => f.valid);
+  // рутина с делом из события может ничего не запускать: событие только заводит дело
+  const taskOnly = d.taskOn && d.taskFrom === 'event';
+  const runs = draftRuns(d);
   return (
     <div className={styles.clause}>
       <span className={styles.k}>{t('Запустить')}</span>
       <div className={styles.clauseBody}>
         <div className={styles.inline}>
           <select className={styles.slot} aria-label="Flow" value={d.flow} onChange={(e) => set({ flow: e.target.value, pauseBefore: [], mode: d.mode === 'until_pause' ? 'suggest' : d.mode })}>
-            {!list.some((f) => f.name === d.flow) && <option value={d.flow}>{d.flow || t('выбери flow')}</option>}
+            {taskOnly && <option value="">{t('ничего — только завести дело')}</option>}
+            {!list.some((f) => f.name === d.flow) && (d.flow || !taskOnly) && <option value={d.flow}>{d.flow || t('выбери flow')}</option>}
             {list.map((f) => (
               <option key={f.name} value={f.name}>{f.name}</option>
             ))}
           </select>
-          {spacesOn && (
+          {spacesOn && runs && (
             <>
               <span>{t('в')}</span>
               <SpacePicker id="routine-edit-space" value={d.space} onChange={(space) => set({ space })} options={spaces.data?.spaces ?? []} loading={spaces.isPending} compact placeholder={t('без пространства')} className={styles.flowSearch} inputClassName={styles.slot} />
             </>
           )}
         </div>
-        <textarea className={styles.inp} rows={2} aria-label={t('Задача flow')} placeholder={t('Задача flow; событие дописывается к ней как данные')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
-        {!isSchedule(d) && (
+        {runs && (
+          <label className={styles.clauseBody}>
+            <span className={styles.lbl}>{t('Что поручить flow')}</span>
+            <textarea className={styles.inp} rows={2} placeholder={t('Например: сделай ревью MR и оставь замечания. Пусто — задача из самого flow')} value={d.input} onChange={(e) => set({ input: e.target.value })} />
+          </label>
+        )}
+        {runs && !isSchedule(d) && (
           <span className={styles.hint}>
             {t('К задаче flow получит событие: заголовок, автора, ссылку, текст и поля. Передавать их отдельно не нужно: что именно придёт — «Что получит flow» в проверке справа.')}
           </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const KINDS = ['Ревью', 'Jira', 'Встреча', 'Задача', 'Своё'];
+
+/**
+ * «Дело» (блок task, docs/desk/design/RulePult.dc.html): «Завести дело как Ревью в Новое. Тем же делом считать ту же
+ * вещь; пришло новое — вернуть в план. Закрыть, когда вещь закрыта». Дела из flow заводит сам flow (desk_put).
+ */
+function TaskClause({ d, set }: ClauseProps) {
+  const closeChoice = isCloseText(d.taskClose) ? 'text' : d.taskClose;
+  return (
+    <div className={styles.clause}>
+      <span className={styles.k}>{t('Дело')}</span>
+      <div className={styles.clauseBody}>
+        <Seg<'off' | 'on'>
+          label={t('Заводить дело')}
+          value={d.taskOn ? 'on' : 'off'}
+          onChange={(v) => set(v === 'on' ? { taskOn: true, taskKind: d.taskKind || KINDS[0]! } : { taskOn: false })}
+          options={[
+            { value: 'off', label: t('не заводить') },
+            { value: 'on', label: t('завести дело'), title: t('Событие становится делом в «Моих делах»: одно дело на вещь, сколько бы событий о ней ни пришло') },
+          ]}
+        />
+        {d.taskOn && (
+          <>
+            <div className={styles.sentence}>
+              {t('Завести дело как')}{' '}
+              <input
+                className={cx(styles.slot, styles.taskKind)}
+                list="routine-task-kinds"
+                size={Math.max(d.taskKind.length, 6)}
+                aria-label={t('Вид дела')}
+                value={d.taskKind}
+                onChange={(e) => set({ taskKind: e.target.value })}
+              />
+              <datalist id="routine-task-kinds">
+                {KINDS.map((k) => (
+                  <option key={k} value={k} />
+                ))}
+              </datalist>{' '}
+              {t('в')}{' '}
+              <select className={styles.slot} aria-label={t('Колонка')} value={d.taskColumn} onChange={(e) => set({ taskColumn: e.target.value as RoutineDraft['taskColumn'] })}>
+                <option value="new">{t('Новое')}</option>
+                <option value="plan">{t('В плане')}</option>
+              </select>
+              {'. '}
+              {t('Заводит')}{' '}
+              <select className={styles.slot} aria-label={t('Кто заводит дело')} value={d.taskFrom} onChange={(e) => set({ taskFrom: e.target.value as RoutineDraft['taskFrom'] })}>
+                <option value="event">{t('само событие')}</option>
+                <option value="flow">{t('flow, инструментом desk_put')}</option>
+              </select>
+            </div>
+            {d.taskFrom === 'event' && (
+              <>
+                <div className={styles.sentence}>
+                  {t('Тем же делом считать')}{' '}
+                  <select className={styles.slot} aria-label={t('Что считать тем же делом')} value={d.taskSame} onChange={(e) => set({ taskSame: e.target.value as RoutineDraft['taskSame'] })}>
+                    <option value="">{t('ту же вещь, иначе тот же разговор')}</option>
+                    <option value="thing">{t('ту же вещь (MR, задачу)')}</option>
+                    <option value="thread">{t('тот же разговор (тред)')}</option>
+                    <option value="event">{t('ничего — каждое событие отдельно')}</option>
+                  </select>
+                  {'; '}
+                  {t('пришло новое по тому же —')}{' '}
+                  <select
+                    className={styles.slot}
+                    aria-label={t('Пришло новое по тому же делу')}
+                    value={d.taskRepeat}
+                    onChange={(e) => set({ taskRepeat: e.target.value as RoutineDraft['taskRepeat'] })}
+                  >
+                    <option value="plan">{t('вернуть в план')}</option>
+                    <option value="keep">{t('оставить, где лежит')}</option>
+                  </select>
+                </div>
+                <div className={styles.sentence}>
+                  {t('Закрыть, когда')}{' '}
+                  <select className={styles.slot} aria-label={t('Когда закрыть дело')} value={closeChoice} onChange={(e) => set({ taskClose: e.target.value === 'text' ? '' : e.target.value })}>
+                    <option value="thing">{t('вещь закрыта (MR смержен, задача готова)')}</option>
+                    <option value="never">{t('закрою сам')}</option>
+                    <option value="text">{t('условие словами…')}</option>
+                  </select>
+                </div>
+                {closeChoice === 'text' && (
+                  <>
+                    <input
+                      className={styles.inp}
+                      aria-label={t('Условие закрытия')}
+                      placeholder={t('Например: в треде ответили «готово»')}
+                      value={d.taskClose}
+                      onChange={(e) => set({ taskClose: e.target.value })}
+                    />
+                    <span className={styles.hint}>{t('Условие словами пока не проверяется само: такое дело закроешь руками.')}</span>
+                  </>
+                )}
+              </>
+            )}
+            <span className={styles.hint}>
+              {d.taskFrom === 'flow'
+                ? t('Дела заводит flow инструментом desk_put — по одному на вещь, о которой он узнал.')
+                : t('Одно дело на вещь: сколько бы сигналов о ней ни пришло из этой и других рутин, дело одно.')}
+            </span>
+          </>
         )}
       </div>
     </div>
@@ -328,29 +451,31 @@ function More({ d, set, r, data, kindCanReply, onYamlSaved }: ClauseProps & { r:
           <CwdField value={d.cwd} onChange={(cwd) => set({ cwd })} />
         </div>
       </div>
-      <div className={styles.clause}>
-        <span className={styles.k}>{t('Ответить')}</span>
-        <div className={styles.clauseBody}>
-          <Seg<ReplyChoice> label={t('Сообщать о результате')} value={d.reply} onChange={(reply) => set({ reply })} options={REPLY_CHOICES.map((c) => ({ value: c, label: replyLabel(c), disabled: c !== 'off' && !kindCanReply && !targets.length }))} />
-          {d.reply !== 'off' && (
-            <div className={styles.sentence}>
-              <select className={styles.slot} aria-label={t('Куда писать')} value={d.replyTo} onChange={(e) => set({ replyTo: e.target.value })}>
-                {kindCanReply && <option value="source">{replyWhere(kind, 'source', data.sources)}</option>}
-                {targets.map((s) => (
-                  <option key={s.slug} value={s.slug}>{replyWhere(undefined, s.slug, data.sources)}</option>
-                ))}
-                {!kindCanReply && !targets.some((s) => s.slug === d.replyTo) && <option value={d.replyTo}>{d.replyTo}</option>}
-              </select>
-              ,{' '}
-              <span className={styles.chipsInline}>
-                {ON.map((o) => (
-                  <button key={o.v} type="button" className={styles.chip} aria-pressed={d.replyOn.includes(o.v)} onClick={() => toggleOn(o.v)}>{o.label}</button>
-                ))}
-              </span>
-            </div>
-          )}
+      {draftRuns(d) && (
+        <div className={styles.clause}>
+          <span className={styles.k}>{t('Ответить')}</span>
+          <div className={styles.clauseBody}>
+            <Seg<ReplyChoice> label={t('Сообщать о результате')} value={d.reply} onChange={(reply) => set({ reply })} options={REPLY_CHOICES.map((c) => ({ value: c, label: replyLabel(c), disabled: c !== 'off' && !kindCanReply && !targets.length }))} />
+            {d.reply !== 'off' && (
+              <div className={styles.sentence}>
+                <select className={styles.slot} aria-label={t('Куда писать')} value={d.replyTo} onChange={(e) => set({ replyTo: e.target.value })}>
+                  {kindCanReply && <option value="source">{replyWhere(kind, 'source', data.sources)}</option>}
+                  {targets.map((s) => (
+                    <option key={s.slug} value={s.slug}>{replyWhere(undefined, s.slug, data.sources)}</option>
+                  ))}
+                  {!kindCanReply && !targets.some((s) => s.slug === d.replyTo) && <option value={d.replyTo}>{d.replyTo}</option>}
+                </select>
+                ,{' '}
+                <span className={styles.chipsInline}>
+                  {ON.map((o) => (
+                    <button key={o.v} type="button" className={styles.chip} aria-pressed={d.replyOn.includes(o.v)} onClick={() => toggleOn(o.v)}>{o.label}</button>
+                  ))}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div className={styles.clause}>
         <span className={styles.k}>{t('Лимит')}</span>
         <div className={styles.inline}>
@@ -445,13 +570,18 @@ function History({ slug, spec, sourceTitle }: { slug: string; spec: ReturnType<t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
   const events = res?.events ?? [];
-  const rows = events.map((e) => ({ e, v: historyVerdict(e) }));
+  const rows = events.map((e) => {
+    const tv = taskVerdict(e.task);
+    return { e, v: historyVerdict(e), task: tv && { ...tv, closed: e.task?.action === 'closed' } };
+  });
   const runs = rows.filter((r) => r.v.run).length;
   // запуски и расхождения видны всегда, остальные пропуски — по кнопке
   const hidden = rows.filter((r) => !r.v.run && !r.v.disagrees);
   const shown = skips ? rows : rows.filter((r) => r.v.run || r.v.disagrees);
   const stale = res && checkedSpec !== key;
   const est = estimateText(res?.estimate);
+  // рутина с делом: главное — сколько дел было бы на доске; запуски — рядом, если рутина ещё и запускает flow
+  const tasks = res?.tasks;
   return (
     <section className={styles.history} aria-label={t('Проверка на истории')}>
       <div className={styles.histHead}>
@@ -465,7 +595,14 @@ function History({ slug, spec, sourceTitle }: { slug: string; spec: ReturnType<t
       {res && (
         <>
           <div className={styles.histHead}>
-            <span className={styles.histBig}>{t('Запустилось бы {k} из {n}', { k: runs, n: events.length })}</span>
+            {tasks !== undefined ? (
+              <>
+                <span className={styles.histBig}>{t('На доске было бы {n} {w}', { n: tasks, w: plural(tasks, 'дело', 'дела', 'дел') })}</span>
+                {spec.run && <span className={styles.mono}>{t('запустилось бы {k} из {n}', { k: runs, n: events.length })}</span>}
+              </>
+            ) : (
+              <span className={styles.histBig}>{t('Запустилось бы {k} из {n}', { k: runs, n: events.length })}</span>
+            )}
             {est && <span className={styles.mono} title={t('По средней стоимости прошлых запусков рутины или flow')}>{est}</span>}
             {stale && <span className="warn small">{t('правило поменялось — проверь снова')}</span>}
           </div>
@@ -475,16 +612,16 @@ function History({ slug, spec, sourceTitle }: { slug: string; spec: ReturnType<t
             </span>
           )}
           <div>
-            {shown.map(({ e, v }) => (
+            {shown.map(({ e, v, task }) => (
               <div key={e.event.id} className={cx(styles.dr, v.disagrees && styles.bad)}>
-                <span className={cx(styles.drV, v.run && styles.run)}>{v.text}</span>
+                <span className={cx(styles.drV, v.run && styles.run, task?.closed && styles.closed)}>{task?.text ?? v.text}</span>
                 <span title={e.event.text}>{e.event.title || e.event.text}</span>
                 {v.disagrees && e.past && (
                   <button type="button" className={cx('btn small', styles.drAct)} disabled={busy} title={t('Взять твой прошлый ответ в примеры проверки словами и проверить снова')} onClick={() => void learn(e.event.id, e.past!)}>
                     {t('Учесть')}
                   </button>
                 )}
-                {v.why && <span className={cx(styles.drWhy, v.disagrees && styles.bad)}>{v.why}</span>}
+                {(task?.why || v.why) && <span className={cx(styles.drWhy, v.disagrees && styles.bad)}>{[task?.why, v.why].filter(Boolean).join(' · ')}</span>}
               </div>
             ))}
             {!events.length && <span className={styles.hint}>{t('Событий из источника пока нет: проверить не на чем.')}</span>}

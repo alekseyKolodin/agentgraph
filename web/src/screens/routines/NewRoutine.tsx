@@ -92,7 +92,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
 
   const title = titleEdited ? d.title : defaultTitle(d, source?.spec.title);
   const missing = draftMissing(d);
-  const missingText = missing.map((m) => ({ source: t('выбери, что запускает'), flow: t('выбери flow'), block: t('выбери блок, перед которым ждать') })[m]).join(', ');
+  const missingText = missing.map((m) => ({ source: t('выбери, что запускает'), flow: t('выбери flow'), block: t('выбери блок, перед которым ждать'), kind: t('назови вид дела') })[m]).join(', ');
 
   const save = async () => {
     setSaving(true);

@@ -93,6 +93,7 @@
 .slot:hover { border-color: rgba(255, 255, 255, .24); }
 .slot[aria-expanded="true"] { border-color: var(--ink); }
 .slot.add { border-style: dashed; color: var(--ink-3); font-weight: 400; }
+.slot.task-kind { cursor: text; font-weight: 500; }
 .slot.gate { border-color: color-mix(in srgb, var(--st-wait) 55%, transparent); }
 .sentence { line-height: 30px; }
 
@@ -174,6 +175,7 @@ select.inp { height: 34px; }
 .dr { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); font-size: var(--fs-small); align-items: baseline; }
 .dr-v { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .dr-v.run { color: var(--st-ok); }
+.dr-v.run.closed { color: var(--ink-3); }
 .dr-why { grid-column: 2 / -1; font-size: var(--fs-meta); color: var(--ink-3); }
 .dr > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problems { margin: 0 0 12px; padding: 8px 14px; border: 1px solid color-mix(in srgb, var(--st-fail) 40%, transparent); background: color-mix(in srgb, var(--st-fail) 6%, var(--panel)); border-radius: var(--r-md); color: var(--ink); font-size: var(--fs-small); }

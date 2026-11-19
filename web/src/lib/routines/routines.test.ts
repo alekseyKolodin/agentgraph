@@ -4,6 +4,7 @@ import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/rout
 import { buildMatch, conditionText, matchFields, opsFor, parseMatch } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
 import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
+import { taskVerdict } from './view';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
   brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
@@ -124,6 +125,41 @@ test('сборка RoutineSpec: расписание с задачей, без �
   assert.equal(buildSpec({ ...d, enabled: true, draft: true }, []).draft, undefined);
   assert.equal(draftFromSpec({ ...buildSpec({ ...d, enabled: false, draft: true }, []) }).draft, true);
   assert.deepEqual(draftMissing({ ...d, mode: 'until_pause' }), ['block']);
+});
+
+test('шаг «Дело»: без flow рутина только заводит дела — run и ответа нет, умолчания не пишутся', () => {
+  const d = { ...emptyDraft(), title: 'Ревью из GitLab', source: 'gitlab', taskOn: true, taskKind: 'Ревью' };
+  const spec = buildSpec(d, []);
+  assert.deepEqual(spec, { title: 'Ревью из GitLab', enabled: false, when: { source: 'gitlab' }, mode: 'suggest', reply: { to: 'none' }, task: { kind: 'Ревью' } });
+  assert.deepEqual(draftMissing(d), []);
+  const back = draftFromSpec(spec);
+  assert.equal(back.taskOn, true);
+  assert.equal(back.flow, '');
+  assert.deepEqual(buildSpec(back, []), spec);
+  // дела из flow без flow заводить некому; вид дела обязателен
+  assert.deepEqual(draftMissing({ ...d, taskFrom: 'flow' }), ['flow']);
+  assert.deepEqual(draftMissing({ ...d, taskKind: ' ' }), ['kind']);
+});
+
+test('шаг «Дело» с flow: все поля блока task туда и обратно', () => {
+  const d = { ...emptyDraft(), title: 'Ревью', source: 'slack', flow: 'review', taskOn: true, taskKind: 'Ревью', taskColumn: 'plan' as const, taskSame: 'thread' as const, taskRepeat: 'keep' as const, taskClose: 'в треде ответили «готово»' };
+  const spec = buildSpec(d, []);
+  assert.equal(spec.run?.flow, 'review');
+  assert.deepEqual(spec.task, { kind: 'Ревью', column: 'plan', same: 'thread', on_repeat: 'keep', close: 'в треде ответили «готово»' });
+  assert.deepEqual(buildSpec(draftFromSpec(spec), []), spec);
+  // «закрою сам» пишется, «когда вещь закрыта» — умолчание
+  assert.equal(buildSpec({ ...d, taskClose: 'never' }, []).task?.close, 'never');
+  assert.equal(buildSpec({ ...d, taskClose: 'thing' }, []).task?.close, undefined);
+  // шаг выключен — блока task нет, run на месте
+  assert.equal(buildSpec({ ...d, taskOn: false }, []).task, undefined);
+});
+
+test('проверка на истории: строка о деле — дело, в план, то же дело, закрыто', () => {
+  assert.equal(taskVerdict(undefined), undefined);
+  assert.equal(taskVerdict({ action: 'new', key: 'mr:a/b/1' })?.text, 'дело');
+  assert.equal(taskVerdict({ action: 'plan', key: 'mr:a/b/1' })?.text, 'в план');
+  assert.equal(taskVerdict({ action: 'same', key: 'mr:a/b/1' })?.text, 'то же дело');
+  assert.deepEqual(taskVerdict({ action: 'closed', key: 'mr:a/b/1', note: 'MR смержен' }), { text: 'закрыто', why: 'MR смержен' });
 });
 
 test('slugify: транслит, без занятых и зарезервированных', () => {

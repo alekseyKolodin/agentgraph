@@ -674,7 +674,7 @@ export class RoutineEngine {
       this.changed();
       return { outcome: 'limit', reason: entry.reason };
     }
-    const pauseBefore = spec.mode === 'until_pause' ? spec.run.pause_before ?? [] : [];
+    const pauseBefore = spec.mode === 'until_pause' ? spec.run?.pause_before ?? [] : [];
     let runId: string;
     // слот занят до await: worktree с git fetch идёт долго, и второй запуск в это время не должен пройти лимиты
     this.starting.set(slug, (this.starting.get(slug) ?? 0) + 1);
@@ -1378,7 +1378,7 @@ export class RoutineEngine {
     }
     const estimate = this.estimate(slug, spec, out);
     const shown = out.find((x) => x.outcome === 'started' || x.outcome === 'waiting') ?? out[0];
-    const task = spec.run.input?.trim();
+    const task = spec.run?.input?.trim();
     const preview = shown && { eventId: shown.event.id, ...(task ? { task } : {}), event: eventBlock(shown.event) };
     return { events: out, disagreements, ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}) };
   }
@@ -1400,7 +1400,7 @@ export class RoutineEngine {
     let avg = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : undefined;
     if (avg === undefined) {
       try {
-        avg = this.deps.flowCost?.(spec.run.flow);
+        avg = spec.run ? this.deps.flowCost?.(spec.run.flow) : undefined;
       } catch {
         avg = undefined;
       }
@@ -1483,7 +1483,7 @@ export class RoutineEngine {
     const src = sourceSlug ? this.store.source(sourceSlug) : undefined;
     const title = spec?.title || slug;
     const name = `Рутина ${title}: вопрос по срабатыванию`;
-    const cwd = askCwd(spec?.run.cwd);
+    const cwd = askCwd(spec?.run?.cwd);
     const prompt = askPrompt({ question, x, slug, routineYaml: f.yaml, sourceSlug, sourceYaml: src?.yaml, connector: src?.spec?.kind === 'connector' });
     return { prompt, name: name.length > 80 ? `${name.slice(0, 79)}…` : name, ...(cwd ? { cwd } : {}) };
   }
