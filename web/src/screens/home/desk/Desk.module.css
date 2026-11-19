@@ -63,6 +63,9 @@ a.title:hover { color: var(--act-hover); text-decoration: underline; }
 .agent a { color: var(--ink-2); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .agent a:hover { color: var(--ink); text-decoration: underline; }
 .agent.wait b { color: var(--st-wait); }
+/* вопрос сессии: до трёх строк внутри плашки — карточка узкая, одной строки не хватает даже на начало; целиком — в title */
+.agent:has(.agent-ask) { flex-wrap: wrap; }
+.agent-ask { flex-basis: 100%; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; color: var(--ink-2); }
 .agent.live b { color: var(--live); }
 
 .meta { display: flex; gap: 4px 10px; align-items: center; flex-wrap: wrap; font-size: var(--fs-meta); color: var(--ink-2); }

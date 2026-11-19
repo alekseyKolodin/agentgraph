@@ -2,8 +2,8 @@
 // уходит в /routines/new?tpl=…; там выбирается подходящий подключённый источник и заполняются шаги. Готовый flow сервер
 // копирует в папку flow пользователя при сохранении, если такого flow ещё нет (POST /api/routines/flow-templates/:name).
 // «Мои дела» за четыре шаблона: ревью из GitLab/GitHub, ревью по ссылке в Slack, задачи Jira, встречи → дела.
-import type { SourceView } from '@server/routines/types';
-import { parseMatch } from './match';
+import type { MatchField, SourceView } from '@server/routines/types';
+import { parseMatch, type Condition } from './match';
 import { emptyDraft, SCHEDULE, type RoutineDraft } from './spec';
 
 export type TemplateKey = 'review-forge' | 'review-slack' | 'jira' | 'meetings' | 'sweep' | 'bug' | 'digest';
@@ -92,6 +92,15 @@ export function sourceForTemplate(tpl: string | null | undefined, sources: Sourc
     default:
       return '';
   }
+}
+
+/**
+ * Условия шаблона, которые умеет выбранный источник: человек сам выбрал источник (а не подставился подходящий) — условие
+ * шаблона («ссылка на MR в тексте», «событие — ревью») остаётся, если у источника есть такое поле; иначе оно не сработает
+ * никогда и рутина молчала бы, поэтому его нет. Без шаблона и у расписания — пусто.
+ */
+export function templateConds(tpl: string | null | undefined, fields: readonly MatchField[]): Condition[] {
+  return templateOf(tpl) ? templateDraft(tpl).conds.filter((c) => fields.some((f) => f.key === c.field)) : [];
 }
 
 /** Ссылка на MR (GitLab) или PR (GitHub) в тексте сообщения: условие без модели для «кинули ссылку в Slack». */

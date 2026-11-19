@@ -185,6 +185,7 @@ export const routines: Record<string, string> = {
   'сегодня {time}': 'today {time}',
   'вчера {time}': 'yesterday {time}',
   'Эти записи не запустятся. Рутина начнёт с тех, что появятся после включения.': 'These records won’t trigger it. The routine starts with those that appear after it is turned on.',
+  'Эти записи не запустят flow, но станут делами: первый опрос заведёт дела по текущему списку источника, до {n} записей. Дальше — только новые.': 'These records won’t run the flow, but they become tasks: the first poll creates tasks from the source’s current list, up to {n} records. After that, only new ones.',
   '{n} блоков': '{n} blocks',
   'без описания': 'no description',
   'Ничего не нашлось.': 'Nothing found.',

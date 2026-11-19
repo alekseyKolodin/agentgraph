@@ -216,7 +216,7 @@ async function overview(deps: IntegrationDeps, x: Exec): Promise<IntegrationsInf
 function jira(deps: IntegrationDeps) {
   const s = loadSettings();
   const token = readJiraToken();
-  if (!s.jira || !token) throw new JiraError('Jira не подключена: открой «Подключения» на главной');
+  if (!s.jira || !token) throw new JiraError('Jira не подключена: открой «Подключения» в разделе «Код»');
   return { s, client: jiraClient(s.jira, token, deps.fetch) };
 }
 
@@ -225,7 +225,7 @@ async function projectByPath(dir: string, x: Exec) {
   const s = loadSettings();
   const root = dir && fs.existsSync(dir) ? await repoRoot(dir, x) : undefined;
   const proj = root ? findProject(s, root) : undefined;
-  if (!proj) throw new Error('Проект не найден: добавь его на главной');
+  if (!proj) throw new Error('Проект не найден: добавь его в «Подключения» (раздел «Код»)');
   return proj;
 }
 

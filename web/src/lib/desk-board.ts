@@ -3,6 +3,7 @@
 // ход → самое свежее в «Новом»), срез по проектам и то, что нужно действиям карточки (сессии и запуски дела, вход flow,
 // папка и первое сообщение сессии).
 import type { ProjectInfo, RunSource, RunSummary, SessionView, SpaceListItem } from '@server/api-types';
+import type { RoutineWait } from '@server/routines/types';
 import type { DeskBy, DeskColumn, DeskItem, DeskSignal } from '@server/desk/types';
 import { normHost, parseKey } from '../../../src/things/keys';
 import { locale, plural, t } from './i18n';
@@ -311,6 +312,28 @@ export function itemSessions<S extends SessionLike>(i: Pick<DeskItem, 'id' | 'ke
   return sessions
     .filter((s) => i.links.sessions.includes(s.id) || s.source?.item === i.id || (s.source?.thing?.key !== undefined && s.source.thing.key === i.key))
     .sort((a, b) => Number(b.live) - Number(a.live) || msOf(b.lastActivityAt) - msOf(a.lastActivityAt));
+}
+
+/**
+ * Сессии, которых нет ни на одной карточке: «одна вещь — одно место». Сессия открытого дела ждёт тебя на самой карточке
+ * (там же и её вопрос), в полосе над доской остаются только чужие для доски — начатые не с карточки.
+ */
+export function sessionsOffBoard<S extends SessionLike>(sessions: readonly S[], openItems: readonly Pick<DeskItem, 'id' | 'key' | 'links' | 'column'>[]): S[] {
+  const open = openItems.filter((i) => i.column !== 'done');
+  return sessions.filter((s) => !open.some((i) => itemSessions(i, [s]).length > 0));
+}
+
+/**
+ * Ожидание рутины с task (3.8) — это само дело в «Новом» с кнопкой «Запустить»: решение («Запустить / Не сейчас / Не то»)
+ * принимается на карточке. Решённые, отложенные и чужие (пауза, ответ) ожидания — не его.
+ */
+export function deskWaitOf<W extends Pick<RoutineWait, 'kind' | 'deskKey' | 'snoozedAt'>>(key: string, waits: readonly W[]): W | undefined {
+  return waits.find((w) => w.kind === 'suggest' && w.deskKey === key && !w.snoozedAt);
+}
+
+/** Ожидания, которых нет ни на одной карточке: в полосе над доской остаются они — «одна вещь — одно место». */
+export function waitsOffBoard<W extends Pick<RoutineWait, 'kind' | 'deskKey' | 'snoozedAt'>>(waits: readonly W[], openItems: readonly Pick<DeskItem, 'key'>[]): W[] {
+  return waits.filter((w) => !openItems.some((i) => deskWaitOf(i.key, [w])));
 }
 
 /** Запуски дела: из ссылок (и продолжения их цепочек), начатые с карточки (source.item) и запуски той же вещи; свежие — первыми. */

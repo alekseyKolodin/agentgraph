@@ -15,7 +15,7 @@ import { useSessions } from '../../../api/sessions';
 import { QuestionCard } from '../../../components/question/QuestionCard';
 import { useNow } from '../../../components/useNow';
 import type { DeskItem } from '@server/desk/types';
-import { inProject, startQueue } from '../../../lib/desk-board';
+import { inProject, sessionsOffBoard, startQueue, waitsOffBoard } from '../../../lib/desk-board';
 import { checkedAgo, checkSummary, checkText, checkTone, projectSlices, type CheckTone } from '../../../lib/desk-top';
 import { inbox, withoutQuestion } from '../../../lib/home';
 import { t } from '../../../lib/i18n';
@@ -75,9 +75,12 @@ function Questions({ now }: { now: number }) {
   const routines = useRoutines(useFeature('routines'));
   const sessionsOn = useFeature('sessions');
   const sessionList = useSessions(sessionsOn);
-  const waitingSessions = homeSessions(sessionList.data?.sessions ?? []).waiting;
+  const openItems = useDesk({ open: true }).data?.items ?? [];
+  // сессия открытого дела ждёт тебя на его карточке (с вопросом) — в полосе её нет: одна вещь — одно место
+  const waitingSessions = sessionsOffBoard(homeSessions(sessionList.data?.sessions ?? []).waiting, openItems);
   const items = inbox(home.data?.runs ?? []);
-  const waits = activeWaits(routines.data?.waits ?? []);
+  // ожидание рутины с task — само дело: «Запустить / Не сейчас / Не то» на его карточке, в полосе его нет
+  const waits = waitsOffBoard(activeWaits(routines.data?.waits ?? []), openItems);
   const catchUp = routines.data?.catchUp ?? [];
   const loadHomeSoon = () => setTimeout(() => void qc.invalidateQueries({ queryKey: keys.home }), 300);
   // RoutineHome — всегда: он сам решает, показывать ли себя (строка решения «ушло» живёт, когда ожиданий уже нет)

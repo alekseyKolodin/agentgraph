@@ -19,12 +19,15 @@ import { defaultTitle, eventNoun, replyHint, replyLabel, replyWhere, sentence, s
 import { formatNext, nextRuns, PRESETS, presetLabel, toCron, type SchedulePreset } from '../../lib/routines/schedule';
 import { foundRow } from '../../lib/routines/source';
 import { buildSpec, draftMissing, isSchedule, REPLY_CHOICES, SCHEDULE, slugify, type ReplyChoice, type RoutineDraft } from '../../lib/routines/spec';
-import { connectHref, isMeetingSource, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateDraft, templateOf } from '../../lib/routines/templates';
+import { connectHref, isMeetingSource, profileLine, ROUTINE_TEMPLATES, sourceForTemplate, templateConds, templateDraft, templateOf } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
 import { CwdField } from './CwdField';
 import { Conditions, cx, Seg, useFlowBlocks, WaitClause } from './parts';
 import styles from './Routines.module.css';
 
+
+/** Засев дел по текущему списку — не больше стольких записей (SEED_MAX в src/routines/engine.ts). */
+const SEED_MAX = 50;
 
 /** Ссылка «Собрать новый flow…»: диалог «Новый flow» живёт в шапке списка Flow сайдбара (как «с чего начать» на главной). */
 const sidebarNewFlow = () => document.querySelector<HTMLButtonElement>(`button[title="${CSS.escape(t('Создать flow'))}"]`);
@@ -148,7 +151,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
               {data.sources.map((s) => {
                 const k = data.kinds.find((x) => x.kind === s.spec.kind);
                 return (
-                  <button key={s.slug} type="button" className={styles.pick} aria-pressed={d.source === s.slug} onClick={() => set({ source: s.slug, conds: [], check: '', mode: d.mode === 'auto' && isSchedule(d) ? 'suggest' : d.mode })}>
+                  <button key={s.slug} type="button" className={styles.pick} aria-pressed={d.source === s.slug} onClick={() => set({ source: s.slug, conds: templateConds(tpl, matchFields(data.kinds.find((k) => k.kind === s.spec.kind))), check: '', mode: d.mode === 'auto' && isSchedule(d) ? 'suggest' : d.mode })}>
                     <b>{s.spec.title}</b>
                     <span>{s.spec.description || k?.summary || s.spec.kind}</span>
                   </button>
@@ -296,7 +299,12 @@ function SourceStep({ d, set, source, fields, kindTitle }: StepProps & { source:
           </div>
         )}
       </div>
-      <span className={styles.hint}>{t('Эти записи не запустятся. Рутина начнёт с тех, что появятся после включения.')}</span>
+      {/* рутина с делом: первый опрос заводит дела по текущему списку (SPEC 3.4), flow на них не запустится */}
+      <span className={styles.hint}>
+        {d.taskOn && d.taskFrom === 'event'
+          ? t('Эти записи не запустят flow, но станут делами: первый опрос заведёт дела по текущему списку источника, до {n} записей. Дальше — только новые.', { n: SEED_MAX })
+          : t('Эти записи не запустятся. Рутина начнёт с тех, что появятся после включения.')}
+      </span>
     </>
   );
 }

@@ -5,6 +5,7 @@ import {
   ageLine,
   ageText,
   deskBoard,
+  deskWaitOf,
   dueView,
   deskRunLink,
   intakeTarget,
@@ -16,10 +17,12 @@ import {
   neighborColumn,
   projectSlice,
   replySignal,
+  sessionsOffBoard,
   sessionCwd,
   startQueue,
   startWith,
   thingLabel,
+  waitsOffBoard,
 } from './desk-board';
 
 // полдень по местному времени: границы дня считаются по нему
@@ -150,6 +153,34 @@ test('«Ответить»: последний сигнал с replyTo и ссы
   const c = { source: 'gitlab', at: ago(0.5), link: 'https://gitlab.example.com/x' };
   assert.equal(replySignal(item({ signals: [a, b, c] }))?.link, 'https://slack.example.com/a');
   assert.equal(replySignal(item({ signals: [c] })), undefined);
+});
+
+test('полоса над доской: сессия открытого дела на карточке, а не в полосе; закрытое дело её не держит', () => {
+  const open = item({ links: { runs: [], sessions: ['s1'] } });
+  const fromCard = item({});
+  const done = item({ column: 'done', links: { runs: [], sessions: ['s4'] } });
+  const sessions = [
+    { id: 's1', live: true, lastActivityAt: ago(1) },
+    { id: 's2', live: true, lastActivityAt: ago(1), source: { item: fromCard.id } },
+    { id: 's3', live: true, lastActivityAt: ago(1) },
+    { id: 's4', live: true, lastActivityAt: ago(1) },
+  ];
+  assert.deepEqual(sessionsOffBoard(sessions, [open, fromCard, done]).map((s) => s.id), ['s3', 's4']);
+  assert.deepEqual(sessionsOffBoard(sessions, []).map((s) => s.id), ['s1', 's2', 's3', 's4']);
+});
+
+test('ожидание рутины-дела — на карточке дела, из полосы над доской уходит; пауза, ответ и отложенное — как были', () => {
+  const a = mr(11);
+  const suggest = { id: 'w1', kind: 'suggest' as const, deskKey: a.key };
+  const snoozed = { id: 'w2', kind: 'suggest' as const, deskKey: mr(12).key, snoozedAt: ago(1) };
+  const pause = { id: 'w3', kind: 'pause' as const, deskKey: a.key };
+  const noItem = { id: 'w4', kind: 'suggest' as const, deskKey: 'mr:gitlab.example.com/grp/app/99' };
+  const plain = { id: 'w5', kind: 'suggest' as const };
+  assert.equal(deskWaitOf(a.key, [pause, suggest])?.id, 'w1');
+  assert.equal(deskWaitOf(mr(12).key, [snoozed]), undefined);
+  assert.equal(deskWaitOf(a.key, [plain]), undefined);
+  // дела нет на доске (закрыто, не пришло) — ожидание остаётся в полосе: решить его иначе негде
+  assert.deepEqual(waitsOffBoard([suggest, snoozed, pause, noItem, plain], [a]).map((w) => w.id), ['w2', 'w3', 'w4', 'w5']);
 });
 
 test('сессии и запуски дела: по ссылкам, по source.item и по вещи; живые и свежие — первыми; продолжение цепочки — по root', () => {
