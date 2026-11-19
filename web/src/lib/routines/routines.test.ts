@@ -4,6 +4,7 @@ import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/rout
 import { buildMatch, conditionText, matchFields, opsFor, parseMatch } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
 import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
+import { logDetail as detailOf, taskVerdict } from './view';
 import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
 import {
   brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
@@ -124,6 +125,47 @@ test('сборка RoutineSpec: расписание с задачей, без �
   assert.equal(buildSpec({ ...d, enabled: true, draft: true }, []).draft, undefined);
   assert.equal(draftFromSpec({ ...buildSpec({ ...d, enabled: false, draft: true }, []) }).draft, true);
   assert.deepEqual(draftMissing({ ...d, mode: 'until_pause' }), ['block']);
+});
+
+test('шаг «Дело»: без flow рутина только заводит дела — run и ответа нет, умолчания не пишутся', () => {
+  const d = { ...emptyDraft(), title: 'Ревью из GitLab', source: 'gitlab', taskOn: true, taskKind: 'Ревью' };
+  const spec = buildSpec(d, []);
+  assert.deepEqual(spec, { title: 'Ревью из GitLab', enabled: false, when: { source: 'gitlab' }, mode: 'suggest', reply: { to: 'none' }, task: { kind: 'Ревью' } });
+  assert.deepEqual(draftMissing(d), []);
+  const back = draftFromSpec(spec);
+  assert.equal(back.taskOn, true);
+  assert.equal(back.flow, '');
+  assert.deepEqual(buildSpec(back, []), spec);
+  // дела из flow без flow заводить некому; вид дела обязателен
+  assert.deepEqual(draftMissing({ ...d, taskFrom: 'flow' }), ['flow']);
+  assert.deepEqual(draftMissing({ ...d, taskKind: ' ' }), ['kind']);
+  // «условие словами» без условия не сохраняется молча как «вещь закрыта»
+  assert.deepEqual(draftMissing({ ...d, taskClose: '' }), ['close']);
+  // без flow пространство формы — проект дела; с flow — пространство запуска
+  assert.equal(buildSpec({ ...d, space: 'billing' }, []).task?.project, 'billing');
+  assert.equal(draftFromSpec(buildSpec({ ...d, space: 'billing' }, [])).space, 'billing');
+  assert.equal(buildSpec({ ...d, space: 'billing', flow: 'review' }, []).task?.project, undefined);
+});
+
+test('шаг «Дело» с flow: все поля блока task туда и обратно', () => {
+  const d = { ...emptyDraft(), title: 'Ревью', source: 'slack', flow: 'review', taskOn: true, taskKind: 'Ревью', taskColumn: 'plan' as const, taskSame: 'thread' as const, taskRepeat: 'keep' as const, taskClose: 'в треде ответили «готово»' };
+  const spec = buildSpec(d, []);
+  assert.equal(spec.run?.flow, 'review');
+  assert.deepEqual(spec.task, { kind: 'Ревью', column: 'plan', same: 'thread', on_repeat: 'keep', close: 'в треде ответили «готово»' });
+  assert.deepEqual(buildSpec(draftFromSpec(spec), []), spec);
+  // «закрою сам» пишется, «когда вещь закрыта» — умолчание
+  assert.equal(buildSpec({ ...d, taskClose: 'never' }, []).task?.close, 'never');
+  assert.equal(buildSpec({ ...d, taskClose: 'thing' }, []).task?.close, undefined);
+  // шаг выключен — блока task нет, run на месте
+  assert.equal(buildSpec({ ...d, taskOn: false }, []).task, undefined);
+});
+
+test('проверка на истории: строка о деле — дело, в план, то же дело, закрыто', () => {
+  assert.equal(taskVerdict(undefined), undefined);
+  assert.equal(taskVerdict({ action: 'new', key: 'mr:a/b/1' })?.text, 'дело');
+  assert.equal(taskVerdict({ action: 'plan', key: 'mr:a/b/1' })?.text, 'в план');
+  assert.equal(taskVerdict({ action: 'same', key: 'mr:a/b/1' })?.text, 'то же дело');
+  assert.deepEqual(taskVerdict({ action: 'closed', key: 'mr:a/b/1', note: 'MR смержен' }), { text: 'закрыто', why: 'MR смержен' });
 });
 
 test('slugify: транслит, без занятых и зарезервированных', () => {
@@ -367,4 +409,9 @@ test('главная: источник, который читают только
 test('шапка списка: расход опроса источников за сегодня входит в деньги дня', () => {
   const meta = overviewMeta([view({ stats: { today: 1, started: 1, waiting: 0, costUsd: 1 }, recent: [entry({ outcome: 'started', at: new Date().toISOString(), costUsd: 1 })] })], new Date(), [src({ pollCostUsd: { today: 0.5, week: 2 } })]);
   assert.equal(meta, 'сегодня 1 запуск · $1.50');
+});
+
+test('строка журнала: сколько дел завёл запуск', () => {
+  const e = { id: '1', at: '2026-11-17T10:00:00.000Z', routine: 'r', event: { source: 's', id: 'e', title: 'x', at: '2026-11-17T10:00:00.000Z' }, outcome: 'started' as const, desk: { created: 2, signals: 1 } };
+  assert.match(detailOf(e), /Запуск завёл 2 дела\. Дописал в дела сигналов: 1\./);
 });

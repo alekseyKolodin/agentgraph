@@ -91,6 +91,19 @@ const WhenScheduleSchema = z
   })
   .strict();
 
+/** Блок task: рутина заводит дела (docs/desk/SPEC.md, этап 3). */
+export const TaskRuleSchema = z
+  .object({
+    kind: z.string().trim().min(1, 'нужен task.kind — вид дела словом: Ревью, Jira, Встреча').describe('Вид дела свободным текстом: «Ревью», «Jira», «Встреча»'),
+    column: z.enum(['new', 'plan']).optional().describe('Куда класть новое дело: new — «Новое» (по умолчанию), plan — «В плане»'),
+    from: z.enum(['event', 'flow']).optional().describe('event — событие и есть дело (по умолчанию); flow — дела заводит flow инструментом desk_put'),
+    same: z.enum(['thing', 'thread', 'event']).optional().describe('Что считать тем же делом: thing — та же вещь (MR, задача), thread — тот же разговор, event — каждое событие отдельно. По умолчанию — вещь, если распознана, иначе нить, иначе событие'),
+    on_repeat: z.enum(['plan', 'keep']).optional().describe('Пришло новое по тому же делу: plan — вернуть в «В плане» (по умолчанию), keep — оставить колонку'),
+    close: z.string().trim().min(1).optional().describe('Когда закрывать: thing — когда вещь закрыта (по умолчанию), never — только руками, или условие словами'),
+    project: z.string().trim().min(1).optional().describe('Проект дела — слаг пространства; нет — пространство из run'),
+  })
+  .strict();
+
 export const RoutineSpecSchema = z
   .object({
     title: z.string().min(1, 'нужен title'),
@@ -108,7 +121,8 @@ export const RoutineSpecSchema = z
         knowledge: z.array(z.string()).optional(),
         model: z.string().optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
     mode: z.enum(['suggest', 'until_pause', 'auto']),
     reply: z
       .object({
@@ -126,8 +140,14 @@ export const RoutineSpecSchema = z
       })
       .strict()
       .optional(),
+    task: TaskRuleSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((spec, ctx) => {
+    // рутина либо запускает flow, либо заводит дела событием; дела «из flow» без flow заводить некому
+    if (!spec.run && !spec.task) ctx.addIssue({ code: 'custom', path: ['run'], message: 'нужен run.flow или блок task' });
+    else if (!spec.run && spec.task?.from === 'flow') ctx.addIssue({ code: 'custom', path: ['run'], message: 'task.from: flow — дела заводит flow, нужен run.flow' });
+  });
 
 function issues(err: z.ZodError): string[] {
   return err.issues.map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message));
@@ -182,14 +202,20 @@ export type ProblemCtx = {
 /** Проблемы сохранённого правила: схема прошла, а сослаться не на что. Пусто — правило рабочее. */
 export function routineProblems(spec: RoutineSpec, ctx: ProblemCtx): string[] {
   const out: string[] = [];
-  let blocks: string[] | undefined;
-  try {
-    blocks = ctx.flowBlocks(spec.run.flow);
-  } catch (err) {
-    out.push(`flow ${spec.run.flow} не читается: ${err instanceof Error ? err.message : String(err)}`);
+  const run = spec.run;
+  if (run) {
+    let blocks: string[] | undefined;
+    try {
+      blocks = ctx.flowBlocks(run.flow);
+    } catch (err) {
+      out.push(`flow ${run.flow} не читается: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (!blocks && !out.length) out.push(`flow ${run.flow} не найден`);
+    if (blocks) for (const b of run.pause_before ?? []) if (!blocks.includes(b)) out.push(`во flow ${run.flow} нет блока «${b}» из pause_before`);
+  } else {
+    if (spec.reply && spec.reply.to !== 'none') out.push('ответ: рутина без flow только заводит дела — отвечать в источник нечему');
+    if (isSchedule(spec.when)) out.push('расписание без flow: заводить дело по часам не из чего — выбери источник или flow');
   }
-  if (!blocks && !out.length) out.push(`flow ${spec.run.flow} не найден`);
-  if (blocks) for (const b of spec.run.pause_before ?? []) if (!blocks.includes(b)) out.push(`во flow ${spec.run.flow} нет блока «${b}» из pause_before`);
   if (isSchedule(spec.when)) {
     const c = parseCron(spec.when.schedule);
     if (typeof c === 'string') out.push(`расписание: ${c}`);

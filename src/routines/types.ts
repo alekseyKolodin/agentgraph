@@ -230,7 +230,8 @@ export type RoutineSpec = {
   /** Черновик: сохранён с «Новой рутины» и ещё ни разу не включался (enabled: false). Включение снимает признак. */
   draft?: boolean;
   when: WhenSource | WhenSchedule;
-  run: {
+  /** Что запускать. Необязательно при task с from: event — рутина только заводит дела (одно из run и task есть всегда). */
+  run?: {
     flow: string;
     /** Задача flow; событие дописывается к ней в обёртке данных. */
     input?: string;
@@ -246,7 +247,7 @@ export type RoutineSpec = {
   mode: RoutineMode;
   reply?: ReplySpec;
   limits?: { usd?: number; per_day?: number; parallel?: number };
-  /** Рутина заводит дела (SPEC этап 3, блок task). С task поле run становится необязательным — правку делает этап 3.3. */
+  /** Рутина заводит дела (SPEC этап 3, блок task). С task поле run необязательно: без него событие только заводит дело. */
   task?: TaskRule;
 };
 
@@ -262,6 +263,8 @@ export type TaskRule = {
   same?: 'thing' | 'thread' | 'event';
   on_repeat?: 'plan' | 'keep';
   close?: 'thing' | 'never' | string;
+  /** Проект дела (слаг пространства); нет — run.space, иначе пространство run.cwd. Нужен рутине без flow. */
+  project?: string;
 };
 
 // ---------------------------------------------------------------- журнал и ожидания
@@ -275,6 +278,7 @@ export type LogOutcome =
   | 'limit' // упёрлось в per_day / parallel / usd
   | 'rejected' // человек ответил «не то» («Это не баг»)
   | 'missed' // пришло, пока приложение было закрыто
+  | 'task' // событие завело дело (рутина без flow, первый опрос, простой) — без запуска
   | 'error';
 
 export type LogEntry = {
@@ -306,6 +310,10 @@ export type LogEntry = {
   sameAs?: { routine: string; logId: string };
   /** Чем кончился запуск строки (статус запуска): упавший запуск повтор по вещи не держит. */
   runStatus?: string;
+  /** Рутина с task: ключ дела, которое завело или обновило это событие. */
+  deskKey?: string;
+  /** Сколько дел запуск завёл (created) и скольким дописал сигнал (signals) инструментом desk_put — report.desk. */
+  desk?: { created: number; signals: number };
 };
 
 /**
@@ -407,7 +415,14 @@ export type HistoryCheck = {
     /** Как человек раньше ответил на это событие (журнал + обратная связь); есть и расходится с outcome — строка «расходится». */
     past?: Feedback['verdict'];
     disagrees?: boolean;
+    /**
+     * Что стало бы с делом (рутина с task, событие подошло): new — новое дело, plan — то же дело вернулось в план,
+     * same — то же дело, колонка та же (on_repeat: keep), closed — дело по этой вещи уже закрыто. key — ключ дела.
+     */
+    task?: { action: 'new' | 'plan' | 'same' | 'closed'; key: string; note?: string };
   }>;
+  /** Рутина с task: сколько разных дел было бы на доске по этим событиям. */
+  tasks?: number;
   /** Человек раньше ответил на событие иначе, чем правило решило бы сейчас («Это не баг», а правило запустило бы). */
   disagreements: number;
   /** Оценка по истории: сколько запусков в неделю и во сколько обойдётся (средняя стоимость прошлых запусков рутины или flow). */

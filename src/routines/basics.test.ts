@@ -41,6 +41,22 @@ test('проблемы правила: нет flow, нет блока из pause
   assert.match(routineProblems(routine({ reply: { to: 'tg' } }), ctx)[0], /ответ: источник tg не подключён/);
 });
 
+test('блок task: рутина без run только заводит дела; без run и task, from: flow без run — ошибка схемы', () => {
+  const only = parseRoutineYaml('title: Ревью\nwhen: { source: gitlab }\nmode: auto\ntask: { kind: Ревью, same: thing, on_repeat: plan, close: thing }\n');
+  assert.deepEqual(only.problems, []);
+  assert.equal(only.spec?.run, undefined);
+  assert.equal(only.spec?.task?.kind, 'Ревью');
+  assert.deepEqual(routineProblems(only.spec!, { ...ctx, sourceExists: () => true }), []);
+  assert.deepEqual(parseRoutineYaml('title: X\nwhen: { source: s }\nmode: auto\n').problems, ['run: нужен run.flow или блок task']);
+  assert.deepEqual(parseRoutineYaml('title: X\nwhen: { source: s }\nmode: auto\ntask: { kind: Ревью, from: flow }\n').problems, ['run: task.from: flow — дела заводит flow, нужен run.flow']);
+  assert.match(parseRoutineYaml('title: X\nwhen: { source: s }\nmode: auto\ntask: { kind: Ревью, same: mr }\n').problems[0], /^task\.same/);
+  assert.match(parseRoutineYaml('title: X\nwhen: { source: s }\nmode: auto\ntask: { kind: " " }\n').problems[0], /^task\.kind/);
+  // без запуска отвечать нечему — проблема правила, а не тихий пропуск
+  assert.deepEqual(routineProblems({ ...only.spec!, reply: { to: 'source' } }, { ...ctx, sourceExists: () => true }), ['ответ: рутина без flow только заводит дела — отвечать в источник нечему']);
+  // расписание без flow дел не заводит
+  assert.match(routineProblems({ ...only.spec!, when: { schedule: '0 9 * * *' } }, ctx)[0], /^расписание без flow/);
+});
+
 test('слаг: кириллица транслитом, занятый — с номером, пустой — запасной', () => {
   assert.equal(slugify('Баги из Slack!'), 'bagi-iz-slack');
   assert.equal(slugify('  '), 'routine');

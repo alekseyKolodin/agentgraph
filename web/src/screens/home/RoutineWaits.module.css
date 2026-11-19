@@ -6,6 +6,8 @@
 .gap { flex: 1; }
 .src { font: 500 var(--fs-cap)/18px var(--font-mono); color: var(--ink-2); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 6px; white-space: nowrap; text-decoration: none; }
 .src:hover { color: var(--ink); border-color: var(--ink-3); }
+/* ожидание-дело: метка вида дела рядом с рутиной (как .src, без ссылки) */
+.desk { font: 500 var(--fs-cap)/18px var(--font-mono); color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 6px; white-space: nowrap; }
 .waited { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--st-wait); font-variant-numeric: tabular-nums; }
 .body { display: flex; flex-direction: column; gap: 6px; }
 .q { margin: 0; font-size: var(--fs-h3); font-weight: 500; line-height: 1.4; text-wrap: balance; }

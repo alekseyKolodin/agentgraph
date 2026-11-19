@@ -16,7 +16,7 @@ const bad = (error: string, status = 400, extra?: Record<string, unknown>): Repl
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
 export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools']);
 
-const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
+const OUTCOMES: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
 
 export type RoutinesRouteDeps = {
   engine: RoutineEngine;
