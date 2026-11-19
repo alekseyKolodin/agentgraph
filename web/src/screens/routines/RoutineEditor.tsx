@@ -495,7 +495,7 @@ function More({ d, set, r, data, kindCanReply, replyNotSet, source, onYamlSaved 
                 {!setupOpen && <button type="button" className="btn small ghost" onClick={() => setSetupOpen(true)}>{t('Настроить ответ')}</button>}
               </span>
             )}
-            {replyNotSet && setupOpen && source && <SourceReplyPanel source={source} onClose={() => setSetupOpen(false)} />}
+            {replyNotSet && setupOpen && source && <SourceReplyPanel source={source} mode={d.reply} onClose={() => setSetupOpen(false)} />}
           </div>
         </div>
       )}

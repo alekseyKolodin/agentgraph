@@ -4,7 +4,7 @@ import type { SessionRequest } from '../../agent.js';
 import type { McpCaller, McpCallResult } from '../../mcp-call.js';
 import { toResult } from '../../mcp-call.js';
 import type { RoutineEvent, SourceSpec } from '../types.js';
-import { connectorKind, fillReplyArgs, mcpServices, replyOf, withReplyTo } from './connector.js';
+import { connectorKind, fillReplyArgs, isSentReply, mcpServices, replyOf, withReplyTo } from './connector.js';
 import { makeCtx } from './testkit.js';
 
 const READ = 'mcp__claude_ai_Slack__slack_read_channel';
@@ -131,16 +131,55 @@ test('ответ коннектора: завис инструмент — ош�
   assert.equal(closed, 1);
 });
 
-test('isSelf коннектора: отправленный рутиной ответ при следующем опросе — не событие, даже без профиля', async () => {
-  const f = fakeMcp({ structuredContent: { ok: true, permalink: 'https://x.slack.com/archives/C1/p9' } });
-  const kind = connectorKind({ session: async () => assert.fail('нет'), mcp: f.mcp, profile: () => ({ names: [], emails: [] }) as never });
+const evOf = (o: Partial<RoutineEvent>): RoutineEvent => ({ source: 's', id: 'a', at: '2026-11-19T10:00:00Z', title: 't', text: 'x', fields: {}, ...o });
+const noProfile = () => ({ names: [], emails: [] }) as never;
+
+test('isSelf коннектора: отправленный рутиной ответ — не событие по id и ссылке сообщения, даже без профиля и после перезапуска', async () => {
+  const f = fakeMcp({ structuredContent: { ok: true, ts: '1700.77', permalink: 'https://x.slack.com/archives/C1/p170077' } });
+  const kind = connectorKind({ session: async () => assert.fail('нет'), mcp: f.mcp, profile: noProfile });
   const ctx = makeCtx({ config: spec({ tool: SEND, args: ARGS }).config });
-  const ev = (o: Partial<RoutineEvent>): RoutineEvent => ({ source: 's', id: 'a', at: '2026-11-19T10:00:00Z', title: 't', text: 'x', fields: {}, ...o });
-  assert.equal(kind.isSelf!(ctx, ev({ text: 'Взял  в работу' })), false);
   await kind.reply!(ctx, { channel: 'C1' }, 'Взял в работу');
-  assert.equal(kind.isSelf!(ctx, ev({ text: ' взял в  РАБОТУ ' })), true);
-  assert.equal(kind.isSelf!(ctx, ev({ text: 'другое', link: 'https://x.slack.com/archives/C1/p9' })), true);
-  assert.equal(kind.isSelf!(ctx, ev({ text: 'другое' })), false);
+  // отправленное лежит в курсоре источника: новый вид (перезапуск) с тем же курсором узнаёт его
+  const restarted = connectorKind({ session: async () => assert.fail('нет'), profile: noProfile });
+  const after = makeCtx({ config: ctx.spec.config, cursor: ctx.cursorValue() });
+  assert.equal(restarted.isSelf!(after, evOf({ id: '1700.77', text: 'Взял в работу (изм.)' })), true);
+  assert.equal(restarted.isSelf!(after, evOf({ id: 'https://x.slack.com/archives/C1/p170077?thread_ts=1', text: 'иной текст' })), true);
+  assert.equal(restarted.isSelf!(after, evOf({ id: 'zzz', text: 'иной текст', link: 'https://X.slack.com/archives/C1/p170077/' })), true);
+  assert.equal(restarted.isSelf!(after, evOf({ id: '1700.78', text: 'иной текст' })), false);
+});
+
+test('isSelf коннектора: без id и ссылки — запасной путь по тексту, только в этом источнике и в том же канале', async () => {
+  const f = fakeMcp({ structuredContent: { ok: true } });
+  const kind = connectorKind({ session: async () => assert.fail('нет'), mcp: f.mcp, profile: noProfile });
+  const a = makeCtx({ slug: 'a', config: spec({ tool: SEND, args: ARGS }).config });
+  const b = makeCtx({ slug: 'b', config: spec({ tool: SEND, args: ARGS }).config });
+  await kind.reply!(a, { channel: 'C1' }, 'Взял в работу');
+  assert.equal(kind.isSelf!(a, evOf({ text: ' взял  в РАБОТУ ' })), true);
+  // другой источник с тем же коротким текстом: курсор у него свой
+  assert.equal(kind.isSelf!(b, evOf({ text: 'Взял в работу' })), false);
+  // тот же текст в другом канале этого источника — чужая запись
+  assert.equal(kind.isSelf!(a, evOf({ text: 'Взял в работу', thread: { source: 's', channel: 'C2', thread: '1' } })), false);
+  assert.equal(kind.isSelf!(a, evOf({ text: 'Взял в работу', thread: { source: 's', channel: 'C1', thread: '1' } })), true);
+});
+
+test('isSelf коннектора: устаревшее отправленное (старше двух недель) по тексту не гасит запись', () => {
+  const old = { since: '2026-11-01T00:00:00Z', sent: [{ at: '2026-10-01T00:00:00Z', text: 'взял в работу' }] };
+  assert.equal(isSentReply(old, evOf({ text: 'Взял в работу' }), Date.parse('2026-11-19T00:00:00Z')), false);
+  assert.equal(isSentReply('2026-11-01T00:00:00Z', evOf({ text: 'Взял в работу' })), false);
+});
+
+test('курсор: опрос сохраняет отправленное и держит строку, пока ответов не было', async () => {
+  const f = fakeMcp({ structuredContent: [] });
+  const kind = connectorKind({ session: async () => assert.fail('нет'), mcp: f.mcp, profile: noProfile });
+  const config = { tools: [READ], request: 'баги', reply: { tool: SEND, args: ARGS }, script: { steps: [{ tool: READ, args: {}, say: 'Читает', json: { id: 'ts' } }] } };
+  const ctx = makeCtx({ config });
+  await kind.poll!(ctx);
+  assert.equal(typeof ctx.cursorValue(), 'string');
+  await kind.reply!(ctx, { channel: 'C1' }, 'ответ');
+  await kind.poll!(ctx);
+  const cur = ctx.cursorValue() as { since: string; sent: unknown[] };
+  assert.equal(typeof cur.since, 'string');
+  assert.equal(cur.sent.length, 1);
 });
 
 test('опрос моделью не получает инструмент ответа: allow и хук — только читающие', async () => {
