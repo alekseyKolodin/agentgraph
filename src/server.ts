@@ -210,6 +210,8 @@ type LiveRun = {
   fix?: RunFix;
   /** Идущий дочерний запуск блока-вызова: пауза, продолжение и остановка этого запуска доходят и до него. */
   child?: string;
+  /** Запуск с карточки дела: ссылка в links.runs и перенос в «В работе» (runDeskStarted); конец ждёт их, чтобы итог лёг в дело. */
+  deskLinked?: Promise<void>;
   /** Пауза этого запуска пришла от родителя (pauseRun родителя): только её снимает и «Возобновить» родителя. */
   pausedByParent?: boolean;
   /** Запись правки и в flows/<имя>.yaml со сверкой с файлом (run-fix.ts flowsSync); у разового запуска её нет. */
@@ -1101,6 +1103,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, opts:
       ...(knowledge.length ? { knowledge } : {}),
       ...(autoSpace ? { autoSpace } : {}),
     }, opts);
+    // запуск с карточки дела: доска, на которую вернутся, уже видит перенос (как у сессий)
+    await live.get(id)?.deskLinked;
     const autoSpaceReply = autoSpace && (autoSpace.slug ? { slug: autoSpace.slug, ...(autoSpace.title ? { title: autoSpace.title } : {}) } : { error: autoSpace.error });
     return sendJson(res, 201, { id, ...(autoSpaceReply ? { autoSpace: autoSpaceReply } : {}) } satisfies RunStarted);
   }
@@ -1488,6 +1492,8 @@ function launchRun(
     notes: [],
   };
   live.set(id, lr);
+  // запуск начат с карточки дела (SPEC 3.2): дело — в «В работе», запуск — в его ссылках. Дочерний — не запуск по делу
+  if (!parent && opts.source?.item) lr.deskLinked = runDeskStarted(opts.source.item, id, spec.name);
 
   const control: RunControl = {
     checkpoint: async () => {
@@ -1597,7 +1603,11 @@ function launchRun(
         const st = e.report.status;
         const outcome = st === 'done' ? 'ok' : st === 'aborted' || st === 'interrupted' ? 'stopped' : 'failed';
         const ids = [id, ...(e.report.root && e.report.root !== id ? [e.report.root] : [])];
-        void deskStore().runEnded(ids, outcome, (outcome === 'ok' ? e.report.digest?.text : e.report.error) || e.report.title).catch((err) => console.error(`[дела] ${errMsg(err)}`));
+        // запуск с карточки мог кончиться раньше, чем ссылка легла в дело: сначала она
+        const summary = (outcome === 'ok' ? e.report.digest?.text : e.report.error) || e.report.title;
+        void Promise.resolve(lr.deskLinked)
+          .then(() => deskStore().runEnded(ids, outcome, summary))
+          .catch((err) => console.error(`[дела] ${errMsg(err)}`));
       }
       if (opts.teamwork?.task && !parent) void currentTeamworkStatus()?.ended(opts.teamwork, { kind: 'run', id, status: e.report.status, ...(e.report.title ? { title: e.report.title } : {}) });
     }
@@ -1661,6 +1671,22 @@ function launchRun(
     return report;
   });
   return { id, done };
+}
+
+/**
+ * Запуск по делу начался (как deskStarted у сессий): ссылка в links.runs и перенос в «В работе» от 'flow'. «Почему твой
+ * ход» не затираем. Дела нет или сбой — только лог: запуск идёт и без дела.
+ */
+async function runDeskStarted(itemId: string, run: string, flow: string): Promise<void> {
+  try {
+    const api = deskStore();
+    const item = (await api.list()).find((i) => i.id === itemId);
+    if (!item) return;
+    await api.put(item.key, { links: { runs: [run] } }, 'flow');
+    if (item.column !== 'work') await api.move(item.key, 'work', 'flow', item.why ? undefined : `запуск flow «${flow}»`);
+  } catch (err) {
+    console.error(`[дела] запуск ${run}: дело ${itemId} не обновилось —`, errMsg(err));
+  }
 }
 
 /**

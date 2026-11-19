@@ -17,6 +17,7 @@ import { thingSessionPrompt } from '../../../lib/dash';
 import {
   columnTitle,
   deskBoard,
+  deskRunLink,
   intakeTarget,
   itemPrompt,
   itemRuns,
@@ -198,7 +199,7 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
       move: (to, keyboard) => move(i, to, keyboard),
       close: (reason, keyboard) => close(i, reason, keyboard),
       ...(sessionsOn ? { startSession: () => startSession(i), continueSession: resume } : {}),
-      ...(target ? { runFlow: (btn: HTMLElement) => setPicker(pickerAt(target, btn)) } : {}),
+      ...(target ? { runFlow: (btn: HTMLElement) => setPicker(pickerAt({ ...target, ...deskRunLink(i) }, btn)) } : {}),
       link: (url) =>
         linkDesk(i.key, url).then(
           (next) => {

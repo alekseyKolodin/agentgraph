@@ -6,6 +6,7 @@ import {
   ageText,
   deskBoard,
   dueView,
+  deskRunLink,
   intakeTarget,
   itemPrompt,
   itemRuns,
@@ -167,6 +168,16 @@ test('сессии и запуски дела: по ссылкам, по source.
     { id: 'r4', startedAt: ago(1), status: 'done' },
   ];
   assert.deepEqual(itemRuns(i, runs).map((r) => r.id), ['r3', 'r2', 'r1']);
+  // запуск с карточки, ссылка ещё не легла в дело — по source.item
+  const fromCard = { id: 'r5', startedAt: ago(0), status: 'running', source: { type: 'mr' as const, key: '!5', title: 'x', item: i.id } };
+  assert.deepEqual(itemRuns(i, [...runs, fromCard]).map((r) => r.id), ['r5', 'r3', 'r2', 'r1']);
+});
+
+test('«Запустить flow» с карточки: вход несёт id дела и вещь с ключом дела', () => {
+  const m = mr(12);
+  assert.deepEqual(deskRunLink(m), { item: m.id, thing: { ...m.thing!, key: m.key } });
+  const own = item({ key: 'own:x' });
+  assert.deepEqual(deskRunLink(own), { item: own.id });
 });
 
 test('вход flow и папка сессии: Jira — ключ; MR — репозиторий «Подключений» с тем же origin; ветка — её корень; своё — папка пространства', () => {

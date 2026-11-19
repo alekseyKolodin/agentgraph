@@ -2,7 +2,7 @@
 // по пяти колонкам, срок и возраст в колонке, «Начни с этого» без модели (просрочено → срок сегодня → дольше всех мой
 // ход → самое свежее в «Новом»), срез по проектам и то, что нужно действиям карточки (сессии и запуски дела, вход flow,
 // папка и первое сообщение сессии).
-import type { ProjectInfo, RunSummary, SessionView, SpaceListItem } from '@server/api-types';
+import type { ProjectInfo, RunSource, RunSummary, SessionView, SpaceListItem } from '@server/api-types';
 import type { DeskBy, DeskColumn, DeskItem, DeskSignal } from '@server/desk/types';
 import { normHost, parseKey } from '../../../src/things/keys';
 import { locale, plural, t } from './i18n';
@@ -297,15 +297,22 @@ export function itemSessions<S extends SessionLike>(i: Pick<DeskItem, 'id' | 'ke
     .sort((a, b) => Number(b.live) - Number(a.live) || msOf(b.lastActivityAt) - msOf(a.lastActivityAt));
 }
 
-/** Запуски дела: из ссылок (и продолжения их цепочек) и запуски той же вещи; свежие — первыми. */
-export function itemRuns<R extends RunLike>(i: Pick<DeskItem, 'key' | 'links'>, runs: readonly R[]): R[] {
+/** Запуски дела: из ссылок (и продолжения их цепочек), начатые с карточки (source.item) и запуски той же вещи; свежие — первыми. */
+export function itemRuns<R extends RunLike>(i: Pick<DeskItem, 'key' | 'links'> & { id?: string }, runs: readonly R[]): R[] {
   return runs
-    .filter((r) => i.links.runs.includes(r.id) || (r.root !== undefined && i.links.runs.includes(r.root)) || (r.source?.thing?.key !== undefined && r.source.thing.key === i.key))
+    .filter((r) =>
+      i.links.runs.includes(r.id) ||
+      (r.root !== undefined && i.links.runs.includes(r.root)) ||
+      (i.id !== undefined && r.source?.item === i.id) ||
+      (r.source?.thing?.key !== undefined && r.source.thing.key === i.key))
     .sort((a, b) => msOf(b.startedAt) - msOf(a.startedAt));
 }
 
-/** Вход flow для «Запустить flow» (POST /api/intake): задача Jira, MR проекта из «Подключений», ветка. Нет — undefined. */
-export type DeskIntake = { type: 'jira' | 'mr' | 'branch'; key: string; project?: string };
+/**
+ * Вход flow для «Запустить flow» (POST /api/intake): задача Jira, MR проекта из «Подключений», ветка. Нет — undefined.
+ * item и thing — само дело (deskRunLink).
+ */
+export type DeskIntake = { type: 'jira' | 'mr' | 'branch'; key: string; project?: string; item?: string; thing?: RunSource['thing'] };
 
 type ProjectLike = Pick<ProjectInfo, 'path'> & Partial<Pick<ProjectInfo, 'remote'>>;
 
@@ -315,6 +322,14 @@ function mrProject(ref: Record<string, unknown>, projects: readonly ProjectLike[
   const path = typeof ref.project === 'string' ? ref.project.toLowerCase() : '';
   if (!host || !path) return undefined;
   return projects.find((p) => p.remote && normHost(p.remote.host) === host && p.remote.path.replace(/^\/+|\/+$/g, '').toLowerCase() === path)?.path;
+}
+
+/**
+ * Само дело для входа flow с карточки: id и вещь с ключом дела (сервер проверит и пересоберёт ключ). Запуск ляжет в
+ * ссылки дела и переведёт его в «В работе» (SPEC 3.2).
+ */
+export function deskRunLink(i: Pick<DeskItem, 'id' | 'key'> & { thing?: DeskItem['thing'] }): Pick<DeskIntake, 'item' | 'thing'> {
+  return { item: i.id, ...(i.thing ? { thing: { ...i.thing, key: i.key } } : {}) };
 }
 
 export function intakeTarget(i: Pick<DeskItem, 'key'> & { thing?: DeskItem['thing'] }, projects: readonly ProjectLike[]): DeskIntake | undefined {
