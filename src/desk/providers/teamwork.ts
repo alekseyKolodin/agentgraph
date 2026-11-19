@@ -68,7 +68,7 @@ type Mark = {
   /** Когда я последний раз видел дело: сигналы коллег позже — «Новое». */
   seen?: string;
   signals?: DeskSignal[];
-  links?: { runs: string[]; sessions: string[] };
+  links?: { runs: string[]; sessions: string[]; mentionedBy?: string[] };
   due?: string;
   /** Задача ушла из моих (снята, битый файл, архив): когда. */
   gone?: string;
@@ -153,7 +153,10 @@ function itemOf(r: Row, m: Mark, now: string): DeskItem {
     why,
     signals,
     ...(m.due ? { due: m.due } : {}),
-    links: { runs, sessions, ...(task.branch ? { branch: task.branch } : {}), ...(task.pr ? { mr: task.pr.url } : {}) },
+    links: {
+      runs, sessions, ...(task.branch ? { branch: task.branch } : {}), ...(task.pr ? { mr: task.pr.url } : {}),
+      ...(m.links?.mentionedBy?.length ? { mentionedBy: m.links.mentionedBy } : {}),
+    },
     createdAt,
     movedAt,
     movedBy: lc(task.updatedBy) === r.me ? 'me' : 'watcher',
@@ -370,9 +373,11 @@ export function teamworkProvider(deps: TeamworkProviderDeps): DeskProvider {
       const edit = patch.signal || patch.links || patch.due
         ? (m: Mark) => {
             if (patch.signal) m.signals = [...(m.signals ?? []), patch.signal].slice(-SIGNALS_KEEP);
-            if (patch.links?.runs?.length || patch.links?.sessions?.length) {
+            if (patch.links?.runs?.length || patch.links?.sessions?.length || patch.links?.mentionedBy?.length) {
               const l = m.links ?? { runs: [], sessions: [] };
-              m.links = { runs: [...new Set([...l.runs, ...(patch.links.runs ?? [])])], sessions: [...new Set([...l.sessions, ...(patch.links.sessions ?? [])])] };
+              const add = (a: string[] | undefined, b: string[] | undefined) => [...new Set([...(a ?? []), ...(b ?? [])])];
+              const mentionedBy = add(l.mentionedBy, patch.links.mentionedBy);
+              m.links = { runs: add(l.runs, patch.links.runs), sessions: add(l.sessions, patch.links.sessions), ...(mentionedBy.length ? { mentionedBy } : {}) };
             }
             if (patch.due) m.due = patch.due;
           }

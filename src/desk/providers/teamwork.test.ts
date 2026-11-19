@@ -227,6 +227,9 @@ test('Teamwork: мои сессии и flow (сигнал без автора) �
   clock.h = 11;
   const own = await p.put(key('PAY-1'), { signal: { source: 'session', at: at(11), text: 'взял в работу' }, links: { sessions: ['s1'] } }, 'session');
   assert.equal(own?.column, 'plan');
+  // этап flow упомянул задачу (desk_put): запуск — в mentionedBy, не в runs
+  const flow = await p.put(key('PAY-1'), { signal: { source: 'flow', at: at(11) }, links: { mentionedBy: ['run-1'] }, onRepeat: 'keep' }, 'flow');
+  assert.deepEqual([flow?.column, flow?.links.mentionedBy, flow?.links.runs], ['plan', ['run-1'], []]);
   // коллега сломал файл задачи — из моих пропала; починил без правки полей — вернулась как была
   f.edit('PAY-1', { error: 'битый YAML' });
   f.pulled();
