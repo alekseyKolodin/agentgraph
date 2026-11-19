@@ -38,6 +38,16 @@ test('runLinks: worktree только внутри папки worktree и рав
     assert.equal(runLinks({ source: { type: 'jira', key: 'A-1', title: 'x'.repeat(1000) } }, tmp).source?.title.length, 300);
   }));
 
+test('runLinks: дело и вещь с карточки — по правилам источника сессии, кривые отбрасываются', () =>
+  withEnv(async (tmp) => {
+    const thing = { type: 'mr', key: 'mr:WWW.GitLab.example.com:443/Grp/App/12', ref: { host: 'gitlab.example.com', project: 'Grp/App', number: 12 } };
+    const src = runLinks({ source: { type: 'mr', key: '!12', title: 'x', item: 'a1b2c3', thing } }, tmp).source;
+    assert.equal(src?.item, 'a1b2c3');
+    assert.equal(src?.thing?.key, 'mr:gitlab.example.com/grp/app/12');
+    const bad = runLinks({ source: { type: 'mr', key: '!12', title: 'x', item: '../x', thing: { type: 'mr', key: 'jira:h/A-1', ref: {} } } }, tmp).source;
+    assert.deepEqual([bad?.key, bad?.item, bad?.thing], ['!12', undefined, undefined]);
+  }));
+
 test('Jira: подключение проверяет токен до сохранения, токен не отдаётся', () =>
   withEnv(async () => {
     const fetchOk = (async () => new Response(JSON.stringify({ accountId: '1', displayName: 'Тест' }), { status: 200 })) as unknown as FetchFn;
@@ -72,6 +82,11 @@ test('вход из ветки через маршрут: только прое�
     const body = r?.body as { input: string; branch: string; source: { type: string } };
     assert.ok(body.input.startsWith('Тикет: ABC-5\n\nВетка: feature/ABC-5-x'));
     assert.equal(body.source.type, 'branch');
+    // с карточки дела: id дела и вещь — в source входа; кривой id — 400
+    const thing = { type: 'branch', key: `branch:${repo}#feature/ABC-5-x`, ref: { root: repo, branch: 'feature/ABC-5-x' } };
+    const fromItem = (await call('POST', '/api/intake', { flow: 'f', type: 'branch', key: 'feature/ABC-5-x', project: repo, item: 'a1b2c3', thing }))?.body as { source: { item?: string; thing?: { key: string } } };
+    assert.deepEqual([fromItem.source.item, fromItem.source.thing?.key], ['a1b2c3', thing.key]);
+    assert.equal((await call('POST', '/api/intake', { type: 'branch', key: 'feature/ABC-5-x', project: repo, item: '../x' }))?.status, 400);
     assert.equal(await call('GET', '/api/unknown'), undefined);
   }));
 
