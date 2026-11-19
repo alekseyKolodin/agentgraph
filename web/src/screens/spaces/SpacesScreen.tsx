@@ -279,7 +279,7 @@ export function SpacesScreen() {
       void qc.invalidateQueries({ queryKey: keys.spaces });
       // репозитории и закрытие меняют проект запусков, сессий и MR: подписи в сайдбаре, на Главной и в «Коде»
       if (patch.repos !== undefined || patch.closed !== undefined) {
-        for (const key of [keys.runs, keys.home, keys.feed, keys.integrations, keys.attention, sessionKeys.list]) void qc.invalidateQueries({ queryKey: key });
+        for (const key of [keys.runs, keys.home, keys.integrations, keys.attention, sessionKeys.list]) void qc.invalidateQueries({ queryKey: key });
       }
     } catch (err) {
       if (my !== seq.current) return;

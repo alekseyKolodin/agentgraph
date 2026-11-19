@@ -1,17 +1,7 @@
-/* Главная — доска дел: сетка «доска + журнал справа», пустая доска, подсветка карточки по ссылке. Поздние перебивки — в конце. */
+/* Главная — доска дел на всю ширину, пустая доска, подсветка карточки по ссылке. Поздние перебивки — в конце. */
 .home-sec { margin-bottom: 22px; }
 .home-sec > h2 { font-size: var(--fs-small); color: var(--ink-2); margin: 0 0 4px; }
 .home-sec > h2 :global(.small) { text-transform: none; letter-spacing: 0; }
-
-.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
-/* без ленты (сервер её не умеет) — одна колонка */
-.home-grid.no-feed { grid-template-columns: minmax(0, 1fr); }
-/* узко: одна колонка, журнал сразу под доской, строки «подключи» и «перезапусти» — под журналом */
-@media (max-width: 1100px) {
-  .home-grid { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
-  .home-main { display: contents; }
-  .home-connect, .home-down { order: 1; }
-}
 
 /* ---------- сессии терминала, ждущие ответа (HomeSessions — в вопросах над доской, DeskTop): строки со сводкой */
 .home-runs { list-style: none; margin: 8px 0 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }

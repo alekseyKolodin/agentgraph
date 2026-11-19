@@ -95,6 +95,11 @@ export type DeskPatch = {
   close?: string;
   /** Кто завёл — только новому делу; у существующего не меняется. */
   createdBy?: DeskCreatedBy;
+  /**
+   * Состояние вещи сменилось, и дело о ней должно сказать новое (запуск упал снова, уже другим этапом): заголовок, вид
+   * и вещь заменяются переданными. Без него первое имя, вид и вещь остаются (второй сигнал называет вещь хуже первого).
+   */
+  refresh?: boolean;
 };
 
 export type DeskFilter = { column?: DeskColumn | DeskColumn[]; project?: string; kind?: string; key?: string; open?: boolean };
@@ -196,4 +201,17 @@ export type DeskWeekReply = {
   arrived: { total: number; routines: Array<{ routine: string; count: number }>; other: number };
   /** Движений за период (заведение, переносы, закрытие). */
   moves: number;
+};
+
+/** Что лежит в thing.ref дела о запуске: карточка берёт отсюда ссылку на страницу и «Продолжить». */
+export type RunThingRef = {
+  /** Последний запуск цепочки: его страница — «Что сломалось» / «Открыть». */
+  runId: string;
+  flow: string;
+  status: 'failed' | 'done';
+  /** Этап или блок, где остановился. */
+  stage?: string;
+  costUsd: number;
+  /** Запуск можно продолжить с места (сервер знал это на конец запуска). */
+  continuable?: boolean;
 };

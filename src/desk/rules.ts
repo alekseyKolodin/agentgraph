@@ -148,6 +148,8 @@ function put(item: DeskItem | undefined, e: Extract<DeskEvent, { type: 'put' }>,
     ...(item.title === item.key && p.title ? { title: line(p.title, 300) } : {}),
     ...(!item.project && p.project ? { project: p.project } : {}),
     ...(!item.thing && p.thing ? { thing: p.thing } : {}),
+    // вещь сменила состояние (запуск упал снова): имя, вид и вещь — новые
+    ...(p.refresh ? { ...(p.title ? { title: line(p.title, 300) } : {}), ...(p.kind ? { kind: line(p.kind, 80) } : {}), ...(p.thing ? { thing: p.thing } : {}) } : {}),
     ...(p.due ? { due: p.due } : {}),
     ...(p.close ? { close: p.close } : {}),
     ...(p.why ? { why: line(p.why) } : {}),

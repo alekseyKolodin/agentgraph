@@ -104,3 +104,24 @@ test('запуск без дела и с несуществующим делом
   assert.deepEqual((await call<DeskListReply>('GET', '/api/desk')).body.items.map((i) => [i.key, i.column, i.links.runs.length]), before);
   release();
 });
+
+test('запуск без дела упал: «остановился с ошибкой» в «Новом» по id запуска; открытие страницы дело не закрывает', async () => {
+  const r = await call<{ id: string }>('POST', '/api/runs', { flow: 'demo', input: 'Почини', cwd: proj });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const key = `run:${r.body.id}`;
+  assert.equal(await itemOf(key), undefined);
+  release();
+  let item: DeskItem | undefined;
+  for (let i = 0; i < 100 && !item; i++) {
+    item = await itemOf(key);
+    if (!item) await new Promise((res) => setTimeout(res, 20));
+  }
+  assert.equal(item?.title, 'demo остановился с ошибкой');
+  assert.equal(item?.column, 'new');
+  assert.equal(item?.why, 'бюджет кончился');
+  assert.equal(item?.movedBy, 'flow');
+  assert.equal(item?.thing?.type, 'run');
+  const seen = await call<{ closed: number }>('POST', '/api/desk/run-seen', { runId: r.body.id });
+  assert.deepEqual([seen.status, seen.body.closed], [200, 0]);
+  assert.equal((await itemOf(key))?.column, 'new');
+});

@@ -2,7 +2,7 @@ export { api, ApiError, errorText, type Method } from './client';
 export { useEventStream, type SseHandlers } from './sse';
 export {
   fetchAttention, fetchBranches, fetchIntegrations, fetchJiraIssues, fetchLimits, fetchMrs, fetchSuggestions, keys, postIntake, useConfig,
-  setRunStreamOpen, useFeature, useFeed, useFlows, useHome, useRuns, type IntakeTarget,
+  setRunStreamOpen, useFeature, useFlows, useHome, useRuns, type IntakeTarget,
 } from './queries';
 export {
   blankFlow, checkFlow, deleteFlow, editFlow, fetchConnectors, fetchFlow, fetchFlowVersion, generateFlow, moveFlow, saveFlowSpec, saveFlowYaml, useFlowHistory, useTags,

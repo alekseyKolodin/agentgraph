@@ -315,3 +315,13 @@ test('absorb: закрытое наблюдателем — открываетс
   const back = absorb(byHand, own, ctx()).item;
   assert.deepEqual([back.column, back.closed, back.seen], ['plan', undefined, seenOpen.seen]);
 });
+
+test('put с refresh: заголовок, вид и вещь заменяются; без него остаются первыми', () => {
+  const ctx = { now: '2026-11-19T10:00:00.000Z', id: () => 'id1' };
+  const thing = (runId: string) => ({ type: 'run' as const, ref: { runId } });
+  const first = step(undefined, { type: 'put', key: 'run:a', by: 'flow', patch: { title: 'f остановился с ошибкой', kind: 'Запуск', thing: thing('a'), signal: { source: 'flow', at: '2026-11-19T10:00:00.000Z', text: 'x' } } }, ctx)!.item;
+  const plain = step(first, { type: 'put', key: 'run:a', by: 'flow', patch: { title: 'новое', thing: thing('b'), why: 'y', signal: { source: 'flow', at: '2026-11-19T11:00:00.000Z', text: 'y' } } }, ctx)!.item;
+  assert.deepEqual([plain.title, plain.thing?.ref.runId], ['f остановился с ошибкой', 'a']);
+  const fresh = step(first, { type: 'put', key: 'run:a', by: 'flow', patch: { title: 'новое', kind: 'Другое', thing: thing('b'), why: 'y', refresh: true, signal: { source: 'flow', at: '2026-11-19T11:00:00.000Z', text: 'y' } } }, ctx)!.item;
+  assert.deepEqual([fresh.title, fresh.kind, fresh.thing?.ref.runId], ['новое', 'Другое', 'b']);
+});

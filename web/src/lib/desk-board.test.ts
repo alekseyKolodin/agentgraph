@@ -17,6 +17,7 @@ import {
   neighborColumn,
   projectSlice,
   replySignal,
+  runEndOf,
   sessionsOffBoard,
   sessionCwd,
   startQueue,
@@ -280,4 +281,19 @@ test('срок — одно правило для доски и «Начни с 
   // просроченное с прошлой недели — раньше просроченного сегодня утром; потом срок сегодня
   assert.deepEqual(q.map((p) => [p.item.id, p.reason]), [[w.id, 'overdue'], [m.id, 'overdue'], [e.id, 'today']]);
   assert.match(q[0]!.text, /^просрочено: срок был \d+ \S+$/);
+});
+
+test('runEndOf: дело о конце запуска — страница, статус, цена; чужое дело — нет', () => {
+  const run = (ref: Record<string, unknown>) => ({ thing: { type: 'run' as const, ref } });
+  assert.deepEqual(runEndOf(run({ runId: 'a b', flow: 'f', status: 'failed', stage: 'этап «Т»', costUsd: 0.5, continuable: true })), { runId: 'a b', flow: 'f', status: 'failed', stage: 'этап «Т»', costUsd: 0.5, continuable: true, to: '/run/a%20b' });
+  assert.equal(runEndOf(run({ runId: 'a', flow: 'f', status: 'done', costUsd: 0 }))?.continuable, undefined);
+  assert.equal(runEndOf(run({ flow: 'f', status: 'done' })), undefined);
+  assert.equal(runEndOf(run({ runId: 'a', status: 'weird' })), undefined);
+  assert.equal(runEndOf({ thing: { type: 'mr' as const, ref: { runId: 'a', status: 'done' } } }), undefined);
+  assert.equal(runEndOf({}), undefined);
+});
+
+test('kindTone: упавший запуск — «баг», готовый — обычный', () => {
+  assert.equal(kindTone({ kind: 'Запуск', key: 'run:a', thing: { type: 'run', ref: { status: 'failed' } } }), 'bug');
+  assert.equal(kindTone({ kind: 'Запуск', key: 'run:a', thing: { type: 'run', ref: { status: 'done' } } }), 'own');
 });

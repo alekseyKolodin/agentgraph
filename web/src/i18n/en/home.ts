@@ -26,16 +26,6 @@ export const home: Record<string, string> = {
   'Свой ответ написан, но не выбран — он не уйдёт агенту:\n{list}\nОтправить без него?':
     "Your own answer is written but not selected — it won't be sent to the agent:\n{list}\nSend without it?",
 
-  // lib/feed.ts: лента «События»
-  'отвечен {time}': 'answered {time}',
-  'остался без ответа': 'left unanswered',
-  'Вопрос от «{title}»': 'Question from “{title}”',
-  'запуск на паузе': 'run paused',
-  'возобновлён {time}': 'resumed {time}',
-  'не возобновлён': 'not resumed',
-  '«{title}» просит решения': '“{title}” asks for a decision',
-  'Запуск завершён': 'Run finished',
-
   // lib/limits.ts, Limits.tsx: лимиты подписки
   'сброс {time}': 'resets {time}',
   'в {time}': 'at {time}',
@@ -76,14 +66,6 @@ export const home: Record<string, string> = {
   'Текущий этап доработает, следующий не начнётся': 'The current phase will finish, the next one will not start',
   'Пауза': 'Pause',
   'Стоп': 'Stop',
-
-  // Feed.tsx
-  'Вопросы агентов, паузы и концы запусков — то же, о чём приходят уведомления': 'Agent questions, pauses and run ends — the same things notifications are sent about',
-  'События': 'Events',
-  'Новых после последней отметки': 'New since last marked as read',
-  'Снять подсветку новых событий': 'Clear the highlight of new events',
-  'Отметить прочитанным': 'Mark as read',
-  'Пока пусто: здесь появятся вопросы агентов, паузы и концы запусков': 'Empty for now: agent questions, pauses and run ends will appear here',
 
   // Attention.tsx, Dash.tsx: «Задачи и код», «MR · нужно внимание»
   'Загружаю…': 'Loading…',
@@ -326,4 +308,16 @@ export const home: Record<string, string> = {
   '{source}: {state} — пока это не починено, дела оттуда не придут.': '{source}: {state} — until this is fixed, no tasks will come from it.',
   '{checked}: {ok} из {total} в порядке, нового нет.': '{checked}: {ok} of {total} fine, nothing new.',
   'Шаблоны рутин': 'Routine templates',
+  // HomeScreen.tsx: «Все запуски»; DeskCard.tsx: дело о конце запуска (src/desk/run-end.ts)
+  'Все запуски': 'All runs',
+  'Список всех запусков в боковой панели: поиск, статусы, скрытые': 'The list of all runs in the side panel: search, statuses, hidden ones',
+  'Открыть страницу запуска': 'Open the run page',
+  'Сколько стоил запуск': 'What the run cost',
+  'Страница запуска: где остановился и почему': 'Run page: where it stopped and why',
+  'Страница запуска: итог': 'Run page: the result',
+  'Что сломалось': 'What broke',
+  'Продолжаю…': 'Continuing…',
+  'Продолжить с места, где остановился: уже пройденное не повторяется': 'Continue from where it stopped: what already passed is not repeated',
+  'Убрать дело с доски: сам запуск останется в списке запусков': 'Remove the task from the board: the run itself stays in the run list',
+  'Запуск не продолжился: {error}': 'The run did not continue: {error}',
 };

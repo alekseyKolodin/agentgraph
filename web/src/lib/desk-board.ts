@@ -4,7 +4,7 @@
 // папка и первое сообщение сессии).
 import type { ProjectInfo, RunSource, RunSummary, SessionView, SpaceListItem } from '@server/api-types';
 import type { RoutineWait } from '@server/routines/types';
-import type { DeskBy, DeskColumn, DeskItem, DeskSignal } from '@server/desk/types';
+import type { DeskBy, DeskColumn, DeskItem, DeskSignal, RunThingRef } from '@server/desk/types';
 import { normHost, parseKey } from '../../../src/things/keys';
 import { LIVE_STATUSES } from './home';
 import { locale, plural, t } from './i18n';
@@ -135,8 +135,10 @@ export function movedByText(i: Pick<DeskItem, 'movedBy' | 'movedAt' | 'createdAt
 /** Тон метки вида — цвет по смыслу (макет: ревью, Jira, встреча, баг, забытое, своё). */
 export type KindTone = 'rev' | 'jira' | 'meet' | 'bug' | 'lost' | 'own';
 
-export function kindTone(i: Pick<DeskItem, 'kind' | 'key'> & { thing?: { type: string } }): KindTone {
+export function kindTone(i: Pick<DeskItem, 'kind' | 'key'> & { thing?: { type: string; ref?: Record<string, unknown> } }): KindTone {
   const k = i.kind.toLowerCase();
+  // упавший запуск — сбой, готовый — обычное дело
+  if (i.thing?.type === 'run' && i.thing.ref?.status === 'failed') return 'bug';
   if (/ревью|review/.test(k)) return 'rev';
   if (/баг|bug|инцидент|incident/.test(k)) return 'bug';
   if (/встреч|meet/.test(k)) return 'meet';
@@ -145,6 +147,16 @@ export function kindTone(i: Pick<DeskItem, 'kind' | 'key'> & { thing?: { type: s
   if (/jira|задач|task/.test(k) || type === 'jira' || type === 'teamwork') return 'jira';
   if (type === 'mr' || /^(mr|pr)\b/.test(k)) return 'rev';
   return 'own';
+}
+
+/**
+ * Дело о конце запуска (src/desk/run-end.ts): упал («Что сломалось», «Продолжить») или готов («Открыть»). Нет — не такое дело.
+ * Страница запуска — последнего в цепочке: по ней и «Что сломалось», и закрытие готового.
+ */
+export function runEndOf(i: Pick<DeskItem, 'thing'>): (RunThingRef & { to: string }) | undefined {
+  const ref = i.thing?.type === 'run' ? (i.thing.ref as Partial<RunThingRef>) : undefined;
+  if (!ref || typeof ref.runId !== 'string' || !ref.runId || (ref.status !== 'failed' && ref.status !== 'done')) return undefined;
+  return { runId: ref.runId, flow: String(ref.flow ?? ''), status: ref.status, ...(ref.stage ? { stage: ref.stage } : {}), costUsd: Number(ref.costUsd) || 0, ...(ref.continuable ? { continuable: true } : {}), to: `/run/${encodeURIComponent(ref.runId)}` };
 }
 
 /** Короткая метка вещи у вида: «!1287», «#7», «AG-512», ветка; у своих дел и разговоров — ''. */

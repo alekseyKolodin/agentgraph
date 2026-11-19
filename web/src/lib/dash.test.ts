@@ -1,11 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { FeedItem, FlowListItem, RunSummary, SessionView, Thing } from '@server/api-types';
+import type { FlowListItem, RunSummary, SessionView, Thing } from '@server/api-types';
 import {
   branchThingKey, dashCap, dashMore, hasConnections, jiraSessionCwd, jiraThing, mrSign, mrThing, pickerFlows, pickerPosition, runsForBranch, runsForJira, sessionsForThing, thingSessionName,
   thingSessionPrompt,
 } from './dash';
-import { feedTone, feedWhat } from './feed';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
   id, flow: 'f', status: 'done', iterations: 1, totalCostUsd: 0, startedAt: '2026-10-24T10:00:00Z', input: '', hidden: false, ...over,
@@ -119,21 +118,6 @@ test('выпадашка выбора flow: под кнопкой правым �
   assert.deepEqual(pickerPosition({ top: 100, bottom: 124, right: 900 }, size, view), { left: 560, top: 128 });
   assert.deepEqual(pickerPosition({ top: 100, bottom: 124, right: 200 }, size, view), { left: 8, top: 128 });
   assert.deepEqual(pickerPosition({ top: 700, bottom: 724, right: 900 }, size, view), { left: 560, top: 496 });
-});
-
-const item = (over: Partial<FeedItem>): FeedItem => ({ id: 'x', kind: 'question', at: '2026-10-24T10:00:00Z', runId: 'r', flow: 'f', ...over });
-
-test('журнал: цвет точки и подписи событий', () => {
-  const now = new Date(2026, 9, 24, 12, 0);
-  assert.equal(feedTone(item({ open: true })), 'closed');
-  assert.equal(feedTone(item({ open: false })), 'closed');
-  assert.equal(feedTone(item({ kind: 'end', status: 'failed' })), 'failed');
-  assert.deepEqual(feedWhat(item({ title: 'План', open: true }), now), { head: 'Вопрос от «План»', state: { text: 'ждёт ответа', wait: true }, tip: 'Вопрос от «План» · ждёт ответа' });
-  assert.deepEqual(feedWhat(item({ title: 'План', doneAt: new Date(2026, 9, 24, 11, 5).toISOString() }), now).state, { text: 'отвечен 11:05', wait: false });
-  assert.equal(feedWhat(item({ title: 'План' }), now).tip, 'Вопрос от «План» · остался без ответа');
-  assert.deepEqual(feedWhat(item({ kind: 'pause', title: 'ask', open: true }), now), { head: '«ask» просит решения', state: { text: 'запуск на паузе', wait: true }, tip: '«ask» просит решения · запуск на паузе' });
-  assert.equal(feedWhat(item({ kind: 'pause', title: 'ask' }), now).state?.text, 'не возобновлён');
-  assert.deepEqual(feedWhat(item({ kind: 'end', status: 'done' }), now), { head: 'Запуск завершён', state: null, tip: 'Запуск завершён' });
 });
 
 test('знак номера: PR GitHub — #, MR GitLab — !', () => {
