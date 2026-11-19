@@ -115,6 +115,10 @@ export const home: Record<string, string> = {
   'Проектов пока нет. Они появятся из директорий проектов запусков или их можно добавить в «Подключениях».':
     'No projects yet. They will appear from the project directories of runs, or you can add them in “Connections”.',
   'Запустить…': 'Run…',
+  'Начать сессию': 'Start session',
+  'Сессия не началась: {error}': 'Session did not start: {error}',
+  'Сессия Claude в {cwd}: первым сообщением — эта задача': 'Claude session in {cwd}, with this issue as the first message',
+  'Сессия Claude в папке проекта: первым сообщением — этот {mr}': 'Claude session in the project folder, with this {mr} as the first message',
   'Мой спринт': 'My sprint',
   'Все мои': 'All mine',
   'Своя JQL': 'Custom JQL',

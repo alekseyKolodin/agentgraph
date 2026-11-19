@@ -61,6 +61,8 @@ export type RunOptions = {
   onQuestion?: (q: QuestionRecord, signal: AbortSignal) => Promise<AskAnswers>;
   /** Продолжение завершённого запуска: блоки, пройденные в нём целиком, не повторяются. */
   continueFrom?: Continuation;
+  /** Продолжение: id первого запуска цепочки (считает сервер). Раннер только сохраняет в отчёт. */
+  root?: string;
   /** Откуда запуск: задача Jira, MR или ветка с главной. Раннер только сохраняет в отчёт. */
   source?: RunSource;
   /** Связь с Teamwork: задача или черновик документа проекта. Раннер только сохраняет в отчёт. */
@@ -444,6 +446,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     startedAt: new Date().toISOString(),
     pid: process.pid,
     ...(cont ? { continuedFrom: cont.runId } : {}),
+    ...(cont && opts.root ? { root: opts.root } : {}),
     ...(opts.adhoc ? { adhoc: true as const } : {}),
     ...(opts.source ? { source: opts.source } : {}),
     ...(opts.teamwork ? { teamwork: opts.teamwork } : {}),

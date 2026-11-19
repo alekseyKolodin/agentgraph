@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { FeedItem, FlowListItem, RunSummary } from '@server/api-types';
-import { dashCap, dashMore, hasConnections, mrSign, pickerFlows, pickerPosition, runsForBranch, runsForJira } from './dash';
+import type { FeedItem, FlowListItem, RunSummary, SessionView, Thing } from '@server/api-types';
+import {
+  dashCap, dashMore, hasConnections, jiraSessionCwd, jiraThing, mrSign, mrThing, pickerFlows, pickerPosition, runsForBranch, runsForJira, sessionsForThing, thingSessionName,
+  thingSessionPrompt,
+} from './dash';
 import { feedTone, feedWhat, isUnread, unreadCount } from './feed';
 
 const run = (id: string, over: Partial<RunSummary> = {}): RunSummary => ({
@@ -30,6 +33,57 @@ test('связанные запуски: по задаче Jira, MR, ветке 
   assert.deepEqual(runsForBranch(runs, '/p', 'feat').map((r) => r.id), ['br', 'wt']);
   assert.deepEqual(runsForBranch(runs, '/p', 'feat', 'g/p!4').map((r) => r.id), ['mr', 'br', 'wt']);
   assert.equal(runsForJira(Array.from({ length: 9 }, (_, i) => run(String(i), { source: { type: 'jira', key: 'K', title: '' } })), 'K').length, 6);
+});
+
+test('вещи «Кода»: ключи задачи Jira и MR по формату src/things/types.ts', () => {
+  assert.deepEqual(jiraThing({ key: 'pay-7', url: 'https://Jira.Example.com/browse/PAY-7', title: 'Падает оплата' }), {
+    type: 'jira', key: 'jira:jira.example.com/PAY-7', ref: { host: 'jira.example.com', key: 'PAY-7' }, url: 'https://Jira.Example.com/browse/PAY-7', title: 'Падает оплата',
+  });
+  assert.equal(jiraThing({ key: 'PAY-7', url: 'не адрес', title: '' }), undefined);
+  const mr = { iid: 12, url: 'https://gitlab.example.com/grp/app/-/merge_requests/12', title: 'Фикс', sourceBranch: 'feature/PAY-7' };
+  assert.deepEqual(mrThing({ remote: { host: 'GitLab.example.com', path: '/grp/app/' }, forge: 'gitlab' }, mr), {
+    type: 'mr', key: 'mr:gitlab.example.com/grp/app/12', ref: { host: 'gitlab.example.com', project: 'grp/app', number: 12, branch: 'feature/PAY-7', forge: 'gitlab' }, url: mr.url, title: 'Фикс',
+  });
+  assert.equal(mrThing({}, mr), undefined);
+});
+
+test('связанные запуски по вещи: запуск рутины у своего MR и задачи, чужая вещь — нет', () => {
+  const thing = (key: string): Thing => ({ type: key.startsWith('mr:') ? 'mr' : 'jira', key, ref: {} });
+  const runs = [
+    run('rt-mr', { source: { type: 'routine', key: 'review', title: 'Ревью', thing: thing('mr:h/g/p/4') } }),
+    run('rt-jira', { source: { type: 'routine', key: 'bugs', title: 'Баг', thing: thing('jira:j/ABC-1') } }),
+    run('rt-other', { source: { type: 'routine', key: 'review', title: 'Ревью', thing: thing('mr:h/g/p/5') } }),
+    run('j1', { source: { type: 'jira', key: 'ABC-1', title: '' } }),
+  ];
+  assert.deepEqual(runsForBranch(runs, '/p', 'feat', 'g/p!4', 'mr:h/g/p/4').map((r) => r.id), ['rt-mr']);
+  assert.deepEqual(runsForJira(runs, 'ABC-1', 'jira:j/ABC-1').map((r) => r.id), ['rt-jira', 'j1']);
+  // без ключа вещи — как раньше
+  assert.deepEqual(runsForJira(runs, 'ABC-1').map((r) => r.id), ['j1']);
+});
+
+const session = (id: string, over: Partial<SessionView> = {}): SessionView =>
+  ({ id, name: id, cwd: '/s', status: 'ended', live: false, tags: [], chips: [], saveState: true, createdAt: '', lastActivityAt: '2026-11-19T10:00:00Z', turns: 0, newTurns: 0, stateSpaces: [], ...over }) as SessionView;
+
+test('сессия из задачи Jira: папка прошлой сессии, иначе запуска по задаче, иначе единственного проекта, иначе по умолчанию', () => {
+  const k = 'jira:j/ABC-1';
+  const s1 = session('a', { cwd: '/old', source: { thing: { type: 'jira', key: k, ref: {} } }, lastActivityAt: '2026-11-18T10:00:00Z' });
+  const s2 = session('b', { cwd: '/new', source: { thing: { type: 'jira', key: k, ref: {} } } });
+  const mine = sessionsForThing([s1, session('c'), s2], k);
+  assert.deepEqual(mine.map((s) => s.id), ['b', 'a']);
+  assert.deepEqual(sessionsForThing([s1], undefined), []);
+  assert.equal(jiraSessionCwd({ sessions: mine, runs: [], projects: [], fallback: '/d' }), '/new');
+  assert.equal(jiraSessionCwd({ sessions: [], runs: [run('r', { cwd: '/wt', project: '/repo' })], projects: [], fallback: '/d' }), '/repo');
+  assert.equal(jiraSessionCwd({ sessions: [], runs: [], projects: [{ path: '/only' }], fallback: '/d' }), '/only');
+  assert.equal(jiraSessionCwd({ sessions: [], runs: [], projects: [{ path: '/a' }, { path: '/b' }], fallback: '/d' }), '/d');
+});
+
+test('первое сообщение и имя сессии из вещи: просьба сверху, вход intake как есть', () => {
+  const input = 'Задача Jira ABC-1\nСсылка: https://j/browse/ABC-1\n\n<source-data>\nЗаголовок: x\n</source-data>';
+  const p = thingSessionPrompt(`${input}\n`);
+  assert.ok(p.endsWith(input));
+  assert.match(p, /^Начинаем работу по этой задаче\./);
+  assert.equal(thingSessionName('!12', ' Фикс\n оплаты '), '!12 Фикс оплаты');
+  assert.equal(thingSessionName('ABC-1', undefined), 'ABC-1');
 });
 
 test('выбор flow: только рабочие, фильтр по имени, папке и описанию; последний — первым, дальше по папке и имени', () => {

@@ -4,11 +4,16 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { IntegrationsInfo, ProjectInfo, RunSummary } from '@server/api-types';
-import { errorText, fetchBranches, fetchIntegrations, fetchJiraIssues, fetchMrs, keys, useRuns, type IntakeTarget } from '../../api';
+import type { IntegrationsInfo, ProjectInfo, RunSummary, SessionView, Thing } from '@server/api-types';
+import { errorText, fetchBranches, fetchIntegrations, fetchJiraIssues, fetchMrs, keys, useConfig, useFeature, useRuns, type IntakeTarget } from '../../api';
+import { createSession, defaultSessionCwd, SESSION_CWD_KEY, sessionKeys, thingIntake, useSessions } from '../../api/sessions';
 import { Badge } from '../../components/Badge';
+import { useToast } from '../../components/Toast';
 import { useMemoryState } from '../../components/useMemoryState';
-import { DASH_STALE_MS, dashCap, dashMore, PRESET_LABEL, runsForBranch, runsForJira, type JiraPreset } from '../../lib/dash';
+import {
+  DASH_STALE_MS, dashCap, dashMore, jiraSessionCwd, jiraThing, mrThing, PRESET_LABEL, runsForBranch, runsForJira, sessionsForThing, thingSessionName, thingSessionPrompt,
+  type JiraPreset,
+} from '../../lib/dash';
 import { when } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { projectHint, projectLabel } from '../../lib/spaces';
@@ -88,6 +93,85 @@ export function RelatedRuns({ runs }: { runs: RunSummary[] }) {
   );
 }
 
+/** Что нужно «Начать сессию»: вещь, откуда взять текст (/api/intake), папка и имя сессии. */
+type ThingSession = { target: IntakeTarget; thing: Thing; cwd: string; name: string };
+
+/**
+ * «Начать сессию» у задачи и MR: сессия Claude в папке проекта, источник — эта вещь, первое сообщение — ключ, ссылка и
+ * текст задачи (как у формы запуска). Пространство сервер берёт сам — открытое пространство проекта папки.
+ */
+function useStartThingSession(): (o: ThingSession) => Promise<void> {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  return async (o) => {
+    try {
+      const intake = await thingIntake(o.target);
+      const s = await createSession({
+        cwd: o.cwd,
+        tags: [],
+        saveState: true,
+        name: o.name,
+        prompt: thingSessionPrompt(intake.input),
+        source: { thing: o.thing },
+        cols: Math.max(80, Math.floor((window.innerWidth - 380) / 8)),
+        rows: Math.max(24, Math.floor((window.innerHeight - 190) / 17)),
+      });
+      LS.setRaw(SESSION_CWD_KEY, s.cwd);
+      qc.setQueryData(sessionKeys.one(s.id), s);
+      void qc.invalidateQueries({ queryKey: sessionKeys.list, exact: true });
+      void navigate(`/sessions/${encodeURIComponent(s.id)}`);
+    } catch (err) {
+      toast(t('Сессия не началась: {error}', { error: errorText(err) }));
+      throw err;
+    }
+  };
+}
+
+/** Кнопка «Начать сессию» строки; null — сессии в этом сервере выключены или вещь не собралась. */
+function SessionButton({ session, title }: { session: ThingSession | undefined; title: string }) {
+  const on = useFeature('sessions');
+  const start = useStartThingSession();
+  const [busy, setBusy] = useState(false);
+  if (!on || !session) return null;
+  return (
+    <button
+      className="btn small ghost"
+      title={title}
+      disabled={busy}
+      onClick={(e) => {
+        e.stopPropagation();
+        setBusy(true);
+        start(session).catch(() => setBusy(false));
+      }}
+    >
+      {busy ? t('Открываю…') : t('Начать сессию')}
+    </button>
+  );
+}
+
+/** Чипы сессий, начатых из этой вещи: имя и «идёт»; клик — открыть сессию. */
+function RelatedSessions({ sessions }: { sessions: SessionView[] }) {
+  const navigate = useNavigate();
+  if (!sessions.length) return null;
+  return (
+    <div className={styles.dashRuns}>
+      {sessions.map((s) => (
+        <button key={s.id} className="chip" title={when(s.lastActivityAt)} onClick={() => void navigate(`/sessions/${encodeURIComponent(s.id)}`)}>
+          <span className="muted">{t('сессия')}</span> {s.name}
+          {s.live && <span className="muted"> · {t('идёт')}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Сессии для связей строк: только когда сессии в этом сервере есть. */
+function useThingSessions(): SessionView[] {
+  const on = useFeature('sessions');
+  return useSessions(on).data?.sessions ?? [];
+}
+
 /** «Ещё N» под списком. */
 function More({ n, onClick }: { n: number; onClick: () => void }) {
   if (!n) return null;
@@ -97,6 +181,8 @@ function More({ n, onClick }: { n: number; onClick: () => void }) {
 function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }) {
   const qc = useQueryClient();
   const runs = useRuns().data ?? [];
+  const sessions = useThingSessions();
+  const serverCwd = useConfig().data?.defaultCwd;
   const [preset, setPreset] = useMemoryState<JiraPreset>('dash.jira.preset', 'sprint');
   // jql — что в поле (недописанный переживает перерисовку), jqlQuery — по какому искали
   const [jql, setJql] = useMemoryState('dash.jira.jql', '');
@@ -161,17 +247,28 @@ function Jira({ info, onLaunch }: { info: IntegrationsInfo; onLaunch: OnLaunch }
       ) : (
         <>
           <ul className={styles.dashList}>
-            {dashCap(list, more).map((i) => (
-              <li key={i.key}>
-                <div className={styles.dashRow}>
-                  <a href={i.url} target="_blank" rel="noopener" className={styles.dashKey}>{i.key}</a>
-                  <span className={styles.dashName} title={i.title}>{i.title}</span>
-                  <span className={styles.dashMeta}>{`${i.type} · ${i.status}${i.parent ? ` · ↑ ${i.parent.key}` : ''}`}</span>
-                  <LaunchButton target={{ type: 'jira', key: i.key }} onLaunch={onLaunch} />
-                </div>
-                <RelatedRuns runs={runsForJira(runs, i.key)} />
-              </li>
-            ))}
+            {dashCap(list, more).map((i) => {
+              const thing = jiraThing(i);
+              const related = runsForJira(runs, i.key, thing?.key);
+              const mine = sessionsForThing(sessions, thing?.key);
+              const cwd = jiraSessionCwd({ sessions: mine, runs: related, projects: info.projects, fallback: defaultSessionCwd(serverCwd) });
+              return (
+                <li key={i.key}>
+                  <div className={styles.dashRow}>
+                    <a href={i.url} target="_blank" rel="noopener" className={styles.dashKey}>{i.key}</a>
+                    <span className={styles.dashName} title={i.title}>{i.title}</span>
+                    <span className={styles.dashMeta}>{`${i.type} · ${i.status}${i.parent ? ` · ↑ ${i.parent.key}` : ''}`}</span>
+                    <SessionButton
+                      session={thing && cwd ? { target: { type: 'jira', key: i.key }, thing, cwd, name: thingSessionName(i.key, i.title) } : undefined}
+                      title={t('Сессия Claude в {cwd}: первым сообщением — эта задача', { cwd })}
+                    />
+                    <LaunchButton target={{ type: 'jira', key: i.key }} onLaunch={onLaunch} />
+                  </div>
+                  <RelatedRuns runs={related} />
+                  <RelatedSessions sessions={mine} />
+                </li>
+              );
+            })}
           </ul>
           <More n={dashMore(list, more)} onClick={() => setMore(true)} />
         </>
@@ -185,6 +282,7 @@ const MR_MINE_KEY = 'agentgraph.mrMine';
 function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
   const qc = useQueryClient();
   const runs = useRuns().data ?? [];
+  const sessions = useThingSessions();
   const path = p.path;
   const [tab, setTab] = useMemoryState<'mr' | 'branches'>(`dash.proj.tab:${path}`, p.remote ? 'mr' : 'branches');
   const [mine, setMine] = useMemoryState(`dash.proj.mine:${path}`, () => LS.raw(MR_MINE_KEY) === '1');
@@ -211,23 +309,31 @@ function Project({ p, onLaunch }: { p: ProjectInfo; onLaunch: OnLaunch }) {
     ) : !items.length ? null : (
       <>
         <ul className={styles.dashList}>
-          {dashCap(items, more).map((m) => (
-            <li key={m.ref}>
-              <div className={styles.dashRow}>
-                <a href={m.url} target="_blank" rel="noopener" className={styles.dashKey}>{gh ? '#' : '!'}{m.iid}</a>
-                <span className={styles.dashName} title={m.title}>
-                  {m.draft && <span className="muted">draft · </span>}
-                  {m.title}
-                </span>
-                <span className={styles.dashMeta} title={`${m.sourceBranch} → ${m.targetBranch}`}>
-                  {`${m.sourceBranch} → ${m.targetBranch} · ${m.author}`}
-                  {m.hasConflicts && <> · <span className="err">{t('конфликты')}</span></>}
-                </span>
-                <LaunchButton target={{ type: 'mr', key: m.ref, project: path }} onLaunch={onLaunch} />
-              </div>
-              <RelatedRuns runs={runsForBranch(runs, path, m.sourceBranch, m.ref)} />
-            </li>
-          ))}
+          {dashCap(items, more).map((m) => {
+            const thing = mrThing(p, m);
+            return (
+              <li key={m.ref}>
+                <div className={styles.dashRow}>
+                  <a href={m.url} target="_blank" rel="noopener" className={styles.dashKey}>{gh ? '#' : '!'}{m.iid}</a>
+                  <span className={styles.dashName} title={m.title}>
+                    {m.draft && <span className="muted">draft · </span>}
+                    {m.title}
+                  </span>
+                  <span className={styles.dashMeta} title={`${m.sourceBranch} → ${m.targetBranch}`}>
+                    {`${m.sourceBranch} → ${m.targetBranch} · ${m.author}`}
+                    {m.hasConflicts && <> · <span className="err">{t('конфликты')}</span></>}
+                  </span>
+                  <SessionButton
+                    session={thing ? { target: { type: 'mr', key: m.ref, project: path }, thing, cwd: path, name: thingSessionName(`${gh ? '#' : '!'}${m.iid}`, m.title) } : undefined}
+                    title={t('Сессия Claude в папке проекта: первым сообщением — этот {mr}', { mr: mrWord })}
+                  />
+                  <LaunchButton target={{ type: 'mr', key: m.ref, project: path }} onLaunch={onLaunch} />
+                </div>
+                <RelatedRuns runs={runsForBranch(runs, path, m.sourceBranch, m.ref, thing?.key)} />
+                <RelatedSessions sessions={sessionsForThing(sessions, thing?.key)} />
+              </li>
+            );
+          })}
         </ul>
         <More n={dashMore(items, more)} onClick={() => setMore(true)} />
       </>

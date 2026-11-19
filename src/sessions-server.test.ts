@@ -419,6 +419,31 @@ test('ошибки создания: нет папки, лишний режим,
   assert.equal(spawned.length, before);
 });
 
+test('сессия из вещи: источник в записи и ответе, пространство проекта по папке; выбранное или «без пространства» — как выбрали; плохой источник — 400', async () => {
+  const shop = path.join(root, 'shop');
+  fs.mkdirSync(shop, { recursive: true });
+  createSpace('shop', { title: 'Магазин', cwd: shop });
+  const thing = { type: 'jira', key: 'jira:jira.example.com/PAY-7', ref: { host: 'jira.example.com', key: 'PAY-7' }, url: 'https://jira.example.com/browse/PAY-7', title: 'Падает оплата' };
+  const r = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [], prompt: 'Задача Jira PAY-7', source: { thing } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.source, { thing });
+  assert.equal(r.body.space, 'shop');
+  const rec = JSON.parse(fs.readFileSync(path.join(root, 'sessions', r.body.id, 'session.json'), 'utf8'));
+  assert.deepEqual(rec.source, { thing });
+  assert.deepEqual((await view(r.body.id)).source, { thing });
+  // без пространства явно (space: null) — без него; без источника папка пространство не выбирает
+  const none = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [], space: null, source: { thing } });
+  assert.equal(none.status, 201, JSON.stringify(none.body));
+  assert.equal(none.body.space, undefined);
+  const plain = await call<SessionView>('POST', '/api/sessions', { cwd: shop, tags: [] });
+  assert.deepEqual([plain.body.space, plain.body.source], [undefined, undefined]);
+  for (const id of [r.body.id, none.body.id, plain.body.id]) await call('POST', `/api/sessions/${id}/end`);
+  const before = spawned.length;
+  const bad = await call<{ error: string }>('POST', '/api/sessions', { cwd: shop, source: { thing: { type: 'jira', key: 'mr:x/y/1' } } });
+  assert.deepEqual([bad.status, /thing.key/.test(bad.body.error)], [400, true]);
+  assert.equal(spawned.length, before);
+});
+
 test('хуки: чужой токен и без токена — 404; SessionStart отдаёт контекст, пространство и тег на ходу ждут следующего шага', async () => {
   createSpace('hk-space', { title: 'Корзина', gist: 'Пустая корзина падает' });
   writeSpaceState('hk-space', 'Суть: корзина', { id: 'r0', at: '', kind: 'run' });
