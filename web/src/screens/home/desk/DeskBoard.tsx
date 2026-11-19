@@ -7,6 +7,7 @@ import { Link, useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionView } from '@server/api-types';
 import type { DeskColumn as Column, DeskItem } from '@server/desk/types';
+import type { RoutineWait } from '@server/routines/types';
 import { errorText, fetchIntegrations, keys, useConfig, useFeature, useRuns } from '../../../api';
 import { closeDesk, linkDesk, moveDesk, refreshDesk, useDesk, useDeskCheck } from '../../../api/desk';
 import { useRoutines } from '../../../api/routines';
@@ -19,6 +20,7 @@ import {
   columnTitle,
   deskBoard,
   deskRunLink,
+  deskWaitOf,
   intakeTarget,
   itemPrompt,
   itemRuns,
@@ -30,7 +32,9 @@ import {
 import { quietBoard, type CheckTone } from '../../../lib/desk-top';
 import { LIVE_STATUSES } from '../../../lib/home';
 import { t } from '../../../lib/i18n';
+import { activeWaits, decisionText } from '../../../lib/routines/view';
 import { termSize } from '../../../lib/sessions';
+import { decide, isSent, undo, useDecisions } from '../routineDecisions';
 import { FlowPicker, pickerAt, type PickerState } from '../FlowPicker';
 import { DeskCard, type CardActions } from './DeskCard';
 import { DeskColumn } from './DeskColumn';
@@ -71,6 +75,9 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
   const sessions = useSessions(sessionsOn).data?.sessions ?? [];
   const runs = useRuns().data ?? [];
   const spaces = useSpaces(useFeature('spaces')).data?.spaces ?? [];
+  // ожидание рутины с task — само дело: решение принимается на карточке (в полосе над доской этого ожидания нет)
+  const waits = activeWaits(routines.data?.waits ?? []);
+  const { hidden: decided } = useDecisions();
   const integrationsOn = useFeature('integrations');
   const projects = useQuery({ queryKey: keys.integrations, queryFn: fetchIntegrations, staleTime: 5 * 60_000, enabled: integrationsOn }).data?.projects ?? [];
   const config = useConfig().data;
@@ -202,11 +209,21 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
     }
   };
 
+  /** Решение по ожиданию рутины: уходит через 5 секунд, до этого — «Отменить» (то же, что у карточки ожидания в полосе). */
+  const decideWait = (w: RoutineWait, action: 'run' | 'later' | 'reject') => {
+    const text = decisionText(action, w, false);
+    decide(w, { action }, text);
+    toast(`${text} ${t('Отменить?')}`, () => {
+      if (!undo(w.id) && isSent(w.id)) toast(t('Решение уже ушло.'));
+    });
+  };
+
   const actions = (i: DeskItem): CardActions => {
     const target = intakeTarget(i, projects);
     return {
       move: (to, keyboard) => move(i, to, keyboard),
       close: (reason, keyboard) => close(i, reason, keyboard),
+      decide: decideWait,
       ...(sessionsOn ? { startSession: () => startSession(i), continueSession: resume } : {}),
       ...(target ? { runFlow: (btn: HTMLElement) => setPicker(pickerAt({ ...target, ...deskRunLink(i) }, btn)) } : {}),
       link: (url) =>
@@ -266,6 +283,9 @@ export function DeskBoard({ project, onProject }: { project?: string; onProject?
                     project={i.project && project === undefined ? { title: spaceTitle.get(i.project) ?? i.project, tone: projectTone(i.project) } : undefined}
                     sessions={r?.sessions ?? []}
                     runs={r?.runs ?? []}
+                    wait={deskWaitOf(i.key, waits)}
+                    // решение принято: кнопок уже нет, строка «Запуск…» с «Отменить» — в полосе над доской
+                    waitDecided={Boolean(deskWaitOf(i.key, waits) && decided.has(deskWaitOf(i.key, waits)!.id))}
                     act={actions(i)}
                     drag={{ dragging: dragging === i.key, start: () => setDragging(i.key), end: () => setDragging(undefined) }}
                   />

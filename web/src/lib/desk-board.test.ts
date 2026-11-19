@@ -5,6 +5,7 @@ import {
   ageLine,
   ageText,
   deskBoard,
+  deskWaitOf,
   dueView,
   deskRunLink,
   intakeTarget,
@@ -16,10 +17,12 @@ import {
   neighborColumn,
   projectSlice,
   replySignal,
+  sessionsOffBoard,
   sessionCwd,
   startQueue,
   startWith,
   thingLabel,
+  waitsOffBoard,
 } from './desk-board';
 
 // полдень по местному времени: границы дня считаются по нему
@@ -150,6 +153,55 @@ test('«Ответить»: последний сигнал с replyTo и ссы
   const c = { source: 'gitlab', at: ago(0.5), link: 'https://gitlab.example.com/x' };
   assert.equal(replySignal(item({ signals: [a, b, c] }))?.link, 'https://slack.example.com/a');
   assert.equal(replySignal(item({ signals: [c] })), undefined);
+});
+
+test('полоса над доской: вопрос сессии, видимый на карточке, уходит из полосы; всё, чего на карточке не видно, остаётся', () => {
+  const ask = { kind: 'question' as const, text: 'Рубли или евро?', at: ago(1) };
+  const w = (id: string, o: object = {}) => ({ id, live: true, status: 'waiting' as const, lastActivityAt: ago(1), ask, ...o });
+  const open = item({ links: { runs: [], sessions: ['s1'] } });
+  const fromCard = item({});
+  const byThing = mr(7);
+  const done = item({ column: 'done', links: { runs: [], sessions: ['s4'] } });
+  const twoSessions = item({ links: { runs: [], sessions: ['s5', 's6'] } });
+  const withRun = item({ links: { runs: ['r1'], sessions: ['s7'] } });
+  const all = [
+    w('s1'),
+    w('s2', { source: { item: fromCard.id } }),
+    w('s3'),
+    w('s4'),
+    w('s8', { source: { thing: { type: 'mr' as const, key: byThing.key, ref: {} } } }),
+    // у дела две живые сессии: карточка берёт самую свежую — она работает, ждущая старая на карточке не видна
+    w('s5', { lastActivityAt: ago(5) }),
+    w('s6', { status: 'working' as const, ask: undefined, lastActivityAt: ago(0.5) }),
+    // по делу идёт запуск: карточка показывает запуск, не сессию
+    w('s7'),
+  ];
+  const waiting = all.filter((s) => s.status === 'waiting');
+  const runs = [{ id: 'r1', startedAt: ago(1), status: 'running' }];
+  const off = sessionsOffBoard(waiting, all, [open, fromCard, byThing, done, twoSessions, withRun], runs);
+  assert.deepEqual(off.map((s) => s.id), ['s3', 's4', 's5', 's7']);
+  // нет дел — все ждущие в полосе
+  assert.deepEqual(sessionsOffBoard(waiting, all, [], runs).map((s) => s.id), waiting.map((s) => s.id));
+  // ждёт доверия к папке (ask нет): карточка вопроса не покажет — сессия остаётся в полосе
+  const trust = [{ id: 's9', live: true, status: 'waiting' as const, lastActivityAt: ago(1) }];
+  assert.deepEqual(sessionsOffBoard(trust, trust, [item({ links: { runs: [], sessions: ['s9'] } })], []).map((s) => s.id), ['s9']);
+});
+
+test('ожидание рутины-дела — на карточке дела, из полосы над доской уходит; пауза, ответ и отложенное — как были', () => {
+  const a = mr(11);
+  const suggest = { id: 'w1', kind: 'suggest' as const, deskKey: a.key };
+  const snoozed = { id: 'w2', kind: 'suggest' as const, deskKey: mr(12).key, snoozedAt: ago(1) };
+  const pause = { id: 'w3', kind: 'pause' as const, deskKey: a.key };
+  const noItem = { id: 'w4', kind: 'suggest' as const, deskKey: 'mr:gitlab.example.com/grp/app/99' };
+  const plain = { id: 'w5', kind: 'suggest' as const };
+  assert.equal(deskWaitOf(a.key, [pause, suggest])?.id, 'w1');
+  assert.equal(deskWaitOf(mr(12).key, [snoozed]), undefined);
+  assert.equal(deskWaitOf(a.key, [plain]), undefined);
+  // дела нет на доске (закрыто, не пришло) — ожидание остаётся в полосе: решить его иначе негде
+  assert.deepEqual(waitsOffBoard([suggest, snoozed, pause, noItem, plain], [a]).map((w) => w.id), ['w2', 'w3', 'w4', 'w5']);
+  // два ожидания об одном деле (ревью из двух рутин): карточка показывает первое, второе — в полосе до решения по первому
+  const second = { id: 'w6', kind: 'suggest' as const, deskKey: a.key };
+  assert.deepEqual(waitsOffBoard([suggest, second], [a]).map((w) => w.id), ['w6']);
 });
 
 test('сессии и запуски дела: по ссылкам, по source.item и по вещи; живые и свежие — первыми; продолжение цепочки — по root', () => {

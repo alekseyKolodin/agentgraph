@@ -2,8 +2,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SourceView } from '@server/routines/types';
+import { matchFields } from './match';
 import { buildSpec, draftMissing, SCHEDULE } from './spec';
-import { connectHref, connectParam, isSlackConnector, profileLine, ROUTINE_TEMPLATES, servicesFor, sourceForTemplate, templateDraft, templateOf } from './templates';
+import { connectHref, connectParam, isSlackConnector, profileLine, ROUTINE_TEMPLATES, servicesFor, sourceForTemplate, templateConds, templateDraft, templateOf } from './templates';
 
 const src = (slug: string, kind: string, extra: Partial<SourceView['spec']> = {}, canReply = false): SourceView => ({
   slug,
@@ -97,4 +98,23 @@ test('параметры адреса «Подключить сервис» — 
   const ready = [{ server: 'claude.ai Slack', title: 'Slack' }, { server: 'notion', title: 'Notion' }, { server: 'x-slack-bot', title: 'Bot' }];
   assert.deepEqual(servicesFor(ready, 'slack'), ['claude.ai Slack', 'x-slack-bot']);
   assert.deepEqual(servicesFor(ready, undefined), []);
+});
+
+test('источник выбран руками: условие шаблона остаётся, если у источника есть такое поле; иначе его нет, а не «никогда не сработает»', () => {
+  const plain = matchFields(undefined);
+  const forge = matchFields({ match: [{ key: 'event', label: 'Событие', type: 'enum', options: ['review'] }] });
+  // ссылка на MR — в тексте: «Текст» есть у любого источника, в том числе у своей команды
+  assert.deepEqual(templateConds('review-slack', plain).map((c) => [c.field, c.op]), [['text', 'contains']]);
+  // событие review — только у GitLab/GitHub; у своей команды такого поля нет
+  assert.deepEqual(templateConds('review-forge', forge).map((c) => c.field), ['event']);
+  assert.deepEqual(templateConds('review-forge', plain), []);
+  // поле есть, а значения «review» в его списке нет — условие не сработает никогда
+  const other = matchFields({ match: [{ key: 'event', label: 'Событие', type: 'enum', options: ['push', 'tag'] }] });
+  assert.deepEqual(templateConds('review-forge', other), []);
+  // без шаблона и у неизвестного — пусто
+  assert.deepEqual(templateConds(null, forge), []);
+  assert.deepEqual(templateConds('nope', forge), []);
+  // правило получается то же, что у подставленного источника
+  const spec = buildSpec({ ...templateDraft('review-slack', { source: SOURCES[2] }), conds: templateConds('review-slack', plain) }, plain);
+  assert.deepEqual('match' in spec.when ? spec.when.match : undefined, { 'text~': ['/merge_requests/', '/pull/'] });
 });

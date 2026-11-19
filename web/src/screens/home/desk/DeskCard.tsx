@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 import { Link } from 'react-router';
 import type { RunSummary, SessionView } from '@server/api-types';
 import type { DeskColumn, DeskItem } from '@server/desk/types';
+import type { RoutineWait } from '@server/routines/types';
 import { LIVE_STATUSES } from '../../../lib/home';
 import {
   ageLine,
@@ -20,6 +21,8 @@ import {
   thingLabel,
 } from '../../../lib/desk-board';
 import { t } from '../../../lib/i18n';
+import { waitButtons } from '../../../lib/routines/view';
+import { askNote } from '../../../lib/sessions';
 import styles from './Desk.module.css';
 
 const cx = (...c: Array<string | false | undefined>) => c.filter(Boolean).join(' ');
@@ -40,11 +43,13 @@ export type CardActions = {
   runFlow?: (btn: HTMLElement) => void;
   /** «Привязать вещь»: адрес MR, PR или задачи Jira. */
   link?: (url: string) => Promise<void>;
+  /** Решение по ожиданию рутины, которое и есть это дело («Запустить / Не сейчас / Не то»). */
+  decide?: (wait: RoutineWait, action: 'run' | 'later' | 'reject') => void;
 };
 
 export type CardDrag = { dragging: boolean; start: () => void; end: () => void };
 
-export function DeskCard({ item, n, now, project, sessions, runs, act, drag }: {
+export function DeskCard({ item, n, now, project, sessions, runs, wait, waitDecided, act, drag }: {
   item: DeskItem;
   /** Номер в «В плане». */
   n?: number;
@@ -52,6 +57,10 @@ export function DeskCard({ item, n, now, project, sessions, runs, act, drag }: {
   project?: { title: string; tone: number };
   sessions: SessionView[];
   runs: RunSummary[];
+  /** Рутина ждёт решения по этому делу (3.8): «Запустить / Не сейчас / Не то» вместо «В план / Не моё». */
+  wait?: RoutineWait;
+  /** Решение по ожиданию уже принято и ждёт отправки (5 с до «Отменить»): кнопок нет. */
+  waitDecided?: boolean;
   act: CardActions;
   drag: CardDrag;
 }) {
@@ -142,7 +151,14 @@ export function DeskCard({ item, n, now, project, sessions, runs, act, drag }: {
         <LinkForm onCancel={() => setLinking(false)} onLink={act.link} />
       ) : (
         <div className={styles.acts}>
-          {item.column === 'new' && (
+          {wait && act.decide && !done && !waitDecided && (
+            <>
+              <button type="button" className="btn small primary" title={`${wait.routineTitle}: ${wait.question}`} onClick={() => act.decide!(wait, 'run')}>{waitButtons(wait).run}</button>
+              <button type="button" className="btn small" title={t('Дело уйдёт в план, запуск подождёт в срабатываниях рутины')} onClick={() => act.decide!(wait, 'later')}>{waitButtons(wait).later}</button>
+              <button type="button" className="btn small ghost" title={t('Дело закроется; рутина запомнит и учтёт в проверке словами')} onClick={() => act.decide!(wait, 'reject')}>{waitButtons(wait).reject}</button>
+            </>
+          )}
+          {item.column === 'new' && !(wait && act.decide) && (
             <>
               <button type="button" className="btn small" onClick={(e) => act.move('plan', byKey(e))}>{t('В план')}</button>
               <button type="button" className="btn small ghost" title={t('Закрыть дело: оно не твоё')} onClick={(e) => act.close('не моё', byKey(e))}>{t('Не моё')}</button>
@@ -181,10 +197,13 @@ function Activity({ run, session }: { run?: RunSummary; session?: SessionView })
     );
   }
   if (session) {
+    // что спросила сессия: в полосе над доской её нет (сессия дела — на карточке), вопрос виден здесь
+    const ask = session.status === 'waiting' ? askNote(session) : '';
     return (
       <div className={cx(styles.agent, session.waitingSince ? styles.wait : undefined)}>
         <b>{session.waitingSince ? t('Сессия ждёт тебя:') : t('Сессия открыта:')}</b>
         <Link to={`/sessions/${encodeURIComponent(session.id)}`} draggable={false} title={session.name}>{session.name}</Link>
+        {ask && <span className={styles.agentAsk} title={ask}>{ask}</span>}
       </div>
     );
   }
