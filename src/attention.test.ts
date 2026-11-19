@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attentionReasons, collectAttention, resetAttentionState, suggestFlows, SUGGEST_MODEL, type AttentionItem } from './attention.js';
+import { attentionReasons, collectAttention, reasonsOfState, resetAttentionState, suggestFlows, SUGGEST_MODEL, type AttentionItem } from './attention.js';
 import type { Discussion, Exec, MergeRequest } from './git.js';
 import type { FlowSummary } from './flows.js';
 import type { Project } from './projects.js';
@@ -80,6 +80,26 @@ test('сбор: проект без remote пропускается, ошибк�
   assert.equal(calls.length, before);
   await collectAttention([proj('/ok', 'h'), proj('/bad', 'h'), proj('/local')], { exec: x, force: true });
   assert.ok(calls.length > before);
+});
+
+test('сбор: MR, который не прочитался, — ошибка с номером и понятным текстом, остальные MR на месте', async () => {
+  resetAttentionState();
+  const x: Exec = async (_cmd, args) => {
+    const p = args.at(-1)!;
+    if (p === 'user') return JSON.stringify({ username: 'me' });
+    if (/merge_requests\?/.test(p)) return JSON.stringify([rawMr(1, { user_notes_count: 0 }), rawMr(2, { user_notes_count: 0 })]);
+    if (p.endsWith('/merge_requests/2')) throw new Error('glab api: 403 Forbidden');
+    return JSON.stringify(rawMr(1, { has_conflicts: true }));
+  };
+  const r = await collectAttention([proj('/ok', 'h')], { exec: x });
+  assert.deepEqual(r.items.map((i) => [i.ref, i.reasons.conflicts]), [['g!1', true]]);
+  assert.deepEqual(r.errors.map((e) => e.error), ['!2: нет доступа к h: выполните glab auth login']);
+});
+
+test('причины из состояния общего наблюдателя: упавший CI, число ответов, конфликты', () => {
+  const state = (facts: Record<string, unknown>) => ({ exists: true, turn: 'me' as const, why: '', title: '', updatedAt: '', facts });
+  assert.deepEqual(reasonsOfState(state({ ci: 'failed', ciUrl: 'u', replies: 2, conflicts: true })), { ci: { status: 'failed', url: 'u' }, replies: 2, conflicts: true });
+  assert.deepEqual(reasonsOfState(state({ ci: 'running' })), { ci: undefined, replies: 0, conflicts: false });
 });
 
 // --- подбор flow через фейковую сессию
