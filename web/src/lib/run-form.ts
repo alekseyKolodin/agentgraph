@@ -1,12 +1,11 @@
 // Форма запуска без React и DOM (ui/app.js renderFlow, startRun, readAttachments, renderRunTags, addRunTag, renderRunMoreSum,
-// renderConnWarn, renderRecentDirs; ui/dash.js renderRunLink, prepareWorktree, runLinkPayload): вложения, теги, сводка
-// «Дополнительно», привязка к задаче, MR/PR или ветке и worktree, тело POST /api/runs.
+// renderConnWarn, renderRecentDirs; ui/dash.js renderRunLink, prepareWorktree, runLinkPayload): вложения, теги, сводки
+// строк «Модель и лимиты» и «Что дать агенту», привязка к задаче, MR/PR или ветке и worktree, тело POST /api/runs.
 import type { FlowSummary, PhaseSummary, ProjectInfo, RecentDir, RunSource, RunWorktree, TagDetail, TagListItem } from '@server/api-types';
 import { plural } from './format';
 import { t } from './i18n';
 import { mrSign } from './dash';
 import { CONN_PREFIX } from './flow/tools';
-import { iterTo } from './graph/text';
 
 // ---------- вложения: файлы читаются в base64 и уходят в POST /api/runs, сервер кладёт их в runs/<id>/attachments/
 
@@ -139,31 +138,24 @@ export function withWorktreeNote(input: string, note: string): string {
 export const staleWorktreeCwd = (cwd: string, worktreesDir: string | undefined, link: RunLink | null): boolean =>
   Boolean(worktreesDir) && !link?.worktree && cwd.trim().startsWith(worktreesDir + '/');
 
-// ---------- сводка «Дополнительно» и тело запуска
+// ---------- сводки строк «Модель и лимиты», «Что дать агенту» и тело запуска
 
-export type MoreSumInput = {
-  tags: string[];
-  attach: number;
-  addDirs: string;
-  worktree: boolean;
-  maxIterations: string;
-  flowMaxIterations: number | undefined;
-  budget: string;
-  modelLabel: string;
-};
+/** «Модель и лимиты» свёрнутой: модель (не выбрана — как в этапах flow) и лимит денег; повторы — repeatsText (lib/flow/plan). */
+export function limitsSum(f: { modelLabel: string; budget: string }): { model: string; budget: string } {
+  const budget = Number(f.budget);
+  return {
+    model: f.modelLabel || t('модель как в этапах flow'),
+    budget: f.budget.trim() && budget > 0 ? t('не дороже {usd}', { usd: `$${f.budget.trim()}` }) : t('без лимита по деньгам'),
+  };
+}
 
-/** Заголовок свёрнутого «Дополнительно»: что там задано не по умолчанию, чтобы скрытое не забылось. */
-export function runMoreSum(f: MoreSumInput): { text: string; set: boolean } {
+/** «Что дать агенту» свёрнутой: теги знаний и другие папки; ничего — так и сказать. */
+export function giveSum(f: { tags: string[]; addDirs: string }): { text: string; set: boolean } {
   const parts: string[] = [];
-  if (f.tags.length) parts.push(f.tags.map((tag) => `#${tag}`).join(' '));
-  if (f.attach) parts.push(`${f.attach} ${plural(f.attach, 'файл', 'файла', 'файлов')}`);
-  const dirs = f.addDirs.split('\n').filter((x) => x.trim()).length;
-  if (dirs) parts.push(t('доп. директорий: {n}', { n: dirs }));
-  if (f.worktree) parts.push('worktree');
-  if (f.maxIterations && f.maxIterations !== String(f.flowMaxIterations ?? '')) parts.push(t('до {n}', { n: iterTo(Number(f.maxIterations)) }));
-  if (f.budget) parts.push(t('до {n}', { n: `$${f.budget}` }));
-  if (f.modelLabel) parts.push(f.modelLabel);
-  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('знания, вложения, директории, worktree, лимиты, модель'), set: false };
+  if (f.tags.length) parts.push(t('знания: {tags}', { tags: f.tags.map((tag) => `#${tag}`).join(' ') }));
+  const dirs = dirLines(f.addDirs).length;
+  if (dirs) parts.push(t('другие папки: {n}', { n: dirs }));
+  return parts.length ? { text: parts.join(' · '), set: true } : { text: t('Ничего сверх задачи: без тегов знаний и других папок'), set: false };
 }
 
 export type RunBodyInput = {

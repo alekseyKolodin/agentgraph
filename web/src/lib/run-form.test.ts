@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FlowSummary, TagDetail } from '@server/api-types';
 import {
-  appendDir, attachName, attachOverLimit, attachTypeError, attachWarn, connWarn, fileSize, recentChips, runBody, runMoreSum, sourceLabel,
+  appendDir, attachName, attachOverLimit, attachTypeError, attachWarn, connWarn, fileSize, giveSum, limitsSum, recentChips, runBody, sourceLabel,
   staleWorktreeCwd, TAG_SLUG_RE, tagAddedMsg, tagMissingMsg, tagOptionLabel, withWorktreeNote, worktreeProject, worktreeRequest,
 } from './run-form';
 
@@ -75,12 +75,12 @@ test('источник и worktree: MR и PR по ключу, проект, те
   assert.equal(withWorktreeNote('', 'N'), 'N');
 });
 
-test('сводка «Дополнительно» и тело POST /api/runs', () => {
-  const base = { tags: [], attach: 0, addDirs: '', worktree: false, maxIterations: '3', flowMaxIterations: 3, budget: '', modelLabel: '' };
-  assert.deepEqual(runMoreSum(base), { text: 'знания, вложения, директории, worktree, лимиты, модель', set: false });
-  assert.deepEqual(runMoreSum({ ...base, tags: ['a', 'b'], attach: 2, addDirs: '/x\n\n/y', worktree: true, maxIterations: '5', budget: '0.5', modelLabel: 'Haiku 4.5' }), {
-    text: '#a #b · 2 файла · доп. директорий: 2 · worktree · до 5 итераций · до $0.5 · Haiku 4.5', set: true,
-  });
+test('сводки строк формы и тело POST /api/runs', () => {
+  assert.deepEqual(limitsSum({ modelLabel: '', budget: '' }), { model: 'модель как в этапах flow', budget: 'без лимита по деньгам' });
+  assert.deepEqual(limitsSum({ modelLabel: 'Opus', budget: ' 150 ' }), { model: 'Opus', budget: 'не дороже $150' });
+  assert.equal(limitsSum({ modelLabel: '', budget: '0' }).budget, 'без лимита по деньгам');
+  assert.deepEqual(giveSum({ tags: [], addDirs: '\n' }), { text: 'Ничего сверх задачи: без тегов знаний и других папок', set: false });
+  assert.deepEqual(giveSum({ tags: ['a', 'b'], addDirs: '/x\n\n/y' }), { text: 'знания: #a #b · другие папки: 2', set: true });
   const can = { integrations: true, attachments: true, addDirs: true, tags: true, spaces: true };
   const body = runBody({ flow: 'f', input: 'x', cwd: '/r', maxIterations: '', maxBudgetUsd: '0.2', model: '', link: null, attach: [], addDirs: '', space: '', saveState: true, autoSpace: false, tags: [], can });
   assert.deepEqual(body, { flow: 'f', input: 'x', cwd: '/r', maxIterations: undefined, maxBudgetUsd: '0.2', model: undefined, addDirs: [] });

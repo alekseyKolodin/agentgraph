@@ -23,5 +23,6 @@ import { sources } from './sources';
 import { deskTop } from './desk-top';
 import { deskMonth } from './desk-month';
 import { deskDetail } from './desk-detail';
+import { flowRun } from './flow-run';
 
-export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...deskTop, ...deskMonth, ...deskDetail };
+export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...deskTop, ...deskMonth, ...deskDetail, ...flowRun };

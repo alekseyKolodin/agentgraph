@@ -1,0 +1,24 @@
+/* Вкладка «История» (docs/flow-redesign/design/History.dc.html): версии сверху вниз, под каждой — её запуски.
+   Строка запуска — общая с «Прошлыми запусками» (RunTab.module.css), здесь — только отступ под версией. */
+.history { display: flex; flex-direction: column; gap: 12px; max-width: 980px; }
+.history > p { margin: 0; }
+.versions { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.version { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.version:first-child { border-top: 0; }
+.v-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 10px 18px; background: var(--well); font-size: var(--fs-small); }
+.v-name { flex: none; padding: 1px 8px; border-radius: var(--r-xs); background: var(--raised); font-family: var(--font-mono); font-size: var(--fs-meta); font-weight: 600; color: var(--ink); }
+.v-now { flex: none; padding: 0 8px; border-radius: var(--r-pill); font-size: var(--fs-meta); font-weight: 600; background: color-mix(in srgb, var(--st-ok) 16%, transparent); color: var(--st-ok); }
+.v-meta { flex: 1 1 200px; min-width: 0; color: var(--ink-2); }
+.v-acts { flex: none; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.v-empty { margin: 0; padding: 12px 18px 12px 34px; border-top: 1px solid var(--line); font-size: var(--fs-small); color: var(--ink-2); }
+.v-more { align-self: flex-start; margin: 4px 0 8px 26px; }
+.diff { padding: 10px 18px 10px 34px; border-top: 1px solid var(--line); }
+.diff p { margin: 0; }
+.diff-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-small); color: var(--ink); }
+.runs { list-style: none; margin: 0; padding: 0; }
+.version .runs > .run-row { padding-left: 34px; border-top: 1px solid var(--line); }
+
+@media (max-width: 700px) {
+  .v-head { padding: 10px 14px; }
+  .version .runs > .run-row, .v-empty, .diff { padding-left: 22px; }
+}

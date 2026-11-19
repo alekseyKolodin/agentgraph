@@ -185,3 +185,5 @@ textarea.next-judge { flex-basis: 100%; font-family: var(--font-mono); font-size
 .edit-views button:hover { color: var(--ink); }
 .edit-views button.on { background: var(--raised); color: var(--ink); font-weight: 500; }
 .edit-views button:focus-visible { outline: none; box-shadow: var(--focus); }
+/* скрытая «Правка» не видна под «Запуском» и «Историей»: .edit-tab { display: flex } перебивал [hidden] */
+.edit-tab[hidden] { display: none; }

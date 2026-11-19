@@ -1,6 +1,6 @@
 // Статистика и версии flow на его экране без React и DOM (ответ GET /api/flows/:name/history, src/flow-history.ts):
-// строка в шапке «12 запусков за 30 дней · последний 18.11, 20:59» и подписи строк вкладки «Версии».
-import type { FlowHistory, FlowVersion } from '@server/api-types';
+// строка в шапке «12 запусков за 30 дней · последний 18.11, 20:59», подписи версий вкладки «История» и её запуски под версиями.
+import type { FlowHistory, FlowRunRow, FlowVersion } from '@server/api-types';
 import { clock, plural, statusLabel, when } from '../format';
 import { locale, t } from '../i18n';
 
@@ -42,4 +42,25 @@ export function versionsNote(h: Pick<FlowHistory, 'versions' | 'noSnapshot' | 'c
     ...(h.currentUnrun ? [t('Файл flow поправили после последнего запуска: текущая версия ещё не запускалась.')] : []),
     ...(h.noSnapshot ? [t('Без снимка flow.yaml — {runs}: их версия неизвестна.', { runs: runsWord(h.noSnapshot) })] : []),
   ].join(' ');
+}
+
+/**
+ * Вкладка «История»: версии от свежей к старой, под каждой — её запуски. prev — версия до неё (с ней сравнивает «Что
+ * изменилось»); файл поправили после последнего запуска — сверху «сейчас» без запусков; запуски без снимка или со
+ * старой версией за пределами списка — в конце, отдельной группой.
+ */
+export type VersionGroup =
+  | { kind: 'version'; v: FlowVersion; prev?: FlowVersion; runs: FlowRunRow[] }
+  | { kind: 'unrun' }
+  | { kind: 'unknown'; runs: FlowRunRow[] };
+
+export function versionGroups(h: Pick<FlowHistory, 'versions' | 'currentUnrun' | 'runs'>): VersionGroup[] {
+  const runs = h.runs ?? [];
+  const known = new Set(h.versions.map((v) => v.id));
+  const out: VersionGroup[] = [];
+  if (h.currentUnrun) out.push({ kind: 'unrun' });
+  h.versions.forEach((v, i) => out.push({ kind: 'version', v, ...(h.versions[i + 1] ? { prev: h.versions[i + 1] } : {}), runs: runs.filter((r) => r.version === v.id) }));
+  const rest = runs.filter((r) => !r.version || !known.has(r.version));
+  if (rest.length) out.push({ kind: 'unknown', runs: rest });
+  return out;
 }
