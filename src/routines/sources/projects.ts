@@ -14,6 +14,8 @@ import { listSpaces, projectOfPath, projectResolver } from '../../spaces.js';
 import { exec as realExec, localBranches, worktreeList, type Exec } from '../../git.js';
 import { branchWatcher } from '../../things/branch.js';
 import { branchKey, sessionKey } from '../../things/keys.js';
+import { desk } from '../../desk/index.js';
+import type { DeskItem } from '../../desk/types.js';
 import type { Thing, Watcher } from '../../things/types.js';
 import { BASE_MATCH, type SourceCtx, type SourceKind } from '../kind.js';
 import type { RoutineEvent } from '../types.js';
@@ -37,6 +39,8 @@ export type ProjectsDeps = {
   reviewStore?: () => ReviewStore;
   /** Разбор моделью сейчас (итог пишется на сервер); цена — в расход источника. */
   review?: (signal: AbortSignal) => Promise<{ costUsd: number; error?: string }>;
+  /** Открытые дела (desk().list({ open: true })): сессия и ветка, привязанные к делу другой вещи, — уже на его карточке. */
+  openItems?: () => Promise<DeskItem[]>;
   /** Наблюдатель веток: по умолчанию branchWatcher на том же exec. */
   watcher?: Watcher;
   now?: () => number;
@@ -267,7 +271,28 @@ async function poll(ctx: SourceCtx, deps: ProjectsDeps): Promise<RoutineEvent[]>
     first[e.id] = e.at;
   }
   ctx.cursor.set({ first, roots, sessions: sessionEvents, ...(reviewTried ? { reviewTried } : {}) } satisfies Cursor);
-  return events;
+  // сессия, начатая с карточки дела (links.sessions), и ветка дела (links.branch) — уже на карточке этого дела: второй
+  // карточки «Забытое» о той же работе не нужно. Пропала отсюда — снимок закроет своё «Забытое» о ней
+  const held = await heldByOtherItems(ctx, deps);
+  return held.size ? events.filter((e) => !held.has(e.things?.[0]?.key ?? '')) : events;
+}
+
+/** Ключи сессий и веток, привязанных к открытым делам о другой вещи. Доска не ответила — ничего не прячем. */
+async function heldByOtherItems(ctx: SourceCtx, deps: ProjectsDeps): Promise<Set<string>> {
+  const out = new Set<string>();
+  let items: DeskItem[];
+  try {
+    items = await (deps.openItems ?? (() => desk().list({ open: true })))();
+  } catch (err) {
+    ctx.log(`дела не прочитались — сессии и ветки дел не отсеяны: ${(err as Error).message}`);
+    return out;
+  }
+  for (const i of items) {
+    if (i.closed) continue;
+    for (const id of i.links?.sessions ?? []) if (sessionKey(id) !== i.key) out.add(sessionKey(id));
+    if (i.links?.branch && i.links.branch !== i.key) out.add(i.links.branch);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------ настоящие зависимости

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import type { Exec } from '../../git.js';
 import type { ReviewSource, ReviewStore } from '../../session-review.js';
 import type { Thing, ThingState, Watcher } from '../../things/types.js';
+import type { DeskItem } from '../../desk/types.js';
 import { BRANCH_DAYS, BRANCHES_MAX, projectsKind, reviewEvery, type ProjectsDeps } from './projects.js';
 import { makeCtx } from './testkit.js';
 
@@ -62,6 +63,7 @@ function deps(o: Partial<ProjectsDeps> & { repos?: Record<string, Branch[] | Err
       throw new Error('модель не должна зваться');
     },
     watcher: w,
+    openItems: async () => [],
     now: () => NOW,
     ...o,
     asked,
@@ -273,4 +275,28 @@ test('сессии: терминал не загрузился (сессий н�
   const broken = await projectsKind(deps({ sessions: async () => [session('s2', { turnCount: 2 })], reviewStore: () => ({ costUsd: 0, items: [], broken: true }) })).poll!(c3);
   assert.deepEqual(broken.map((e) => e.id), ['review:s2@2']);
   assert.match(c3.logs.join('\n'), /итог разбора сессий не прочитался/);
+});
+
+test('сессия и ветка, привязанные к открытому делу другой вещи, — не «Забытое»: они уже на карточке того дела', async () => {
+  const ask = { kind: 'question' as const, text: 'Так или иначе?', at: ago(1) };
+  const item = (key: string, links: { sessions?: string[]; branch?: string }, closed = false) =>
+    ({ id: key, key, kind: 'Jira', title: key, column: 'work', why: '', signals: [], links: { runs: [], sessions: links.sessions ?? [], ...(links.branch ? { branch: links.branch } : {}) }, createdAt: ago(1), movedAt: ago(1), movedBy: 'me', ...(closed ? { closed: { at: ago(0), reason: 'x' } } : {}) }) as DeskItem;
+  const d = deps({
+    repos: { [ROOT]: [{ name: 'feat', open: true }, { name: 'own', open: true }] },
+    states: { feat: { turn: 'me', why: 'грязно', facts: { dirty: 1 } }, own: { turn: 'me', why: 'грязно', facts: { dirty: 2 } } },
+    sessions: async () => [session('s1', { ask }), session('s2', { ask }), session('s3', { ask })],
+    openItems: async () => [
+      // задача Jira, по которой открыли сессию s1 и ветку feat
+      item('jira:x.atlassian.net/PAY-7', { sessions: ['s1'], branch: 'branch:/code/app#feat' }),
+      // «Забытое» о самой s2 (её продолжили с карточки) — своё дело, его не прячем
+      item('session:s2', { sessions: ['s2'] }),
+      // закрытое дело сессию не держит
+      item('mr:gitlab.example.com/grp/app/3', { sessions: ['s3'] }, true),
+    ],
+  });
+  const events = await projectsKind(d).poll!(ctx());
+  assert.deepEqual(events.map((e) => e.id), ['branch:/code/app#own@dirty', `ask:s2@${ask.at}`, `ask:s3@${ask.at}`]);
+  // доска не ответила — ничего не прячем
+  const failing = await projectsKind({ ...d, openItems: async () => { throw new Error('диск занят'); } }).poll!(ctx());
+  assert.equal(failing.length, 5);
 });
