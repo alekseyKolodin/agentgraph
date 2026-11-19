@@ -3,6 +3,7 @@
 // Только типы — файл читает и веб. Контракт этапа 3: менять только дописывая поля.
 
 import type { ThingType } from '../things/types.js';
+import type { CheckResult } from '../routines/types.js';
 
 export type DeskColumn = 'new' | 'plan' | 'work' | 'waiting' | 'done';
 
@@ -50,6 +51,11 @@ export type DeskItem = {
   turn?: 'me' | 'others' | 'none';
   /** Отпечаток последнего применённого состояния вещи (closed + turn + updatedAt), чтобы правило сработало один раз. */
   seen?: string;
+  /**
+   * Правило закрытия (task.close рутины): 'thing' или нет — сверка закрывает, когда вещь закрыта; 'never' — только руками;
+   * иная строка — условие словами (на этапе 3 сверка его не исполняет — как 'never').
+   */
+  close?: string;
 };
 
 /**
@@ -69,6 +75,8 @@ export type DeskPatch = {
   links?: Partial<DeskLinks>;
   /** Пришло новое по тому же: 'plan' — из «Ждёт других»/«Готово» в «В плане» (по умолчанию), 'keep' — колонка та же. */
   onRepeat?: 'plan' | 'keep';
+  /** Правило закрытия дела (DeskItem.close); у существующего дела переданное перезаписывает. */
+  close?: string;
 };
 
 export type DeskFilter = { column?: DeskColumn | DeskColumn[]; project?: string; kind?: string; key?: string; open?: boolean };
@@ -95,3 +103,6 @@ export type DeskMove = { at: string; key: string; from?: DeskColumn; to: DeskCol
  * Изменения доски приходят в общий поток событий как { type: 'desk' }.
  */
 export type DeskChange = { type: 'desk'; runId: ''; flow: '' };
+
+/** GET /api/desk: дела по фильтру и итог последней сверки (нет — сверки ещё не было). */
+export type DeskListReply = { items: DeskItem[]; check?: CheckResult };

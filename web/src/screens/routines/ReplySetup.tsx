@@ -7,14 +7,24 @@ import { errorText } from '../../api';
 import { routineKeys, saveSource, useMcpTools } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { DEFAULT_REPLY_ARGS, parseReply } from '../../lib/routines/reply';
+import type { ReplyChoice } from '../../lib/routines/spec';
 import { cx } from './parts';
 import styles from './Routines.module.css';
 
 /**
  * «Как отвечать» (необязательно): один пишущий инструмент сервиса и шаблон его аргументов. Чтение источника пишущих
- * инструментов не получает; этот — единственный, который рутина вызовет на запись, и только когда ты одобрил ответ.
+ * инструментов не получает; этот — единственный, который рутина вызовет на запись. Когда он сработает, решает режим ответа
+ * рутины (mode).
  */
-export function ReplyStep({ services, chosen, tool, args, parsed, onTool, onArgs }: { services: McpServiceView[]; chosen: string[]; tool: string; args: string; parsed: ReturnType<typeof parseReply> | undefined; onTool: (v: string) => void; onArgs: (v: string) => void }) {
+/** Когда уйдёт сообщение — по режиму ответа рутины; у экрана подключения рутины ещё нет, режим не известен. */
+function whenSent(mode: ReplyChoice | undefined): string {
+  if (mode === 'draft') return t('Ответ уходит без модели и только после твоей проверки.');
+  if (mode === 'auto') return t('Ответ уходит без модели и сразу, без твоей проверки: так настроена эта рутина.');
+  if (mode === 'off') return t('У этой рутины ответ выключен: пока не включишь, ничего не уйдёт.');
+  return t('Ответ уходит без модели. Когда — после твоей проверки или сразу — решает режим ответа в самой рутине.');
+}
+
+export function ReplyStep({ services, chosen, tool, args, parsed, mode, onTool, onArgs }: { services: McpServiceView[]; chosen: string[]; tool: string; args: string; parsed: ReturnType<typeof parseReply> | undefined; mode?: ReplyChoice; onTool: (v: string) => void; onArgs: (v: string) => void }) {
   // отвечать удобнее там же, откуда читаем: выбранные сервисы — первыми
   const withWrite = services.filter((s) => s.status === 'connected' && s.writeTools.length).sort((a, b) => Number(chosen.includes(b.server)) - Number(chosen.includes(a.server)));
   const picked = withWrite.flatMap((s) => s.writeTools.map((x) => ({ s, x }))).find((r) => r.x.name === tool);
@@ -26,7 +36,7 @@ export function ReplyStep({ services, chosen, tool, args, parsed, onTool, onArgs
     <div className={styles.field} role="group" aria-label={t('Как отвечать')}>
       <span className={styles.lbl}>{t('Как отвечать')} · {t('необязательно')}</span>
       <span className={styles.hint}>
-        {t('Чтобы рутина могла ответить в тред, откуда пришла запись, выбери один инструмент сервиса, который отправляет сообщение. Это единственный инструмент, которым рутина может что-то записать: читать им нельзя, а источник выше только читает. Ответ уходит без модели и тем текстом, который ты одобрил.')}
+        {t('Чтобы рутина могла ответить в тред, откуда пришла запись, выбери один инструмент сервиса, который отправляет сообщение. Это единственный инструмент, которым рутина может что-то записать: читать им нельзя, а источник выше только читает.')} {whenSent(mode)}
       </span>
       <select className={styles.slot} aria-label={t('Инструмент ответа')} value={tool} onChange={(e) => onTool(e.target.value)}>
         <option value="">{t('Не отвечать из источника')}</option>
@@ -59,7 +69,7 @@ export function ReplyStep({ services, chosen, tool, args, parsed, onTool, onArgs
 }
 
 /** Ответ для уже подключённого источника (из редактора рутины): тот же шаг «Как отвечать», сохраняется в тот же источник без пересборки скрипта. */
-export function SourceReplyPanel({ source, onClose }: { source: SourceView; onClose: () => void }) {
+export function SourceReplyPanel({ source, mode, onClose }: { source: SourceView; mode?: ReplyChoice; onClose: () => void }) {
   const qc = useQueryClient();
   const q = useMcpTools();
   const [tool, setTool] = useState('');
@@ -86,7 +96,7 @@ export function SourceReplyPanel({ source, onClose }: { source: SourceView; onCl
     <div className={styles.field}>
       {q.isPending && <span className="muted small">{t('Смотрю, что подключено к Claude… (несколько секунд)')}</span>}
       {q.isError && <span className={styles.err}>{t('Список сервисов не загрузился: {error}', { error: errorText(q.error) })}</span>}
-      {q.data && <ReplyStep services={services} chosen={chosen} tool={tool} args={args} parsed={parsed} onTool={setTool} onArgs={setArgs} />}
+      {q.data && <ReplyStep services={services} chosen={chosen} tool={tool} args={args} parsed={parsed} mode={mode} onTool={setTool} onArgs={setArgs} />}
       <div className="row">
         <button type="button" className="btn primary" disabled={busy || !parsed?.ok} title={tool && !parsed?.ok ? parsed?.error : t('Сохранить ответ в источнике «{title}»', { title: source.spec.title })} onClick={() => void save()}>{t('Сохранить ответ')}</button>
         <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>{t('Отмена')}</button>

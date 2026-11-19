@@ -5,9 +5,11 @@
 // space_state_write (состояние), space_settings (заголовок, папки чтения, рабочая папка — space.json); flow_write —
 // flow в папке flow (проверка схемой до записи); session_new — открыть рядом новую сессию agentgraph; у сессии из задачи
 // Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий её задачи, и team_doc_write — документ проекта
-// команды. Кроме knowledge_read ничего нет в allowedTools, и хук PreToolUse велит claude спрашивать пользователя о
-// каждом вызове (не прошедший проверку — отклоняет без вопроса). Слаги и пространство берутся в момент вызова:
-// выбранное на ходу доступно сразу.
+// команды; дела на доске «Мои дела» — desk_put, desk_close, desk_list (src/desk/tools.ts: сессия, проект и ветка
+// подставляются сами, сигнал — от 'session'). Кроме knowledge_read и desk_list ничего нет в allowedTools; о записи
+// пространства, flow, новой сессии и задачи Teamwork хук PreToolUse велит claude спрашивать пользователя при каждом
+// вызове (не прошедший проверку — отклоняет без вопроса), о desk_put и desk_close спрашивает сам claude по режиму
+// разрешений. Слаги и пространство берутся в момент вызова: выбранное на ходу доступно сразу.
 import type { SessionView, TeamTaskStatus } from './api-types.js';
 import { knowledgeReadText } from './knowledge-tools.js';
 import { KNOWLEDGE_READ_TOOL } from './tags.js';
@@ -17,6 +19,7 @@ import {
 } from './sessions.js';
 import { TASK_STATUSES } from './teamwork.js';
 import { FLOW_RUNS_NOTE } from './session-edit.js';
+import { deskCall, deskInputSchemas, deskToolDescriptions, DESK_CLOSE_TOOL, DESK_LIST_TOOL, DESK_PUT_TOOL, DESK_TOOLS, type DeskCallCtx, type DeskHint } from './desk/tools.js';
 
 /**
  * Что у сессии на момент вызова: пространство (слаг и папка), теги знаний, папка flow и задача Teamwork, если сессия
@@ -54,6 +57,13 @@ export type McpCtx = {
   teamTask?: (args: TeamTaskUpdateArgs) => Promise<string>;
   /** Документ проекта Teamwork (architecture, design, docs/<имя>.md); ответ — путь файла в клоне. Нет у сессии без задачи. */
   teamDoc?: (name: string, text: string) => Promise<string>;
+  /**
+   * Дела: что подставляется само (хранилище, сессия, проект, ветка) — в момент вызова инструмента; хранилище открывается
+   * только при вызове. Нет — инструментов дел у сессии нет.
+   */
+  desk?: () => DeskCallCtx;
+  /** Вещь и проект сессии для описаний desk_*: на момент tools/list. */
+  deskHint?: () => DeskHint;
 };
 
 export type McpReply = { status: number; body?: unknown };
@@ -62,7 +72,7 @@ const PROTOCOL_FALLBACK = '2025-06-18';
 
 const str = (description: string) => ({ type: 'string', description });
 
-function tools(scope: ReturnType<McpScope>) {
+function tools(scope: ReturnType<McpScope>, desk?: DeskHint) {
   const space = scope.space ? ` (${scope.space})` : ' (у сессии сейчас нет пространства — вызов вернёт ошибку)';
   const file = (name: string) => (scope.spaceDir ? `${scope.spaceDir}/${name}` : name);
   const ask = 'Пользователь подтверждает вызов.';
@@ -212,7 +222,21 @@ function tools(scope: ReturnType<McpScope>) {
           },
         ]
       : []),
+    // дела — личная доска пользователя: в конце списка, после инструментов задачи
+    ...(desk ? deskTools(desk) : []),
   ];
+}
+
+const DESK_ANNOTATIONS: Record<(typeof DESK_TOOLS)[number], Record<string, boolean>> = {
+  [DESK_PUT_TOOL]: { readOnlyHint: false, destructiveHint: false },
+  [DESK_CLOSE_TOOL]: { readOnlyHint: false, destructiveHint: false },
+  [DESK_LIST_TOOL]: { readOnlyHint: true },
+};
+
+function deskTools(hint: DeskHint) {
+  const d = deskToolDescriptions('session', hint);
+  const schemas = deskInputSchemas();
+  return DESK_TOOLS.map((name) => ({ name, description: d[name], inputSchema: schemas[name], annotations: DESK_ANNOTATIONS[name] }));
 }
 
 const NEW_KEYS = ['prompt', 'space', 'tags', 'cwd', 'name', 'model'];
@@ -362,6 +386,9 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
       const file = await ctx.teamDoc(args.name.replace(CONTROL_RE, '').trim(), args.text);
       return { content: [{ type: 'text', text: `Документ записан: ${file}. Коммит в репо команды уйдёт участникам.` }] };
     }
+    if (ctx.desk && (DESK_TOOLS as readonly unknown[]).includes(name)) {
+      return { content: [{ type: 'text', text: (await deskCall(name, args, ctx.desk()))! }] };
+    }
     throw new Error(`Нет инструмента ${String(name)}`);
   } catch (err) {
     return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
@@ -386,7 +413,7 @@ async function one(msg: RpcMessage, ctx: McpCtx): Promise<unknown> {
     case 'ping':
       return result({});
     case 'tools/list':
-      return result({ tools: tools(ctx.scope()) });
+      return result({ tools: tools(ctx.scope(), ctx.desk ? (ctx.deskHint?.() ?? {}) : undefined) });
     case 'tools/call':
       return result(await call(params.name, params.arguments, ctx));
     default:

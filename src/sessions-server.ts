@@ -20,7 +20,8 @@ import { runSession, type SessionRequest, type SessionResult } from './agent.js'
 import { nothingToName, pickSessionTitle } from './session-title.js';
 import type { RunTitleReport } from './run-title.js';
 import { parseSessionSource } from './work-links.js';
-import { FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
+import { APP_DIR, FLOWS_DIR, ROOT, RUNS_DIR } from './paths.js';
+import { branchCache } from './git-head.js';
 import { requestProblem } from './server-guard.js';
 import { knowledgeTags, readTag, runTagSlugs, tagsDir } from './tags.js';
 import {
@@ -49,6 +50,9 @@ import { teamsDir } from './teamwork.js';
 import type { DraftSession } from './space-draft.js';
 import { REVIEW_DAYS, type ReviewSource } from './session-review.js';
 import { loadPtyKit, PtySession, ptyKitError, type PtyKit, type ScreenClient } from './sessions-pty.js';
+import { desk } from './desk/index.js';
+import type { DeskApi } from './desk/types.js';
+import { branchKeyOf } from './desk/tools.js';
 
 /** Открытое пространство проекта папки (projectOf по папке); закрытое или «Без проекта» — undefined. */
 function openProjectSpace(cwd: string): string | undefined {
@@ -216,6 +220,10 @@ export type SessionDeps = {
    * (parseRunTitle): одна строка до TITLE_MAX знаков — его присваивают как есть.
    */
   title: (text: string, signal: AbortSignal) => Promise<RunTitleReport>;
+  /** Хранилище дел для desk_* сессии; по умолчанию — общее (desk()). Шов для тестов. */
+  desk?: () => DeskApi;
+  /** Папка кода agentgraph: там скилл session-to-flow («Flow из сессии»); нет — APP_DIR. */
+  appDir?: string;
 };
 
 const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) =>
@@ -341,7 +349,13 @@ export class SessionManager {
   list(): SessionList {
     // проект — по одному снимку пространств на весь список
     const proj = projectResolver();
-    const views = [...this.sessions.values()].map((s) => this.view(s, proj));
+    // ветка папки — для поиска на странице «Сессии»; у многих сессий папка одна, HEAD читается один раз
+    const branchOf = branchCache();
+    const views = [...this.sessions.values()].map((s) => {
+      const v = this.view(s, proj);
+      const branch = branchOf(v.cwd);
+      return branch ? { ...v, branch } : v;
+    });
     views.sort((a, b) => Number(b.live) - Number(a.live) || b.lastActivityAt.localeCompare(a.lastActivityAt));
     return { sessions: views, max: LIVE_SESSIONS_MAX };
   }
@@ -779,6 +793,29 @@ export class SessionManager {
   }
 
   /**
+   * «Flow из сессии»: новая сессия в папке кода agentgraph (там лежит скилл session-to-flow и flows/ рядом) с первым
+   * сообщением «/session-to-flow <транскрипт>». Источник — транскрипт последнего разговора этой сессии; нет его (не было
+   * сообщений, файл удалён) — 409. Нет скилла (сборка без .claude/skills) — 501. Лимит живых сессий — как у create.
+   */
+  async toFlow(id: string, port: number, size?: { cols: number; rows: number }): Promise<SessionView> {
+    const root = this.deps.appDir ?? APP_DIR;
+    if (!sessionToFlowSkill(root)) throw new SessionError(501, `Скилла session-to-flow нет в ${root}/${SESSION_TO_FLOW_SKILL}`, 'no_skill');
+    const s = this.get(id);
+    const transcript = resumeTarget(s.rec) ? s.rec.transcriptPath : undefined;
+    if (!transcript) {
+      throw new SessionError(409, s.rec.turns ? 'Транскрипт разговора этой сессии удалён: flow делать не из чего' : 'В сессии ещё не было ни одного сообщения: flow делать не из чего', 'no_transcript');
+    }
+    // путь пришёл хуком сессии — он в первое сообщение: кавычки и управляющие символы дописали бы к команде свой текст
+    if (!path.isAbsolute(transcript) || !transcript.endsWith('.jsonl') || /["\\\u0000-\u001f\u007f]/.test(transcript)) {
+      throw new SessionError(409, `Путь транскрипта не подходит для команды: ${JSON.stringify(transcript)}`, 'no_transcript');
+    }
+    // транскрипт — недоверенный текст (вывод страниц, файлов, MR), а папка — код agentgraph: режим всегда manual, а не
+    // defaultMode из настроек пользователя (как session_new в другой папке). Путь — в кавычках: в нём бывают пробелы
+    const from = s.rec.name.length > 60 ? `${s.rec.name.slice(0, 59)}…` : s.rec.name;
+    return this.create({ cwd: root, name: `Flow из «${from}»`, prompt: `/session-to-flow "${transcript}"`, permissionMode: 'manual', ...(size ?? {}) }, port, root);
+  }
+
+  /**
    * «Продолжить»: новый процесс claude в той же папке с текущими пространством и тегами (папки и запреты — заново). Транскрипт последнего
    * разговора есть — --resume, нет (не было ни одного сообщения) — новый разговор. Адрес /sessions/<id> тот же. prompt —
    * первое сообщение продолженного разговора (ответ на вопрос, «с чего продолжить»): claude отправит его сам.
@@ -1126,6 +1163,22 @@ export class SessionManager {
         return file;
       },
       ...(team ? { teamTask: (args) => team.hooks.updateTask(team.link, args, s.rec.id), teamDoc: (name, text) => team.hooks.writeDoc(team.link, name, text, s.rec.id) } : {}),
+      // дела: сессия, проект (явное пространство, иначе по папке) и ветка папки — сами, в момент вызова
+      desk: () => ({
+        api: (this.deps.desk ?? desk)(),
+        by: 'session',
+        source: 'session',
+        session: s.rec.id,
+        project: () => projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined,
+        branch: () => branchKeyOf(s.rec.cwd),
+        why: `из сессии «${s.rec.name}»`,
+        ...(s.rec.source?.thing ? { thing: s.rec.source.thing } : {}),
+      }),
+      deskHint: () => {
+        const thing = s.rec.source?.thing;
+        const project = projectResolver().of({ space: s.rec.space, path: s.rec.cwd }).space ?? undefined;
+        return { ...(thing ? { thing: { key: thing.key, ...(thing.title ? { title: thing.title } : {}) } } : {}), ...(project ? { project } : {}) };
+      },
     });
   }
 
@@ -1861,6 +1914,10 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
       }
       return done(200, (await mgr.resume(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined, prompt)) satisfies SessionView);
     }
+    if ((m = p.match(/^\/api\/sessions\/([^/]+)\/to-flow$/)) && method === 'POST') {
+      const body = asObject(await ctx.readJson());
+      return done(201, (await mgr.toFlow(m[1], req.socket.localPort ?? 0, body.cols ? sizeOf(body) : undefined)) satisfies SessionView);
+    }
     if ((m = p.match(/^\/api\/sessions\/([^/]+)\/restart$/)) && method === 'POST') return done(200, (await mgr.restart(m[1], req.socket.localPort ?? 0)) satisfies SessionView);
     if ((m = p.match(/^\/api\/sessions\/([^/]+)$/)) && method === 'DELETE') {
       mgr.remove(m[1]);
@@ -1872,6 +1929,10 @@ export async function sessionsRoute(req: IncomingMessage, res: ServerResponse, u
     return done(err.status, { error: err.message, ...(err.code ? { code: err.code } : {}) });
   }
 }
+
+/** Скилл «Flow из сессии» в папке кода agentgraph (.claude/skills — в checkout, в сборке приложения его может не быть). */
+export const SESSION_TO_FLOW_SKILL = '.claude/skills/session-to-flow/SKILL.md';
+export const sessionToFlowSkill = (root: string = sessionManager().deps.appDir ?? APP_DIR): boolean => fs.existsSync(path.join(root, SESSION_TO_FLOW_SKILL));
 
 /** Есть ли фича sessions: для features в /api/config. */
 export const sessionsAvailable = () => sessionManager().available();

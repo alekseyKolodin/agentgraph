@@ -146,6 +146,8 @@ export function tickOf(e: LogEntry, runs: RunStatuses = new Map()): Tick {
       return startedTick(e, runs);
     case 'waiting':
       return 'w';
+    case 'task':
+      return 'o';
     case 'error':
       return 'e';
     default:
@@ -172,7 +174,7 @@ export type LogChip = 'all' | 'wait' | 'run' | 'skip' | 'error';
 
 export function chipOf(o: LogOutcome): Exclude<LogChip, 'all'> {
   if (o === 'waiting') return 'wait';
-  if (o === 'started') return 'run';
+  if (o === 'started' || o === 'task') return 'run';
   if (o === 'error') return 'error';
   return 'skip';
 }
@@ -184,7 +186,7 @@ export function chipLabel(c: LogChip): string {
 /** Исходы на сервер для фильтра (?outcome=a,b). */
 export function chipOutcomes(c: LogChip): LogOutcome[] | undefined {
   if (c === 'all') return undefined;
-  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'error'];
+  const all: LogOutcome[] = ['started', 'waiting', 'filtered', 'check_no', 'duplicate', 'limit', 'rejected', 'missed', 'task', 'error'];
   return all.filter((o) => chipOf(o) === c);
 }
 
@@ -218,6 +220,8 @@ export function verdict(e: LogEntry, runs: RunStatuses = new Map()): { text: str
       return { text: t('не то'), tone: 'muted' };
     case 'missed':
       return { text: t('простой'), tone: 'muted' };
+    case 'task':
+      return { text: t('дело'), tone: 'ok' };
     case 'error':
       return { text: t('ошибка'), tone: 'fail' };
   }
@@ -243,6 +247,8 @@ export function logDetail(e: LogEntry): string {
   // почему подошло (ответ проверки словами) — у запуска и ожидания, где своей причины нет
   else if (e.why) parts.push(e.why.trim().replace(/([^.!?…])$/, '$1.'));
   if (e.replied) parts.push(t('Ответ ушёл: «{text}».', { text: e.replied.text }));
+  if (e.desk?.created) parts.push(t('Запуск завёл {n} {w}.', { n: e.desk.created, w: plural(e.desk.created, 'дело', 'дела', 'дел') }));
+  if (e.desk?.signals) parts.push(t('Дописал в дела сигналов: {n}.', { n: e.desk.signals }));
   if (e.costUsd) parts.push(t('Потрачено {usd}.', { usd: usd(e.costUsd) }));
   if (!parts.length) parts.push(e.outcome === 'started' ? t('Запуск начат.') : t('Подробностей нет.'));
   return parts.join(' ');
@@ -281,7 +287,7 @@ export function overviewMeta(routines: RoutineView[], now: Date = new Date(), so
 export function routineSub(r: RoutineView, sources: SourceView[], scheduleText: (cron: string) => string): string {
   const w = r.spec.when;
   const from = 'schedule' in w ? `${t('Расписание')} · ${scheduleText(w.schedule)}` : (sources.find((s) => s.slug === w.source)?.spec.title ?? w.source);
-  return `${from} → ${r.spec.run.flow}`;
+  return `${from} → ${r.spec.run ? r.spec.run.flow : t('дело «{kind}»', { kind: r.spec.task?.kind ?? '' })}`;
 }
 
 /**
@@ -298,15 +304,19 @@ export function waitButtons(w: Pick<RoutineWait, 'question' | 'kind'>): { run: s
   return { run, later: t('Не сейчас'), reject };
 }
 
+/** Ожидание рутины с task (3.8): это дело в «Новом» — запуск по нему ещё не начат. */
+export const isDeskWait = (w: Pick<RoutineWait, 'kind' | 'deskKey'>): boolean => w.kind === 'suggest' && Boolean(w.deskKey);
+
 /** Строка после решения по карточке. */
-export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft'>, replied: boolean): string {
+export function decisionText(action: 'run' | 'later' | 'reject', w: Pick<RoutineWait, 'kind' | 'replyDraft' | 'deskKey'>, replied: boolean): string {
   const where = w.replyDraft?.where;
   if (w.kind === 'reply') return action === 'run' ? t('Ответ ушёл: {where}.', { where: where ?? '' }) : action === 'reject' ? t('Ответ не отправлен.') : t('Отложено. Ответ ждёт в срабатываниях рутины.');
   const tail = !w.replyDraft ? '' : replied ? t(' Ответ ушёл: {where}.', { where: where ?? '' }) : t(' Наружу ничего не ушло.');
   if (action === 'run') return (w.kind === 'pause' ? t('Запуск продолжен.') : t('Запуск начат.')) + tail;
   // «Не сейчас» ответ не отправляет: сервер только откладывает ожидание
-  if (action === 'later') return t('Отложено. Запуск ждёт в срабатываниях рутины.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
-  return t('Закрыто как «не то». Рутина учтёт это в следующий раз.') + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  // ожидание-дело (3.8): «Не сейчас» — дело в план, «Не то» — дело закрыто
+  if (action === 'later') return (isDeskWait(w) ? t('Дело — в план. Запуск ждёт в срабатываниях рутины.') : t('Отложено. Запуск ждёт в срабатываниях рутины.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
+  return (isDeskWait(w) ? t('Дело закрыто как «не то». Рутина учтёт это в следующий раз.') : t('Закрыто как «не то». Рутина учтёт это в следующий раз.')) + (w.replyDraft ? t(' Наружу ничего не ушло.') : '');
 }
 
 /** Ушёл ли ответ вместе с решением: «Ответ готов» — только «Отправить»; иначе — галочка, кроме «Не сейчас» и отказа. */
@@ -391,4 +401,16 @@ export function historyVerdict(e: HistoryCheck['events'][number]): { text: strin
     ? [{ match: t('Ты отметил это как подходящее, правило пропустило.'), no_match: t('Ты отметил это как неподходящее, правило запустило бы.'), not_duplicate: t('Ты отметил, что это не повтор, правило отсеяло как дубль.') }[e.past!], e.reason ?? ''].filter(Boolean).join(' ')
     : (e.reason ?? '');
   return { text, run, disagrees, why };
+}
+
+/**
+ * Строка «Проверки на истории» о деле (рутина с task): «дело» — новое дело, «в план» — то же дело вернулось в план,
+ * «то же дело» — колонка та же (on_repeat: keep), «закрыто» — дело по этой вещи уже закрыто. Нет task — undefined.
+ */
+export function taskVerdict(task: HistoryCheck['events'][number]['task']): { text: string; why: string } | undefined {
+  if (!task) return undefined;
+  if (task.action === 'new') return { text: t('дело'), why: task.note ?? '' };
+  if (task.action === 'plan') return { text: t('в план'), why: task.note ?? t('то же дело: вернулось в план') };
+  if (task.action === 'same') return { text: t('то же дело'), why: task.note ?? t('то же дело: колонка та же') };
+  return { text: t('закрыто'), why: task.note ?? t('дело по этой вещи уже закрыто') };
 }

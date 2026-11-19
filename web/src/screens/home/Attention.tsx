@@ -1,12 +1,15 @@
 // Главная: «MR · нужно внимание» (ui/attention.js) — свои открытые MR из проектов «Подключений», где упал CI, ждут ответа
 // обсуждения или есть конфликты. Подсказка flow приходит отдельным запросом (/api/attention/suggest, haiku в фоне)
-// и дорисовывается в готовые строки.
+// и дорисовывается в готовые строки. Дела о MR, где ход мой (src/desk, SPEC 3.10), — теми же строками после MR
+// «Подключений»; MR, который уже показан, вторым не идёт.
 import { useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AttentionItem } from '@server/api-types';
 import { errorText, fetchAttention, fetchSuggestions, keys, useRuns } from '../../api';
+import { useDesk } from '../../api/desk';
 import { useMemoryState } from '../../components/useMemoryState';
 import { DASH_STALE_MS, dashCap, dashMore, mrSign, runsForBranch } from '../../lib/dash';
+import { deskMrRows, type DeskMrRow } from '../../lib/desk';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { projectHint, projectLabel } from '../../lib/spaces';
@@ -42,6 +45,8 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
     staleTime: Infinity,
   });
   const suggestions = suggest.data?.suggestions ?? {};
+  const deskRows = deskMrRows(useDesk().data?.items, (items ?? []).map((m) => m.url));
+  const rows: Array<{ att: AttentionItem } | { desk: DeskMrRow }> = [...(items ?? []).map((att) => ({ att })), ...deskRows.map((desk) => ({ desk }))];
 
   const reload = () => {
     force.current = true;
@@ -56,7 +61,7 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
   ));
   const title = t('Твои открытые MR из проектов «Подключений», где упал CI, ждут ответа обсуждения или есть конфликты. «Запустить…» и подсказка flow заполнят форму запуска, запустишь сам');
   // ничего не нужно — одна строка вместо пустой карточки: в простое она не занимает верх главной
-  if (!att.error && items && !items.length && !errs.length) {
+  if (!att.error && items && !rows.length && !errs.length) {
     return (
       <section className={homeStyles.homeSec}>
         <div className={`${styles.dashHead} ${styles.dashQuiet}`}>
@@ -80,15 +85,16 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
       </section>
     );
   }
+  // дела от «Подключений» не зависят: их строки видны и пока MR грузятся, и под ошибкой
   let list;
-  if (att.error) list = <p className="msg err">{errorText(att.error)}</p>;
-  else if (!items) list = <p className="muted small">{t('Загружаю…')}</p>;
-  else if (!items.length) list = null;
+  if (!rows.length) list = null;
   else {
     list = (
       <>
         <ul className={styles.dashList}>
-          {dashCap(items, more).map((m) => {
+          {dashCap(rows, more).map((r) => {
+            if ('desk' in r) return <DeskRow key={r.desk.key} d={r.desk} />;
+            const m = r.att;
             const s = suggestions[m.ref];
             return (
               <li key={m.ref}>
@@ -124,8 +130,8 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
             );
           })}
         </ul>
-        {dashMore(items, more) > 0 && (
-          <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={() => setMore(true)}>{t('Ещё {n}', { n: dashMore(items, more) })}</button>
+        {dashMore(rows, more) > 0 && (
+          <button type="button" className={`btn small ghost ${styles.dashMore}`} onClick={() => setMore(true)}>{t('Ещё {n}', { n: dashMore(rows, more) })}</button>
         )}
       </>
     );
@@ -135,11 +141,12 @@ export function Attention({ onLaunch }: { onLaunch: OnLaunch }) {
     <section className={homeStyles.homeSec}>
       <div className={styles.dashHead}>
         <h2 title={title}>
-          {t('MR · нужно внимание')} <span className="muted small">{items?.length ? String(items.length) : ''}</span>
+          {t('MR · нужно внимание')} <span className="muted small">{rows.length ? String(rows.length) : ''}</span>
         </h2>
         <button className="btn small ghost" title={t('Обновить')} onClick={reload}>↻</button>
       </div>
       <div className={styles.dashBox}>
+        {att.error ? <p className="msg err">{errorText(att.error)}</p> : !items && <p className="muted small">{t('Загружаю…')}</p>}
         {list}
         {errs}
       </div>
@@ -159,5 +166,26 @@ function Reasons({ m }: { m: AttentionItem }) {
       )}
       {r.conflicts && <a className="badge failed" href={m.url} target="_blank" rel="noopener" title={t('Конфликты с {branch}', { branch: m.targetBranch })}>{t('конфликты')}</a>}
     </span>
+  );
+}
+
+/** Дело о MR (src/desk): та же строка, причина — почему сейчас мой ход. */
+function DeskRow({ d }: { d: DeskMrRow }) {
+  return (
+    <li>
+      <div className={styles.dashRow}>
+        {d.url ? (
+          <a href={d.url} target="_blank" rel="noopener" className={styles.dashKey}>{d.sign}{d.num}</a>
+        ) : (
+          <span className={styles.dashKey}>{d.sign}{d.num}</span>
+        )}
+        <span className={styles.dashName} title={d.title}>{d.title}</span>
+        <span className={styles.dashMeta} title={d.kind}>{d.project ?? d.kind}</span>
+        <span className={styles.attReasons}>
+          {/* причина длинная — бейдж короткий, целиком в подсказке */}
+          {d.why && <span className="badge waiting" title={d.why}>{d.why.length > 60 ? `${d.why.slice(0, 59)}…` : d.why}</span>}
+        </span>
+      </div>
+    </li>
   );
 }

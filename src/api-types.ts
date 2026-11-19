@@ -312,6 +312,42 @@ export type FlowSummary = {
 /** Элемент GET /api/flows: сводка flow (у невалидного — только имя, папка и ошибка). */
 export type FlowListItem = FlowSummary;
 
+/**
+ * Версия flow — одинаковые по содержимому снимки flow.yaml его запусков (src/flow-history.ts). Версия запуска — та, с
+ * которой он начался (после правки на ходу — flow.0.yaml).
+ */
+export type FlowVersion = {
+  /** Отпечаток содержимого (12 hex). */
+  id: string;
+  /** Номер по времени появления: 1 — самая старая известная. */
+  n: number;
+  /** Совпадает с файлом flow сейчас. */
+  current: boolean;
+  /** Запусков с этой версией. */
+  runs: number;
+  firstAt: string;
+  lastAt: string;
+  /** Последний запуск с этой версией и его файл снимка (GET /api/runs/:id/file?path=…). */
+  runId: string;
+  file: string;
+};
+
+/** GET /api/flows/:name/history: как flow используют и какие версии были у его запусков (разовые не в счёт). */
+export type FlowHistory = {
+  name: string;
+  /** Всех запусков flow, с дочерними и от рутин. */
+  total: number;
+  /** Запусков за последние 30 дней. */
+  runs30d: number;
+  last?: { id: string; startedAt: string; status: string; title?: string };
+  /** От свежих к старым, не больше 30. */
+  versions: FlowVersion[];
+  /** Запусков без снимка flow.yaml (папку чистили): в версиях их нет. */
+  noSnapshot: number;
+  /** Файл flow сейчас ни с одним запуском не запускался (поправили после последнего). */
+  currentUnrun?: true;
+};
+
 /** Шаг ИИ-сессии над flow: генерация, сама правка или починка после неё (attempt из of), когда flow не прошёл валидацию. */
 export type FlowAiStage = { kind: 'generate' } | { kind: 'edit' } | { kind: 'repair'; attempt: number; of: number };
 /** Что done потока добавляет к обычному телу ответа: фактическая модель (нет — init не пришёл) и длительность всего запроса. */
@@ -700,6 +736,8 @@ export type SessionView = {
   source?: SessionSource;
   /** Проект сессии (пространство): явное пространство, иначе по папке; есть в списке GET /api/sessions. */
   projectRef?: ProjectRef;
+  /** Ветка, на которой сейчас стоит папка сессии (HEAD, без вызова git); только в списке GET /api/sessions — поиск по ветке. */
+  branch?: string;
 };
 
 /**
@@ -1194,7 +1232,15 @@ export type RunReport = {
   flowEdits?: RunFlowEdit[];
   /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
   parent?: RunParent;
+  /** Дела, которые запуск завёл или дополнил инструментом desk_put (вместе с вызванными flow). Нет вызовов — поля нет. */
+  desk?: RunDesk;
 };
+
+/**
+ * Дела запуска (src/desk/tools.ts): created — заведено новых, signals — сигналов к уже существующим делам, keys — ключи
+ * всех тронутых дел по порядку, без повторов (не больше 100). Журнал рутины показывает created.
+ */
+export type RunDesk = { created: number; signals: number; keys: string[] };
 
 /** GET /api/runs/:id: отчёт, идёт ли запуск в этом сервере и можно ли его продолжить (canContinue). */
 export type RunDetail = RunReport & { live: boolean; continuable?: boolean; continueReason?: string };

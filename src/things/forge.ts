@@ -5,22 +5,20 @@
 //   • мой MR: ход мой, если упал CI, есть конфликты или после моей последней реплики или пуша кто-то ответил;
 //     иначе ход других (ждёт ревью);
 //   • чужой MR: ход мой, если ревью запрошено (и я ещё не отвечал) или после моей последней реплики автор ответил,
-//     появились коммиты либо ревью запрошено заново; последняя реплика моя — ход других.
+//     появились коммиты либо ревью запрошено заново; последняя реплика моя — ход других. Реплики третьих ревьюеров ход не двигают.
+// Одобрение и «запросил правки» — тоже реплика: мой approve без комментария закрывает «ревью запрошено», а approve ревьюера
+// в моём MR возвращает ход мне (можно мёржить). Реплики ботов (CI-бот, `…[bot]`, `project_1_bot_…`) в моём MR не считаются.
+// Какой это forge — берём из ref.forge (его знает тот, кто нашёл ссылку); по хосту угадываем, только если его нет.
 // «Я» — логин из профиля (`loadProfile`: gitlab или github) плюс логин из `glab`/`gh` на этом хосте; ref.me задаёт его явно.
 // Нет доступа к хосту или MR — `exists: false` с понятной `error`; исключений наружу нет.
-import { exec, forgeOf, forgeUser, type Exec, type Forge } from '../git.js';
+import { exec, forgeOf, ghUser, glabUser, type Exec, type Forge } from '../git.js';
 import type { Profile } from '../api-types.js';
 import { loadProfile } from '../settings.js';
 import { mrKey } from './keys.js';
 import type { Thing, ThingState, Turn, Watcher } from './types.js';
 
-/**
- * Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое).
- * forge — из вещи (resolve знает его по адресу: GitHub Enterprise на своём хосте); нет — по хосту (forgeOf).
- */
+/** Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое). */
 export type ForgeRef = { host: string; project: string; number: number; forge?: Forge; me?: string; notesCount?: number };
-
-const forgeOfRef = (ref: Pick<ForgeRef, 'host' | 'forge'>): Forge => ref.forge ?? forgeOf(ref.host);
 
 export type ForgeDeps = {
   exec?: Exec;
@@ -53,7 +51,12 @@ export function forgeRefOf(thing: Thing): ForgeRef | string {
   const host = typeof r.host === 'string' ? r.host : undefined;
   const project = typeof r.project === 'string' ? r.project : undefined;
   const number = typeof r.number === 'number' ? r.number : typeof r.number === 'string' ? Number(r.number) : undefined;
-  const base = { ...(r.forge === 'gitlab' || r.forge === 'github' ? { forge: r.forge as Forge } : {}), ...(typeof r.me === 'string' && r.me ? { me: r.me } : {}), ...(typeof r.notesCount === 'number' ? { notesCount: r.notesCount } : {}) };
+  const forge: Forge | undefined = r.forge === 'github' ? 'github' : r.forge === 'gitlab' ? 'gitlab' : undefined;
+  const base = {
+    ...(forge ? { forge } : {}),
+    ...(typeof r.me === 'string' && r.me ? { me: r.me } : {}),
+    ...(typeof r.notesCount === 'number' ? { notesCount: r.notesCount } : {}),
+  };
   if (host && project && number && Number.isInteger(number) && number > 0) return { host, project, number, ...base };
   const m = KEY_RE.exec(thing.key);
   if (m && Number(m[3]) > 0) return { host: m[1], project: m[2], number: Number(m[3]), ...base };
@@ -61,6 +64,18 @@ export function forgeRefOf(thing: Thing): ForgeRef | string {
 }
 
 // ---------------------------------------------------------------- модель и суждение (чистые функции)
+
+/** Решение ревьюера: одобрил, запросил правки или снял одобрение. Это реплика, а не системная заметка. */
+export type Verdict = 'approved' | 'changes' | 'withdrawn';
+
+export type MrNote = {
+  at: number;
+  author: string;
+  system: boolean;
+  verdict?: Verdict;
+  /** API сказал, что автор — бот (GitHub: type Bot); по имени бота узнаёт botLogin. */
+  bot?: boolean;
+};
 
 export type MrModel = {
   lifecycle: 'open' | 'merged' | 'closed';
@@ -79,7 +94,7 @@ export type MrModel = {
   /** Обсуждения: last — автор последней несистемной заметки. */
   threads: { resolvable: boolean; resolved: boolean; last?: string }[];
   /** Все заметки и ревью с временем (мс): по ним считается «после моей последней реплики». */
-  notes: { at: number; author: string; system: boolean }[];
+  notes: MrNote[];
   /** Кому сейчас запрошено ревью. */
   reviewers: string[];
   /** Когда последний коммит ветки (мс); нет — не запрашивали. */
@@ -101,6 +116,12 @@ function plural(n: number, one: string, few: string, many: string): string {
   const m100 = n % 100;
   return `${n} ${m100 >= 11 && m100 <= 14 ? many : m10 === 1 ? one : m10 >= 2 && m10 <= 4 ? few : many}`;
 }
+
+const VERDICT_RU: Record<Verdict, string> = { approved: 'одобрено', changes: 'просит правки', withdrawn: 'снято одобрение' };
+
+/** Логин бота: `github-actions[bot]`, `ci-bot`, GitLab `project_12_bot_ab12…`, `group_3_bot_…`. */
+const botLogin = (login: string): boolean => /\[bot\]$|(^|[-_])bot($|[-_])|^(project|group)_\d+_bot/i.test(login);
+const isBotNote = (n: MrNote): boolean => n.bot === true || botLogin(n.author);
 
 /** Состояние MR по модели и множеству моих логинов (нижний регистр). */
 export function judgeMr(m: MrModel, mine: ReadonlySet<string>): ThingState {
@@ -133,7 +154,9 @@ export function judgeMr(m: MrModel, mine: ReadonlySet<string>): ThingState {
   // свой пуш — тоже ответ автора на замечания; чужие коммиты в чужом MR — ответ автора ревьюеру
   const myLast = Math.max(0, ...myNotes, author ? (m.commitAt ?? 0) : 0);
   const asked = m.requests.filter((r) => isMine(r.reviewer)).map((r) => r.at);
-  const othersNotes = real.filter((n) => !isMine(n.author));
+  // чья реплика передаёт ход мне: в моём MR — любого ревьюера, кроме ботов; в чужом — только автора (третьи ревьюеры не в счёт)
+  const sameAuthor = (login: string) => login.toLowerCase() === m.author.toLowerCase();
+  const othersNotes = real.filter((n) => !isMine(n.author) && (author ? !isBotNote(n) : sameAuthor(n.author)));
   const othersLast = Math.max(0, ...othersNotes.map((n) => n.at), author ? 0 : (m.commitAt ?? 0), author ? 0 : Math.max(0, ...asked));
   const theirs = othersLast > myLast;
   const fresh = othersNotes.filter((n) => n.at > myLast);
@@ -147,8 +170,14 @@ export function judgeMr(m: MrModel, mine: ReadonlySet<string>): ThingState {
     const parts: string[] = [];
     if (ciFailed) parts.push('CI упал');
     if (m.conflicts) parts.push(`конфликты с ${m.targetBranch}`);
-    if (theirs && fresh.length) parts.push(`${plural(fresh.length, 'новая реплика', 'новые реплики', 'новых реплик')}`);
-    else if (replies) parts.push(`${plural(replies, 'тред ждёт', 'треда ждут', 'тредов ждут')} ответа`);
+    if (theirs && fresh.length) {
+      const talk = fresh.filter((n) => !n.verdict).length;
+      if (talk) parts.push(plural(talk, 'новая реплика', 'новые реплики', 'новых реплик'));
+      for (const v of ['changes', 'approved', 'withdrawn'] as const) {
+        const who = [...new Set(fresh.filter((n) => n.verdict === v).map((n) => n.author))];
+        if (who.length) parts.push(`${VERDICT_RU[v]}: ${who.join(', ')}`);
+      }
+    } else if (replies) parts.push(`${plural(replies, 'тред ждёт', 'треда ждут', 'тредов ждут')} ответа`);
     if (ciFailed || m.conflicts || theirs) return done('me', parts.join(', '));
     if (m.draft) return done('none', 'черновик');
     return done('others', m.reviewers.length ? `ждёт ревью: ${m.reviewers.join(', ')}` : 'ждёт ревью');
@@ -161,10 +190,7 @@ export function judgeMr(m: MrModel, mine: ReadonlySet<string>): ThingState {
   if (theirs) {
     const parts: string[] = [];
     if (Math.max(0, ...asked) > myLast) parts.push('ревью запрошено заново');
-    const fromAuthor = fresh.filter((n) => n.author.toLowerCase() === m.author.toLowerCase()).length;
-    const others = fresh.length - fromAuthor;
-    if (fromAuthor) parts.push(`автор ответил: ${plural(fromAuthor, 'реплика', 'реплики', 'реплик')}`);
-    if (others) parts.push(`${plural(others, 'реплика', 'реплики', 'реплик')} от других`);
+    if (fresh.length) parts.push(`автор ответил: ${plural(fresh.length, 'реплика', 'реплики', 'реплик')}`);
     if ((m.commitAt ?? 0) > myLast) parts.push('новые коммиты');
     return done('me', parts.join(', '));
   }
@@ -204,6 +230,32 @@ const lifecycleOf = (state: string | undefined, merged?: boolean): MrModel['life
 const glApi = async <T>(x: Exec, host: string, path: string): Promise<T> => JSON.parse(await x('glab', ['api', '--hostname', host, path], { timeoutMs: 30_000 })) as T;
 const ghApi = async <T>(x: Exec, host: string, args: string[]): Promise<T> => JSON.parse(await x('gh', ['api', '--hostname', host, ...args], { timeoutMs: 30_000 })) as T;
 
+const PAGE_SIZE = 100;
+/** Страниц на один список — потолок против бесконечного цикла; 2000 записей в одном списке MR не бывает. */
+const MAX_PAGES = 20;
+
+/** Запрос страницы: первая — как и была (`per_page=100`), следующие дописывают `&page=N`. */
+const pageQuery = (page: number): string => `per_page=${PAGE_SIZE}${page > 1 ? `&page=${page}` : ''}`;
+
+/** Весь список: страницы по 100 от старых к новым, пока страница полная. В обычном MR это один запрос, как раньше. */
+async function allPages<T>(get: (page: number) => Promise<T[]>): Promise<T[]> {
+  const all: T[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const part = await get(page);
+    all.push(...part);
+    if (part.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
+/** Системная заметка GitLab о решении ревьюера: «approved this merge request» и т. п. Остальные системные заметки — undefined. */
+function verdictOf(body: string): Verdict | undefined {
+  if (/^unapproved\b/i.test(body)) return 'withdrawn';
+  if (/^approved\b/i.test(body)) return 'approved';
+  if (/^requested changes\b/i.test(body)) return 'changes';
+  return undefined;
+}
+
 /** «requested review from @anna and @boris» → логины. */
 function requestedFrom(body: string): string[] {
   const m = /requested review from\s+(.*)$/i.exec(body);
@@ -236,7 +288,7 @@ async function gitlabModel(ref: ForgeRef, x: Exec, depth: Depth): Promise<MrMode
   if (model.lifecycle !== 'open') return model;
   // без заметок обсуждения не нужны; в полном режиме системные заметки («запросил ревью») не считаются в user_notes_count — идём всегда
   if (depth === 'full' || ref.notesCount !== 0) {
-    const raw = await glApi<GlDiscussion[]>(x, ref.host, `${base}/discussions?per_page=100`);
+    const raw = await allPages((page) => glApi<GlDiscussion[]>(x, ref.host, `${base}/discussions?${pageQuery(page)}`));
     for (const d of raw) {
       const notes = d.notes ?? [];
       // у обсуждения флаги есть не во всех версиях GitLab: тогда выводим их из заметок
@@ -248,7 +300,9 @@ async function gitlabModel(ref: ForgeRef, x: Exec, depth: Depth): Promise<MrMode
       });
       for (const n of notes) {
         const at = num(n.created_at);
-        model.notes.push({ at, author: n.author?.username ?? '', system: Boolean(n.system) });
+        // «approved this merge request» — системная заметка, но по сути реплика ревьюера: без неё approve без комментария не виден
+        const verdict = n.system && n.body ? verdictOf(n.body) : undefined;
+        model.notes.push({ at, author: n.author?.username ?? '', system: Boolean(n.system) && !verdict, ...(verdict ? { verdict } : {}) });
         if (n.system && n.body) for (const reviewer of requestedFrom(n.body)) model.requests.push({ at, reviewer });
       }
     }
@@ -297,15 +351,23 @@ async function githubCi(ref: ForgeRef, sha: string, prUrl: string, x: Exec): Pro
   return { status: running ? 'running' : 'success', url: `${prUrl}/checks` };
 }
 
-const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+const THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) { nodes { isResolved comments(last: 30) { nodes { author { login } createdAt } } } }
+      reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { isResolved comments(last: 30) { nodes { author { login __typename } createdAt } } } }
     }
   }
 }`;
 
-type GhThreads = { data?: { repository?: { pullRequest?: { reviewThreads?: { nodes?: { isResolved?: boolean; comments?: { nodes?: { author?: { login?: string } | null; createdAt?: string }[] } }[] } } | null } | null } };
+type GhThreadsPage = {
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  nodes?: { isResolved?: boolean; comments?: { nodes?: { author?: { login?: string; __typename?: string } | null; createdAt?: string }[] } }[];
+};
+type GhThreads = { data?: { repository?: { pullRequest?: { reviewThreads?: GhThreadsPage } | null } | null } };
+
+type GhUser = { login?: string; type?: string } | null;
+/** Решение ревьюера по состоянию ревью GitHub; COMMENTED и DISMISSED — обычные реплики. */
+const GH_VERDICT: Record<string, Verdict | undefined> = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes' };
 
 async function githubModel(ref: ForgeRef, x: Exec, depth: Depth): Promise<MrModel> {
   const pr = await ghApi<GhPull>(x, ref.host, [`repos/${ref.project}/pulls/${ref.number}`]);
@@ -336,26 +398,37 @@ async function githubModel(ref: ForgeRef, x: Exec, depth: Depth): Promise<MrMode
       if (pr.head?.sha) model.ci = await githubCi(ref, pr.head.sha, url, x);
     })(),
     (async () => {
-      const raw = await ghApi<GhThreads>(x, ref.host, ['graphql', '-f', `query=${THREADS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${ref.number}`]);
-      for (const t of raw.data?.repository?.pullRequest?.reviewThreads?.nodes ?? []) {
-        const comments = t.comments?.nodes ?? [];
-        model.threads.push({ resolvable: true, resolved: Boolean(t.isResolved), last: comments.length ? (comments.at(-1)!.author?.login ?? '') : undefined });
-        for (const c of comments) model.notes.push({ at: num(c.createdAt), author: c.author?.login ?? '', system: false });
+      // тредов больше 100 — идём по курсору: порядок «от старых», и новые треды иначе остались бы за краем
+      let after: string | undefined;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const raw = await ghApi<GhThreads>(x, ref.host, ['graphql', '-f', `query=${THREADS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${ref.number}`, ...(after ? ['-f', `after=${after}`] : [])]);
+        const threads = raw.data?.repository?.pullRequest?.reviewThreads;
+        for (const t of threads?.nodes ?? []) {
+          const comments = t.comments?.nodes ?? [];
+          model.threads.push({ resolvable: true, resolved: Boolean(t.isResolved), last: comments.length ? (comments.at(-1)!.author?.login ?? '') : undefined });
+          for (const c of comments) model.notes.push({ at: num(c.createdAt), author: c.author?.login ?? '', system: false, ...(c.author?.__typename === 'Bot' ? { bot: true } : {}) });
+        }
+        if (!threads?.pageInfo?.hasNextPage || !threads.pageInfo.endCursor) break;
+        after = threads.pageInfo.endCursor;
       }
     })(),
   ];
   if (depth === 'full') {
     jobs.push(
       (async () => {
-        const list = await ghApi<{ user?: { login?: string } | null; created_at?: string }[]>(x, ref.host, [`repos/${ref.project}/issues/${ref.number}/comments?per_page=100`]);
-        for (const c of list) model.notes.push({ at: num(c.created_at), author: c.user?.login ?? '', system: false });
+        const list = await allPages((page) => ghApi<{ user?: GhUser; created_at?: string }[]>(x, ref.host, [`repos/${ref.project}/issues/${ref.number}/comments?${pageQuery(page)}`]));
+        for (const c of list) model.notes.push({ at: num(c.created_at), author: c.user?.login ?? '', system: false, ...(c.user?.type === 'Bot' ? { bot: true } : {}) });
       })(),
       (async () => {
-        const list = await ghApi<{ user?: { login?: string } | null; submitted_at?: string; state?: string }[]>(x, ref.host, [`repos/${ref.project}/pulls/${ref.number}/reviews?per_page=100`]);
-        for (const r of list) if (r.state !== 'PENDING') model.notes.push({ at: num(r.submitted_at), author: r.user?.login ?? '', system: false });
+        const list = await allPages((page) => ghApi<{ user?: GhUser; submitted_at?: string; state?: string }[]>(x, ref.host, [`repos/${ref.project}/pulls/${ref.number}/reviews?${pageQuery(page)}`]));
+        for (const r of list) {
+          if (r.state === 'PENDING') continue;
+          const verdict = GH_VERDICT[r.state ?? ''];
+          model.notes.push({ at: num(r.submitted_at), author: r.user?.login ?? '', system: false, ...(verdict ? { verdict } : {}), ...(r.user?.type === 'Bot' ? { bot: true } : {}) });
+        }
       })(),
       (async () => {
-        const list = await ghApi<{ event?: string; created_at?: string; requested_reviewer?: { login?: string } | null }[]>(x, ref.host, [`repos/${ref.project}/issues/${ref.number}/events?per_page=100`]);
+        const list = await allPages((page) => ghApi<{ event?: string; created_at?: string; requested_reviewer?: { login?: string } | null }[]>(x, ref.host, [`repos/${ref.project}/issues/${ref.number}/events?${pageQuery(page)}`]));
         for (const e of list) if (e.event === 'review_requested' && e.requested_reviewer?.login) model.requests.push({ at: num(e.created_at), reviewer: e.requested_reviewer.login });
       })(),
       (async () => {
@@ -381,24 +454,30 @@ export function forgeError(host: string, forge: Forge, err: unknown, what = 'MR'
   return msg;
 }
 
+/** Какой это forge: из ref (его записал тот, кто разобрал ссылку), иначе по хосту — github.com и github.<компания>. */
+const forgeFor = (ref: { host: string; forge?: Forge }): Forge => ref.forge ?? forgeOf(ref.host);
+
+/** Логин из glab или gh — по forge из ref, а не по хосту: GitHub Enterprise бывает на git.corp.com (кэш — в git.ts). */
+const userOn = (forge: Forge, host: string, x: Exec): Promise<string> => (forge === 'github' ? ghUser(host, x) : glabUser(host, x));
+
 /** Мои логины на хосте: профиль, плюс логин из glab/gh (с кэшем в git.ts). ref.me — единственный, если задан. */
 async function myLogins(ref: ForgeRef, deps: ForgeDeps, x: Exec): Promise<Set<string>> {
   if (ref.me) return new Set([ref.me.toLowerCase()]);
-  const forge = forgeOfRef(ref);
+  const forge = forgeFor(ref);
   const p = (deps.profile ?? loadProfile)();
   const out = new Set<string>();
   const fromProfile = forge === 'github' ? p.github : p.gitlab;
   if (fromProfile) out.add(fromProfile.toLowerCase());
   // логин из glab/gh нужен не всегда: профиль уже ответил, а ошибка авторизации всплывёт и так, на запросе самого MR
-  if (!out.size) out.add((await forgeUser(ref.host, x)).toLowerCase());
-  else await forgeUser(ref.host, x).then((u) => out.add(u.toLowerCase()), () => undefined);
+  if (!out.size) out.add((await userOn(forge, ref.host, x)).toLowerCase());
+  else await userOn(forge, ref.host, x).then((u) => out.add(u.toLowerCase()), () => undefined);
   return out;
 }
 
 /** Состояние одного MR. Не бросает: сбой — exists: false с error. */
 export async function mrState(ref: ForgeRef, deps: ForgeDeps & { depth?: Depth } = {}): Promise<ThingState> {
   const x = deps.exec ?? exec;
-  const forge = forgeOfRef(ref);
+  const forge = forgeFor(ref);
   const depth = deps.depth ?? 'full';
   try {
     const model = await (forge === 'github' ? githubModel(ref, x, depth) : gitlabModel(ref, x, depth));
@@ -410,7 +489,7 @@ export async function mrState(ref: ForgeRef, deps: ForgeDeps & { depth?: Depth }
 
 /** Только открыт, смёржен или закрыт: один запрос. Ошибка запроса — исключение (его ловит вызывающий). */
 export async function mrLifecycle(ref: Pick<ForgeRef, 'host' | 'project' | 'number' | 'forge'>, x: Exec = exec): Promise<MrModel['lifecycle']> {
-  if (forgeOfRef(ref) === 'github') {
+  if (forgeFor(ref) === 'github') {
     const p = await ghApi<GhPull>(x, ref.host, [`repos/${ref.project}/pulls/${ref.number}`]);
     return lifecycleOf(p.state, Boolean(p.merged || p.merged_at));
   }

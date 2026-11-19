@@ -155,6 +155,48 @@ test('фича sessions есть в /api/config, когда pty загрузил
   assert.ok(r.body.features.includes('sessions'));
 });
 
+test('«Flow из сессии»: новая сессия в папке кода agentgraph с /session-to-flow по транскрипту; без транскрипта — 409, без скилла — 501', async () => {
+  const { APP_DIR } = await import('./paths.js');
+  assert.ok((await call<{ features: string[] }>('GET', '/api/config')).body.features.includes('session-to-flow'));
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), name: 'Чинили корзину' });
+  const token = tokenOf(spawned.at(-1)!);
+  // без единого сообщения и транскрипта — делать не из чего
+  const empty = await call<{ code: string }>('POST', `/api/sessions/${s.id}/to-flow`, {});
+  assert.deepEqual([empty.status, empty.body.code], [409, 'no_transcript']);
+  const dir = path.join(root, 'claude projects');
+  fs.mkdirSync(dir, { recursive: true });
+  const tp = path.join(dir, `${s.id}.jsonl`);
+  fs.writeFileSync(tp, '{}\n');
+  await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id, transcript_path: tp });
+  await hook(s.id, token, { hook_event_name: 'UserPromptSubmit', session_id: s.id, prompt: 'почини корзину' });
+  const r = await call<SessionView>('POST', `/api/sessions/${s.id}/to-flow`, { cols: 120, rows: 40 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const p = spawned.at(-1)!;
+  assert.equal(p.opts.cwd, APP_DIR);
+  assert.deepEqual([p.opts.cols, p.opts.rows], [120, 40]);
+  assert.deepEqual(p.args.slice(-2), ['--', `/session-to-flow "${tp}"`]);
+  assert.deepEqual([r.body.name, r.body.cwd, r.body.live], ['Flow из «Чинили корзину»', APP_DIR, true]);
+  // транскрипт — недоверенный текст, папка — код agentgraph: режим manual, а не из настроек пользователя
+  assert.equal(p.args[p.args.indexOf('--permission-mode') + 1], 'manual');
+  // путь с кавычкой дописал бы к команде свой текст — отказ
+  const evil = path.join(root, 'x" и ещё текст');
+  fs.mkdirSync(evil, { recursive: true });
+  const etp = path.join(evil, `${s.id}.jsonl`);
+  fs.writeFileSync(etp, '{}\n');
+  await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'resume', session_id: s.id, transcript_path: etp });
+  const bad = await call<{ code: string }>('POST', `/api/sessions/${s.id}/to-flow`, {});
+  assert.deepEqual([bad.status, bad.body.code], [409, 'no_transcript']);
+  // папка кода без скилла (сборка без .claude/skills) — 501, новой сессии нет
+  const mgr = new SessionManager({ ...sessionManager().deps, dir: path.join(root, 'sessions-noskill'), appDir: path.join(root, 'proj') });
+  await assert.rejects(mgr.toFlow(s.id, 0), (e: unknown) => e instanceof SessionError && e.status === 501);
+  // убрать за собой: разбор сессий ниже считает недавние сессии
+  for (const id of [s.id, r.body.id]) {
+    await call('POST', `/api/sessions/${id}/end`);
+    await until(async () => !(await view(id)).live);
+    await call('DELETE', `/api/sessions/${id}`);
+  }
+});
+
 test('создание: claude без shell в папке проекта, окружение без маркеров хоста; новое пространство заводится, его папка — в --add-dir, контекст ждёт SessionStart', async () => {
   createTag('rules', 'Правила');
   updateTag('rules', { notes: 'Пиши тесты' });
@@ -486,7 +528,7 @@ test('хуки: чужой токен и без токена — 404; SessionSta
 
   // MCP того же сервера: только POST и только с токеном
   const list = await call<{ result: { tools: unknown[] } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': token });
-  assert.equal(list.body.result.tools.length, 7);
+  assert.equal(list.body.result.tools.length, 10, "семь своих и три инструмента дел");
   assert.equal((await call('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).status, 404);
   assert.equal((await call('GET', `/api/sessions/${s.id}/mcp`, undefined, { 'X-Agentgraph-Session': token })).status, 405);
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { stringify as toYaml } from 'yaml';
 import type { RunSource } from './intake.js';
-import type { RunTeamworkLink } from './api-types.js';
+import type { RunDesk, RunTeamworkLink } from './api-types.js';
 import type {
   BlockNext, BlockReport, ConditionReport, DigestSession, FinalPhase, NextCheck, PauseReason, PhaseFiles, PhaseReport, QuestionRecord, RunDigest, RunEvent, RunFixVia,
   RunFlowEdit, RunNote, RunParent, RunReport, RunStatus, RunWorktree, SpaceStateReport, StateSkip,
@@ -32,13 +32,15 @@ import {
 } from './artifacts.js';
 import { ArtifactStore, countDenial, type PauseAnswer, type StepRef } from './artifact-store.js';
 import { knowledgeBlock, knowledgeDirs, resolveKnowledge, type KnowledgeTag } from './tags.js';
-import { dataDirsGuard, phaseProtectedRoots, queueSpaceState, readSpace, spaceContext, writeSpaceState, type Space } from './spaces.js';
+import { dataDirsGuard, phaseProtectedRoots, projectResolver, queueSpaceState, readSpace, spaceContext, writeSpaceState, type Space } from './spaces.js';
 import { dropRunPaths, parseSpaceState, SPACE_STATE_PROMPT_FILE, spaceStateRequest } from './space-state.js';
 import type { AutoSpaceReport } from './auto-space.js';
 import type { RunTitleReport } from './run-title.js';
 import { feedbackKey, type DigestInput, type DigestReport } from './run-digest.js';
 import { ARTIFACT_TOOLS_ALLOW, ARTIFACT_TOOLS_ENABLED, ARTIFACT_TOOLS_SERVER, artifactToolsServer } from './artifact-tools.js';
 import { KNOWLEDGE_TOOLS_ALLOW, KNOWLEDGE_TOOLS_SERVER, knowledgeToolsServer } from './knowledge-tools.js';
+import { branchKeyOf, canonicalKey, DESK_TOOLS_ALLOW, DESK_TOOLS_SERVER, deskToolsServer } from './desk/tools.js';
+import type { DeskApi, DeskItem } from './desk/types.js';
 import { flowChanges, flowEditProblems, keepBlockName, RESTART_DETAIL, RunFixError } from './run-fix.js';
 import { bypassedBlocks, callInput, callOutcome, pickNext } from './compose.js';
 import { checkCalls, loadCalledFlow } from './flows.js';
@@ -132,9 +134,36 @@ export type RunOptions = {
    * (src/routines). Продолжение снимает её как обычную паузу. Без control.requestPause (CLI) опция не действует.
    */
   pauseBefore?: string[];
+  /**
+   * Хранилище дел: у каждого этапа (не у судьи) — инструменты desk_put, desk_close, desk_list (src/desk/tools.ts), запуск,
+   * проект и ветка подставляются сами; итог — report.desk. Открывается при первом вызове инструмента. Без опции — без них.
+   */
+  desk?: () => DeskApi;
 };
 
 export type { RunWorktree } from './api-types.js';
+
+/** Ключей тронутых дел в report.desk не больше: счётчики идут дальше. */
+export const RUN_DESK_KEYS_MAX = 100;
+
+/** Учесть дело в итоге запуска: новое — created, иначе signals; ключ — один раз. */
+export function tallyDesk(t: RunDesk | undefined, key: string, created: boolean): RunDesk {
+  const out: RunDesk = t ?? { created: 0, signals: 0, keys: [] };
+  if (created) out.created++;
+  else out.signals++;
+  if (!out.keys.includes(key) && out.keys.length < RUN_DESK_KEYS_MAX) out.keys.push(key);
+  return out;
+}
+
+/** Итог дел вызванного flow — в итог родителя: журнал рутины видит дела всего запуска. */
+export function addDesk(t: RunDesk | undefined, child: RunDesk | undefined): RunDesk | undefined {
+  if (!child) return t;
+  const out: RunDesk = t ?? { created: 0, signals: 0, keys: [] };
+  out.created += child.created;
+  out.signals += child.signals;
+  for (const k of child.keys) if (!out.keys.includes(k) && out.keys.length < RUN_DESK_KEYS_MAX) out.keys.push(k);
+  return out;
+}
 
 /**
  * Что новый запуск берёт у прошлого при продолжении (continuationFrom). Только сплошное начало
@@ -464,6 +493,39 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
   // теги знаний блоков считаются на старте (и при продолжении заново: тег мог измениться); ошибка — до первого этапа
   let knowledge = new Map<string, KnowledgeTag[]>();
   const save = () => fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify(report, null, 2));
+  // дела: один сервер на этап (in-process, как knowledge), запуск и рутина — в каждом деле и сигнале, итог — в отчёт
+  const deskTools = (): McpTools => {
+    if (!opts.desk) return {};
+    const open = opts.desk;
+    const thing = opts.source?.thing;
+    const project = () => projectResolver().of({ space: opts.space, path: opts.cwd }).space ?? undefined;
+    // закрыть запуск может только своё: дело, где он (его цепочка, родитель) в links.runs, и дело о вещи запуска —
+    // текст задачи из Slack не вычистит доску пользователя
+    const own = new Set([report.id, report.continuedFrom, opts.root, opts.parent?.runId].filter((x): x is string => Boolean(x)));
+    const ownKey = thing ? canonicalKey(thing.key) : undefined;
+    const canClose = (item: DeskItem) =>
+      item.links.runs.some((r) => own.has(r)) || (ownKey !== undefined && item.key === ownKey) ? undefined : `Дело ${item.key} завёл не этот запуск: закрыть его может пользователь`;
+    const server = deskToolsServer(
+      () => ({
+        api: open(),
+        by: 'flow',
+        source: 'flow',
+        run: report.id,
+        ...(opts.source?.type === 'routine' ? { routine: opts.source.key } : {}),
+        project,
+        branch: () => branchKeyOf(opts.cwd),
+        why: `из запуска ${spec.name}`,
+        ...(thing ? { thing } : {}),
+        canClose,
+        onPut: (item, created) => {
+          report.desk = tallyDesk(report.desk, item.key, created);
+          save();
+        },
+      }),
+      { ...(thing ? { thing: { key: thing.key, ...(thing.title ? { title: thing.title } : {}) } } : {}) },
+    );
+    return { mcpServers: { [DESK_TOOLS_SERVER]: server }, allow: DESK_TOOLS_ALLOW };
+  };
   // Хранилище создаётся до start, ошибка его создания делает запуск failed (бросается в try ниже).
   let store: ArtifactStore | undefined;
   let storeError: unknown;
@@ -709,8 +771,10 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     let res: SessionResult;
     let thrown: { err: unknown } | undefined;
     try {
+      const req = buildRequest(spec, phase, prompt, runOpts, art, known);
       res = await (opts.session ?? runSession)({
-        ...buildRequest(spec, phase, prompt, runOpts, art, known),
+        ...req,
+        ...mergeTools(req, deskTools()),
         onQuestion,
         onModel: (model) => emit({ type: 'phase_model', block: block.name, iteration: iter, phase: phase.name, model }),
         onContext: (c) => emit({ type: 'phase_context', block: block.name, iteration: iter, phase: phase.name, ...c }),
@@ -835,6 +899,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
         ...(opts.digest ? { digest: opts.digest } : {}),
         ...(opts.runChild ? { runChild: opts.runChild } : {}),
         ...(opts.loadFlow ? { loadFlow: opts.loadFlow } : {}),
+        ...(opts.desk ? { desk: opts.desk } : {}),
         parent,
       };
       emit({ type: 'call', block: block.name, iteration: iter, phase: phase.name, runId: path.basename(childDir), flow: block.flow });
@@ -842,6 +907,8 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
       calling = { flow: block.flow, runId: path.basename(childDir) };
       child = await (opts.runChild ?? runFlow)(callee, childOpts);
       lastCall.set(block.name, { runId: child.id, runDir: child.runDir });
+      const desk = addDesk(report.desk, child.desk);
+      if (desk) report.desk = desk;
       const done = child;
       res = callOutcome(block.flow, done, (rel) => {
         const f = path.join(done.runDir, rel);

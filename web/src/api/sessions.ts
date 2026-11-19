@@ -57,6 +57,11 @@ export const endSession = (id: string) => api<SessionView>('POST', `/api/session
  * предел — ApiError 409 с code limit.
  */
 export const continueSession = (id: string, prompt?: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/continue`, prompt?.trim() ? { prompt } : {});
+/**
+ * «Flow из сессии»: новая сессия в папке кода agentgraph с /session-to-flow по транскрипту этой. Нет транскрипта — 409
+ * no_transcript, нет скилла — 501 no_skill, живых сессий предел — 409 limit.
+ */
+export const sessionToFlow = (id: string, size: { cols: number; rows: number }) => api<SessionView>('POST', `/api/sessions/${enc(id)}/to-flow`, size);
 /** «Перезапустить»: claude заново тем же разговором, папки пространства и тегов пересчитаны. */
 export const restartSession = (id: string) => api<SessionView>('POST', `/api/sessions/${enc(id)}/restart`);
 /** Оценка разбора «Не доделано» до запуска: модель не зовётся. */

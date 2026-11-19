@@ -16,7 +16,7 @@ test('Slack: подключить готовый вид, собрать рути
   const draft = await e2e.routine(slug);
   expect(draft.spec).toMatchObject({ enabled: false, draft: true });
   expect(draft.spec.mode).toBe('until_pause');
-  expect(draft.spec.run.pause_before).toEqual(['fix']);
+  expect(draft.spec.run?.pause_before).toEqual(['fix']);
   expect(draft.spec.reply).toMatchObject({ to: 'source', draft: true });
   expect('check' in draft.spec.when && draft.spec.when.check).toBe('Это баг-репорт');
   await enable(page);
@@ -122,7 +122,7 @@ test('расписание: пресет на «Новой рутине», св�
   const r = await e2e.routine(slug);
   expect(r.spec.when).toMatchObject({ schedule: '15 7 * * *' });
   expect(r.spec.mode).toBe('auto');
-  expect(r.spec.run.input).toBe('Сводка по MR');
+  expect(r.spec.run?.input).toBe('Сводка по MR');
 
   // своё расписание — каждую минуту; включить и дождаться запуска по часам
   await page.getByRole('group', { name: 'Как часто' }).getByRole('button', { name: 'Своё расписание' }).click();

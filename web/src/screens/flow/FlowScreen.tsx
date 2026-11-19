@@ -1,15 +1,18 @@
 // Экран flow (ui/app.js openFlow, renderFlow, setTab, saveYaml, removeFlow, renderFlowTabGraph): шапка с описанием, папкой и
-// меню, вкладки «Конструктор / Запуск / YAML». /flow/<имя> — файл из flows/, /draft — черновик разового запуска (только в памяти
+// меню, строка «запусков за 30 дней · последний», вкладки «Конструктор / Запуск / YAML / Версии» (версии — из снимков flow.yaml
+// его запусков, lib/flow/history.ts; версию можно открыть или взять в редактор YAML). /flow/<имя> — файл из flows/, /draft — черновик разового запуска (только в памяти
 // вкладки). Уход с несохранённого конструктора и с черновика спрашивает, как openHome/openRun/leaveDraft в старом UI.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, Navigate, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { checkFlow, deleteFlow, errorText, fetchFlow, keys, saveFlowYaml, useFeature, useFlows, useTags } from '../../api';
+import { checkFlow, deleteFlow, errorText, fetchFlow, fetchFlowVersion, keys, saveFlowYaml, useFeature, useFlowHistory, useFlows, useTags } from '../../api';
+import { openRunFile } from '../../components/file/FileDialog';
 import { AdhocBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { FlowGraph, type GraphHit } from '../../components/graph/FlowGraph';
 import { ICON } from '../../components/shell/FlowList';
 import { findPhase, toEditable } from '../../lib/flow/edit';
+import { usageLine, versionMeta, versionsNote } from '../../lib/flow/history';
 import { callSubOf, schemeSummary } from '../../lib/flow/summary';
 import { flowGraphModel } from '../../lib/graph/model';
 import { t } from '../../lib/i18n';
@@ -19,7 +22,7 @@ import { afterRender, openPhasePane } from './actions';
 import { KnowledgeBadge } from './BlockEditor';
 import { Builder, graphPick } from './Builder';
 import { DIRTY_TEXT, leaveDraft, revealFlow, useMoveFlow } from './nav';
-import { applySaved, closeFlow, flowState, msgClass, openLoaded, saveStart, set, useFlowStore, type Tab } from './store';
+import { applySaved, closeFlow, dropYamlVersion, flowState, loadYamlVersion, msgClass, openLoaded, saveStart, set, useFlowStore, type Tab } from './store';
 import { RunForm } from './RunForm';
 import { YamlEditor, type YamlEditorHandle } from './YamlEditor';
 import styles from './Flow.module.css';
@@ -34,6 +37,9 @@ window.addEventListener('beforeunload', (e) => {
     e.returnValue = '';
   }
 });
+
+/** Вкладки экрана; у черновика разового запуска «Версий» нет — запусков у него не было. */
+const FLOW_TABS: readonly (readonly [Tab, string])[] = [['builder', 'Конструктор'], ['run', 'Запуск'], ['yaml', 'YAML'], ['versions', 'Версии']];
 
 /** Состояние перехода на экран flow: вкладка и вход из «Запустить…» с главной. */
 type FlowNavState = Partial<RunTabState> & { tab?: Tab };
@@ -114,13 +120,14 @@ export function FlowScreen({ draft = false }: { draft?: boolean }) {
     <div className={styles.viewFlow}>
       <FlowHead />
       <nav className="tabs page-tabs" role="tablist" aria-label={t('Разделы flow')}>
-        {([['builder', 'Конструктор'], ['run', 'Запуск'], ['yaml', 'YAML']] as const).map(([id, label]) => (
+        {(flow.draft ? FLOW_TABS.slice(0, 3) : FLOW_TABS).map(([id, label]) => (
           <button key={id} type="button" className={cx('tab', st.tab === id && 'active')} role="tab" aria-selected={st.tab === id} onClick={() => void setTab(id)}>{t(label)}</button>
         ))}
       </nav>
       <Builder hidden={st.tab !== 'builder'} />
       <RunTab hidden={st.tab !== 'run'} intake={nav?.intake} intakeKey={location.key} />
       <YamlTab hidden={st.tab !== 'yaml'} />
+      {!flow.draft && st.tab === 'versions' && <VersionsTab />}
       <KnowledgeTags />
     </div>
   );
@@ -229,6 +236,7 @@ function FlowHead() {
         <h1>{flow.name}{flow.draft && <AdhocBadge />}</h1>
         <p ref={desc} className={cx('muted', styles.flowDesc, descOpen && styles.open)}>{description}</p>
         {descMore && <button type="button" className="link-btn" onClick={() => setDescOpen(!descOpen)}>{descOpen ? t('свернуть') : t('ещё')}</button>}
+        {!flow.draft && <FlowUsage name={flow.name} yaml={flow.yaml} />}
         {!flow.draft && (
           <label className={styles.folderField} title={t('Папка в flows/. Пусто — корень. Можно перетащить flow на папку слева')}>
             <span className={styles.folderIcon}>{ICON.folder}</span>
@@ -367,11 +375,96 @@ function YamlTab({ hidden }: { hidden: boolean }) {
   };
   return (
     <section hidden={hidden}>
-      <YamlEditor ref={editor} className={styles.yamlEditor} value={flow.yaml} seq={st.yamlSeq} />
+      <YamlEditor ref={editor} className={styles.yamlEditor} value={st.yamlFrom?.text ?? flow.yaml} seq={st.yamlSeq} />
       <div className="row">
         <button className="btn primary" onClick={() => void save()}>{flow.draft ? t('Применить') : t('Сохранить')}</button>
+        {/* в редакторе — версия из снимка запуска: вернуть текст файла без сохранения */}
+        {st.yamlFrom && <button type="button" className="btn ghost" onClick={dropYamlVersion}>{t('Вернуть текст flow')}</button>}
         <pre className={msgClass(st.yamlMsg)}>{st.yamlMsg.text}</pre>
       </div>
+    </section>
+  );
+}
+
+/** Строка в шапке: «5 запусков за 30 дней · последний 18.11, 20:59» — последний ссылкой на запуск. */
+function FlowUsage({ name, yaml }: { name: string; yaml: string }) {
+  const h = useFlowHistory(name, yaml).data;
+  if (!h) return null;
+  const u = usageLine(h);
+  return (
+    <p className={cx('muted small', styles.flowUsage)} title={u.title}>
+      {u.month}
+      {u.last && h.last && (
+        <>
+          {' · '}
+          <Link to={`/run/${h.last.id}`}>{u.last}</Link>
+        </>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Вкладка «Версии»: разные flow.yaml, с которыми начинались его запуски, от свежей к старой. Версию можно открыть
+ * (снимок в окне файла) или взять в редактор YAML — «Сохранить» там вернёт её в flows/.
+ */
+function VersionsTab() {
+  const st = useFlowStore();
+  const flow = st.flow!;
+  const { askConfirm } = useConfirm();
+  const q = useFlowHistory(flow.name, flow.yaml);
+  const [busy, setBusy] = useState('');
+  const [err, setErr] = useState('');
+  const h = q.data;
+  const take = async (runId: string, file: string, label: string) => {
+    if (flowState.dirty && !(await askConfirm(t('В конструкторе есть несохранённые изменения, во вкладке YAML их не будет. Перейти?'), { ok: t('Перейти') }))) return;
+    setBusy(runId);
+    setErr('');
+    try {
+      // задача запуска в снимке — чужая: сервер подставит задачу файла flow
+      const r = await fetchFlowVersion(flow.name, runId, file);
+      // пока читали, открыли другой flow — версия ему не нужна
+      if (flowState.flow?.name !== flow.name) return;
+      loadYamlVersion(r.yaml, label, { text: t('В редакторе — версия {label} из запуска {id}, задача — из файла flow. «Сохранить» вернёт её в flows/, «Вернуть текст flow» — отменит.', { label, id: runId }), tone: 'warn' });
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy('');
+    }
+  };
+  if (q.error) return <p className="msg err">{t('История flow не загрузилась: {error}', { error: errorText(q.error) })}</p>;
+  if (!h) return null;
+  const note = versionsNote(h);
+  return (
+    <section className={styles.versions} aria-label={t('Версии flow')}>
+      <p className="muted small">{t('Свои flow не лежат в git: версии собраны из снимков flow.yaml, с которыми начинались запуски.')}</p>
+      {!h.versions.length ? (
+        <p className="muted small">{h.total ? t('Снимков flow.yaml у запусков нет.') : t('Flow ещё не запускался: версий нет.')}</p>
+      ) : (
+        <ul className={styles.versionList}>
+          {h.versions.map((v) => {
+            const label = `v${v.n}`;
+            return (
+              <li key={v.id}>
+                <span className={styles.versionName}>{label}</span>
+                {v.current && <span className={styles.versionNow} title={t('Совпадает с файлом flow сейчас')}>{t('текущая')}</span>}
+                <span className={styles.versionMeta} title={t('Отпечаток {id}', { id: v.id })}>{versionMeta(v)}</span>
+                <span className={styles.versionActs}>
+                  <Link to={`/run/${v.runId}`} title={t('Последний запуск с этой версией')}>{t('запуск')}</Link>
+                  <button type="button" className="btn small ghost" onClick={() => void openRunFile(v.runId, v.file, t('flow {name} — {label}', { name: flow.name, label }))}>{t('Открыть')}</button>
+                  {!v.current && (
+                    <button type="button" className="btn small" disabled={busy === v.runId} title={t('Положить эту версию в редактор YAML — сохранишь там')} onClick={() => void take(v.runId, v.file, label)}>
+                      {t('В редактор')}
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {note && <p className="muted small">{note}</p>}
+      {err && <p className="msg err">{err}</p>}
     </section>
   );
 }
