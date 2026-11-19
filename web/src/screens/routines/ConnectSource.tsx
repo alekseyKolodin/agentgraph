@@ -10,8 +10,10 @@ import { errorText } from '../../api';
 import { cancelDraft, draftSecret, fetchMcpTools, importRecipe, refineDraft, routineKeys, saveSource, startConnectorBuild, startDraft, testSource, useConnectorBuild, useDraft, useMcpTools, useRecipes, useRoutines, type RecipeView } from '../../api/routines';
 import { t } from '../../lib/i18n';
 import { commandSpec, DEFAULT_MAP, everyLabel, everyOptions, foundRow, foundText, kindSpec, MAP_KEYS, mapLabel, missingFields } from '../../lib/routines/source';
+import { DEFAULT_REPLY_ARGS, parseReply } from '../../lib/routines/reply';
 import { slugify } from '../../lib/routines/spec';
 import { NotAvailable } from './RoutinesList';
+import { ReplyStep } from './ReplySetup';
 import { cx, Dot, Seg } from './parts';
 import styles from './Routines.module.css';
 
@@ -357,7 +359,9 @@ function KindForm({ data, picked, fromNew }: { data: RoutinesOverview; picked: P
   const build = (): { spec: SourceSpec; secrets: Record<string, string> } => {
     if (recipe) {
       const secrets = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]));
-      return { spec: { ...recipe.spec, title: title.trim() || recipe.spec.title, ...(poll ? { every } : {}) }, secrets };
+      // ответ (config.reply) в рецепте от коллеги не берём: получателя сообщений человек выбирает сам, на шаге «Как отвечать»
+      const { reply: _reply, ...config } = recipe.spec.config ?? {};
+      return { spec: { ...recipe.spec, config, title: title.trim() || recipe.spec.title, ...(poll ? { every } : {}) }, secrets };
     }
     return kindSpec(kind!, values, title, poll ? every : undefined);
   };
@@ -455,6 +459,9 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // «Как отвечать»: пустой инструмент — источник только читает
+  const [replyTool, setReplyTool] = useState('');
+  const [replyArgs, setReplyArgs] = useState(DEFAULT_REPLY_ARGS);
   const build = useConnectorBuild(buildId);
   const save = useSaveSource(data, fromNew);
   const box = useRef<HTMLElement>(null);
@@ -514,10 +521,12 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
   };
   const doSave = async () => {
     if (!result) return;
+    if (replyTool && !replyParsed?.ok) return;
     setBusy(true);
     setError('');
     try {
-      await save({ ...result.spec, title: title.trim() || result.spec.title, every: every || result.spec.every });
+      const config = replyParsed?.ok ? { ...result.spec.config, reply: replyParsed.reply } : result.spec.config;
+      await save({ ...result.spec, config, title: title.trim() || result.spec.title, every: every || result.spec.every });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -525,6 +534,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
     }
   };
   const loading = q.isPending || refreshing;
+  const replyParsed = replyTool ? parseReply(replyTool, replyArgs) : undefined;
   const script = result?.spec.config.script as ConnectorScript | undefined;
 
   return (
@@ -644,6 +654,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
             <input className={styles.inp} value={note} placeholder={t('Не то? Поправь словами: «только мои сообщения»')} aria-label={t('Поправка словами')} onChange={(e) => setNote(e.target.value)} />
             <button type="button" className="btn" disabled={working || !note.trim()} onClick={() => void start(note.trim())}>{t('Поправить')}</button>
           </div>
+          <ReplyStep services={services} chosen={servers} tool={replyTool} args={replyArgs} parsed={replyParsed} onTool={setReplyTool} onArgs={setReplyArgs} />
           <div className={styles.readyHead}>
             <label className={cx(styles.field, styles.grow)}>
               <span className={styles.lbl}>{t('Название')}</span>
@@ -652,7 +663,7 @@ function ConnectorForm({ data, fromNew }: { data: RoutinesOverview; fromNew: boo
             <EverySelect value={every || result.spec.every || '5m'} min={result.mode === 'script' ? '1m' : '30m'} onChange={setEvery} />
           </div>
           <div className="row">
-            <button type="button" className="btn primary" disabled={working} onClick={() => void doSave()}>{t('Сохранить источник')}</button>
+            <button type="button" className="btn primary" disabled={working || Boolean(replyTool && !replyParsed?.ok)} title={replyTool && !replyParsed?.ok ? replyParsed?.error : undefined} onClick={() => void doSave()}>{t('Сохранить источник')}</button>
           </div>
         </>
       )}

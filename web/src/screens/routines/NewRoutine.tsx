@@ -70,8 +70,8 @@ function NewForm({ data }: { data: RoutinesOverview }) {
   const needFireflies = tpl === 'meeting' && !d.source && !data.sources.some(isMeetingSource);
   const kind = source ? data.kinds.find((k) => k.kind === source.spec.kind) : undefined;
   const fields = useMemo(() => matchFields(kind), [kind]);
-  const replyTargets = data.sources.filter((s) => data.kinds.find((k) => k.kind === s.spec.kind)?.canReply);
-  const canReplySource = Boolean(kind?.canReply);
+  const replyTargets = data.sources.filter((s) => s.canReply);
+  const canReplySource = Boolean(source?.canReply);
   const srcInfo = source ? { title: source.spec.title, kind: source.spec.kind } : undefined;
 
   // куда отвечать: в источник, если он умеет; иначе — первый источник с ответом; некуда — «Не сообщать». «Не сообщать»,
@@ -162,7 +162,7 @@ function NewForm({ data }: { data: RoutinesOverview }) {
                 </select>
               </div>
             )}
-            <span className={styles.hint}>{!canReplySource && !replyTargets.length && d.source ? t('Отвечать некуда: подключи Telegram или Slack, и рутина сможет писать туда.') : replyHint(d.reply)}</span>
+            <span className={styles.hint}>{!canReplySource && !replyTargets.length && d.source ? (source?.spec.kind === 'connector' ? t('Отвечать некуда: у этого источника не выбран инструмент ответа. Ответить можно из flow — дай этапу инструмент коннектора; или подключи сервис заново с шагом «Как отвечать».') : t('Отвечать некуда: подключи Telegram или Slack, и рутина сможет писать туда.')) : replyHint(d.reply)}</span>
           </Step>
         </div>
         <aside className={styles.summary} aria-label={t('Что получится')}>

@@ -20,6 +20,8 @@ import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
 import { builtinKinds } from './sources/index.js';
+import { resolveSignal, settingsJiraHosts, thingLabel, THINGS_MAX } from '../things/resolve.js';
+import type { Thing } from '../things/types.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait } from './store.js';
 import { LogReadError, RoutineStore } from './store.js';
 import type {
@@ -101,6 +103,8 @@ export type EngineDeps = {
   reconnectMs?: number;
   /** Замок «один движок на папку настроек» (src/routines/lock.ts): who — ui или desktop; deps — подмена в тестах. */
   lock?: { who: string; deps?: Partial<LockDeps> };
+  /** Хосты Jira для разбора ссылок и ключей задач в событиях; по умолчанию — из настроек «Подключений». */
+  jiraHosts?: () => string[];
 };
 
 const DEFAULT_EVERY_MS = 5 * 60_000;
@@ -118,6 +122,10 @@ const ALERT_CLEAR_MS = 30 * 60_000;
 const EMPTY_MIN_MS = 3 * DAY_MS;
 /** Истории ещё мало (меньше трёх приходов нового) — пусто дольше недели. */
 const EMPTY_DEFAULT_MS = 7 * DAY_MS;
+/** «То же срабатывание» по вещи держится, пока первое открыто, и столько после него (sameFiring). */
+const SAME_THING_MS = DAY_MS;
+/** Запуск кончился так — повтор по вещи он не держит: следующий сигнал запустит снова. */
+const RETRY_STATUSES = new Set(['failed', 'aborted', 'budget_exceeded', 'interrupted', 'max_iterations']);
 
 const newId = () => randomBytes(6).toString('hex');
 
@@ -567,6 +575,7 @@ export class RoutineEngine {
       }
       // новые считаются здесь, в очереди: пачка, пришедшая следом с теми же записями, уже не «свежая»
       onFresh?.(fresh.length);
+      if (fresh.length) this.addThings(fresh);
       // и новые, и пришедшие снова: виденное освежается, долго открытая вещь не вытесняется и не придёт «новой»
       this.store.addSeen(source, events.map((e) => e.id));
       if (!fresh.length) return;
@@ -609,6 +618,81 @@ export class RoutineEngine {
     });
   }
 
+  /**
+   * Вещи новых событий (src/things/resolve.ts): свои — что вид источника назвал сам и что по ссылке события (назначение
+   * в ревью, комментарий в MR, обновление задачи), потом упомянутые в тексте. У своей главной вещи версия — id события,
+   * если вид не дал свою: так «ревью запрошено снова» и новый комментарий — новое, а та же ссылка в чате — повтор.
+   */
+  private addThings(events: RoutineEvent[]): void {
+    let hosts: string[] | undefined;
+    for (const e of events) {
+      try {
+        hosts ??= (this.deps.jiraHosts ?? settingsJiraHosts)();
+        const r = resolveSignal(e, { jiraHosts: hosts });
+        const own = uniqThings([...(e.things ?? []), ...r.own]);
+        const all = uniqThings([...own, ...r.mentioned]).slice(0, THINGS_MAX);
+        if (!all.length) continue;
+        if (own.length && all[0].ref.version === undefined) all[0] = { ...all[0], ref: { ...all[0].ref, version: e.id } };
+        e.things = all;
+      } catch (err) {
+        // разбор ссылок — подсказка, а не условие: сбой не должен терять событие
+        this.say(`[${e.source}] вещи события «${e.title}» не разобраны: ${msg(err)}`);
+      }
+    }
+  }
+
+  /**
+   * «То же срабатывание» (SPEC 2.9): одна вещь — один запуск одного flow с той же задачей. Повтор — событие, у которого
+   * главная вещь та же, что у срабатывания этой или другой рутины с тем же flow и задачей (run.flow + run.input), пока то
+   * открыто (ждёт человека, в очереди, идёт) или начато меньше SAME_THING_MS назад. Срабатывание — запуск, ожидание или
+   * «не то» от человека; запуск, который упал или прерван (RETRY_STATUSES), повтор не держит.
+   * Новое, а не повтор: у события своя версия вещи, которой у срабатывания ещё не было (ревью запрошено снова, новый
+   * комментарий, задача обновлена). Сигнал без версии — ссылка на MR в сообщении чата, письмо — в эти сутки повтор; первая
+   * версия после такого сигнала — тоже (это та же просьба, пришедшая вторым путём), её версия запоминается строкой повтора.
+   * Через сутки та же вещь запускает снова: виденное источника по id это не трогает.
+   */
+  private sameFiring(slug: string, spec: RoutineSpec, e: RoutineEvent): { routine: string; logId: string; reason: string } | undefined {
+    const main = e.things?.[0];
+    if (!main) return undefined;
+    const version = thingVersion(e);
+    const runKey = runKeyOf(spec);
+    const now = this.now().getTime();
+    const open = new Map<string, string>();
+    for (const w of this.store.waits()) if (w.logId) open.set(w.logId, w.kind === 'reply' ? 'ждёт ответа' : 'ждёт решения');
+    for (const q of this.store.queue()) if (q.logId) open.set(q.logId, 'в очереди');
+    for (const a of this.active.values()) open.set(a.logId, 'в работе');
+    type Hit = { routine: string; title: string; line: LogEntry; at: number };
+    let hit: Hit | undefined;
+    const lines: LogEntry[] = [];
+    for (const r of this.store.routines()) {
+      if (!r.spec || runKeyOf(r.spec) !== runKey) continue;
+      let log: LogEntry[];
+      try {
+        log = this.store.logAll(r.slug);
+      } catch {
+        continue; // журнал не читается — этой рутине повтор не найти, она видна в problems
+      }
+      for (const x of log) {
+        if (x.things?.[0] !== main.key) continue;
+        lines.push(x);
+        const fired = open.has(x.id) || ((startedAtOf(x) || x.outcome === 'waiting' || x.outcome === 'rejected') && !(x.runStatus && RETRY_STATUSES.has(x.runStatus) && x.outcome !== 'rejected'));
+        if (!fired) continue;
+        const at = Date.parse(startedAtOf(x) ?? x.at);
+        if (!open.has(x.id) && !(now - at < SAME_THING_MS)) continue;
+        if (!hit || at > hit.at) hit = { routine: r.slug, title: r.spec.title, line: x, at };
+      }
+    }
+    if (!hit) return undefined;
+    const h = hit;
+    // «Не повтор» от человека на это событие сильнее правила
+    if (this.pastVerdicts(slug).get(e.id) === 'not_duplicate') return undefined;
+    const versions = new Set(lines.filter((x) => (x.id === h.line.id || (x.sameAs?.routine === h.routine && x.sameAs.logId === h.line.id)) && x.thingVersion).map((x) => x.thingVersion!));
+    if (version && versions.size && !versions.has(version)) return undefined;
+    const state = open.get(h.line.id) ?? (h.line.outcome === 'rejected' ? 'отклонено человеком' : h.line.outcome === 'waiting' ? 'ждало решения' : 'запускалось');
+    const who = h.routine === slug ? '' : ` рутиной «${h.title}»`;
+    return { routine: h.routine, logId: h.line.id, reason: `повтор: ${thingLabel(main)} уже ${state}${who} ${clockOf(new Date(h.at), this.now())} — тот же flow на ту же вещь не запускается ещё раз` };
+  }
+
   /** Полный путь события для рутины: условия → проверка словами → ожидание или запуск. */
   async process(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; /** «Догнать»: человек только что нажал — уведомлять о каждом предложении незачем. */ quiet?: boolean } = {}): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
     let why: string | undefined;
@@ -616,6 +700,11 @@ export class RoutineEngine {
     if (!isSchedule(spec.when)) {
       const m = matchRule(spec.when.match, e);
       if (!m.ok) return this.record(slug, e, 'filtered', { reason: m.reason });
+      // решение человека («Запустить» в «догнать», в ожидании) повтором не режется
+      if (!o.human) {
+        const same = this.sameFiring(slug, spec, e);
+        if (same) return this.record(slug, e, 'duplicate', { reason: same.reason, sameAs: { routine: same.routine, logId: same.logId } });
+      }
       if (spec.when.check?.trim()) {
         const x = this.examples(slug);
         let c: CheckResult;
@@ -771,6 +860,8 @@ export class RoutineEngine {
       routine: slug,
       event: { source: e.source, id: e.id, title: e.title, at: e.at, ...(e.link ? { link: e.link } : {}) },
       outcome,
+      ...(e.things?.length ? { things: e.things.map((t) => t.key) } : {}),
+      ...(thingVersion(e) ? { thingVersion: thingVersion(e) } : {}),
       ...strip(extra),
     };
     this.store.appendLog(entry);
@@ -898,7 +989,7 @@ export class RoutineEngine {
     try {
       line = this.store.logAll(a.routine).find((x) => x.id === a.logId);
       // проверка словами уже стоила денег: запуск добавляется к ней, а не затирает
-      this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd) });
+      this.store.updateLog(a.routine, a.logId, { costUsd: round((line?.checkCostUsd ?? 0) + ev.costUsd), runStatus: String(ev.status) });
       if (ev.status === 'budget_exceeded') this.log(a.routine, a.event, 'limit', { runId, reason: `бюджет запуска превышен${spec?.limits?.usd ? ` (limits.usd = ${spec.limits.usd})` : ''}` });
     } catch (err) {
       line = undefined;
@@ -1207,8 +1298,20 @@ export class RoutineEngine {
         ...(pollCostUsd ? { pollCostUsd } : {}),
         missingSecrets: missing,
         usedBy: used.get(f.slug) ?? [],
+        canReply: f.spec ? this.canReply(f.spec) : false,
       };
     });
+  }
+
+  /** Умеет ли источник ответить: вид с reply, а если ответ настраивается в источнике — только с настроенным. */
+  private canReply(spec: SourceSpec): boolean {
+    const k = this.kind(spec.kind);
+    if (!k?.reply) return false;
+    try {
+      return k.canReplyFor ? k.canReplyFor(spec) : true;
+    } catch {
+      return false;
+    }
   }
 
   kindViews(): SourceKindView[] {
@@ -1741,6 +1844,27 @@ export function emptyTooLong(c: Pick<SourceChecks, 'last' | 'arrivals'>, now: nu
 }
 
 const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+/** Вещи без повторов по ключу, порядок — первого появления. */
+function uniqThings(list: Thing[]): Thing[] {
+  const seen = new Set<string>();
+  return list.filter((t) => !seen.has(t.key) && Boolean(seen.add(t.key)));
+}
+
+/** Версия главной вещи события: есть только у своей вещи (addThings), у упомянутой — нет. */
+function thingVersion(e: RoutineEvent): string | undefined {
+  const v = e.things?.[0]?.ref.version;
+  return typeof v === 'string' && v ? v : typeof v === 'number' ? String(v) : undefined;
+}
+
+/** Что именно запускает рутина: flow и задача (пробелы не в счёт). Две рутины с одним flow и задачей — одна работа. */
+const runKeyOf = (spec: RoutineSpec): string => `${spec.run.flow}\n${(spec.run.input ?? '').trim().replace(/\s+/g, ' ')}`;
+
+/** «в 10:12» сегодня, «18.11 в 10:12» — в другой день. */
+function clockOf(d: Date, now: Date): string {
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return dayKey(d) === dayKey(now) ? `в ${hm}` : `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} в ${hm}`;
+}
 
 function strip<T extends Record<string, unknown>>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;

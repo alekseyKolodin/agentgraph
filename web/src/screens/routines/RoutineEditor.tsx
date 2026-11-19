@@ -6,12 +6,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { HistoryCheck, RoutineView, RoutinesOverview } from '@server/routines/types';
+import type { HistoryCheck, RoutineView, RoutinesOverview, SourceView } from '@server/routines/types';
 import { ApiError, errorText, useFeature, useFlows } from '../../api';
 import { checkHistory, deleteRoutine, routineKeys, runRoutine, saveRoutine, sendFeedback, useRoutine, useRoutines } from '../../api/routines';
 import { useSpaces } from '../../api/spaces';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { SpacePicker } from '../../components/SpacePicker';
+import { SourceReplyPanel } from './ReplySetup';
 import { useToast } from '../../components/Toast';
 import { useNow } from '../../components/useNow';
 import { plural, t } from '../../lib/i18n';
@@ -69,10 +70,9 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
   // источник с ответом или «Не сообщать» (сырое «source» у источника без reply давало бы ошибку в журнале на каждом событии)
   const replyFor = (slug: string): Partial<RoutineDraft> => {
     if (d.reply === 'off') return {};
-    const k = data.kinds.find((x) => x.kind === data.sources.find((s) => s.slug === slug)?.spec.kind);
-    if (k?.canReply) return { replyTo: 'source' };
+    if (data.sources.find((s) => s.slug === slug)?.canReply) return { replyTo: 'source' };
     if (d.replyTo !== 'source' && d.replyTo !== slug) return {};
-    const target = data.sources.find((s) => s.slug !== slug && data.kinds.find((x) => x.kind === s.spec.kind)?.canReply);
+    const target = data.sources.find((s) => s.slug !== slug && s.canReply);
     return target ? { replyTo: target.slug } : { reply: 'off' };
   };
   const done = () => void qc.invalidateQueries({ queryKey: routineKeys.all });
@@ -114,9 +114,11 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
     }
   };
 
+  // источник «через Claude» без настроенного ответа: «в источник» ответить нечем
+  const replyNotSet = !isSchedule(d) && d.reply !== 'off' && source?.spec.kind === 'connector' && !source.canReply && d.replyTo === 'source';
   const moreSummary = [
     d.worktree === 'new' ? t('новое рабочее дерево') : d.cwd ? d.cwd : '',
-    !runs ? '' : d.reply === 'off' ? t('без ответа') : `${t('ответ')} ${replyWhere(source?.spec.kind, d.replyTo, data.sources)} ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
+    !runs ? '' : d.reply === 'off' ? t('без ответа') : replyNotSet ? t('ответ в источник не настроен') : `${t('ответ')} ${replyWhere(source?.spec.kind, d.replyTo, data.sources)} ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
     d.usd ? t('до {usd} за запуск', { usd: `$${d.usd}` }) : '',
     d.perDay ? t('{n} в день', { n: d.perDay }) : '',
   ]
@@ -201,7 +203,7 @@ function Editor({ r, data }: { r: RoutineView; data: RoutinesOverview }) {
             <span>{more ? '▾' : '▸'} {t('Ещё')}</span>
             {!more && <span className={styles.moreSum}>{moreSummary}</span>}
           </button>
-          {more && <More d={d} set={set} r={r} data={data} kindCanReply={Boolean(kind?.canReply)} onYamlSaved={done} />}
+          {more && <More d={d} set={set} r={r} data={data} kindCanReply={Boolean(source?.canReply)} replyNotSet={replyNotSet} source={source} onYamlSaved={done} />}
         </div>
         <History slug={r.slug} spec={spec} sourceTitle={isSchedule(d) ? t('расписания') : (source?.spec.title ?? d.source)} />
       </div>
@@ -417,12 +419,13 @@ const ON: Array<{ v: 'start' | 'pause' | 'end'; label: string }> = [
   { v: 'end', label: t('в конце') },
 ];
 
-function More({ d, set, r, data, kindCanReply, onYamlSaved }: ClauseProps & { r: RoutineView; data: RoutinesOverview; kindCanReply: boolean; onYamlSaved: () => void }) {
+function More({ d, set, r, data, kindCanReply, replyNotSet, source, onYamlSaved }: ClauseProps & { r: RoutineView; data: RoutinesOverview; kindCanReply: boolean; replyNotSet: boolean; source: SourceView | undefined; onYamlSaved: () => void }) {
+  const [setupOpen, setSetupOpen] = useState(false);
   const [yamlOpen, setYamlOpen] = useState(false);
   const [yaml, setYaml] = useState(r.yaml);
   const [yamlErr, setYamlErr] = useState('');
   const qc = useQueryClient();
-  const targets = data.sources.filter((s) => s.slug !== d.source && data.kinds.find((k) => k.kind === s.spec.kind)?.canReply);
+  const targets = data.sources.filter((s) => s.slug !== d.source && s.canReply);
   const kind = data.sources.find((s) => s.slug === d.source)?.spec.kind;
   const saveYaml = async () => {
     setYamlErr('');
@@ -473,6 +476,13 @@ function More({ d, set, r, data, kindCanReply, onYamlSaved }: ClauseProps & { r:
                 </span>
               </div>
             )}
+            {replyNotSet && (
+              <span className={styles.hint}>
+                {t('Ответ в источник не настроен: у «Сервиса через Claude» нет инструмента для ответа. Отвечать можно из flow: дай этапу инструмент коннектора. Или выбери инструмент ответа для этого источника.')}{' '}
+                {!setupOpen && <button type="button" className="btn small ghost" onClick={() => setSetupOpen(true)}>{t('Настроить ответ')}</button>}
+              </span>
+            )}
+            {replyNotSet && setupOpen && source && <SourceReplyPanel source={source} onClose={() => setSetupOpen(false)} />}
           </div>
         </div>
       )}

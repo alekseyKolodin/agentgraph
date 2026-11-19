@@ -199,7 +199,7 @@ const view = (p: Partial<RoutineView> = {}): RoutineView => ({
   recent: [],
   ...p,
 });
-const src = (p: Partial<SourceView> = {}): SourceView => ({ slug: 'slack', spec: { title: 'Slack', kind: 'slack', config: {} }, status: 'ok', missingSecrets: [], usedBy: [], ...p });
+const src = (p: Partial<SourceView> = {}): SourceView => ({ slug: 'slack', spec: { title: 'Slack', kind: 'slack', config: {} }, status: 'ok', missingSecrets: [], usedBy: [], canReply: false, ...p });
 
 test('состояние рутины: черновик, пауза, ждёт, источник, идёт, включена', () => {
   assert.equal(routineState(view({ spec: { ...view().spec, enabled: false, draft: true } }), [], []), 'draft');

@@ -337,3 +337,65 @@ test('isSelf коннектора: без автора, регистр, «@ло�
   assert.equal(k.isSelf!(ctx, ev('@anna')), false);
   assert.equal(k.isSelf!(ctx, ev('Иван')), false, 'часть имени — не совпадение');
 });
+
+// ---------------------------------------------------------------- нить разговора (thread/channel)
+
+test('скрипт: нить и канал по FieldMap — сообщение и ответ в треде дают одну нить; без пути нити — нити нет', async () => {
+  const f = fakeMcp({
+    [READ]: textOf({
+      channel: 'C01',
+      messages: [
+        { ts: '1731920000.1', thread_ts: '1731920000.1', text: 'глянь MR https://gitlab.test/g/app/-/merge_requests/3', ch: 'C01' },
+        { ts: '1731920100.2', thread_ts: '1731920000.1', text: 'поправил, глянь', ch: 'C01' },
+        { ts: '1731920200.3', text: 'вне треда', ch: 'C01' },
+      ],
+    }),
+  });
+  const kind = connectorKind({ session: async () => assert.fail('модель не нужна'), mcp: f.mcp });
+  const steps = [{ tool: READ, args: {}, say: 'Читает канал', json: { items: 'messages', id: 'ts', text: 'text', thread: 'thread_ts', channel: 'ch' } }];
+  const events = await kind.poll!(makeCtx({ slug: 'sl', config: scriptSpec(steps).config }));
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, { source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+  // правило без нити — как раньше
+  const plain = await connectorKind({ session: async () => assert.fail(), mcp: f.mcp }).poll!(makeCtx({ slug: 'sl', config: scriptSpec([{ ...steps[0], json: { items: 'messages', id: 'ts' } }]).config }));
+  assert.ok(plain.every((e) => e.thread === undefined));
+  // scriptOf пропускает новые пути, а не теряет их
+  assert.deepEqual(scriptOf(scriptSpec(steps))!.steps[0].json, { items: 'messages', id: 'ts', text: 'text', thread: 'thread_ts', channel: 'ch' });
+});
+
+test('скрипт: нить и канал регулярками из текстового ответа', () => {
+  const text = '### Anna [C01] thread:1731920000.1\nглянь\n### Boris [C01]\nвне треда';
+  const events = textItems(text, { split: '^### ', id: '^(\\S+)', channel: '\\[(\\w+)\\]', thread: 'thread:(\\S+)' }, 'sl');
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+});
+
+test('connector без скрипта: нить и канал из ответа модели; в подсказке модели — что это', async () => {
+  const reqs: SessionRequest[] = [];
+  const kind = connectorKind({
+    session: async (req) => {
+      reqs.push(req);
+      return ok({ records: [{ id: 'm1', title: 'глянь', thread: '1731920000.1', channel: 'C01' }, { id: 'm2', title: 'без нити', thread: '', channel: 'C01' }] });
+    },
+  });
+  const events = await kind.poll!(makeCtx({ slug: 'sl', config: { tool: READ, request: 'Сообщения #review' } }));
+  assert.deepEqual(events.map((e) => e.thread), [{ source: 'sl', channel: 'C01', thread: '1731920000.1' }, undefined]);
+  assert.match(reqs[0].system!, /thread — id нити/);
+});
+
+test('сборка: map_thread и map_channel из ответа модели попадают в скрипт; подсказка сборщику о чатах', async () => {
+  const a = buildSpecOf({ ok: true, steps: [{ tool: READ, args_json: '{}', say: 'Читает канал', format: 'json', map_items: 'messages', map_id: 'ts', map_thread: 'thread_ts', map_channel: 'channel' }] }, { tools: [READ], request: 'ревью в #review' });
+  assert.ok(a.ok);
+  if (a.ok) assert.deepEqual((a.spec.config.script as { steps: Array<{ json: unknown }> }).steps[0].json, { items: 'messages', id: 'ts', thread: 'thread_ts', channel: 'channel' });
+  const reqs: SessionRequest[] = [];
+  const builds = createConnectorBuilds({
+    session: async (req) => {
+      reqs.push(req);
+      return ok({ ok: false, reason: 'нет' });
+    },
+    testSource: async () => ({ ok: true, sample: [], found: 0 }) as unknown as SourceTestResult,
+    newId: () => 'b1',
+  });
+  builds.start({ tools: [READ], request: 'ревью' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(reqs[0].system!, /map_thread — id нити/);
+  assert.match(JSON.stringify(reqs[0].outputSchema), /map_thread/);
+});

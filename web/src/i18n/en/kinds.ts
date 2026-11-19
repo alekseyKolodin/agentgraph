@@ -45,6 +45,7 @@ export const kinds: Record<string, string> = {
   'Пусто — все проекты.': 'Empty means all projects.',
   'Что произошло': 'What happened',
   'Черновик (MR)': 'Draft (MR)',
+  'Ревью запрошено снова': 'Review requested again',
   'PR на ревью у вас, упоминания и новые комментарии к вашим PR': 'PRs waiting for your review, mentions and new comments on your PRs',
   'Нужен установленный и авторизованный gh (gh auth login).': 'Needs gh installed and signed in (gh auth login).',
   'владелец/репозиторий': 'owner/repository',
