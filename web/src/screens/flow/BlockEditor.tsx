@@ -1,17 +1,16 @@
 // Блок в конструкторе (ui/app.js blockHtml, blockHeadHtml, blockPanelHtml, wireBlock): шапка с названием и порядком
-// (несколько блоков), цикл и условие остановки, теги знаний; в ленте — ещё этапы блока, в инспекторе — чипы этапов.
+// (несколько блоков), цикл и условие остановки, теги знаний и чипы этапов — в правой панели «Правки».
 import { useFeature } from '../../api';
 import { TagBadge } from '../../components/Badge';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
-  blockHeading, blockLabel, isCall, isMulti, moveBlock, newPhase, phaseNum, removeBlock, renameBlock, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
+  blockHeading, blockLabel, isCall, isMulti, moveBlock, phaseNum, removeBlock, renameBlock, setBlockMode, slug, TAG_SLUG_RE, untilFor, type EditBlock,
 } from '../../lib/flow/edit';
 import { plural } from '../../lib/format';
 import { t } from '../../lib/i18n';
 import { bindField, dropStaleSel, openPhasePane, sameField } from './actions';
 import { CallFields, CallPaneInfo, NextFields } from './CallEditor';
 import { DraftInput, PluginsField } from './fields';
-import { PhaseCard } from './PhaseCard';
 import { emit, flowState, knowledgeDraft, markDirty, useFlowStore, type BlockField, type FieldKey } from './store';
 import styles from './Flow.module.css';
 
@@ -334,52 +333,7 @@ export function BlockPanel({ bi, inPane = false }: { bi: number; inPane?: boolea
   );
 }
 
-/** Блок в ленте: шапка, цикл, этапы, «Добавить этап». */
-export function BlockSection({ bi }: { bi: number }) {
-  const st = useFlowStore();
-  const spec = st.spec!;
-  const b = spec.blocks[bi]!;
-  const multi = isMulti(spec);
-  const groups = [...new Set(b.phases.map((p) => p.group).filter(Boolean))] as string[];
-  return (
-    <section className={cx(styles.bblock, multi && styles.multi, st.ai?.diff.blocks.has(b.name) && styles.aiChanged)} data-b={bi} id={`bblock-${bi}`}>
-      <BlockHead bi={bi} />
-      <BlockPanel bi={bi} />
-      {!isCall(b) && <BlockPhases bi={bi} groups={groups} />}
-    </section>
-  );
-}
-
-/** Этапы блока в ленте: карточки и «Добавить этап». У блока-вызова их нет. */
-function BlockPhases({ bi, groups }: { bi: number; groups: string[] }) {
-  const st = useFlowStore();
-  const spec = st.spec!;
-  const b = spec.blocks[bi]!;
-  const multi = isMulti(spec);
-  return (
-    <>
-      <h3>{multi ? t('Этапы блока {n}', { n: bi + 1 }) : t('Этапы')}</h3>
-      <datalist id={`b-groups-${bi}`}>
-        {groups.map((g) => <option key={g} value={g} />)}
-      </datalist>
-      <div>
-        {b.phases.map((p, i) => <PhaseCard key={phaseKey(p)} bi={bi} i={i} />)}
-      </div>
-      <button
-        className="btn"
-        onClick={() => {
-          b.phases.push(newPhase(spec, bi));
-          markDirty();
-          openPhasePane(bi, b.phases.length - 1, styles.flash!);
-        }}
-      >
-        {t('Добавить этап')}
-      </button>
-    </>
-  );
-}
-
-/** Блок в инспекторе: шапка, цикл и чипы этапов блока. */
+/** Блок в правой панели «Правки»: шапка, цикл и чипы этапов блока. */
 export function BlockPane({ bi }: { bi: number }) {
   const st = useFlowStore();
   const spec = st.spec!;

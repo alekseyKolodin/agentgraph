@@ -26,4 +26,6 @@ import { deskDetail } from './desk-detail';
 import { graph } from './graph';
 import { flowRun } from './flow-run';
 
-export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...deskTop, ...deskMonth, ...deskDetail, ...graph, ...flowRun };
+export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...deskTop, ...deskMonth, ...deskDetail, ...graph, ...flowRun, ...flowEdit };
+import { flowEdit } from './flow-edit';
+

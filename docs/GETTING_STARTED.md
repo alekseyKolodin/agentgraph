@@ -204,7 +204,7 @@ A move by hand holds until the thing itself changes. The watcher sees the same s
 - **"New flow" → generate**: describe the task in words ("fix the failing tests, don't touch the tests themselves"), and the generator proposes a flow. Before running it, check the prompts, tools and condition.
 - **"New flow" → assemble by hand**: an empty template; phases are added in the builder.
 - **"New flow" → one-off run (don't save the flow)**: like "generate", but the flow is not saved. The draft opens in the builder marked "one-off": edit it by hand, with "Edit with AI" or in YAML; the "Apply" button only validates the edit. Then the **Run** tab → "Run": the run follows what is in the builder right now, and nothing appears in `flows/`. The draft lives only in this browser tab, and leaving it asks for confirmation. On the page of such a run, instead of "To flow" there is "Save as flow" (name and folder; a taken name is not overwritten).
-- **Edit with AI** (above the graph in the builder): describe what to change ("add a review phase after implementation"). The edit lands in the builder unsaved: you look at what changed and click "Save" (the button at the bottom appears when there are unsaved edits) or "Undo edit".
+- **Edit with AI** (the "Assistant" panel to the right of the scheme on the **Edit** tab): describe what to change ("add a review phase after implementation") and press ⌘↵. While the AI works you see its steps in words ("Added phase …", "Editing phase …: prompt"); then its reply, the "What changed" rows (a click opens the phase) and warnings. The edit lands in the scheme unsaved: the "AI edit not saved yet" bar above the scheme has "Undo edit" and "Save".
 - The **YAML** tab — for fine-grained text editing.
 
 Flows are saved to `flows/<name>.yaml` or `flows/<folder>/<name>.yaml`. These are ordinary files: you can put them in git and send them to colleagues.
@@ -484,6 +484,7 @@ So that a pull request can't be merged with red checks, require the `test` check
 | `src/adhoc.ts` | one-off run: a draft from the request body (`spec`/`yaml`), the run's flow snapshot, which flow to continue from (the snapshot or `flows/`), "Save as flow" |
 | `src/generate.ts` | the generator: task → flow (a Claude session with read-only tools: real check commands and paths come from the project); design rules shared with "Edit with AI" |
 | `src/edit.ts` | "Edit with AI": the agent edits the YAML with the Edit tool |
+| `src/edit-steps.ts` | steps of "Edit with AI" in words: after each Read/Edit/Write of the flow file, what changed since the previous snapshot (phase added, phase fields edited, file added) — by the raw YAML, without validation; tests `edit-steps.test.ts` |
 | `src/flow-ai.ts` | HTTP responses of generation and "Edit with AI": the same JSON body as always, or with `Accept: application/x-ndjson` a stream of the session's progress (model, API retries, step, log lines, then the body with the model and duration) |
 | `src/runner.ts` | execution: blocks, iterations, phases, condition checks, pause, continuation, writing `runs/`; user instructions and edits of a paused run (`RunFix`); call blocks as child runs (`runChild`) and branching by `next` |
 | `src/run-fix.ts` | "fix and continue": what an edit of a running run's flow may not change and what it changed (pure functions; the runner applies the edit at a checkpoint) |

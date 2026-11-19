@@ -62,15 +62,8 @@
 
 .bpanel.flash, .art-decl.flash { outline: 2px solid var(--live); outline-offset: 2px; }
 
-/* конструктор (system.md → «Конструктор»): граф — главный холст во всю ширину, инспектор справа — только когда что-то выбрано.
-   Режимы инспектора: «этап» — форма этапа целиком, «блок» — цикл и условие, «поле» — крупный редактор одного поля */
-.builder-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
-.builder-split.with-insp { grid-template-columns: minmax(0, 1fr) minmax(380px, 38%); }
-.builder-col { min-width: 0; }
-.focus-pane { top: 60px; height: calc(100vh - 82px); border-color: var(--line-strong); }
-.focus-pane[hidden] { display: none; }
-.focus-chips:empty { display: none; }
-.phase-pane, .block-pane { flex: 1; min-height: 0; overflow: auto; margin: 0 -6px; padding: 2px 6px; }
+
+/* поля этапа и блока в правой панели «Правки» (EditSide.tsx): этап целиком, блок (цикл и условие) */
 .phase-pane .pcard { border: 0; box-shadow: none; background: transparent; padding: 0; margin: 0; }
 .phase-pane textarea.p-prompt { min-height: 45vh; resize: vertical; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.6; }
 .phase-pane .p-adv > summary { pointer-events: none; list-style: none; }
@@ -82,34 +75,7 @@
 .block-pane textarea.b-until-prompt { min-height: 30vh; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.6; }
 .pane-phases { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
 .builder .focused-src { outline: 1px solid var(--ink-3); outline-offset: 1px; }
-@media (max-width: 1100px) {
-  .builder-split, .builder-split.with-insp { grid-template-columns: minmax(0, 1fr); }
-  .focus-pane { display: none; }
-}
-@media (min-width: 1101px) {
-  /* в ленте чипы переменных не нужны: они в инспекторе этапа */
-  .builder-main .p-section.p-vars { display: none; }
-  /* карточка в ленте, открытая в инспекторе */
-  .builder .pcard.pane-src { outline: 1px solid var(--ink-3); outline-offset: 1px; }
-}
-
-/* панель конструктора: правка с ИИ одной строкой (растёт по тексту) и сохранение; липнет к верху */
-.builder-bar { position: sticky; top: 0; z-index: 6; display: flex; align-items: flex-start; gap: 16px; padding: 8px 0 10px; margin-top: -8px; background: var(--deck); }
-.ai-edit { flex: 1 1 auto; min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
-.ai-edit-label { flex: none; margin-top: 8px; font-family: var(--font-mono); font-size: var(--fs-cap); line-height: 1.4; color: var(--ink-3); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 5px; }
-.ai-edit textarea { flex: 1; min-width: 0; min-height: 35px; max-height: 168px; field-sizing: content; padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: inherit; line-height: 1.5; resize: none; }
-.ai-edit textarea[readonly] { opacity: .7; }
-.builder-save { flex: none; display: flex; align-items: center; gap: 10px; min-height: 35px; }
-.builder-save[hidden] { display: none; }
-.builder-note { margin: 0 0 10px; }
-.builder-note:empty { display: none; }
-.builder-list-head { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); }
 .run-label { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
-.ai-result { display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 10px 14px; margin-bottom: 14px; }
-.ai-summary { white-space: pre-wrap; font-size: var(--fs-small); line-height: 1.5; }
-.ai-diff ul { margin: 4px 0 0; padding-left: 18px; font-size: var(--fs-small); }
-.ai-diff li[data-phase] { cursor: pointer; color: var(--live); }
-.ai-diff li[data-phase]:hover { text-decoration: underline; }
 .pcard.ai-changed, .bblock.ai-changed > .bpanel { border-color: var(--st-ok); box-shadow: 0 0 0 1px var(--st-ok); }
 
 .pcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
@@ -187,3 +153,99 @@ textarea.next-judge { flex-basis: 100%; font-family: var(--font-mono); font-size
 .edit-views button:focus-visible { outline: none; box-shadow: var(--focus); }
 /* скрытая «Правка» не видна под «Запуском» и «Историей»: .edit-tab { display: flex } перебивал [hidden] */
 .edit-tab[hidden] { display: none; }
+
+/* ---------- «Правка» (EditTab.tsx): плашка несохранённого сверху, слева схема, справа «Помощник | Этап N» */
+.grow { flex: 1; }
+.edit-split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 32%, 460px); gap: 20px; align-items: start; }
+.edit-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.tab-builder[hidden] { display: none; }
+.under-graph { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* плашка «Правка ИИ ещё не сохранена» / «Есть несохранённые изменения» */
+.unsaved {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 10px 14px; border-radius: var(--r-lg);
+  border: 1px solid color-mix(in srgb, var(--st-ok) 45%, transparent); background: color-mix(in srgb, var(--st-ok) 7%, var(--panel));
+}
+.unsaved-text { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.unsaved-text > span { font-size: var(--fs-small); color: var(--ink-2); }
+.unsaved-text pre { margin: 4px 0 0; }
+.saved-note { margin: 0; }
+
+/* правая панель: шапка с сегментом, тело — помощник или поля выбранного */
+.edit-side {
+  position: sticky; top: 8px; height: var(--side-h, calc(100vh - 30px)); min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-lg);
+}
+.side-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 12px; border-bottom: 1px solid var(--line); }
+.side-seg { display: inline-flex; min-width: 0; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
+.side-seg button { font: inherit; font-size: var(--fs-small); color: var(--ink-2); background: transparent; border: 0; border-right: 1px solid var(--line); padding: 4px 12px; cursor: pointer; white-space: nowrap; }
+.side-seg button:last-child { border-right: 0; }
+.side-seg button:hover { color: var(--ink); }
+.side-seg button.on { background: var(--raised); color: var(--ink); font-weight: 500; }
+.side-seg button:focus-visible { outline: none; box-shadow: var(--focus); }
+.side-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px 16px; }
+.side-warn { flex: none; margin: 0; padding: 8px 14px; font-size: var(--fs-small); color: var(--st-wait); border-bottom: 1px solid var(--line); }
+.side-ctx { margin: 0 0 10px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.side-body .phase-pane, .side-body .block-pane { overflow: visible; margin: 0; padding: 0; }
+/* изменённое правкой ИИ видно на схеме и в «Что изменилось»: в полях этапа рамка лишняя */
+.side-body .phase-pane .pcard.ai-changed { border: 0; box-shadow: none; }
+.pcard-foot { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.flow-settings { display: flex; flex-direction: column; gap: 14px; }
+.builder textarea.flow-input { min-height: 160px; line-height: 1.5; }
+.flow-settings .art-decl:focus { outline: none; }
+
+/* помощник: лента сообщений и поле «Что поменять» */
+.assistant { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.assistant[hidden] { display: none; }
+.chat-feed { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding: 16px 14px; }
+.chat-empty { display: flex; flex-direction: column; gap: 6px; color: var(--ink-2); font-size: var(--fs-small); }
+.chat-empty p { margin: 0; }
+.bubble {
+  align-self: flex-end; max-width: 88%; padding: 9px 12px; border-radius: 12px 12px 4px 12px; background: var(--raised);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.bubble.queued { border: 1px dashed var(--line-strong); background: transparent; }
+.queued-note { display: block; margin-top: 4px; font-size: var(--fs-meta); color: var(--ink-3); }
+.ai-reply { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ai-reply :global(.md) { font-size: var(--fs-small); line-height: 1.55; overflow-wrap: anywhere; }
+.ai-reply :global(.md) > :first-child { margin-top: 0; }
+.ai-reply :global(.md) > :last-child { margin-bottom: 0; }
+.ai-reply.undone > :not(.facts):not(p) { opacity: .55; }
+.cap { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.chg-list { display: flex; flex-direction: column; gap: 2px; margin: 0 -10px; }
+.chg-list > .cap { padding: 0 10px 4px; }
+.chg-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--ink); font: inherit; font-size: var(--fs-small); line-height: 1.45; text-align: left; cursor: pointer;
+}
+.chg-row:hover:not(:disabled) { background: var(--hover); }
+.chg-row:focus-visible { outline: none; box-shadow: var(--focus); }
+.chg-row:disabled { cursor: default; color: var(--ink-2); }
+.chg-row b { font-weight: 600; }
+.chg-kind { flex: 0 0 62px; }
+.tag { display: inline-block; font-size: var(--fs-cap); font-weight: 600; line-height: 18px; padding: 0 7px; border-radius: var(--r-xs); white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
+.tag-new { --c: var(--st-ok); }
+.tag-edit { --c: var(--ink-2); }
+.tag-gone { --c: var(--st-fail); }
+.note-plate { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--st-wait) 40%, transparent); border-radius: var(--r-md); font-size: var(--fs-small); line-height: 1.5; }
+.note-plate b { color: var(--st-wait); font-weight: 600; }
+.note-plate ul { margin: 4px 0 0; padding-left: 18px; }
+.trail > summary { cursor: pointer; width: max-content; font-size: var(--fs-meta); color: var(--ink-3); }
+.trail > summary:hover { color: var(--ink-2); }
+.trail[open] > summary { margin-bottom: 8px; }
+.trail[open] { display: flex; flex-direction: column; gap: 8px; }
+.facts { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--fs-meta); color: var(--ink-2); }
+.composer { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); }
+.composer textarea {
+  width: 100%; min-height: 96px; max-height: 40vh; resize: vertical; padding: 9px 11px; border-radius: var(--r-md);
+  border: 1px solid var(--line-strong); background: var(--well); color: var(--ink); font: inherit; line-height: 1.5;
+}
+.composer textarea:focus { outline: none; border-color: var(--live); }
+.composer-row { display: flex; align-items: center; gap: 10px; }
+.composer .msg { margin: 0; }
+.hint { min-width: 0; font-size: var(--fs-meta); color: var(--ink-3); }
+.kbd { flex: none; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); }
+@media (max-width: 1100px) {
+  .edit-split { grid-template-columns: minmax(0, 1fr); }
+  .edit-side { position: static; height: min(80vh, 760px); }
+}

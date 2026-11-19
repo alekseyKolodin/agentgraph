@@ -5,6 +5,8 @@
 //   { "rules": [{ "when": "подстрока промпта или системного промпта", "text"?: "...", "structured"?: {...}, "delayMs"?: n }],
 //     "mcpServers"?: [McpServerStatus…],  — ответ на mcp_status (список MCP-серверов и коннекторов claude.ai)
 //     "mcpCalls"?: { "mcp__…__tool": { content, structuredContent?, isError? } } }  — ответы на mcp_call (вызов без модели)
+//   Правило с "edits": [{ "find", "replace" }] — «Правка с ИИ»: фейк сам читает файл flow из промпта и правит его
+//   вызовами Read/Edit (tool_use + tool_result, как настоящий агент), между шагами — "stepDelayMs".
 // Первое совпавшее правило отвечает; нет совпадений — ответ по умолчанию (см. defaultAnswer). Каждый вызов
 // дописывается строкой в FAKE_CLAUDE_LOG — тест проверяет, какие сессии были и что в них ушло.
 import fs from 'node:fs';
@@ -126,13 +128,42 @@ function textOf(content) {
 }
 
 let turns = 0;
+const usage0 = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Вызов инструмента агентом и его результат: сообщения assistant (tool_use) и user (tool_result), как у CLI. */
+function toolCall(name, input, result) {
+  const id = `toolu_${randomUUID().slice(0, 12)}`;
+  out({
+    type: 'assistant', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(),
+    message: { id: `msg_${randomUUID()}`, type: 'message', role: 'assistant', model, content: [{ type: 'tool_use', id, name, input }], stop_reason: 'tool_use', stop_sequence: null, usage: usage0 },
+  });
+  out({ type: 'user', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: result }] } });
+}
+
+/** «Правка с ИИ»: Read файла flow, потом Edit на каждую замену (замены — подряд по тексту файла). */
+async function editFile(prompt, edits, stepMs) {
+  const file = prompt.match(/в файле (\/\S+?\.yaml)/)?.[1];
+  if (!file) return;
+  await sleep(stepMs);
+  toolCall('Read', { file_path: file }, fs.readFileSync(file, 'utf8'));
+  for (const e of edits) {
+    await sleep(stepMs);
+    const text = fs.readFileSync(file, 'utf8');
+    if (text.includes(e.find)) fs.writeFileSync(file, text.replace(e.find, e.replace));
+    toolCall('Edit', { file_path: file, old_string: e.find, new_string: e.replace }, `The file ${file} has been updated.`);
+  }
+  await sleep(stepMs);
+}
+
 async function onUser(msg) {
   const prompt = textOf(msg.message?.content);
   const a = answer(prompt);
   logCall({ system: system.slice(0, 300), prompt, schema: Boolean(schema), answer: a });
-  if (a.delayMs) await new Promise((r) => setTimeout(r, a.delayMs));
+  if (a.delayMs) await sleep(a.delayMs);
   turns++;
   out({ type: 'system', subtype: 'init', session_id: sessionId, model, cwd: process.cwd(), tools: [], mcp_servers: [], permissionMode: 'default', apiKeySource: 'none', slash_commands: [], output_style: 'default', uuid: randomUUID() });
+  if (Array.isArray(a.edits)) await editFile(prompt, a.edits, a.stepDelayMs ?? 0);
   const structured = a.structured ?? (schema && !a.text ? fromSchema(schema) : undefined);
   const text = a.text ?? (structured !== undefined ? JSON.stringify(structured) : 'ok');
   const usage = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };

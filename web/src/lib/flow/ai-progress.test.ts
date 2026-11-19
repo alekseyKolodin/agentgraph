@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import type { FlowEditStep } from '@server/api-types';
 import assert from 'node:assert/strict';
 import {
   aiFacts, aiProgressStep, defaultModelLabel, elapsed, isSilent, LINES_MAX, modelChip, RETRY_SHOW_MS, retryLabel, silenceMs, SILENCE_MS, stageLabel, startProgress,
@@ -94,4 +95,36 @@ test('модель: чип без префикса и даты, «по умол�
   assert.equal(modelChip('claude-haiku-4-5-20251001'), 'haiku-4-5');
   assert.equal(defaultModelLabel(undefined), 'по умолчанию');
   assert.equal(defaultModelLabel('claude-opus-5-5'), 'по умолчанию (opus-5-5)');
+});
+
+test('шаги правки: склейка правок одного этапа, «добавил» остаётся, удалённое после добавления пропадает', async () => {
+  const { pushStep } = await import('./ai-progress');
+  let list = pushStep([], { kind: 'read', blocks: 1, phases: 3, artifacts: 1 });
+  list = pushStep(list, { kind: 'read', blocks: 1, phases: 3, artifacts: 1 });
+  list = pushStep(list, { kind: 'edit', what: 'phase', name: 'find', title: 'Поиск', fields: ['prompt'] });
+  list = pushStep(list, { kind: 'add', what: 'phase', name: 'review', title: 'Утверждение' });
+  list = pushStep(list, { kind: 'edit', what: 'phase', name: 'find', title: 'Поиск', fields: ['handoff', 'prompt'] });
+  list = pushStep(list, { kind: 'edit', what: 'phase', name: 'review', title: 'Утверждение', fields: ['tools'] });
+  assert.deepEqual(list, [
+    { kind: 'read', blocks: 1, phases: 3, artifacts: 1 },
+    { kind: 'edit', what: 'phase', name: 'find', title: 'Поиск', fields: ['prompt', 'handoff'] },
+    { kind: 'add', what: 'phase', name: 'review', title: 'Утверждение' },
+  ]);
+  assert.equal(pushStep(list, { kind: 'remove', what: 'phase', name: 'review' }).length, 2);
+});
+
+test('шаги словами: последний — «Правлю», прошедшие — «Поправил»; прочитал — состав; повторы одиночного блока', async () => {
+  const { stepView, stepsTouched } = await import('./ai-progress');
+  assert.deepEqual(stepView({ kind: 'read', blocks: 1, phases: 3, artifacts: 1 }, false), { text: 'Прочитал flow: 3 этапа, 1 файл', detail: '' });
+  assert.equal(stepView({ kind: 'read', blocks: 2, phases: 5, artifacts: 0 }, false).text, 'Прочитал flow: 2 блока, 5 этапов');
+  const edit: FlowEditStep = { kind: 'edit', what: 'phase', name: 'find', title: 'Поиск болей', fields: ['prompt', 'handoff'] };
+  assert.deepEqual(stepView(edit, true), { text: 'Правлю этап «Поиск болей»', detail: 'промпт, что передать следующему этапу' });
+  assert.equal(stepView(edit, false).text, 'Поправил этап «Поиск болей»');
+  assert.equal(stepView({ kind: 'add', what: 'artifact', name: 'review', title: 'user_review.md' }, true).text, 'Добавил файл user_review.md');
+  assert.equal(stepView({ kind: 'add', what: 'artifact', name: 'notes' }, false).text, 'Добавил файл notes.md');
+  assert.deepEqual(stepView({ kind: 'edit', what: 'block', name: 'main', fields: ['loop'] }, true), { text: 'Правлю повторы и условие', detail: '' });
+  assert.equal(stepView({ kind: 'edit', what: 'flow', name: '', fields: ['description'] }, false).detail, 'описание');
+  const touched = stepsTouched([edit, { kind: 'remove', what: 'phase', name: 'gone' }, { kind: 'edit', what: 'block', name: 'b', fields: ['loop'] }]);
+  assert.deepEqual([...touched.phases], ['find']);
+  assert.deepEqual([...touched.blocks], ['b']);
 });
