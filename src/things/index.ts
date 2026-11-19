@@ -1,9 +1,12 @@
 // Реестр наблюдателей вещей (SPEC 3.1): один наблюдатель на тип. Фабрики приносят сессии наблюдателей этапа 2
 // (docs/desk/plan-2.md) из своих файлов; подключение — одна строка в FACTORIES.
 import type { Thing, ThingState, ThingType, Watcher } from './types.js';
+import { forgeWatcher } from './forge.js';
+import { jiraWatcher } from './jira.js';
+import { branchWatcher } from './branch.js';
 
-/** Фабрики наблюдателей: forge (src/things/forge.ts), Jira (jira.ts), ветка (branch.ts) — подключаются при слиянии. */
-const FACTORIES: Array<() => Watcher> = [];
+/** Фабрики наблюдателей: MR/PR (forge.ts), задача Jira (jira.ts), ветка (branch.ts). */
+const FACTORIES: Array<() => Watcher> = [() => forgeWatcher(), () => jiraWatcher(), () => branchWatcher()];
 
 let cache: Watcher[] | undefined;
 

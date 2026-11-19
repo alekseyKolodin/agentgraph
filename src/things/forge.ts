@@ -12,6 +12,7 @@ import { exec, forgeOf, forgeUser, type Exec, type Forge } from '../git.js';
 import type { Profile } from '../api-types.js';
 import { loadProfile } from '../settings.js';
 import type { Thing, ThingState, Turn, Watcher } from './types.js';
+import { mrKey } from './keys.js';
 
 /** Что нужно, чтобы найти MR. me и notesCount — подсказки вызывающего (список «моих MR» уже знает и то и другое). */
 export type ForgeRef = { host: string; project: string; number: number; me?: string; notesCount?: number };
@@ -29,9 +30,13 @@ export type Depth = 'full' | 'attention';
 
 const EVERY_MS = 2 * 60_000;
 
-/** Ключ MR по формату из types.ts. Когда появится keys.ts (сессия things-core), этот вызов заменить на mrKey(). */
+/** Ключ MR — mrKey() из keys.ts; на несобираемом (пустой хост, проект без группы) — прежняя запись по формату, без исключения. */
 export function mrKeyOf(host: string, project: string, number: number): string {
-  return `mr:${host.toLowerCase()}/${project.replace(/^\/+|\/+$/g, '')}/${number}`;
+  try {
+    return mrKey(host, project, number);
+  } catch {
+    return `mr:${host.toLowerCase()}/${project.replace(/^\/+|\/+$/g, '')}/${number}`;
+  }
 }
 
 const KEY_RE = /^mr:([^/]+)\/(.+)\/(\d+)$/;
