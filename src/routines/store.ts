@@ -54,7 +54,7 @@ export type FileEntry<T> = { slug: string; yaml: string } & Parsed<T>;
 export type CatchUpRecord = CatchUp & { items: RoutineEvent[]; matchingIds: string[] };
 
 /** Событие, ждущее очереди parallel. */
-export type QueueItem = { routine: string; event: RoutineEvent; at: string; /** Строка журнала limit, которая станет started. */ logId?: string; /** Решение человека: per_day не действует. */ human?: boolean; /** Дело события (рутина с task): запуск переносит его «В работу». */ deskKey?: string };
+export type QueueItem = { routine: string; event: RoutineEvent; at: string; /** Строка журнала limit, которая станет started. */ logId?: string; /** Решение человека: per_day не действует. */ human?: boolean; /** Дело события (рутина с task): запуск переносит его «В работу». */ deskKey?: string; /** Сколько раз запуск не начался (startRun бросил): повтор из очереди, пока попытки не кончились. */ attempts?: number; /** Повтор не раньше этого момента (ISO): пауза после сбоя запуска. */ notBefore?: string };
 
 /** Запись источника-снимка в прошлой проверке: id и то, по чему считается ключ дела (deskKeyOf). */
 export type SnapshotEntry = Pick<RoutineEvent, 'id' | 'source' | 'things' | 'thread'>;

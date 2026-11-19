@@ -28,27 +28,42 @@ export function commandOf(args: string[]): string {
   return '';
 }
 
-export const exec: Exec = (cmd, args, opts = {}) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      cmd,
-      args,
-      {
-        cwd: opts.cwd,
-        timeout: opts.timeoutMs ?? 30_000,
-        maxBuffer: MAX_BUFFER,
-        // fetch на приватном remote не должен виснуть на вопросе пароля
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GLAB_NO_PROMPT: '1', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', ...opts.env },
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          const e = err as NodeJS.ErrnoException & { killed?: boolean };
-          const why = e.code === 'ENOENT' ? `${cmd} не установлен` : e.killed ? 'таймаут' : String(stderr || e.message).trim().split('\n').slice(-3).join(' ');
-          reject(new Error(`${[cmd, commandOf(args)].filter(Boolean).join(' ')}: ${why}`));
-        } else resolve(String(stdout));
-      },
-    );
-  });
+/** Часы для отличия сна от зависания: настенные идут и во сне, монотонные (на macOS) нет. */
+export type ExecClocks = { wall: () => number; mono: () => number };
+
+/** Настенных часов прошло больше монотонных на столько — компьютер спал, и таймаут считал время сна. */
+const SLEEP_GAP_MS = 10_000;
+
+export function createExec(clocks: ExecClocks = { wall: () => Date.now(), mono: () => performance.now() }): Exec {
+  return (cmd, args, opts = {}) =>
+    new Promise((resolve, reject) => {
+      const wall0 = clocks.wall();
+      const mono0 = clocks.mono();
+      execFile(
+        cmd,
+        args,
+        {
+          cwd: opts.cwd,
+          timeout: opts.timeoutMs ?? 30_000,
+          maxBuffer: MAX_BUFFER,
+          // fetch на приватном remote не должен виснуть на вопросе пароля
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GLAB_NO_PROMPT: '1', GH_PROMPT_DISABLED: '1', NO_COLOR: '1', ...opts.env },
+        },
+        (err, stdout, stderr) => {
+          if (err) {
+            const e = err as NodeJS.ErrnoException & { killed?: boolean };
+            // таймаут execFile считает по настенным часам: сон посреди команды съедает его целиком
+            const slept = clocks.wall() - wall0 - (clocks.mono() - mono0) > SLEEP_GAP_MS;
+            const timedOut = e.killed ? (slept ? 'прервано сном компьютера' : 'таймаут') : undefined;
+            const why = e.code === 'ENOENT' ? `${cmd} не установлен` : timedOut ?? String(stderr || e.message).trim().split('\n').slice(-3).join(' ');
+            reject(new Error(`${[cmd, commandOf(args)].filter(Boolean).join(' ')}: ${why}`));
+          } else resolve(String(stdout));
+        },
+      );
+    });
+}
+
+export const exec: Exec = createExec();
 
 const git = (cwd: string, args: string[], x: Exec = exec, timeoutMs?: number) => x('git', args, { cwd, timeoutMs });
 

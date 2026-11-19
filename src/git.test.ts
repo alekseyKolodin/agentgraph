@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { aheadBehind, checkoutStatus, commandOf, copyUntracked, ensureWorktree, exec, forgeOf, findBranchMr, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
+import { aheadBehind, checkoutStatus, commandOf, copyUntracked, createExec, ensureWorktree, exec, forgeOf, findBranchMr, forgeUser, getMergeRequest, glabMrPath, listMergeRequests, localBranches, mrDiscussions, parseRemote, repoRoot, slugify, type Exec } from './git.js';
 
 test('remote: https, scp, ssh с портом, вложенные группы', () => {
   assert.deepEqual(parseRemote('https://gitlab.example.com/cafe/App.git'), { host: 'gitlab.example.com', path: 'cafe/App' });
@@ -197,6 +197,27 @@ test('ошибка exec подписана командой, а не опцие�
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('таймаут: настенные часы ушли вперёд сильнее монотонных — «прервано сном компьютера»', async () => {
+  // настенные часы прыгают на минуту между стартом и ошибкой, монотонные идут как обычно
+  let wall = 1_000_000;
+  let mono = 5_000;
+  const slept = createExec({ wall: () => (wall += 60_000), mono: () => (mono += 10) });
+  await assert.rejects(slept(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 100 }), (err: Error) => {
+    assert.match(err.message, /прервано сном компьютера/);
+    assert.doesNotMatch(err.message, /таймаут/);
+    return true;
+  });
+});
+
+test('таймаут: часы идут вровень — обычный «таймаут»', async () => {
+  let t = 0;
+  const plain = createExec({ wall: () => (t += 50), mono: () => t });
+  await assert.rejects(plain(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { timeoutMs: 100 }), (err: Error) => {
+    assert.match(err.message, /: таймаут$/);
+    return true;
+  });
 });
 
 // --- GitHub через gh

@@ -141,6 +141,11 @@ export type ServerOptions = {
    */
   notifier?: (n: Notice) => void;
   /**
+   * Не давать компьютеру уснуть (десктоп: powerSaveBlocker): сервер берёт удержание на подготовку запуска рутины
+   * (worktree, git fetch) и на время жизни каждого запуска flow и отпускает вернувшейся функцией. Счёт — на стороне хоста.
+   */
+  keepAwake?: () => () => void;
+  /**
    * Автообновление checkout agentgraph (src/update.ts): проверка по таймеру и /api/update. Включают CLI `ui` и десктоп;
    * по умолчанию выключено — тесты и встраивания сервера в сеть не ходят.
    */
@@ -228,6 +233,8 @@ type HomeEvent = HomeEventOf<RunEvent['type'] | 'session' | 'team' | 'space' | '
 type ChatTurnState = { abort: AbortController; live: ChatLive; clients: Set<http.ServerResponse> };
 
 const live = new Map<string, LiveRun>();
+/** Удержание от сна (ServerOptions.keepAwake) по живым запускам: снимается в конце запуска. */
+const awakeHolds = new Map<string, () => void>();
 const chats = new Map<string, ChatTurnState>();
 /** Идущие генерации и правки flow ИИ и черновики пространств: живут, пока живо соединение; stopServer прерывает их. */
 const generations = new Set<AbortController>();
@@ -295,7 +302,15 @@ function routines(srv: ServerOptions): RoutineEngine {
   const extra = typeof srv.routines === 'object' ? srv.routines : {};
   routineEngine = new RoutineEngine({
     ...extra,
-    startRun: (r) => startRoutineRun(r, srv),
+    startRun: async (r) => {
+      // сон посреди git fetch / worktree add убивает подготовку по таймауту: пока готовим запуск, компьютер не засыпает
+      const release = srv.keepAwake?.();
+      try {
+        return await startRoutineRun(r, srv);
+      } finally {
+        release?.();
+      }
+    },
     resumeRun: (id) => resumeRun(id),
     stopRun: (id) => abortRun(id),
     flowCost: (name) => {
@@ -1492,6 +1507,8 @@ function launchRun(
     notes: [],
   };
   live.set(id, lr);
+  const releaseAwake = srv.keepAwake?.();
+  if (releaseAwake) awakeHolds.set(id, releaseAwake);
   // запуск начат с карточки дела (SPEC 3.2): дело — в «В работе», запуск — в его ссылках. Дочерний — не запуск по делу
   if (!parent && opts.source?.item) lr.deskLinked = runDeskStarted(opts.source.item, id, spec.name);
 
@@ -1594,6 +1611,8 @@ function launchRun(
       for (const client of lr.clients) client.end();
       lr.clients.clear();
       live.delete(id);
+      awakeHolds.get(id)?.();
+      awakeHolds.delete(id);
       // конец запуска по задаче Teamwork (spec §10): done — «В работе» → «Ревью», иначе только статус в local.json.
       // Дочерний запуск блока-вызова задачу не двигает: о нём скажет конец родителя
       // (автоматика уже снята остановкой сервера — конец опоздавшего запуска просто не записывается)

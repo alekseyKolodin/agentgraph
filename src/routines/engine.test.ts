@@ -13,7 +13,7 @@ import type { RoutineEvent, RoutineSpec } from './types.js';
 
 type Reply = { target?: Record<string, unknown>; text: string };
 
-function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult>; listen?: SourceKind['listen']; startFails?: boolean; now?: string; gate?: () => Promise<void> } = {}) {
+function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult>; listen?: SourceKind['listen']; startFails?: boolean | number; now?: string; gate?: () => Promise<void> } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-'));
   const store = new RoutineStore(root);
   const clock = { now: new Date(o.now ?? '2026-11-17T10:00:00.000Z') };
@@ -24,6 +24,7 @@ function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult
   const replies: Reply[] = [];
   const checks: CheckInput[] = [];
   let changes = 0;
+  let startCalls = 0;
   const kind: SourceKind = {
     kind: 'fake',
     title: 'Фейк',
@@ -44,7 +45,9 @@ function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult
     store,
     kinds: () => [kind],
     startRun: async (r) => {
-      if (o.startFails) throw new Error('flow сломан');
+      startCalls++;
+      // true — всегда падает, число — столько первых вызовов
+      if (o.startFails === true || (typeof o.startFails === 'number' && startCalls <= o.startFails)) throw new Error('flow сломан');
       await o.gate?.();
       started.push(r);
       return `run-${started.length}`;
@@ -71,7 +74,7 @@ function setup(o: { check?: (i: CheckInput) => CheckResult | Promise<CheckResult
     await engine.pollSource('src');
     await engine.idle();
   };
-  return { root, store, engine, clock, items, started, resumed, stopped, replies, checks, routine, event, connected, push, changes: () => changes, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, engine, clock, startCalls: () => startCalls, items, started, resumed, stopped, replies, checks, routine, event, connected, push, changes: () => changes, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('первый опрос после подключения только запоминает «уже видено»', async () => {
@@ -327,13 +330,128 @@ test('parallel: лишние ждут очереди и стартуют, ког
   }
 });
 
-test('запуск не начался — error в журнал', async () => {
+test('запуск не начался — не окончательная ошибка: событие ждёт повтора в очереди', async () => {
   const t = setup({ startFails: true });
   try {
     t.connected();
     t.routine('r');
     await t.push(t.event('1'));
-    assert.match(t.engine.logOf('r', {})[0].reason!, /запуск не начался: flow сломан/);
+    const log = t.engine.logOf('r', {});
+    assert.equal(log.length, 1);
+    assert.match(log[0].reason!, /запуск не начался: flow сломан; повторю при следующей проверке \(попытка 1 из 3\)/);
+    assert.notEqual(log[0].outcome, 'error');
+    const q = t.store.queue();
+    assert.equal(q.length, 1);
+    assert.equal(q[0].attempts, 1);
+    assert.equal(q[0].logId, log[0].id);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался один раз: повтор после паузы стартует, в журнале одна строка с итогом запуска', async () => {
+  const t = setup({ startFails: 1 });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    assert.equal(t.started.length, 0);
+    t.clock.now = new Date(t.clock.now.getTime() + 2 * 60_000);
+    await t.engine.drainQueue();
+    assert.equal(t.started.length, 1);
+    assert.equal(t.store.queue().length, 0);
+    const log = t.engine.logOf('r', {});
+    assert.equal(log.length, 1);
+    assert.equal(log[0].outcome, 'started');
+    assert.equal(log[0].runId, 'run-1');
+    assert.equal(log[0].reason, undefined);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался: до конца паузы очередь запуск не повторяет', async () => {
+  const t = setup({ startFails: 1 });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    t.clock.now = new Date(t.clock.now.getTime() + 60_000);
+    await t.engine.drainQueue();
+    assert.equal(t.startCalls(), 1);
+    assert.equal(t.store.queue().length, 1);
+    t.clock.now = new Date(t.clock.now.getTime() + 60_000);
+    await t.engine.drainQueue();
+    assert.equal(t.startCalls(), 2);
+    assert.equal(t.started.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался три раза: строка — окончательная ошибка, очередь пуста, четвёртой попытки нет', async () => {
+  const t = setup({ startFails: true });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    for (let i = 0; i < 2; i++) {
+      t.clock.now = new Date(t.clock.now.getTime() + 2 * 60_000);
+      await t.engine.drainQueue();
+    }
+    assert.equal(t.startCalls(), 3);
+    assert.equal(t.store.queue().length, 0);
+    const log = t.engine.logOf('r', {});
+    assert.equal(log.length, 1);
+    assert.equal(log[0].outcome, 'error');
+    assert.equal(log[0].reason, 'запуск не начался: flow сломан');
+    t.clock.now = new Date(t.clock.now.getTime() + 10 * 60_000);
+    await t.engine.drainQueue();
+    assert.equal(t.startCalls(), 3);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался: ручной «Запустить» забирает событие из очереди и ту же строку журнала', async () => {
+  const t = setup({ startFails: 1 });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    assert.equal(t.store.queue().length, 1);
+    const logId = t.engine.logOf('r', {})[0].id;
+    await t.engine.runNow('r', '1');
+    assert.equal(t.store.queue().length, 0);
+    assert.equal(t.started.length, 1);
+    const log = t.engine.logOf('r', {});
+    assert.equal(log.length, 1);
+    assert.equal(log[0].id, logId);
+    assert.equal(log[0].outcome, 'started');
+    // очередь пуста: после паузы второго запуска нет
+    t.clock.now = new Date(t.clock.now.getTime() + 5 * 60_000);
+    await t.engine.drainQueue();
+    assert.equal(t.started.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('запуск не начался: выключение и удаление рутины чистят очередь повторов', async () => {
+  const t = setup({ startFails: true });
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    assert.equal(t.store.queue().length, 1);
+    t.engine.setEnabled('r', false);
+    assert.equal(t.store.queue().length, 0);
+    assert.match(t.engine.logOf('r', {})[0].reason!, /рутина выключена/);
+    t.engine.setEnabled('r', true);
+    await t.push(t.event('2'));
+    assert.equal(t.store.queue().length, 1);
+    t.engine.deleteRoutine('r');
+    assert.equal(t.store.queue().length, 0);
   } finally {
     t.done();
   }

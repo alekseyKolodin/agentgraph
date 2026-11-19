@@ -3,7 +3,7 @@
 // UI — сборка dist/web, общение с сервером только по HTTP и SSE; Node в окне нет (contextIsolation, sandbox).
 // Три способа запуска: `npm run desktop:dev` (голый Electron из терминала), ярлык checkout'а из `npm run desktop:install`
 // (тот же код и данные, но свой AgentGraph.app в Dock и запуск из Finder) и упакованное приложение (`desktop:build`).
-import { app, BrowserWindow, dialog, Menu, Notification, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, Menu, Notification, powerSaveBlocker, shell, type MenuItemConstructorOptions } from 'electron';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -287,6 +287,23 @@ const confirmQuit = (): Promise<boolean> =>
     },
   });
 
+// Сон посреди git fetch / worktree add или идущего запуска рвёт его по таймауту: пока готовится запуск рутины или идёт
+// хоть один flow, приложение не даёт системе приостановить его (экран может гаснуть). Удержаний может быть несколько.
+let awakeHolds = 0;
+let awakeId: number | undefined;
+function keepAwake(): () => void {
+  if (awakeHolds++ === 0) awakeId = powerSaveBlocker.start('prevent-app-suspension');
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--awakeHolds === 0 && awakeId !== undefined) {
+      if (powerSaveBlocker.isStarted(awakeId)) powerSaveBlocker.stop(awakeId);
+      awakeId = undefined;
+    }
+  };
+}
+
 async function main(): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
     // второй экземпляр поднял бы второй сервер над теми же runs/: запуски одного не видны другому как свои
@@ -320,7 +337,7 @@ async function main(): Promise<void> {
     });
   // упакованное приложение не git checkout: проверка обновлений сама скажет, что обновляться не с чего
   origin = `http://localhost:${port}`;
-  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, routines: true, restart, notifier: showNotice });
+  await server.startServer({ port, host: HOST, defaultCwd: os.homedir(), update: true, routines: true, restart, notifier: showNotice, keepAwake });
   stopServer = () => server.stopServer();
   const sessions = await import('../sessions-server.js');
   liveSessions = () => sessions.liveSessionNames();
