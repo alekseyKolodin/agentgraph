@@ -24,7 +24,7 @@ import { resolveSignal, settingsJiraHosts, thingLabel, THINGS_MAX } from '../thi
 import type { Thing } from '../things/types.js';
 import { ownKey, threadKey } from '../things/keys.js';
 import { desk as sharedDesk } from '../desk/index.js';
-import type { DeskApi, DeskPatch } from '../desk/types.js';
+import type { DeskApi, DeskItem, DeskPatch } from '../desk/types.js';
 import { projectOfPath } from '../spaces.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, SourceChecks, StoredWait } from './store.js';
 import { LogReadError, RoutineStore } from './store.js';
@@ -610,16 +610,28 @@ export class RoutineEngine {
           .slice(-SEED_MAX);
         this.addThings(list.filter((e) => !e.things));
         for (const r of toSeed) {
-          let ok = true;
+          // прошедшие записи засева помнятся: следующий опрос повторяет только упавшие (и не больше SEED_TRIES раз),
+          // а не весь список с проверкой словами заново
+          const prog = this.store.seedProgress(r.slug)[source] ?? { done: [], tries: {} };
+          const done = new Set(prog.done);
+          const tries = { ...prog.tries };
           for (const e of list) {
+            if (done.has(e.id) || (tries[e.id] ?? 0) >= SEED_TRIES) continue;
+            let failed = false;
             try {
-              if ((await this.process(r.slug, r.spec, e, { seed: 'было в источнике, когда рутина начала заводить дела' })).outcome === 'error') ok = false;
+              failed = (await this.process(r.slug, r.spec, e, { seed: 'было в источнике, когда рутина начала заводить дела' })).outcome === 'error';
             } catch (err) {
-              ok = false;
+              failed = true;
               this.failed(r.slug, e, err);
             }
+            if (failed) tries[e.id] = (tries[e.id] ?? 0) + 1;
+            else done.add(e.id);
           }
-          if (ok) this.store.setLastCheck(seedKey(r.slug, source), this.now().toISOString());
+          // всё прошло или сдалось — засев кончен; иначе прогресс ждёт следующего опроса
+          if (list.every((e) => done.has(e.id) || (tries[e.id] ?? 0) >= SEED_TRIES)) {
+            this.store.setLastCheck(seedKey(r.slug, source), this.now().toISOString());
+            this.store.setSeedProgress(r.slug, source, undefined);
+          } else this.store.setSeedProgress(r.slug, source, { done: [...done].filter((id) => list.some((e) => e.id === id)), tries });
         }
       }
       if (!fresh.length) return;
@@ -782,6 +794,8 @@ export class RoutineEngine {
   ): Promise<{ outcome: LogOutcome; runId?: string; wait?: RoutineWait; reason?: string }> {
     let why: string | undefined;
     let checkCost: number | undefined;
+    /** Проверка словами сочла событие повтором (рутина с делом): дело получает сигнал, запуска нет. */
+    let modelDup: string | undefined;
     const task = taskFromEvent(spec);
     // «догнать» у рутины с делом: событие простоя уже прошло путь и завело дело — проверку словами второй раз не платим
     const seededRow = task && o.noPut ? this.seededRow(slug, e) : undefined;
@@ -807,8 +821,12 @@ export class RoutineEngine {
         const cost = c.costUsd > 0 ? { costUsd: c.costUsd, checkCostUsd: c.costUsd } : {};
         // засев: неподошедшее журнал не забивает, но расход проверки остаётся в журнале одной строкой check_no
         if (!c.match) return o.seed && !c.costUsd ? { outcome: 'check_no', reason: c.reason } : this.record(slug, e, 'check_no', { reason: c.reason, ...cost });
-        // «Не повтор» от человека сильнее ответа модели
-        if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') return this.record(slug, e, 'duplicate', { reason: c.reason, ...cost });
+        // «Не повтор» от человека сильнее ответа модели. У рутины с делом повтор режет только запуск: сигнал о том же
+        // дело получает (ниже), как и при повторе по вещи
+        if (c.duplicate && x.verdicts.get(e.id) !== 'not_duplicate') {
+          if (!task) return this.record(slug, e, 'duplicate', { reason: c.reason, ...cost });
+          modelDup = c.reason?.trim() || 'повтор недавнего';
+        }
         why = c.reason?.trim() || undefined;
         checkCost = c.costUsd > 0 ? c.costUsd : undefined;
       }
@@ -827,11 +845,9 @@ export class RoutineEngine {
           this.say(`[${slug}] дело по событию «${e.title}» не завелось: ${msg(err)}`);
         }
       }
-      if (!spec.run || o.seed) {
-        // примеры проверки словами на повтор — и у рутины без flow
-        this.store.addEvent(slug, 'started', e);
-        return this.record(slug, e, 'task', { ...(deskKey ? { deskKey } : {}), ...(o.seed ? { reason: o.seed } : {}), ...(why ? { why } : {}), ...spent });
-      }
+      // засев и рутина без flow примеры повтора для проверки словами не пополняют: там только запущенное
+      if (!spec.run || o.seed) return this.record(slug, e, 'task', { ...(deskKey ? { deskKey } : {}), ...(o.seed ? { reason: o.seed } : modelDup ? { reason: `повтор: ${modelDup}` } : {}), ...(why ? { why } : {}), ...spent });
+      if (modelDup) return this.record(slug, e, 'duplicate', { reason: modelDup, ...(deskKey ? { deskKey } : {}), ...spent });
       if (!o.human) {
         const same = this.sameFiring(slug, spec, e);
         if (same) return this.record(slug, e, 'duplicate', { reason: same.reason, sameAs: { routine: same.routine, logId: same.logId }, ...(deskKey ? { deskKey } : {}), ...spent });
@@ -896,6 +912,15 @@ export class RoutineEngine {
   /** Дело по событию (SPEC этап 3, блок task): ключ по same, сигнал с replyTo, проект рутины. Возвращает ключ дела. */
   private async putTask(slug: string, spec: RoutineSpec, task: TaskRule, e: RoutineEvent, why?: string): Promise<string> {
     const { key, thing } = deskKeyOf(task, e);
+    // у существующего дела почему (причину наблюдателя) рутина не переписывает; правило закрытия — только рутина,
+    // которая дело завела (две рутины с разным close не переключают его туда-сюда)
+    let before: DeskItem | undefined;
+    try {
+      before = await this.deskApi().get(key);
+    } catch {
+      before = undefined; // не прочли — как новое: put сам разберётся, есть ли дело
+    }
+    const own = !before || before.signals[0]?.routine === slug;
     let project: string | undefined;
     try {
       project = (this.deps.projectOf ?? defaultProjectOf)(spec);
@@ -907,7 +932,7 @@ export class RoutineEngine {
       title: clip(e.title || thing?.title || e.text || key, 300),
       ...(project ? { project } : {}),
       column: task.column ?? 'new',
-      why: clip(why || spec.title, 300),
+      ...(before ? {} : { why: clip(why || spec.title, 300) }),
       signal: {
         source: e.source,
         at: e.at,
@@ -919,7 +944,7 @@ export class RoutineEngine {
       },
       ...(thing ? { thing: deskThing(thing) } : {}),
       onRepeat: task.on_repeat ?? 'plan',
-      close: task.close ?? 'thing',
+      ...(own ? { close: task.close ?? 'thing' } : {}),
     };
     await this.deskApi().put(key, patch, 'routine');
     this.changed();
@@ -927,11 +952,17 @@ export class RoutineEngine {
   }
 
   /** Перенос дела рутины (запуск начат → «В работе», «Не сейчас» → «В плане», «Не то» → закрыто). Сбой доски запуск не валит. */
-  private async moveTask(key: string | undefined, how: { column: 'work' | 'plan'; by: 'routine' | 'me'; why: string; runId?: string } | { close: string }): Promise<void> {
+  private async moveTask(key: string | undefined, how: { column: 'work' | 'plan'; by: 'routine' | 'me'; why: string; runId?: string } | { close: string; routine: string }): Promise<void> {
     if (!key) return;
     try {
-      if ('close' in how) await this.deskApi().close(key, how.close, 'me');
-      else {
+      const item = await this.deskApi().get(key);
+      // дела нет или его уже закрыла сверка (MR смержен) — ожидание его не двигает и не открывает заново
+      if (!item || item.closed) return;
+      if ('close' in how) {
+        // «Не то» в ожидании одной рутины не закрывает общее дело: сигналы других рутин и источников — тоже просьбы
+        if (item.signals.some((s) => s.routine !== how.routine)) return;
+        await this.deskApi().close(key, how.close, 'me');
+      } else {
         // ссылка на запуск — put без сигнала: колонку он не двигает, двигает move
         if (how.runId) await this.deskApi().put(key, { links: { runs: [how.runId] } }, 'routine');
         await this.deskApi().move(key, how.column, how.by, how.why);
@@ -1275,7 +1306,7 @@ export class RoutineEngine {
           if (res.outcome === 'error') await this.moveTask(w.deskKey, { column: 'plan', by: 'routine', why: res.reason ?? 'запуск не начался' });
         } else {
           this.reject(w, logId);
-          await this.moveTask(w.deskKey, { close: 'человек ответил «не то»' });
+          await this.moveTask(w.deskKey, { close: 'человек ответил «не то»', routine: w.routine });
         }
       } else if (w.kind === 'pause') {
         if (a.action === 'run') {
@@ -2116,6 +2147,8 @@ function taskFromEvent(spec: RoutineSpec): TaskRule | undefined {
 const seedKey = (slug: string, source: string) => `task:${slug}@${source}`;
 /** Засев по текущему списку — не больше стольких самых свежих записей. */
 const SEED_MAX = 50;
+/** Запись засева, упавшая столько раз (доска, проверка словами), больше не повторяется: строка ошибки в журнале есть. */
+const SEED_TRIES = 3;
 
 /**
  * Ключ дела события по task.same (docs/desk/plan-3.md): thing — ключ главной вещи события; thread — ключ нити
