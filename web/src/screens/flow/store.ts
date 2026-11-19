@@ -8,7 +8,9 @@ import type { FlowSaved } from '../../api';
 import type { AiProgress } from '../../lib/flow/ai-progress';
 import { toEditable, type EditBlock, type EditPhase, type EditSpec, type SpecChanges } from '../../lib/flow/edit';
 
-export type Tab = 'builder' | 'run' | 'yaml' | 'versions';
+export type Tab = 'run' | 'edit' | 'history';
+/** Что видно во вкладке «Правка»: схема с помощником или текст YAML. */
+export type EditView = 'scheme' | 'yaml';
 export type Msg = { text: string; tone: '' | 'ok' | 'err' | 'warn' };
 export const NO_MSG: Msg = { text: '', tone: '' };
 export const msgClass = (m: Msg, base = 'msg') => `${base}${m.tone ? ` ${m.tone}` : ''}`;
@@ -59,11 +61,12 @@ type State = {
   /** Имя этапа, выбранного на графе конструктора: переживает перерисовку и сдвиг индексов. */
   graphSel: string | null;
   tab: Tab;
+  editView: EditView;
   /** Другой flow: граф конструктора вписывается заново. */
   refit: number;
   /** Растёт, когда YAML в редакторе надо заменить текстом flow (открыли, сохранили). */
   yamlSeq: number;
-  /** В редакторе YAML — версия из снимка запуска (вкладка «Версии»), ещё не сохранённая; null — текст flow. */
+  /** В редакторе YAML — версия из снимка запуска (вкладка «История»), ещё не сохранённая; null — текст flow. */
   yamlFrom: { text: string; label: string } | null;
   /** Явное открытие этапа или блока в инспекторе: прокрутка наверх, фокус в название. */
   openSeq: number;
@@ -77,7 +80,7 @@ type State = {
 
 export const flowState: State = {
   flow: null, spec: null, dirty: false, editSeq: 0, ai: null, aiAbort: null, aiProgress: null, aiText: '', aiMsg: NO_MSG, bMsg: NO_MSG, yamlMsg: NO_MSG,
-  sel: null, graphSel: null, tab: 'run', refit: 0, yamlSeq: 0, yamlFrom: null, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
+  sel: null, graphSel: null, tab: 'run', editView: 'scheme', refit: 0, yamlSeq: 0, yamlFrom: null, openSeq: 0, approved: false, formSeq: 0, extrasSeq: 0,
 };
 
 let version = 0;
@@ -147,8 +150,9 @@ export function openLoaded(doc: FlowDoc, tab: Tab): void {
     dirty: false,
     sel: null,
     graphSel: null,
-    // у черновика вкладки «Версии» нет
-    tab: !doc.spec ? 'yaml' : doc.draft && tab === 'versions' ? 'run' : tab,
+    // у черновика вкладки «История» нет; flow без разбора по схеме — сразу в YAML
+    tab: !doc.spec ? 'edit' : doc.draft && tab === 'history' ? 'run' : tab,
+    editView: !doc.spec ? 'yaml' : tab === 'edit' ? 'scheme' : flowState.editView,
     bMsg: NO_MSG,
     yamlMsg: doc.error ? { text: doc.error, tone: 'err' } : NO_MSG,
     yamlSeq: flowState.yamlSeq + 1,
@@ -207,7 +211,7 @@ export type SaveStart = { flow: FlowDoc | null; editSeq: number };
 
 /** Версия из снимка запуска — в редактор YAML, без сохранения: вернуть её — «Сохранить» там же. */
 export function loadYamlVersion(text: string, label: string, msg: Msg): void {
-  set({ yamlFrom: { text, label }, yamlSeq: flowState.yamlSeq + 1, tab: 'yaml', yamlMsg: msg });
+  set({ yamlFrom: { text, label }, yamlSeq: flowState.yamlSeq + 1, tab: 'edit', editView: 'yaml', yamlMsg: msg });
 }
 
 /** Убрать версию из редактора: снова текст flow. */

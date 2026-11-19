@@ -311,7 +311,7 @@ function RunPage({ id }: { id: string }) {
   const rename = (title: string) => renameRun(id, title);
   const flowAction = r.adhoc
     ? canAdhoc ? { label: t('Сохранить как flow'), run: () => setSaveOpen(true) } : null
-    : { label: t('Открыть flow в конструкторе'), run: () => void openFlow(r.flow, 'builder') };
+    : { label: t('Открыть flow в правке'), run: () => void openFlow(r.flow, 'edit') };
 
   // ---------- ответ на паузу: поле под карточкой паузы у flow с артефактом решений
   const dec = artPanel && r.live && pause && r.pauseReason ? artDecisions() : undefined;

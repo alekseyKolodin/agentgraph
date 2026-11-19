@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Flow — запуск большого flow</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,a:focus-visible,textarea:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3)}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tabs a{font-size:14px;color:var(--ink-2);padding:8px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs a:hover{color:var(--ink)}
+.tabs a.on{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.bdg{font-size:11px;font-weight:600;line-height:18px;padding:0 8px;border-radius:999px;white-space:nowrap;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent)}
+.setrow{display:flex;gap:6px 16px;align-items:flex-start;flex-wrap:wrap;padding:14px 18px;border-top:1px solid var(--line)}
+.setrow:first-child{border-top:0}
+.num{width:22px;height:22px;border-radius:50%;background:var(--raised);color:var(--ink-2);font-size:12px;font-weight:600;display:grid;place-items:center;flex:none}
+.blk{display:flex;gap:12px;align-items:flex-start;padding:6px 8px;margin:0 -8px;border-radius:6px;color:var(--ink)}
+.blk:hover{background:var(--hover);color:var(--ink)}
+.blk .m{margin-left:auto;font-size:12px;color:var(--ink-2);white-space:nowrap;padding-top:2px}
+.past{display:flex;gap:6px 14px;align-items:center;flex-wrap:wrap;padding:10px 18px;border-top:1px solid var(--line);font-size:13px}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 1000px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri" href="Home.dc.html" aria-label="Мои дела" title="Мои дела"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri on" href="Main.dc.html" aria-label="Flow" title="Flow" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Рутины" title="Рутины"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 24px 32px 40px; display: flex; flex-direction: column; gap: 20px">
+    <header style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+      <div style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+        <span class="cap">Flow · папка Kai</span>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">kai-mvp</h1>
+        <p style="margin: 0; color: var(--ink-2); max-width: 720px">Доводит проект до MVP: план вех, реализация с проверкой, песочница и CI, аудит полноты, документация, релиз.</p>
+      </div>
+      <button type="button" class="btn g" aria-label="Действия с flow">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>
+      </button>
+    </header>
+
+    <nav class="tabs" aria-label="Разделы flow">
+      <a class="on" href="RunBig.dc.html" aria-current="page">Запуск</a>
+      <a href="EditBig.dc.html">Правка</a>
+      <a href="History.dc.html">История</a>
+    </nav>
+
+    <div style="display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start">
+      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+
+        <section class="card" aria-label="Задача" style="padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 12px; border-color: var(--line-strong)">
+          <label for="task" class="cap">Что нужно сделать</label>
+          <textarea id="task" rows="6" style="width: 100%; resize: vertical; border: 0; background: transparent; color: var(--ink); font-family: inherit; font-size: 17px; line-height: 1.55; padding: 0; border-radius: 4px">Доведи Kai до MVP по docs/prd.md. Сначала покажи мне план вех, реализацию начинай только после моего «да».</textarea>
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px">
+            <button type="button" class="btn g">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M11.5 7.5 7 12a2.5 2.5 0 0 1-3.5-3.5l5-5a1.7 1.7 0 0 1 2.4 2.4L6.2 10.6"/></svg>
+              Приложить файл
+            </button>
+            <span style="flex: 1"></span>
+            <span class="mono" style="font-size: 12px; color: var(--ink-3)">⌘↵</span>
+            <button type="button" class="btn p" style="padding: 7px 18px; font-size: 14px">Запустить</button>
+          </div>
+        </section>
+
+        <section class="card" aria-label="С чем запустить">
+          <div class="setrow">
+            <span class="cap" style="flex: 0 0 132px; padding-top: 2px">Где работать</span>
+            <div style="flex: 1 1 280px; min-width: 0; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap"><span style="font-weight: 600">Kai</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">~/Kai</span></div>
+            <a class="btn s" href="RunSetup.dc.html">Сменить</a>
+          </div>
+          <div class="setrow">
+            <span class="cap" style="flex: 0 0 132px; padding-top: 2px">Модель и лимиты</span>
+            <div style="flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+              <span><span style="font-weight: 600">Opus 5.5</span> · не дороже <span class="mono" style="font-size: 13px">$150</span></span>
+              <span style="font-size: 12px; color: var(--ink-2)">Повторы у каждого блока свои, от 3 до 12. Здесь можно задать общий потолок.</span>
+            </div>
+            <button type="button" class="btn s">Изменить</button>
+          </div>
+          <div class="setrow">
+            <span class="cap" style="flex: 0 0 132px; padding-top: 2px">Что дать агенту</span>
+            <div style="flex: 1 1 280px; min-width: 0">
+              <span style="color: var(--ink-2)">Ничего сверх задачи: без тегов знаний и других папок</span>
+            </div>
+            <button type="button" class="btn s">Добавить</button>
+          </div>
+        </section>
+
+        <section class="card" aria-label="Прошлые запуски">
+          <div style="display: flex; gap: 12px; align-items: center; padding: 12px 18px">
+            <span class="cap">Прошлые запуски</span>
+            <span style="flex: 1"></span>
+            <a href="History.dc.html" style="font-size: 12px; color: var(--ink-2)">Вся история</a>
+          </div>
+          <div class="past">
+            <span class="mono" style="flex: 0 0 96px; font-size: 12px; color: var(--ink-2)">30.10, 19:56</span>
+            <span style="flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 1px">
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Kai MVP: план, реализация, проверка</span>
+              <span style="font-size: 12px; color: var(--ink-2)">Дошёл до блока 4 из 6</span>
+            </span>
+            <span class="bdg" style="--c: #a3a9b3">прервано</span>
+            <span class="mono" style="flex: 0 0 64px; text-align: right; font-size: 12px; color: var(--ink-2)">$10.60</span>
+            <button type="button" class="btn s">Продолжить с блока 4</button>
+          </div>
+          <div class="past">
+            <span class="mono" style="flex: 0 0 96px; font-size: 12px; color: var(--ink-2)">30.10, 18:13</span>
+            <span style="flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 1px">
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Kai MVP: план, реализация, проверка</span>
+              <span style="font-size: 12px; color: var(--fail)">Упал в блоке 4, этап «Закрыть пробелы»</span>
+            </span>
+            <span class="bdg" style="--c: #f06a6a">ошибка</span>
+            <span class="mono" style="flex: 0 0 64px; text-align: right; font-size: 12px; color: var(--ink-2)">$126.65</span>
+            <button type="button" class="btn s g">Взять задачу</button>
+          </div>
+        </section>
+      </div>
+
+      <aside class="card" aria-label="Что произойдёт" style="flex: 1 1 340px; max-width: 420px; min-width: 0; padding: 18px; display: flex; flex-direction: column; gap: 14px">
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <span class="cap">Что произойдёт</span>
+          <span style="font-size: 16px; font-weight: 600">6 блоков по очереди, 17 этапов</span>
+        </div>
+
+        <div style="background: var(--well); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 96px; color: var(--ink-3)">Спросит тебя</span><span style="color: var(--wait)">2 раза: план вех и перед релизом</span></div>
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 96px; color: var(--ink-3)">Закончит</span><span>когда пройдёт проверка релиза</span></div>
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 96px; color: var(--ink-3)">Оставит</span><span class="mono" style="font-size: 12px">plan.md, progress.md и ещё 3</span></div>
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 96px; color: var(--ink-3)">В прошлый раз</span><span><span class="mono" style="font-size: 12px">$126.65</span> до блока 4</span></div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 2px">
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num" style="background: color-mix(in srgb, #f2b136 18%, transparent); color: var(--wait)">1</span>
+            <span style="font-weight: 500">План вех</span>
+            <span class="m">1 этап</span>
+          </a>
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num">2</span>
+            <span style="font-weight: 500">Реализация вех</span>
+            <span class="m">3 этапа · до 12 раз</span>
+          </a>
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num">3</span>
+            <span style="font-weight: 500">Песочница и CI</span>
+            <span class="m">2 этапа · до 6 раз</span>
+          </a>
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num">4</span>
+            <span style="font-weight: 500">Матрица полноты</span>
+            <span class="m">2 этапа · до 5 раз</span>
+          </a>
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num">5</span>
+            <span style="font-weight: 500">Документация</span>
+            <span class="m">4 этапа</span>
+          </a>
+          <a class="blk" href="EditBig.dc.html">
+            <span class="num" style="background: color-mix(in srgb, #f2b136 18%, transparent); color: var(--wait)">6</span>
+            <span style="font-weight: 500">Релиз</span>
+            <span class="m">5 этапов · до 3 раз</span>
+          </a>
+        </div>
+
+        <span style="font-size: 12px; color: var(--ink-2)">Блоков больше восьми: видны первые шесть и те, где спросит тебя, остальные под «Показать все».</span>
+        <a class="btn s" href="EditBig.dc.html" style="align-self: flex-start">Открыть схему</a>
+      </aside>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

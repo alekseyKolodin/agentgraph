@@ -79,7 +79,7 @@ export function NewFlowDialog({ open, onClose }: { open: boolean; onClose: () =>
   const openGenerated = async (r: FlowGenerated & FlowAiDone, draft: boolean) => {
     // openFlow сам спрашивает про идущую правку ИИ, openDraft — нет: черновик молча оборвал бы оплаченную правку
     if (draft && flowState.aiAbort && !(await askConfirm(t('ИИ ещё правит flow. Прервать правку и перейти?'), { ok: t('Прервать') }))) return;
-    const opened = draft ? await openDraft(r) : await openFlow(r.name, 'builder');
+    const opened = draft ? await openDraft(r) : await openFlow(r.name, 'edit');
     if (!opened) return;
     setReady((x) => (x?.r === r ? null : x));
     set({ aiMsg: { text: t('Flow сгенерирован: {facts}', { facts: aiFacts(r.model, r.durationMs, r.costUsd) }), tone: '' } });
@@ -129,7 +129,7 @@ export function NewFlowDialog({ open, onClose }: { open: boolean; onClose: () =>
       // новый flow открывается без вопроса о прежних несохранённых правках, как в старом UI
       flowState.dirty = false;
       if (created) await openGenerated(created, false);
-      else await openFlow(target, 'builder');
+      else await openFlow(target, 'edit');
     } catch (err) {
       const text = ctl.signal.aborted ? t('Генерация прервана') : errorText(err);
       setMsg({ text, tone: ctl.signal.aborted ? '' : 'err' });

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Flow — правка с ИИ</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--ink-off:#4b515a;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;transition:background-color .12s,border-color .12s}
+.btn:hover{background:#262b33;color:var(--ink)}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible,a:focus-visible,textarea:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.p{background:#e7e9ec;color:#111316;border-color:#e7e9ec}
+.btn.p:hover{background:#ffffff;color:#111316}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.btn.g:hover{background:var(--hover);color:var(--ink)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.rail{flex:0 0 48px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0}
+.ri{width:34px;height:34px;border-radius:6px;display:grid;place-items:center;color:var(--ink-3)}
+.ri:hover{background:var(--hover);color:var(--ink)}
+.ri.on{background:var(--select);color:var(--ink)}
+.rsep{width:20px;height:1px;background:var(--line);margin:4px 0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tabs a{font-size:14px;color:var(--ink-2);padding:8px 14px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs a:hover{color:var(--ink)}
+.tabs a.on{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg a{font-size:13px;color:var(--ink-2);border-right:1px solid var(--line);padding:4px 12px;line-height:20px}
+.seg a:last-child{border-right:0}
+.seg a.on{background:var(--raised);color:var(--ink);font-weight:500}
+.node{flex:0 0 150px;min-height:104px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;color:var(--ink)}
+.node:hover{border-color:var(--live);color:var(--ink)}
+.node.chg{border-color:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,#4cc38a 40%,transparent)}
+.node .t{font-size:13px;font-weight:600;line-height:1.3}
+.node .n{color:var(--ink-2);margin-right:6px}
+.node .s{font-size:11px;color:var(--ink-2);font-family:var(--mono)}
+.tag{font-size:11px;font-weight:600;line-height:18px;padding:0 7px;border-radius:4px;white-space:nowrap;color:var(--c);background:color-mix(in srgb,var(--c) 15%,transparent);align-self:flex-start}
+.arr{flex:0 0 22px;align-self:center;color:var(--ink-3)}
+.chg-row{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:6px;color:var(--ink)}
+.chg-row:hover{background:var(--hover);color:var(--ink)}
+.chg-row .w{flex:0 0 62px}
+.md p{margin:0}
+@media (max-width:700px){.rail{flex-basis:100%;flex-direction:row;flex-wrap:wrap;padding:4px 8px;border-right:0;border-bottom:1px solid var(--line)}.rsep{width:1px;height:20px;margin:0 4px}}
+</style>
+</helmet>
+<div class="ag" style="min-height: 1000px; display: flex; flex-wrap: wrap; align-items: stretch">
+  <nav class="rail" aria-label="Разделы">
+    <a class="ri" href="Home.dc.html" aria-label="Мои дела" title="Мои дела"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5 9 3.5l6 5V15h-4v-4H7v4H3z"/></svg></a>
+    <a class="ri" href="#" aria-label="Быстрая сессия" title="Быстрая сессия"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M9 4v10M4 9h10"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri on" href="Main.dc.html" aria-label="Flow" title="Flow" aria-current="page"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2"/><circle cx="13.5" cy="13.5" r="2"/><path d="M6.5 4.5h3a2 2 0 0 1 2 2v5"/></svg></a>
+    <a class="ri" href="#" aria-label="Запуски" title="Запуски"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5v11l9-5.5z"/></svg></a>
+    <a class="ri" href="#" aria-label="Сессии" title="Сессии"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="2"/><path d="m5.5 7.5 2 1.5-2 1.5M9.5 11h3"/></svg></a>
+    <span class="rsep"></span>
+    <a class="ri" href="#" aria-label="Пространства" title="Пространства"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.5 15.5 9 9 15.5 2.5 9z"/></svg></a>
+    <a class="ri" href="#" aria-label="Рутины" title="Рутины"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M10 2 4 10h4.5L7.5 16 14 8H9.5z"/></svg></a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; padding: 24px 32px 40px; display: flex; flex-direction: column; gap: 16px">
+    <header style="display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap">
+      <div style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 4px">
+        <span class="cap">Flow · папка research</span>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.005em">micro-business-idea-research</h1>
+      </div>
+      <button type="button" class="btn g" aria-label="Действия с flow">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.4"/><circle cx="8" cy="8" r="1.4"/><circle cx="13" cy="8" r="1.4"/></svg>
+      </button>
+    </header>
+
+    <nav class="tabs" aria-label="Разделы flow">
+      <a href="Main.dc.html">Запуск</a>
+      <a class="on" href="Edit.dc.html" aria-current="page">Правка</a>
+      <a href="History.dc.html">История</a>
+    </nav>
+
+    <section aria-label="Несохранённая правка" style="border: 1px solid rgba(242,177,54,.45); background: color-mix(in srgb, #f2b136 6%, #181b20); border-radius: 8px; padding: 12px 16px; display: flex; gap: 10px 16px; align-items: center; flex-wrap: wrap">
+      <div style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 1px">
+        <span style="font-weight: 600">Правка ИИ ещё не сохранена</span>
+        <span style="font-size: 13px; color: var(--ink-2)">1 новый этап и 3 изменённых — они выделены зелёным. Пока не сохранишь, запуск идёт по старой версии.</span>
+      </div>
+      <button type="button" class="btn">Отменить правку</button>
+      <button type="button" class="btn p">Сохранить</button>
+    </section>
+
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start">
+
+      <section aria-label="Схема flow" style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+        <div class="card" style="overflow: hidden">
+          <div style="display: flex; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+            <div class="seg" role="group" aria-label="Вид">
+              <a class="on" href="#" aria-current="true">Схема</a>
+              <a href="#">YAML</a>
+            </div>
+            <span style="flex: 1"></span>
+            <button type="button" class="btn s g" aria-label="Мельче">−</button>
+            <span class="mono" style="font-size: 12px; color: var(--ink-2)">100%</span>
+            <button type="button" class="btn s g" aria-label="Крупнее">+</button>
+            <button type="button" class="btn s g">Вписать</button>
+          </div>
+
+          <div style="overflow-x: auto; background-color: var(--deck); background-image: radial-gradient(rgba(163,169,179,.3) 1px, transparent 1px); background-size: 18px 18px">
+            <div style="display: flex; flex-direction: column; gap: 18px; padding: 28px 16px 28px; min-width: 856px">
+              <div style="display: flex; align-items: flex-start">
+                <a class="node" href="#" style="flex-basis: 132px; margin-top: 44px; border-color: color-mix(in srgb, #7aa7ff 55%, transparent); background: color-mix(in srgb, #7aa7ff 7%, #181b20)">
+                  <span class="t">Задача</span>
+                  <span style="font-size: 11px; color: var(--ink-2)">то, что ты пишешь при запуске</span>
+                </a>
+                <svg class="arr" style="margin-top: 90px; align-self: flex-start" width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M0 6h19M15 2l4 4-4 4"/></svg>
+
+                <div style="flex: 1 1 auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(24,27,32,.7); display: flex; flex-direction: column">
+                  <div style="display: flex; gap: 10px; align-items: center; padding: 9px 14px; font-size: 12px; flex-wrap: wrap">
+                    <span style="font-weight: 600">Партии идей</span>
+                    <span style="color: var(--ink-2)">повторяется до 8 раз</span>
+                  </div>
+                  <div style="display: flex; align-items: stretch; padding: 0 14px 12px">
+                    <a class="node chg" href="EditNode.dc.html">
+                      <span class="t"><span class="n">1</span>Поиск болей и партия идей</span>
+                      <span class="s">discover_ideas</span>
+                      <span class="tag" style="--c: #4cc38a; margin-top: auto">изменён</span>
+                    </a>
+                    <svg class="arr" width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M0 6h19M15 2l4 4-4 4"/></svg>
+                    <a class="node chg" href="EditNode.dc.html">
+                      <span class="t"><span class="n">2</span>Утверждение партии</span>
+                      <span class="s">user_review</span>
+                      <span class="tag" style="--c: #4cc38a; margin-top: auto">новый</span>
+                    </a>
+                    <svg class="arr" width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M0 6h19M15 2l4 4-4 4"/></svg>
+                    <a class="node chg" href="EditNode.dc.html">
+                      <span class="t"><span class="n">3</span>Валидация в интернете</span>
+                      <span class="s">validate_ideas</span>
+                      <span class="tag" style="--c: #4cc38a; margin-top: auto">изменён</span>
+                    </a>
+                    <svg class="arr" width="22" height="12" viewBox="0 0 22 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M0 6h19M15 2l4 4-4 4"/></svg>
+                    <a class="node chg" href="EditNode.dc.html">
+                      <span class="t"><span class="n">4</span>Скоринг и шорт-лист</span>
+                      <span class="s">score_report</span>
+                      <span class="tag" style="--c: #4cc38a; margin-top: auto">изменён</span>
+                    </a>
+                  </div>
+                  <a href="#" style="display: flex; gap: 10px; align-items: center; padding: 9px 14px; border-top: 1px dashed var(--line-strong); font-size: 12px; flex-wrap: wrap">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M6 1 11 6 6 11 1 6z"/></svg>
+                    <span style="color: var(--ink-2)">Повторять, пока</span>
+                    <span style="font-weight: 500">в шорт-листе меньше 20 идей</span>
+                    <span class="tag" style="--c: #4cc38a; align-self: center">изменено</span>
+                  </a>
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding-left: 154px">
+                <span class="cap">Файлы, которые ведут этапы</span>
+                <a href="#" class="mono" style="font-size: 12px; padding: 4px 10px; border: 1px dashed var(--line-strong); border-radius: 6px; background: var(--panel)">scoring.md</a>
+                <a href="#" class="mono" style="font-size: 12px; padding: 4px 10px; border: 1px dashed var(--ok); border-radius: 6px; background: var(--panel)">user_review.md · новый</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap">
+          <span style="font-size: 12px; color: var(--ink-2)">Клик по этапу открывает его поля справа.</span>
+          <span style="flex: 1"></span>
+          <button type="button" class="btn s">Добавить этап</button>
+          <button type="button" class="btn s">Настройки flow</button>
+        </div>
+      </section>
+
+      <aside class="card" aria-label="Помощник" style="flex: 1 1 380px; max-width: 440px; min-width: 0; display: flex; flex-direction: column">
+        <div style="display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line)">
+          <span style="font-weight: 600">Помощник</span>
+          <span style="flex: 1"></span>
+          <button type="button" class="btn s g">Opus 5.5
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m2 3.5 3 3 3-3"/></svg>
+          </button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px; padding: 16px 14px">
+          <div style="align-self: flex-end; max-width: 88%; background: var(--raised); border-radius: 12px 12px 4px 12px; padding: 9px 12px">нужно поменять промпты и добавить валидацию пользователя</div>
+
+          <div class="md" style="display: flex; flex-direction: column; gap: 12px">
+            <p>Понял так: перед проверкой в интернете ты сам утверждаешь каждую партию идей. Промпты поменял только там, где это для этого нужно.</p>
+
+            <div style="display: flex; flex-direction: column; gap: 2px; margin: 0 -10px">
+              <span class="cap" style="padding: 0 10px 4px">Что изменилось</span>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #4cc38a">новый</span></span><span><span style="font-weight: 600">Утверждение партии.</span> Показывает идеи и спрашивает, какие проверять.</span></a>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #a3a9b3">правка</span></span><span><span style="font-weight: 600">Поиск болей.</span> Не повторяет отклонённое, учитывает твои пожелания.</span></a>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #a3a9b3">правка</span></span><span><span style="font-weight: 600">Валидация.</span> Проверяет только одобренные идеи.</span></a>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #a3a9b3">правка</span></span><span><span style="font-weight: 600">Скоринг.</span> Отклонённые идеи не оценивает, ставит им статус.</span></a>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #a3a9b3">правка</span></span><span><span style="font-weight: 600">Условие повтора.</span> Отклонённая идея в шорт-листе считается ошибкой.</span></a>
+              <a class="chg-row" href="#"><span class="w"><span class="tag" style="--c: #4cc38a">новый</span></span><span><span style="font-weight: 600">Файл user_review.md.</span> Твои решения по идеям.</span></a>
+            </div>
+
+            <div style="border: 1px solid rgba(242,177,54,.4); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+              <span style="font-size: 13px"><span style="color: var(--wait); font-weight: 600">Обрати внимание.</span> Каждая партия теперь ждёт твоего ответа. Если отклонишь много идей, 8 повторов может не хватить.</span>
+              <button type="button" class="btn s" style="align-self: flex-start">Поднять до 12</button>
+            </div>
+
+            <span class="mono" style="font-size: 12px; color: var(--ink-2)">Opus 5.5 · 3 мин 9 с · $0.91</span>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; margin-top: auto">
+          <label for="ask" class="cap">Что поменять</label>
+          <textarea id="ask" rows="4" placeholder="Например: добавь ревью после реализации" style="width: 100%; resize: vertical; background: var(--well); border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); font-family: inherit; font-size: 15px; line-height: 1.5; padding: 10px 12px"></textarea>
+          <div style="display: flex; gap: 10px; align-items: center">
+            <span style="font-size: 12px; color: var(--ink-3)">Правка ляжет поверх несохранённой</span>
+            <span style="flex: 1"></span>
+            <span class="mono" style="font-size: 12px; color: var(--ink-3)">⌘↵</span>
+            <button type="button" class="btn">Отправить</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

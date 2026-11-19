@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Помощник — правка идёт</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--live:#7aa7ff;--ok:#4cc38a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.btn:hover{background:#262b33}
+.btn:focus-visible,summary:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3)}
+.st{display:flex;gap:10px;align-items:flex-start;font-size:13px}
+.st svg{flex:none;margin-top:3px}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.live{width:8px;height:8px;border-radius:50%;background:var(--live);flex:none;animation:pulse 1.4s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.live{animation:none}}
+</style>
+</helmet>
+<div class="ag" style="width: 440px; height: 640px; padding: 16px; display: flex">
+  <aside aria-label="Помощник" style="flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-width: 0">
+    <div style="display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line)">
+      <span style="font-weight: 600">Помощник</span>
+      <span style="flex: 1"></span>
+      <span class="mono" style="font-size: 12px; color: var(--ink-2)">Opus 5.5</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 16px; padding: 16px 14px; flex: 1; min-height: 0">
+      <div style="align-self: flex-end; max-width: 88%; background: var(--raised); border-radius: 12px 12px 4px 12px; padding: 9px 12px">нужно поменять промпты и добавить валидацию пользователя</div>
+
+      <section aria-label="Ход правки" style="border: 1px solid color-mix(in srgb, #7aa7ff 35%, transparent); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 12px">
+        <div style="display: flex; gap: 10px; align-items: center">
+          <span class="live"></span>
+          <span style="font-weight: 600">Правлю flow</span>
+          <span style="flex: 1"></span>
+          <span class="mono" role="timer" style="font-size: 12px; color: var(--ink-2)">2:06</span>
+          <button type="button" class="btn s">Прервать</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <div class="st" style="color: var(--ink-2)">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#4cc38a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 6.5 2.5 2.5L10 3.5"/></svg>
+            <span>Прочитал flow: 3 этапа, 1 файл</span>
+          </div>
+          <div class="st" style="color: var(--ink-2)">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#4cc38a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 6.5 2.5 2.5L10 3.5"/></svg>
+            <span>Добавил файл user_review.md</span>
+          </div>
+          <div class="st" style="color: var(--ink-2)">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#4cc38a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 6.5 2.5 2.5L10 3.5"/></svg>
+            <span>Добавил этап «Утверждение партии»</span>
+          </div>
+          <div class="st">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="3" fill="#7aa7ff"/></svg>
+            <span><span style="font-weight: 600">Правлю этап «Поиск болей»</span><br><span style="color: var(--ink-2)">что передать следующему этапу</span></span>
+          </div>
+        </div>
+
+        <details>
+          <summary style="font-size: 12px; color: var(--ink-2); cursor: pointer; border-radius: 4px">Технический лог</summary>
+        </details>
+      </section>
+
+      <span style="font-size: 12px; color: var(--ink-2)">Этапы на схеме загораются зелёным по мере правки. Flow не изменится, пока ты не сохранишь.</span>
+    </div>
+
+    <div style="border-top: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+      <span class="cap">Что поменять</span>
+      <div style="background: var(--well); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 15px; color: var(--ink-3); min-height: 72px">Можно дописать уточнение: оно уйдёт следующим шагом</div>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":440,"height":640}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

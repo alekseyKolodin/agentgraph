@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Правка — поля этапа</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--live:#7aa7ff;--ok:#4cc38a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.btn:hover{background:#262b33}
+.btn:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3)}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg a{font-size:13px;color:var(--ink-2);border-right:1px solid var(--line);padding:4px 12px;line-height:20px}
+.seg a:last-child{border-right:0}
+.seg a.on{background:var(--raised);color:var(--ink);font-weight:500}
+.fld{width:100%;font-family:inherit;font-size:14px;color:var(--ink);background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:7px 10px}
+.chip{display:inline-flex;gap:6px;align-items:center;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line-strong);color:var(--ink)}
+.f{display:flex;flex-direction:column;gap:6px}
+</style>
+</helmet>
+<div class="ag" style="width: 440px; height: 900px; padding: 16px; display: flex">
+  <aside aria-label="Поля этапа" style="flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-width: 0">
+    <div style="display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line)">
+      <div class="seg" role="group" aria-label="Что справа">
+        <a href="Edit.dc.html">Помощник</a>
+        <a class="on" href="#" aria-current="true">Этап 2</a>
+      </div>
+      <span style="flex: 1"></span>
+      <button type="button" class="btn s g" aria-label="Закрыть поля этапа">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m2.5 2.5 7 7M9.5 2.5l-7 7"/></svg>
+      </button>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 18px; padding: 16px 14px; flex: 1; min-height: 0">
+      <div class="f">
+        <label for="n-title" class="cap">Название</label>
+        <input id="n-title" class="fld" value="Утверждение партии" style="font-weight: 600">
+        <span class="mono" style="font-size: 12px; color: var(--ink-2)">user_review</span>
+      </div>
+
+      <div class="f">
+        <div style="display: flex; align-items: baseline; gap: 10px">
+          <label for="n-prompt" class="cap">Что делает этап</label>
+          <span style="flex: 1"></span>
+          <a href="#" style="font-size: 12px; color: var(--ink-2)">На весь экран</a>
+        </div>
+        <textarea id="n-prompt" class="fld" rows="11" style="font-family: var(--mono); font-size: 12px; line-height: 1.6; resize: vertical">Покажи пользователю идеи из новой партии, которые прошли фильтр. По каждой: название, боль, почему прошла.
+
+Задай два вопроса:
+1. Какие идеи отправить на проверку.
+2. Что учесть в следующих партиях.
+
+Ответ запиши в user_review.md: решение по каждой идее и пожелания.
+
+Если идей без решения нет, ничего не спрашивай.</textarea>
+      </div>
+
+      <div class="f">
+        <span class="cap">Что этапу можно</span>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
+          <span class="chip">Спрашивать тебя</span>
+          <button type="button" class="btn s g">Добавить</button>
+        </div>
+      </div>
+
+      <div class="f">
+        <span class="cap">Файлы</span>
+        <div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 56px; color: var(--ink-2)">Читает</span><span class="mono" style="font-size: 12px">scoring.md</span></div>
+          <div style="display: flex; gap: 10px"><span style="flex: 0 0 56px; color: var(--ink-2)">Пишет</span><span class="mono" style="font-size: 12px">user_review.md</span></div>
+        </div>
+      </div>
+
+      <div class="f">
+        <label for="n-next" class="cap">Что передать следующему этапу</label>
+        <textarea id="n-next" class="fld" rows="2" style="font-size: 13px; resize: vertical">Список одобренных идей и пожелания к следующим партиям.</textarea>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid var(--line); padding: 12px 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+      <a class="btn" href="Edit.dc.html">Попросить ИИ поправить этап</a>
+      <span style="flex: 1"></span>
+      <button type="button" class="btn g" style="color: #f06a6a">Удалить</button>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

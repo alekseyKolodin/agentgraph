@@ -177,3 +177,11 @@
 .next-goto .icon { flex: 0 0 auto; }
 .next-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 textarea.next-judge { flex-basis: 100%; font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.45; }
+/* «Правка»: сегмент «Схема | YAML» (EditTab.tsx) */
+.edit-tab { display: flex; flex-direction: column; gap: 12px; }
+.edit-views { display: inline-flex; align-self: flex-start; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
+.edit-views button { font: inherit; font-size: var(--fs-small); color: var(--ink-2); background: transparent; border: 0; border-right: 1px solid var(--line); padding: 4px 12px; cursor: pointer; }
+.edit-views button:last-child { border-right: 0; }
+.edit-views button:hover { color: var(--ink); }
+.edit-views button.on { background: var(--raised); color: var(--ink); font-weight: 500; }
+.edit-views button:focus-visible { outline: none; box-shadow: var(--focus); }

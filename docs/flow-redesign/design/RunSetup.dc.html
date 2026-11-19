@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Запуск — где работать</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#111316}
+a{color:#e7e9ec;text-decoration:none}a:hover{color:#ffffff}
+.ag{--deck:#111316;--panel:#181b20;--raised:#1f232a;--well:#0c0e11;--hover:rgba(255,255,255,.04);--select:rgba(255,255,255,.07);--line:rgba(255,255,255,.08);--line-strong:rgba(255,255,255,.14);--ink:#e7e9ec;--ink-2:#a3a9b3;--ink-3:#7d848e;--live:#7aa7ff;--ok:#4cc38a;--fail:#f06a6a;--wait:#f2b136;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--deck);-webkit-font-smoothing:antialiased}
+.ag *{box-sizing:border-box}
+.btn{font-family:inherit;font-size:13px;font-weight:500;line-height:20px;color:var(--ink);background:var(--raised);border:1px solid var(--line-strong);border-radius:6px;padding:5px 12px;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px}
+.btn:hover{background:#262b33}
+.btn:focus-visible,input:focus-visible,select:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(122,167,255,.55)}
+.btn.s{font-size:12px;padding:3px 9px;min-height:26px}
+.btn.g{background:transparent;border-color:transparent;color:var(--ink-2)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.cap{font-size:12px;font-weight:500;color:var(--ink-3)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.setrow{display:flex;gap:6px 16px;align-items:flex-start;flex-wrap:wrap;padding:14px 18px;border-top:1px solid var(--line)}
+.setrow:first-child{border-top:0}
+.opt{display:flex;gap:12px;align-items:center;padding:8px 10px;border-radius:6px;cursor:pointer}
+.opt:hover{background:var(--hover)}
+.opt.on{background:var(--select)}
+.opt input{accent-color:#e7e9ec;margin:0}
+.fld{font-family:inherit;font-size:13px;color:var(--ink);background:var(--well);border:1px solid var(--line-strong);border-radius:6px;padding:6px 10px;min-height:32px}
+.chk{display:flex;gap:10px;align-items:flex-start;font-size:13px;cursor:pointer}
+.chk input{accent-color:#e7e9ec;margin:3px 0 0}
+</style>
+</helmet>
+<div class="ag" style="width: 760px; height: 700px; padding: 24px; display: flex; flex-direction: column; gap: 16px">
+  <section class="card" aria-label="С чем запустить">
+    <div class="setrow" style="background: color-mix(in srgb, #ffffff 2%, transparent); border-radius: 12px 12px 0 0">
+      <span class="cap" style="flex: 0 0 132px; padding-top: 6px">Где работать</span>
+      <div style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+        <input class="fld" type="search" aria-label="Найти пространство или папку" placeholder="Найти пространство или папку" style="width: 100%">
+
+        <div role="radiogroup" aria-label="Пространства" style="display: flex; flex-direction: column; gap: 2px">
+          <span class="cap" style="padding: 0 10px 4px">Пространства</span>
+          <label class="opt on"><input type="radio" name="where" checked><span style="font-weight: 600; flex: 0 0 110px">Kai</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">~/Kai</span></label>
+          <label class="opt"><input type="radio" name="where"><span style="font-weight: 600; flex: 0 0 110px">agentgraph</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">~/Documents/agentgraph</span></label>
+          <label class="opt"><input type="radio" name="where"><span style="font-weight: 600; flex: 0 0 110px">resersh</span><span class="mono" style="font-size: 12px; color: var(--ink-2)">~/resersh</span></label>
+        </div>
+
+        <div role="radiogroup" aria-label="Папка без пространства" style="display: flex; flex-direction: column; gap: 2px">
+          <span class="cap" style="padding: 0 10px 4px">Папка без пространства</span>
+          <label class="opt"><input type="radio" name="where"><span class="mono" style="font-size: 12px; flex: 0 0 110px">~/sandbox</span><span style="font-size: 12px; color: var(--ink-2)">пространство заведётся само по тексту задачи</span></label>
+          <div style="padding: 4px 10px 0"><button type="button" class="btn s">Выбрать другую папку</button></div>
+        </div>
+
+        <div style="border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px">
+          <label class="chk"><input type="checkbox" checked><span>Обновить состояние пространства Kai после «готово»</span></label>
+          <label class="chk"><input type="checkbox"><span>Работать в отдельной копии репозитория<br><span style="font-size: 12px; color: var(--ink-2)">git worktree: основная папка останется нетронутой</span></span></label>
+        </div>
+      </div>
+      <button type="button" class="btn s">Готово</button>
+    </div>
+
+    <div class="setrow">
+      <span class="cap" style="flex: 0 0 132px; padding-top: 6px">Модель и лимиты</span>
+      <div style="flex: 1 1 380px; min-width: 0; display: flex; gap: 12px; flex-wrap: wrap">
+        <label style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px"><span style="font-size: 12px; color: var(--ink-2)">Модель</span>
+          <select class="fld"><option>Opus 5.5</option><option>Sonnet 5.5</option><option>Как в этапах flow</option></select></label>
+        <label style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 110px"><span style="font-size: 12px; color: var(--ink-2)">Не дороже, $</span>
+          <input class="fld" type="number" placeholder="без лимита"></label>
+        <label style="display: flex; flex-direction: column; gap: 4px; flex: 1 1 110px"><span style="font-size: 12px; color: var(--ink-2)">Повторов, не больше</span>
+          <input class="fld" type="number" value="8"></label>
+      </div>
+      <button type="button" class="btn s">Готово</button>
+    </div>
+
+    <div class="setrow">
+      <span class="cap" style="flex: 0 0 132px; padding-top: 2px">Что дать агенту</span>
+      <div style="flex: 1 1 380px; min-width: 0">
+        <span style="color: var(--ink-2)">Ничего сверх задачи: без тегов знаний и других папок</span>
+      </div>
+      <button type="button" class="btn s">Добавить</button>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":760,"height":700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

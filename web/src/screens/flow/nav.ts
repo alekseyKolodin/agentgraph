@@ -63,7 +63,7 @@ export function useOpenDraft() {
     if (!(await leaveDraft(askConfirm, false))) return false;
     if (!flowState.flow?.draft && flowState.dirty && !(await askConfirm(DIRTY_TEXT, { ok: t('Перейти') }))) return false;
     flowState.approved = true;
-    openLoaded({ name: r.name, yaml: r.yaml, summary: r.summary, spec: r.spec, folder: '', draft: true }, 'builder');
+    openLoaded({ name: r.name, yaml: r.yaml, summary: r.summary, spec: r.spec, folder: '', draft: true }, 'edit');
     void navigate('/draft');
     return true;
   }, [navigate, askConfirm]);
