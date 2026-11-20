@@ -221,7 +221,10 @@ select.inp { height: 34px; }
 
 @media (max-width: 1100px) {
   .connect-grid { grid-template-columns: minmax(0, 1fr); }
-  /* колонка помощника ушла под разделы: не липнет и не режется по высоте экрана */
+}
+/* колонка помощника ушла под разделы (контейнер editor из sections/Sections.module.css уже 540 + 28 + 340 px): не липнет и
+   не режется по высоте экрана */
+@container editor (max-width: 907.98px) {
   .new-side.new-side { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 700px) {
