@@ -22,7 +22,13 @@ const NOTES_MAX = 6;
 export type ComposeContext = {
   sources: Array<{ slug: string; title: string; kind: string; description?: string; canReply: boolean }>;
   kinds: Array<Pick<SourceKindView, 'kind' | 'title' | 'summary' | 'match' | 'canReply'>>;
-  flows: Array<{ name: string; description?: string; blocks: string[] }>;
+  flows: Array<{
+    name: string;
+    description?: string;
+    blocks: string[];
+    /** Готовый flow из templates/flows: у человека его ещё нет, при сохранении рутины он копируется в flows/«Мои дела». */
+    template?: true;
+  }>;
   spaces: Array<{ slug: string; title?: string; cwd?: string }>;
 };
 

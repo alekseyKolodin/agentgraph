@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { assertFlowName, flowExists, parseFlow, plannedFlowFile } from '../flows.js';
 import { APP_DIR } from '../paths.js';
+import { flowBlocks } from '../schema.js';
 import type { FlowTemplate } from './types.js';
 
 export const flowTemplatesDir = (): string => path.join(APP_DIR, 'templates', 'flows');
@@ -25,7 +26,7 @@ export type FlowTemplateDeps = {
 export class NoFlowTemplate extends Error {}
 
 /** Шаблон по имени: текст файла и проверенная схема. Нет файла или битый — ошибка с понятной причиной. */
-function readTemplate(name: string, dir: string): { text: string; description: string } {
+function readTemplate(name: string, dir: string): { text: string; description: string; blocks: string[] } {
   assertFlowName(name);
   const file = path.join(dir, `${name}.yaml`);
   let text: string;
@@ -36,11 +37,15 @@ function readTemplate(name: string, dir: string): { text: string; description: s
   }
   const spec = parseFlow(text);
   if (spec.name !== name) throw new Error(`Шаблон ${name}: в файле flow называется ${spec.name}`);
-  return { text, description: spec.description ?? '' };
+  const blocks = flowBlocks(spec).flatMap((b) => (b.name ? [b.name] : []));
+  return { text, description: spec.description ?? '', blocks };
 }
 
-/** Готовые flow шаблонов: имя и описание. Битый файл пропускается — он не должен ломать «Новую рутину». */
-export function flowTemplates(o: FlowTemplateDeps = {}): FlowTemplate[] {
+/** Готовый flow шаблона с названиями блоков — помощнику рутин для until_pause / pause_before. */
+export type FlowTemplateWithBlocks = FlowTemplate & { blocks: string[] };
+
+/** Готовые flow шаблонов: имя, описание и блоки. Битый файл пропускается — он не должен ломать «Новую рутину». */
+export function flowTemplatesWithBlocks(o: FlowTemplateDeps = {}): FlowTemplateWithBlocks[] {
   const dir = o.templates ?? flowTemplatesDir();
   let files: string[];
   try {
@@ -48,16 +53,22 @@ export function flowTemplates(o: FlowTemplateDeps = {}): FlowTemplate[] {
   } catch {
     return [];
   }
-  const out: FlowTemplate[] = [];
+  const out: FlowTemplateWithBlocks[] = [];
   for (const f of files.sort()) {
     const name = f.replace(/\.yaml$/, '');
     try {
-      out.push({ name, description: readTemplate(name, dir).description });
+      const { description, blocks } = readTemplate(name, dir);
+      out.push({ name, description, blocks });
     } catch {
       /* битый шаблон — не показываем */
     }
   }
   return out;
+}
+
+/** Готовые flow шаблонов: имя и описание (ответ GET /api/routines/flow-templates). */
+export function flowTemplates(o: FlowTemplateDeps = {}): FlowTemplate[] {
+  return flowTemplatesWithBlocks(o).map(({ name, description }) => ({ name, description }));
 }
 
 /**

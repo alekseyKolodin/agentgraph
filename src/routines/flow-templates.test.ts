@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ensureTemplateFlow, flowTemplates, flowTemplatesDir, TEMPLATE_FLOW_FOLDER } from './flow-templates.js';
+import { ensureTemplateFlow, flowTemplates, flowTemplatesDir, flowTemplatesWithBlocks, TEMPLATE_FLOW_FOLDER } from './flow-templates.js';
 import { parseRoutineYaml } from './schema.js';
 
 const DESK_FLOWS = ['desk-meeting-tasks', 'desk-projects-sweep', 'desk-review-mr', 'desk-task-start'];
@@ -14,6 +14,13 @@ test('готовые flow шаблонов: все четыре на месте,
   const list = flowTemplates();
   assert.deepEqual(list.map((x) => x.name), DESK_FLOWS);
   for (const x of list) assert.ok(x.description.length > 10, x.name);
+});
+
+test('готовые flow шаблонов с блоками: те же имена, у каждого есть блоки', () => {
+  const list = flowTemplatesWithBlocks();
+  assert.deepEqual(list.map((x) => x.name), flowTemplates().map((x) => x.name));
+  assert.deepEqual(list.map((x) => x.name), DESK_FLOWS);
+  for (const x of list) assert.ok(x.blocks.length > 0 && x.blocks.every(Boolean), x.name);
 });
 
 test('flow шаблона копируется в «Мои дела», если его нет; есть — не трогается', () => {

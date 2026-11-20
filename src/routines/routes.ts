@@ -6,7 +6,7 @@ import { assertSlug, freeSlug, parseSourceYaml, SLUG_RE } from './schema.js';
 import { getMcpServers, type McpServer } from '../connectors.js';
 import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
-import { ensureTemplateFlow, flowTemplates, NoFlowTemplate } from './flow-templates.js';
+import { ensureTemplateFlow, flowTemplates, flowTemplatesWithBlocks, NoFlowTemplate } from './flow-templates.js';
 import type { ComposeContext } from './compose.js';
 import { createRoutineAssistant, type RoutineAssistant } from './assistant.js';
 import { AssistantBusy } from '../assistant.js';
@@ -81,7 +81,15 @@ function drafts(deps: RoutinesRouteDeps): DraftRoutes | undefined {
 /** Что модель видит о человеке при сборке рутины словами: имена и описания, без ключей и настроек источников. */
 export function composeContext(engine: RoutineEngine): ComposeContext {
   const kinds = engine.kindViews();
-  const flows = listFlows().flatMap((f) => (f.valid ? [{ name: f.name, ...(f.description ? { description: f.description } : {}), blocks: (f.blocks ?? []).map((b) => b.name) }] : []));
+  const mine = listFlows();
+  const flows: ComposeContext['flows'] = mine.flatMap((f) => (f.valid ? [{ name: f.name, ...(f.description ? { description: f.description } : {}), blocks: (f.blocks ?? []).map((b) => b.name) }] : []));
+  // готовые flow шаблонов, которых у человека нет: при сохранении рутины они копируются в flows/«Мои дела».
+  // Свой flow с тем же именем (даже битый) закрывает шаблон: копирование его не заменит.
+  const own = new Set(mine.map((f) => f.name));
+  for (const t of flowTemplatesWithBlocks()) {
+    if (own.has(t.name)) continue;
+    flows.push({ name: t.name, ...(t.description ? { description: t.description } : {}), blocks: t.blocks, template: true });
+  }
   let spaces: ComposeContext['spaces'] = [];
   try {
     spaces = listSpaces().map((x) => ({ slug: x.slug, ...(x.title ? { title: x.title } : {}), ...(x.cwd ? { cwd: x.cwd } : {}) }));

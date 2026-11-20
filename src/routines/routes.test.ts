@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RoutineEngine } from './engine.js';
 import { RoutineStore } from './store.js';
-import { routinesRoute } from './routes.js';
+import { composeContext, routinesRoute } from './routes.js';
 import type { DraftRoutes } from './kind.js';
 import type { DraftView } from './types.js';
 
@@ -244,6 +244,19 @@ test('готовые flow шаблонов: список; чужое имя — 
     assert.equal((await t.call('POST', '/api/routines/flow-templates/nope', {}))?.status, 404);
     // «flow-templates» занят разделом API: рутина с таким слагом не открылась бы
     assert.equal((await t.call('PUT', '/api/routines/flow-templates', { spec }))?.status !== 200, true);
+  } finally {
+    t.done();
+  }
+});
+
+test('контекст помощника: готовые flow шаблонов в flows, без повторов имён, с блоками', () => {
+  const t = setup(null);
+  try {
+    const { flows } = composeContext(t.engine);
+    assert.ok(flows.some((f) => f.name === 'desk-task-start'));
+    const names = flows.map((f) => f.name);
+    assert.equal(new Set(names).size, names.length);
+    for (const f of flows) if (f.template) assert.ok(f.blocks.length > 0, f.name);
   } finally {
     t.done();
   }

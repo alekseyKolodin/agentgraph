@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionRequest, SessionResult } from '../agent.js';
-import { COMPOSE_MODEL, createComposeRoutes, type ComposeContext } from './compose.js';
+import { buildSpec, COMPOSE_MODEL, createComposeRoutes, type ComposeContext } from './compose.js';
 import type { ComposeView, DirCheck } from './types.js';
 
 const ctx: ComposeContext = {
@@ -116,6 +116,14 @@ test('подходящего flow нет: needs.flow со словами чел�
   assert.ok(v.state === 'ready');
   assert.equal(v.needs.flow, 'разобрать письмо и ответить');
   assert.equal(v.spec.run?.flow, '');
+});
+
+test('готовый flow шаблона из контекста (template: true) берётся: нет «нет в списке flow», needs.flow пустой', async () => {
+  const withTemplate: ComposeContext = { ...ctx, flows: [...ctx.flows, { name: 'desk-task-start', description: 'Взять задачу в работу', blocks: ['plan', 'work'], template: true }] };
+  const built = await buildSpec({ ...base, flow: 'desk-task-start', input: 'Возьми задачу' }, withTemplate, dirOf(true), 'задачи из Jira');
+  assert.ok(!built.fix.some((f) => /нет в списке flow/.test(f)), built.fix.join('; '));
+  assert.equal(built.needs.flow, undefined);
+  assert.equal(built.spec.run?.flow, 'desk-task-start');
 });
 
 test('только дело на доске: без flow, kind задан, пространство — проект дела', async () => {
