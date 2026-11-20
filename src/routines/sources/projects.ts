@@ -342,7 +342,7 @@ export function projectsKind(deps: ProjectsDeps = {}): SourceKind {
     minEveryMs: MIN_POLL_MS,
     snapshot: true,
     setup: [
-      { key: 'spaces', label: 'Пространства', placeholder: 'kai, billing', optional: true, hint: 'Слаги через запятую. Пусто — все открытые пространства и все сессии.' },
+      { key: 'spaces', label: 'Пространства', placeholder: 'kai, billing', optional: true, hint: 'Слаги через запятую. Пусто — все открытые пространства и все сессии. Ветки обходятся только в привязанных репозиториях пространства, рабочая папка сама не считается.' },
       {
         key: 'review',
         label: 'Разбор сессий моделью',

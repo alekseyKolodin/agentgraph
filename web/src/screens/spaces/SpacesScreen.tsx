@@ -39,8 +39,8 @@ const cx = (...list: (string | false | null | undefined)[]) => list.filter(Boole
 type Msg = { cls: string; text: string };
 const NO_MSG: Msg = { cls: 'msg', text: '' };
 const EMPTY_FORM: SpaceForm = { title: '', map: '', state: '', dirs: '', cwd: '', tags: [] };
-type NewSpace = { open: boolean; slug: string; title: string; gist: string; dirs: string; cwd?: string };
-const NEW_CLOSED: NewSpace = { open: false, slug: '', title: '', gist: '', dirs: '', cwd: '' };
+type NewSpace = { open: boolean; slug: string; title: string; gist: string; dirs: string; cwd?: string; bindRepo?: boolean };
+const NEW_CLOSED: NewSpace = { open: false, slug: '', title: '', gist: '', dirs: '', cwd: '', bindRepo: false };
 type Tab = 'map' | 'state' | 'docs' | 'folders' | 'knowledge' | 'context' | 'settings';
 const TABS: [Tab, string][] = [
   ['map', t('Карта')], ['state', t('Состояние')], ['docs', t('Документы')], ['folders', t('Папки')], ['knowledge', t('Знания')], ['context', t('Контекст')], ['settings', t('Настройки')],
@@ -206,7 +206,7 @@ export function SpacesScreen() {
   const create = async (ev: FormEvent) => {
     ev.preventDefault();
     setNewMsg(NO_MSG);
-    const body = newSpaceBody(ns.slug, ns.title, ns.gist, ns.dirs, ns.cwd ?? '');
+    const body = newSpaceBody(ns.slug, ns.title, ns.gist, ns.dirs, ns.cwd ?? '', ns.bindRepo ?? false);
     if (!body) return;
     if (!SPACE_SLUG_RE.test(body.slug)) return setNewMsg({ cls: 'msg err', text: t('Слаг пространства: строчные латинские буквы, цифры и дефис') });
     // занятый слаг: суть и папки молча не пропадут — сервер ответит 409, а здесь скажем сразу
@@ -372,6 +372,16 @@ export function SpacesScreen() {
                 <PickDirButton prompt={t('Рабочая папка пространства')} start={() => ns.cwd ?? ''} onPick={(p) => setNs((v) => ({ ...v, cwd: p }))} />
               </div>
             </label>
+            {/* привязка репозитория — только по просьбе: пространство под одну задачу в общем репозитории не становится его «домом» */}
+            {(ns.cwd ?? '').trim() && (
+              <div className={styles.bindRepo}>
+                <label className={styles.check}>
+                  <input type="checkbox" name="bindRepo" aria-describedby="space-new-bind-hint" checked={ns.bindRepo ?? false} onChange={(e) => setNs((v) => ({ ...v, bindRepo: e.target.checked }))} />
+                  <span>{t('Всё в этом репозитории относить сюда')}</span>
+                </label>
+                <span id="space-new-bind-hint" className="muted small">{t('Запуски, сессии, MR и ветки в этом репозитории без выбранного пространства будут подписаны им. Для пространства под одну задачу не включай')}</span>
+              </div>
+            )}
             <div className={styles.dirs}>
               <label htmlFor="space-new-dirs" className="field-label" title={t('Репозитории и папки фичи, по одному на строку: сессии и этапы получат их на чтение, а карта — список «Где что»')}>{t('Папки')}</label>
               <PickDirButton
@@ -796,7 +806,7 @@ function Repos({ space: s, onQuick }: { space: SpaceDetail; onQuick: EditorProps
           })}
         </ul>
       ) : (
-        <span className="muted small">{t('Не привязаны: работа без явного пространства попадёт сюда, только если она в папках пространства')}</span>
+        <span className="muted small">{t('Не привязаны: работа без явного пространства попадёт сюда, только если она в папках пространства вне git')}</span>
       )}
       <div className="path-field">
         <input

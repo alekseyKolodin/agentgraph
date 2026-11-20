@@ -190,6 +190,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
       // и рабочей папкой; существующее — только изменённые папки
       const plan = folderPlan({ target, known, dirs: extraDirs, cwd, created: created.current });
       if (plan.kind === 'create') {
+        // без bindRepo: у сессии пространство явное, привязка репозитория ей не нужна
         await createSpace({ slug: plan.slug, dirs: plan.dirs, ...(plan.cwd ? { cwd: plan.cwd } : {}) });
         // дальше форма — уже про него: повтор после сбоя сессии сохранит папки, а не упрётся в «слаг занят»
         created.current = plan.slug;

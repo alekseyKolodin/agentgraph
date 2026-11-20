@@ -224,3 +224,10 @@ test('закрытые пространства: отдельно в списк�
   assert.equal(spaceStateAt({ stateMtimeMs: Date.parse('2026-11-18T11:50:00Z') }, now), '10 мин назад');
   assert.equal(spaceStateAt({}, now), '');
 });
+
+test('newSpaceBody: bindRepo уходит только при заполненной рабочей папке и включённой галочке', () => {
+  assert.deepEqual(newSpaceBody('p', '', '', '', '/code/app', true), { slug: 'p', cwd: '/code/app', bindRepo: true });
+  assert.deepEqual(newSpaceBody('p', '', '', '', '/code/app', false), { slug: 'p', cwd: '/code/app' });
+  assert.deepEqual(newSpaceBody('p', '', '', '', '/code/app'), { slug: 'p', cwd: '/code/app' }, 'по умолчанию выключено');
+  assert.deepEqual(newSpaceBody('p', '', '', '', '  ', true), { slug: 'p' }, 'без рабочей папки привязывать нечего');
+});

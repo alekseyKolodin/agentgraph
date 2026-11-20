@@ -68,6 +68,10 @@
 .mono { font-family: var(--font-mono); font-size: var(--fs-small); line-height: 1.5; }
 .field-foot { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .field-foot > :first-child { max-width: 680px; }
+.bind-repo { display: flex; flex-direction: column; gap: 2px; }
+:global(.form) label.check { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; cursor: pointer; }
+:global(.form) label.check > input[type='checkbox'] { width: auto; flex: none; padding: 0; }
+:global(.form) label.check > span { font-size: inherit; }
 .dirs { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
 .dirs textarea { grid-column: 1 / -1; font-family: var(--font-mono); font-size: var(--fs-small); }
 /* репозитории пространства: строки «путь · отвязать», под ними поле привязки */

@@ -251,18 +251,30 @@ export function swapSpaceTags(tags: string[], prev: string[] = [], next: string[
 /** Теги знаний пространства по слагу из списка; нет такого — пусто. */
 export const spaceTags = (slug: string, options: Pick<SpaceListItem, 'slug' | 'tags'>[]): string[] => options.find((x) => x.slug === slug.trim())?.tags ?? [];
 
-/** Тело POST /api/spaces; пустой слаг — null (форма не уходит). */
+/**
+ * Тело POST /api/spaces; пустой слаг — null (форма не уходит). bindRepo — галочка «всё в этом репозитории относить
+ * сюда»: уходит только при заполненной рабочей папке (без неё привязывать нечего).
+ */
 export function newSpaceBody(
   slug: string,
   title: string,
   gist: string,
   dirs: string,
   cwd = '',
-): { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string } | null {
+  bindRepo = false,
+): { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string; bindRepo?: true } | null {
   const s = slug.trim();
   if (!s) return null;
   const list = dirLines(dirs);
-  return { slug: s, ...(title.trim() ? { title: title.trim() } : {}), ...(gist.trim() ? { gist: gist.trim() } : {}), ...(list.length ? { dirs: list } : {}), ...(cwd.trim() ? { cwd: cwd.trim() } : {}) };
+  const wd = cwd.trim();
+  return {
+    slug: s,
+    ...(title.trim() ? { title: title.trim() } : {}),
+    ...(gist.trim() ? { gist: gist.trim() } : {}),
+    ...(list.length ? { dirs: list } : {}),
+    ...(wd ? { cwd: wd } : {}),
+    ...(wd && bindRepo ? { bindRepo: true as const } : {}),
+  };
 }
 
 /** Счётчик под редактором: строк и знаков. */

@@ -200,7 +200,7 @@ test(
     assert.deepEqual(readSpace('p')!.tags, ['kotlin', 'release']);
     // space.json, записанный сессией: несуществующий тег не пройдёт
     const prev = readSpace('p')!;
-    const text = JSON.stringify({ slug: 'p', title: 'T', createdAt: prev.createdAt, updatedAt: prev.updatedAt, tags: ['kotlin', 'ghost'], history: [] });
+    const text = JSON.stringify({ slug: 'p', title: 'T', createdAt: prev.createdAt, updatedAt: prev.updatedAt, tags: ['kotlin', 'ghost'], repos: [], history: [] });
     assert.throws(() => checkSpaceMetaText('p', text, prev), /Тега знаний ghost нет/);
     assert.deepEqual(checkSpaceMetaText('p', text.replace(', "ghost"', '').replace(',"ghost"', ''), prev).tags, ['kotlin']);
     // удалённый тег знаний формы больше не получают: его нет ни в пространстве, ни в списке

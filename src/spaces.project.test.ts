@@ -8,6 +8,7 @@ import {
   checkSpaceMetaText,
   createSpace,
   checkSpaceRepos,
+  createSpaceReply,
   gitRootOf,
   listSpaces,
   NO_PROJECT,
@@ -149,7 +150,8 @@ test(
     updateSpace('shop', { repos: [] });
     assert.deepEqual(readSpace('shop')!.repos, []);
     assert.deepEqual(readSpaceMeta('shop')!.repos, []);
-    assert.equal(projectOfPath(path.join(app, 'android', 'x')).space, 'shop', 'рабочая папка всё ещё содержит путь');
+    // рабочая папка внутри git путь не забирает: отвязанный репозиторий без другого дома — «Без проекта»
+    assert.deepEqual(projectOfPath(path.join(app, 'android', 'x')), NO_PROJECT);
     assert.deepEqual(projectOfPath(app), NO_PROJECT);
   }),
 );
@@ -262,14 +264,78 @@ test(
 );
 
 test(
-  'новое пространство привязывает только репозиторий рабочей папки: папки чтения — справочные',
+  'новое пространство привязывает репозиторий рабочей папки только по bindRepo: папки чтения — справочные всегда',
   withDirs((code) => {
     const app = repo(path.join(code, 'app'));
     const lib = repo(path.join(code, 'design-system'));
-    const s = createSpace('feature', { cwd: path.join(app), dirs: [lib] });
-    assert.deepEqual(s.repos, [app]);
-    assert.deepEqual(createSpace('bare').repos, []);
+    const feature = createSpace('feature', { cwd: app, dirs: [lib] });
+    assert.deepEqual(feature.repos, [], 'рабочая папка — «где работать», не «чей репозиторий»');
+    assert.deepEqual(projectOfPath(path.join(app, 'src')), NO_PROJECT);
+    const home = createSpace('home', { cwd: app, dirs: [lib], bindRepo: true });
+    assert.deepEqual(home.repos, [app]);
+    assert.equal(projectOfPath(path.join(app, 'src')).space, 'home');
+    assert.deepEqual(createSpace('bare', { bindRepo: true }).repos, [], 'без рабочей папки привязывать нечего');
     assert.equal(projectOfPath(lib), NO_PROJECT);
+  }),
+);
+
+test(
+  'проект по папке: рабочая папка внутри репозитория без привязки путь в нём не забирает, папка пространства — всегда',
+  withDirs((code) => {
+    const app = repo(path.join(code, 'app'));
+    fs.mkdirSync(path.join(app, 'perf'), { recursive: true });
+    rawSpace('perf', { cwd: path.join(app, 'perf'), repos: [] });
+    assert.deepEqual(projectOfPath(path.join(app, 'perf', 'bench')), NO_PROJECT);
+    assert.deepEqual(projectOfPath(app), NO_PROJECT);
+    assert.equal(projectOfPath(path.join(spaceDir('perf'), 'docs')).space, 'perf');
+    // рабочая папка вне git — по-прежнему папка пространства
+    const notes = path.join(code, 'notes');
+    fs.mkdirSync(path.join(notes, 'deep'), { recursive: true });
+    rawSpace('notes', { cwd: notes, repos: [] });
+    assert.equal(projectOfPath(path.join(notes, 'deep')).space, 'notes');
+  }),
+);
+
+test(
+  'отвязка работает: было repos [app] и cwd app, после repos [] путь в app — «Без проекта»',
+  withDirs((code) => {
+    const app = repo(path.join(code, 'app'));
+    rawSpace('perf', { cwd: app, repos: [app] });
+    assert.equal(projectOfPath(path.join(app, 'src')).space, 'perf');
+    updateSpace('perf', { repos: [] });
+    assert.deepEqual(projectOfPath(path.join(app, 'src')), NO_PROJECT);
+  }),
+);
+
+test(
+  'createSpace без bindRepo пишет repos: [] явно — повторное чтение не переносит туда корни cwd и dirs',
+  withDirs((code) => {
+    const app = repo(path.join(code, 'app'));
+    const lib = repo(path.join(code, 'lib'));
+    createSpace('perf', { cwd: app, dirs: [lib] });
+    assert.deepEqual(fileMeta('perf').repos, []);
+    // чтение списка и проект по папке прогоняют withRepos — переноса быть не должно
+    assert.equal(listSpaces().find((s) => s.slug === 'perf')?.repos, undefined, 'в списке пустые repos не отдаются');
+    assert.deepEqual(projectOfPath(path.join(app, 'src')), NO_PROJECT);
+    assert.deepEqual(readSpace('perf')!.repos, []);
+    assert.deepEqual(fileMeta('perf').repos, [], 'перенос withRepos не сработал');
+  }),
+);
+
+test(
+  'POST /api/spaces: bindRepo не булево — 400; true с cwd в репозитории — repos с корнем; без флага — пусто',
+  withDirs((code) => {
+    const app = repo(path.join(code, 'app'));
+    fs.mkdirSync(path.join(app, 'src'));
+    assert.equal(createSpaceReply({ slug: 'bad', cwd: app, bindRepo: 'yes' }).status, 400);
+    assert.equal(readSpaceMeta('bad'), undefined, 'с ошибкой пространство не заводится');
+    const bound = createSpaceReply({ slug: 'home', cwd: path.join(app, 'src'), bindRepo: true });
+    assert.equal(bound.status, 201);
+    assert.deepEqual((bound.body as { repos: string[] }).repos, [app]);
+    const plain = createSpaceReply({ slug: 'perf', cwd: app });
+    assert.equal(plain.status, 201);
+    assert.deepEqual((plain.body as { repos: string[] }).repos, []);
+    assert.deepEqual((createSpaceReply({ slug: 'off', cwd: app, bindRepo: false }).body as { repos: string[] }).repos, []);
   }),
 );
 
@@ -286,5 +352,23 @@ test(
     rawSpace('greedy', { repos: ['/', os.homedir()] });
     fs.mkdirSync(path.join(code, 'loose'));
     assert.deepEqual(projectOfPath(path.join(code, 'loose')), NO_PROJECT);
+  }),
+);
+
+test(
+  'space.json правкой сессии без поля repos — отказ: иначе перенос заново привязал бы корни cwd и dirs и отвязка пропала',
+  withDirs((code) => {
+    const app = repo(path.join(code, 'app'));
+    rawSpace('perf', { cwd: app, repos: [app] });
+    updateSpace('perf', { repos: [] });
+    const prev = readSpaceMeta('perf')!;
+    const { repos: _r, ...noRepos } = prev;
+    assert.throws(() => checkSpaceMetaText('perf', JSON.stringify({ ...noRepos, title: 'Новое' }), prev), /repos не убирают: пустой список — \[\]/);
+    assert.equal(checkSpaceMetaText('perf', JSON.stringify({ ...prev, title: 'Новое' }), prev).title, 'Новое');
+    // новое пространство записью файла — тоже только с явным repos
+    assert.throws(() => checkSpaceMetaText('fresh', JSON.stringify({ slug: 'fresh', cwd: app, history: [] }), null), /repos не убирают/);
+    assert.deepEqual(checkSpaceMetaText('fresh', JSON.stringify({ slug: 'fresh', cwd: app, repos: [], history: [] }), null).repos, []);
+    // ошибка значений — первой: причина отказа сессии обрезается
+    assert.throws(() => checkSpaceMetaText('perf', JSON.stringify({ ...noRepos, dirs: ['/'] }), prev), /проверку agentgraph: (?!repos).*; repos не убирают/);
   }),
 );

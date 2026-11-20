@@ -15,7 +15,7 @@ const enc = encodeURIComponent;
 export const fetchSpaces = () => api<{ spaces: SpaceListItem[] }>('GET', '/api/spaces');
 export const fetchSpace = (slug: string) => api<SpaceDetail>('GET', `/api/spaces/${enc(slug)}`);
 /** map и state — из черновика модели, который человек просмотрел: сервер проверяет их до создания. */
-export const createSpace = (body: { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string; map?: string; state?: string }) => api<Space>('POST', '/api/spaces', body);
+export const createSpace = (body: { slug: string; title?: string; gist?: string; dirs?: string[]; cwd?: string; bindRepo?: boolean; map?: string; state?: string }) => api<Space>('POST', '/api/spaces', body);
 /**
  * mapBase и stateBase — mtimeMs файла, с которого начали правку (0 — файла не было): изменили снаружи — 409.
  * legacySummary — саммари тега, дописанное старой версией: взять в состояние или скрыть; keepTitle — оставить

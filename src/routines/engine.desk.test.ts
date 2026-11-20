@@ -12,6 +12,7 @@ import type { SourceKind } from './kind.js';
 import type { RoutineEvent, RoutineSpec } from './types.js';
 import type { DeskApi, DeskBy, DeskColumn, DeskItem, DeskPatch } from '../desk/types.js';
 import { openDesk } from '../desk/index.js';
+import { createSpace } from '../spaces.js';
 
 const MR = 'https://gitlab.company.com/grp/app/-/merge_requests/12';
 const MR_KEY = 'mr:gitlab.company.com/grp/app/12';
@@ -386,6 +387,34 @@ test('проект дела: task.project у рутины без flow, инач�
     assert.deepEqual(t.desk.puts().map((p) => [p.patch.signal?.routine, p.patch.project]).sort(), [['both', 'shop'], ['only', 'billing']]);
   } finally {
     t.done();
+  }
+});
+
+test('проект дела: run.cwd в репозитории, где другое пространство — только рабочая папка, — дело без проекта; привязанный — проект', async () => {
+  // настоящий defaultProjectOf и пространства во временной папке настроек: подмена deps.projectOf проверила бы подмену
+  const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-cfg-')));
+  const code = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-code-')));
+  const prev = process.env.AGENTGRAPH_CONFIG_DIR;
+  process.env.AGENTGRAPH_CONFIG_DIR = cfg;
+  const t = setup();
+  try {
+    const big = path.join(code, 'big');
+    const lib = path.join(code, 'lib');
+    for (const r of [big, lib]) fs.mkdirSync(path.join(r, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(big, 'perf'));
+    createSpace('perf-research', { cwd: big });
+    createSpace('lib-home', { cwd: lib, bindRepo: true });
+    t.routine('mr', 'gl', { run: { flow: 'review', input: 'ревью', cwd: path.join(big, 'perf') } });
+    t.routine('lib', 'gl', { run: { flow: 'review', input: 'ревью', cwd: lib } });
+    await t.push('gl', t.gl('review:1'));
+    const byRoutine = Object.fromEntries(t.desk.puts().map((p) => [p.patch.signal?.routine, p.patch.project]));
+    assert.deepEqual(byRoutine, { mr: undefined, lib: 'lib-home' });
+  } finally {
+    t.done();
+    if (prev === undefined) delete process.env.AGENTGRAPH_CONFIG_DIR;
+    else process.env.AGENTGRAPH_CONFIG_DIR = prev;
+    fs.rmSync(cfg, { recursive: true, force: true });
+    fs.rmSync(code, { recursive: true, force: true });
   }
 });
 

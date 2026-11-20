@@ -52,7 +52,7 @@ export const kinds: Record<string, string> = {
   'Черновик (PR)': 'Draft (PR)',
   // Проекты (src/routines/sources/projects.ts)
   'Брошенное в проектах пространств: незакоммиченные и неотправленные ветки, ветки без MR, сессии на вопросе и «не доделано»': 'Left behind in your spaces’ projects: uncommitted and unpushed branches, branches without an MR, sessions that ended on a question, and “unfinished”',
-  'Слаги через запятую. Пусто — все открытые пространства и все сессии.': 'Slugs, comma-separated. Empty means all open spaces and all sessions.',
+  'Слаги через запятую. Пусто — все открытые пространства и все сессии. Ветки обходятся только в привязанных репозиториях пространства, рабочая папка сама не считается.': 'Slugs, comma-separated. Empty means all open spaces and all sessions. Branches are scanned only in a space’s linked repositories; its working folder doesn’t count on its own.',
   'Разбор сессий моделью': 'Session review by model',
   'Как часто модель (sonnet) разбирает сессии с новыми ходами: «не доделано» и «последний шаг» станут делами. ≈ $0.05–0.6 за разбор. Пусто или off — без модели; 24h — раз в сутки.': 'How often the model (sonnet) reviews sessions with new turns: “unfinished” and “last step” become tasks. ≈ $0.05–0.6 per review. Empty or off means no model; 24h — once a day.',
   'Что брошено': 'What was left',

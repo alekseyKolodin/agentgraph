@@ -896,7 +896,7 @@ await scenario('space-session', () =>
     add(sc, 'своё пространство — в permissions.ask', permissions.ask.includes(`Edit(/${cwd}/**)`) ? 'ok' : 'FAIL', permissions.ask.join(', '));
     let round = 0;
     let rawRound = 0;
-    const badMeta = JSON.stringify({ dirs: ['/'] });
+    const badMeta = JSON.stringify({ dirs: ['/'], repos: [] });
     const goodMeta = JSON.stringify({ ...JSON.parse(before.meta), title: 'CHECK' });
     const isGood = (i: Record<string, unknown>) => String(i.content ?? '').includes('CHECK');
     const isBad = (i: Record<string, unknown>) => /"dirs"\s*:\s*\[\s*"\/"\s*\]/.test(String(i.content ?? ''));
