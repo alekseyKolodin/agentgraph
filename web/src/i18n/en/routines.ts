@@ -609,4 +609,12 @@ export const routines: Record<string, string> = {
   'Установи:': 'Install:',
   'Войди в аккаунт:': 'Sign in:',
   'Потом нажми «Проверить»: agentgraph покажет твои MR на ревью. Адрес сервера нужен, только если GitLab свой (gitlab.company.com).': 'Then press “Check”: agentgraph will show your MRs waiting for review. The server address is only needed for a self-hosted GitLab (gitlab.company.com).',
+  'Проверить перед делом': 'Check before adding a task',
+  'ИИ смотрит событие и открытые дела на доске. Решит, что это продолжение одного из них, — событие допишется в историю того дела: колонка не меняется, flow не запускается. Пусто — дело заводится без проверки': 'AI looks at the event and the open tasks on the board. If it decides the event continues one of them, the event is added to that task’s history: the column stays, no flow is started. Empty — a task is added without the check',
+  'Вызов модели на каждое событие, пока на доске есть открытые дела. Прошлое решение по той же вещи повторяется без модели.': 'One model call per event while the board has open tasks. An earlier decision about the same item is reused without the model.',
+  'Условие проверки перед делом': 'Check-before-task rule',
+  'Например: если в задаче есть ссылка на MR и по этому MR уже есть дело — это то же дело, нового не заводи.': 'For example: if the issue links an MR and there is already a task for that MR, it is the same task — do not add a new one.',
+  'Модель проверки перед делом': 'Model for the check before a task',
+  'Быстрая модель дешевле и обычно справляется; на спорных событиях точнее сильная': 'A fast model is cheaper and usually enough; a strong one is more accurate on borderline events',
+  'с проверкой перед делом': 'with a check before adding',
 };

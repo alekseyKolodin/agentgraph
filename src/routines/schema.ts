@@ -123,6 +123,14 @@ export const TaskRuleSchema = z
     on_repeat: z.enum(['plan', 'keep']).optional().describe('Пришло новое по тому же делу: plan — вернуть в «В плане» (по умолчанию), keep — оставить колонку'),
     close: z.string().trim().min(1).optional().describe('Когда закрывать: thing — когда вещь закрыта (по умолчанию), never — только руками, или условие словами'),
     project: z.string().trim().min(1).optional().describe('Проект дела — слаг пространства; нет — пространство из run'),
+    merge: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .optional()
+      .describe('Проверка перед делом, словами: когда событие — не новое дело, а продолжение уже открытого. Модель смотрит событие и открытые дела доски; нашла — событие дописывается в историю того дела (колонка не меняется, flow не запускается), нет — дело заводится как обычно. Пример: «если в задаче есть ссылка на MR и по этому MR уже есть дело — это то же дело». Только для from: event'),
+    merge_model: z.string().trim().min(1).optional().describe('Модель проверки перед делом; нет — модель по умолчанию (haiku)'),
   })
   .strict();
 
@@ -179,6 +187,9 @@ export const RoutineSpecSchema = z
     // рутина либо запускает flow, либо заводит дела событием; дела «из flow» без flow заводить некому
     if (!spec.run && !spec.task) ctx.addIssue({ code: 'custom', path: ['run'], message: 'нужен run.flow или блок task' });
     else if (!spec.run && spec.task?.from === 'flow') ctx.addIssue({ code: 'custom', path: ['run'], message: 'task.from: flow — дела заводит flow, нужен run.flow' });
+    if (spec.task?.merge && spec.task.from === 'flow') ctx.addIssue({ code: 'custom', path: ['task', 'merge'], message: 'task.merge — только для дел из события (from: event): дела flow заводит сам' });
+    // у расписания нет события-вещи: проверка звала бы модель на каждый тик
+    else if (spec.task?.merge && 'schedule' in spec.when) ctx.addIssue({ code: 'custom', path: ['task', 'merge'], message: 'task.merge — только у рутины на источнике, не по расписанию' });
   });
 
 type Issue = z.core.$ZodIssue;

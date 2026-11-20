@@ -13,6 +13,8 @@ import type { RoutineEvent, RoutineSpec } from './types.js';
 import type { DeskApi, DeskBy, DeskColumn, DeskItem, DeskPatch } from '../desk/types.js';
 import { openDesk } from '../desk/index.js';
 import { createSpace } from '../spaces.js';
+import { jiraThing } from '../things/resolve.js';
+import type { MergeInput, MergeResult } from './task-merge.js';
 
 const MR = 'https://gitlab.company.com/grp/app/-/merge_requests/12';
 const MR_KEY = 'mr:gitlab.company.com/grp/app/12';
@@ -60,7 +62,7 @@ function fakeDesk(o: { fail?: boolean; /** put этих ключей падае�
   return { api, items, calls, puts: () => allPuts().filter((c) => c.patch.signal), links: () => allPuts().filter((c) => !c.patch.signal) };
 }
 
-function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean; failKeys?: Set<string>; duplicate?: boolean } = {}) {
+function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean; failKeys?: Set<string>; duplicate?: boolean; /** Ответ проверки перед делом: ключ дела или null; функция — по входу. */ merge?: string | null | ((i: MergeInput) => Promise<MergeResult>) } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-desk-'));
   const store = new RoutineStore(root);
   const clock = { now: new Date('2026-11-17T10:00:00.000Z') };
@@ -68,6 +70,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean;
   const started: RoutineRunRequest[] = [];
   const desk = fakeDesk({ fail: o.failDesk, failKeys: o.failKeys });
   const checks: string[] = [];
+  const merges: MergeInput[] = [];
   const real = o.realDesk ? openDesk(path.join(root, 'desk')) : undefined;
   const kind: SourceKind = {
     kind: 'fake',
@@ -97,6 +100,11 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean;
     check: async (i) => {
       checks.push(i.event.id);
       return { match: true, duplicate: Boolean(o.duplicate), reason: o.duplicate ? 'то же, что вчера' : 'подходит', costUsd: 0 };
+    },
+    merge: async (i) => {
+      merges.push(i);
+      if (typeof o.merge === 'function') return o.merge(i);
+      return { key: o.merge ?? null, reason: o.merge ? 'тот же MR' : 'новое', costUsd: 0.01 };
     },
     log: () => {},
     lock: { who: 'test', deps: { alive: () => false } },
@@ -128,7 +136,7 @@ function setup(o: { lastCheck?: boolean; failDesk?: boolean; realDesk?: boolean;
     await engine.idle();
   };
   const log = (slug: string) => engine.logOf(slug, {}).reverse();
-  return { root, store, engine, items, started, desk, real, checks, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, store, engine, items, started, desk, real, checks, merges, routine, gl, chat, push, log, clock, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 test('рутина без flow: событие заводит дело по ключу вещи — без запуска, строка журнала «дело»', async () => {
@@ -578,6 +586,213 @@ test('«Не то» не закрывает общее дело другой р�
     await t.engine.waitAction(w2!.id, { action: 'later' });
     assert.equal(t.desk.calls.filter((c) => c.op === 'move').length, moves);
     assert.equal(t.desk.items.get(key14)?.closed?.reason, 'MR смержен');
+  } finally {
+    t.done();
+  }
+});
+
+// --- проверка перед делом (task.merge): событие о задаче Jira со ссылкой на MR, по которому дело уже есть
+
+const JIRA_KEY = 'jira:jira.company.com/TE-1';
+/** Событие «чата» о задаче Jira: главная вещь — задача, MR из описания — упомянутая. */
+const jiraEvent = (t: ReturnType<typeof setup>, id: string, text = `Сделать фичу. MR: ${MR}`): RoutineEvent => ({
+  ...t.chat(id, text),
+  title: 'TE-1 Сделать фичу',
+  link: 'https://jira.company.com/browse/TE-1',
+  thread: undefined,
+  replyTo: undefined,
+  things: [jiraThing({ host: 'jira.company.com', key: 'TE-1', url: 'https://jira.company.com/browse/TE-1' })],
+});
+
+test('проверка перед делом: задача Jira со ссылкой на MR дописывается к делу MR — без нового дела, без запуска, колонка та же', async () => {
+  const t = setup({ merge: MR_KEY });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: { flow: 'review' }, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.desk.api.move(MR_KEY, 'waiting', 'me');
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.equal(t.desk.items.has(JIRA_KEY), false);
+    const mr = t.desk.items.get(MR_KEY)!;
+    assert.deepEqual(mr.signals.map((x) => x.source), ['gl', 'chat']);
+    // только сигнал: имя, вид и вещь дела MR не трогаются, повтор не двигает колонку
+    const put = t.desk.puts().at(-1)!;
+    assert.deepEqual(Object.keys(put.patch).sort(), ['onRepeat', 'signal']);
+    assert.equal(put.patch.onRepeat, 'keep');
+    assert.equal(put.patch.signal?.link, 'https://jira.company.com/browse/TE-1');
+    assert.equal(t.started.length, 0);
+    // дело по вещи события — первым кандидатом и с пометкой
+    assert.equal(t.merges[0].candidates[0].key, MR_KEY);
+    assert.equal(t.merges[0].candidates[0].byThing, true);
+    // строка — на узле «дело», без «Не повтор»: событие встало там, а не на ИИ рутины
+    const [line] = t.log('jira');
+    assert.equal(line.outcome, 'task');
+    assert.equal(line.deskKey, MR_KEY);
+    assert.equal(line.mergedInto, MR_KEY);
+    assert.match(line.reason ?? '', /^добавлено к делу/);
+    assert.equal(line.costUsd, 0.01);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: модель сказала «новое» — дело заводится как обычно и запуск идёт', async () => {
+  const t = setup({ merge: null });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: { flow: 'review' }, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.equal(t.desk.items.get(JIRA_KEY)?.kind, 'Jira');
+    assert.equal(t.started.length, 1);
+    assert.equal(t.merges.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: доска пуста или своё дело уже есть — модель не зовётся', async () => {
+  const t = setup({ merge: MR_KEY });
+  try {
+    t.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('chat', jiraEvent(t, '1'));
+    assert.equal(t.merges.length, 0);
+    assert.ok(t.desk.items.has(JIRA_KEY));
+    // второе событие о той же задаче: её дело уже открыто — обычный сигнал туда
+    t.routine('gitlab', 'gl', { run: undefined });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.equal(t.merges.length, 0);
+    assert.equal(t.desk.items.get(JIRA_KEY)?.signals.length, 2);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: следующее событие о той же задаче идёт туда же без модели', async () => {
+  const t = setup({ merge: MR_KEY });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    // обновление задачи уже без ссылки на MR — всё равно в дело MR, модель второй раз не спрашивается
+    await t.push('chat', jiraEvent(t, '3', 'статус изменён'));
+    assert.equal(t.merges.length, 1);
+    assert.equal(t.desk.items.has(JIRA_KEY), false);
+    assert.equal(t.desk.items.get(MR_KEY)?.signals.length, 3);
+    assert.equal(t.log('jira')[0].outcome, 'task');
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: сбой модели или ключ не из списка — дело заводится как обычно', async () => {
+  const t = setup({ merge: async () => { throw new Error('сеть'); } });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.ok(t.desk.items.has(JIRA_KEY));
+    assert.equal(t.desk.items.get(MR_KEY)?.signals.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: ключ не из кандидатов или дело закрыли во время проверки — своё дело', async () => {
+  const t = setup({ merge: 'mr:чужой/1' });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.ok(t.desk.items.has(JIRA_KEY));
+    assert.equal(t.log('jira')[0].mergedInto, undefined);
+  } finally {
+    t.done();
+  }
+  const u = setup({
+    merge: async () => {
+      await u.desk.api.close(MR_KEY, 'смержен', 'watcher');
+      return { key: MR_KEY, reason: 'тот же MR', costUsd: 0 };
+    },
+  });
+  try {
+    u.routine('gitlab', 'gl', { run: undefined });
+    u.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await u.push('gl', u.gl('review:1'));
+    await u.push('chat', jiraEvent(u, '2'));
+    // в закрытое дело сигнал не кладётся — событие идёт своим делом
+    assert.ok(u.desk.items.has(JIRA_KEY));
+    assert.equal(u.desk.items.get(MR_KEY)?.signals.length, 1);
+  } finally {
+    u.done();
+  }
+});
+
+test('проверка перед делом: засев дописывает к делу без запуска', async () => {
+  const t = setup({ merge: MR_KEY, lastCheck: false });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: { flow: 'review' }, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.equal(t.desk.items.has(JIRA_KEY), false);
+    assert.equal(t.started.length, 0);
+    const [line] = t.log('jira');
+    assert.equal(line.outcome, 'task');
+    assert.equal(line.mergedInto, MR_KEY);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: «догнать» берёт последнее решение по записи — своё дело после дописанного запускает flow', async () => {
+  const t = setup({ merge: MR_KEY });
+  try {
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: { flow: 'review' }, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    // событие простоя: засев дописал его к делу MR
+    await t.push('chat', { ...jiraEvent(t, '2'), at: '2026-11-17T09:30:00.000Z' });
+    const merged = t.log('jira').find((x) => x.mergedInto)!;
+    assert.equal(merged.mergedInto, MR_KEY);
+    // запись вернулась и получила своё дело — это решение новее
+    t.store.appendLog({ ...merged, id: 'later', at: '2026-11-17T10:00:05.000Z', deskKey: JIRA_KEY, mergedInto: undefined, reason: 'своё дело' });
+    const [row] = t.engine.catchUps().filter((r) => r.routine === 'jira');
+    await t.engine.catchUpAction(row.id, 'run');
+    assert.equal(t.started.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверка перед делом: дело закрыли между чтением и записью сигнала — событие идёт своим делом', async () => {
+  let closeOnGet = false;
+  const t = setup({
+    merge: async () => {
+      closeOnGet = true;
+      return { key: MR_KEY, reason: 'тот же MR', costUsd: 0 };
+    },
+  });
+  try {
+    const get = t.desk.api.get.bind(t.desk.api);
+    t.desk.api.get = async (key) => {
+      const item = await get(key);
+      if (closeOnGet && key === MR_KEY) {
+        closeOnGet = false;
+        await t.desk.api.close(MR_KEY, 'смержен', 'watcher');
+      }
+      return item;
+    };
+    t.routine('gitlab', 'gl', { run: undefined });
+    t.routine('jira', 'chat', { run: undefined, task: { kind: 'Jira', merge: 'есть MR с делом — то же дело' } });
+    await t.push('gl', t.gl('review:1'));
+    await t.push('chat', jiraEvent(t, '2'));
+    assert.ok(t.desk.items.has(JIRA_KEY));
+    assert.equal(t.log('jira')[0].mergedInto, undefined);
   } finally {
     t.done();
   }

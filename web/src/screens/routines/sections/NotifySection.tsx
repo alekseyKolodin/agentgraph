@@ -8,10 +8,11 @@ import { useState } from 'react';
 import type { NotifyEvent, RoutinesOverview } from '@server/routines/types';
 import { useFeature } from '../../../api';
 import { useSpaces } from '../../../api/spaces';
-import { Chips, ctlClass, Field, Input, Select, Seg } from '../../../components/form';
+import { Chips, ctlClass, Field, Input, ModelSelect, Select, Seg, TextArea } from '../../../components/form';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { SpacePicker } from '../../../components/SpacePicker';
 import { t } from '../../../lib/i18n';
+import { DEFAULT_CHECK_MODEL } from '../../../lib/routines/graph';
 import { replyWhere } from '../../../lib/routines/phrase';
 import { draftMissing, draftRuns, isCloseText, isSchedule, NOTIFY_EVENTS, NOTIFY_OS_DEFAULT, type RoutineDraft } from '../../../lib/routines/spec';
 import { SourceReplyPanel } from '../ReplySetup';
@@ -291,6 +292,7 @@ function taskSummary(d: RoutineDraft): string {
     d.taskKind.trim() ? t('вид «{kind}»', { kind: d.taskKind.trim() }) : t('вид дела не назван'),
     t('в «{col}»', { col }),
     d.taskFrom === 'flow' ? t('заводит flow') : close,
+    ...(d.taskFrom === 'event' && !isSchedule(d) && d.taskMerge.trim() ? [t('с проверкой перед делом')] : []),
   ].join(' · ');
 }
 
@@ -382,7 +384,37 @@ export function TaskSettings({ d, set }: DraftProps) {
           </>
         )}
       </div>
-      {d.taskFrom === 'event' && !isSchedule(d) && d.check.trim() && (
+      {d.taskFrom === 'event' && !isSchedule(d) && (
+        <div className={s.col}>
+          <Field
+            label={t('Проверить перед делом')}
+            help={t('ИИ смотрит событие и открытые дела на доске. Решит, что это продолжение одного из них, — событие допишется в историю того дела: колонка не меняется, flow не запускается. Пусто — дело заводится без проверки')}
+            hint={d.taskMerge.trim() ? t('Вызов модели на каждое событие, пока на доске есть открытые дела. Прошлое решение по той же вещи повторяется без модели.') : undefined}
+          >
+            <TextArea
+              rows={2}
+              maxLength={2000}
+              aria-label={t('Условие проверки перед делом')}
+              placeholder={t('Например: если в задаче есть ссылка на MR и по этому MR уже есть дело — это то же дело, нового не заводи.')}
+              value={d.taskMerge}
+              onChange={(e) => set({ taskMerge: e.target.value })}
+            />
+          </Field>
+          {d.taskMerge.trim() && (
+            <div className={s.row}>
+              <span className={s.lbl}>{t('Модель')}</span>
+              <ModelSelect
+                aria-label={t('Модель проверки перед делом')}
+                value={d.taskMergeModel}
+                defaultLabel={DEFAULT_CHECK_MODEL}
+                title={t('Быстрая модель дешевле и обычно справляется; на спорных событиях точнее сильная')}
+                onChange={(taskMergeModel) => set({ taskMergeModel })}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      {d.taskFrom === 'event' && !isSchedule(d) && (d.check.trim() || d.taskMerge.trim()) && (
         <span className={s.warn}>{t('Первый опрос заведёт дела по текущему списку источника: до {n} записей, и каждую проверит словами — это расход модели.', { n: SEED_MAX })}</span>
       )}
     </>

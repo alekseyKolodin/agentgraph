@@ -106,6 +106,8 @@ const FIELD_TEXT: Partial<Record<keyof RoutineDraft, string>> = {
   taskSame: t('дело'),
   taskRepeat: t('дело'),
   taskClose: t('дело'),
+  taskMerge: t('дело'),
+  taskMergeModel: t('дело'),
   knowledge: t('знания'),
 };
 

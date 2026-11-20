@@ -54,6 +54,10 @@ export type RoutineDraft = {
   taskRepeat: 'plan' | 'keep';
   /** 'thing' | 'never' | условие словами. */
   taskClose: string;
+  /** Проверка перед делом словами (task.merge): пусто — дело заводится без неё. */
+  taskMerge: string;
+  /** Модель проверки перед делом (task.merge_model); пусто — по умолчанию. */
+  taskMergeModel: string;
   /** О чём слать системное уведомление (notify.os). В правило пишется, только если отличается от NOTIFY_OS_DEFAULT. */
   notifyOs: NotifyEvent[];
 };
@@ -102,6 +106,8 @@ export function emptyDraft(): RoutineDraft {
     taskSame: '',
     taskRepeat: 'plan',
     taskClose: 'thing',
+    taskMerge: '',
+    taskMergeModel: '',
     notifyOs: [...NOTIFY_OS_DEFAULT],
   };
 }
@@ -117,6 +123,8 @@ export function taskRule(d: RoutineDraft): TaskRule | undefined {
     ...(d.taskSame ? { same: d.taskSame } : {}),
     ...(d.taskRepeat !== 'plan' ? { on_repeat: d.taskRepeat } : {}),
     ...(close && close !== 'thing' ? { close } : {}),
+    // проверка перед делом — только у дел из события: дела flow заводит сам
+    ...(d.taskFrom === 'event' && !isSchedule(d) && d.taskMerge.trim() ? { merge: d.taskMerge.trim(), ...(d.taskMergeModel.trim() ? { merge_model: d.taskMergeModel.trim() } : {}) } : {}),
     ...(!draftRuns(d) && d.space ? { project: d.space } : {}),
   };
 }
@@ -232,6 +240,8 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
           taskSame: task.same ?? '',
           taskRepeat: task.on_repeat ?? 'plan',
           taskClose: task.close ?? 'thing',
+          taskMerge: task.merge ?? '',
+          taskMergeModel: task.merge_model ?? '',
         }
       : {}),
     notifyOs: [...(spec.notify?.os ?? NOTIFY_OS_DEFAULT)],

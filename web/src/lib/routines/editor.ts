@@ -135,7 +135,7 @@ export type SectionNo = 1 | 2 | 3;
 const SECTION_FIELDS: Record<SectionNo, ReadonlyArray<keyof RoutineDraft>> = {
   1: ['source', 'conds', 'condsMode', 'check', 'checkModel', 'checkAsk', 'schedule', 'missed'],
   2: ['flow', 'input', 'space', 'cwd', 'worktree', 'pauseBefore', 'mode', 'usd', 'perDay', 'parallel', 'model', 'knowledge'],
-  3: ['reply', 'replyTo', 'replyOn', 'taskOn', 'taskKind', 'taskColumn', 'taskFrom', 'taskSame', 'taskRepeat', 'taskClose', 'notifyOs'],
+  3: ['reply', 'replyTo', 'replyOn', 'taskOn', 'taskKind', 'taskColumn', 'taskFrom', 'taskSame', 'taskRepeat', 'taskClose', 'taskMerge', 'taskMergeModel', 'notifyOs'],
 };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);

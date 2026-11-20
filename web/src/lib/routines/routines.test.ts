@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/routines/types';
 import { buildMatch, conditionReady, condValues, incompleteConds, matchFields, opsFor, parseMatch, type Condition } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
-import { buildSpec, draftFromSpec, draftMissing, draftUnsavedConds, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
+import { buildSpec, draftFromSpec, draftMissing, draftUnsavedConds, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify, taskRule } from './spec';
 import { logDetail as detailOf, taskVerdict } from './view';
 import { defaultTitle, replyWhere } from './phrase';
 import {
@@ -548,4 +548,14 @@ test('решение по ожиданию дела: пока оно в пути
   ];
   assert.deepEqual([...decidedDeskKeys(lines)], ['mr:gitlab.com/a/b/1', 'mr:gitlab.com/a/b/2']);
   assert.equal(decidedDeskKeys([]).size, 0);
+});
+
+test('проверка перед делом: в правило — только у дел из события, модель — только с условием; обратно в форму', () => {
+  const d = { ...emptyDraft(), taskOn: true, taskKind: 'Jira', taskMerge: '  есть MR с делом — то же дело ', taskMergeModel: 'sonnet' };
+  assert.deepEqual(taskRule(d), { kind: 'Jira', merge: 'есть MR с делом — то же дело', merge_model: 'sonnet' });
+  assert.equal(taskRule({ ...d, taskFrom: 'flow' })?.merge, undefined);
+  assert.equal(taskRule({ ...d, taskMerge: ' ' })?.merge_model, undefined);
+  const back = draftFromSpec({ title: 'x', when: { source: 'jira' }, mode: 'auto', task: { kind: 'Jira', merge: 'то же дело', merge_model: 'sonnet' } });
+  assert.equal(back.taskMerge, 'то же дело');
+  assert.equal(back.taskMergeModel, 'sonnet');
 });

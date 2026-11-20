@@ -15,7 +15,7 @@ import { openDesk } from '../desk/index.js';
 const A = 'branch:/code/app#feat';
 const S = 'session:s1';
 
-function setup(o: { snapshot?: boolean } = {}) {
+function setup(o: { snapshot?: boolean; /** Проверка перед делом у рутины: ответ — этот ключ. */ merge?: string } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-engine-snap-'));
   const store = new RoutineStore(root);
   const real = openDesk(path.join(root, 'desk'));
@@ -54,12 +54,13 @@ function setup(o: { snapshot?: boolean } = {}) {
     timers: { setInterval: () => 0, clearInterval: () => {}, setTimeout: (fn) => setTimeout(fn, 1), clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout) },
     jiraHosts: () => [],
     desk: () => desk,
+    merge: async () => ({ key: o.merge ?? null, reason: 'то же', costUsd: 0 }),
     log: () => {},
     lock: { who: 'test', deps: { alive: () => false } },
   });
   store.writeSource('proj', { title: 'Проекты', kind: 'snap', config: {} });
   store.setLastCheck('proj', '2026-11-17T09:00:00.000Z');
-  engine.saveRoutine('forgot', { spec: { title: 'Забытое в проектах', when: { source: 'proj' }, mode: 'auto', task: { kind: 'Забытое' } } });
+  engine.saveRoutine('forgot', { spec: { title: 'Забытое в проектах', when: { source: 'proj' }, mode: 'auto', task: { kind: 'Забытое', ...(o.merge ? { merge: 'сессия по той же ветке — то же дело' } : {}) } } });
   const ev = (id: string, key: string, at = '2026-11-17T10:00:01.000Z', extra: Partial<RoutineEvent> = {}): RoutineEvent => ({
     source: 'proj', id, at, title: id, text: `про ${id}`, fields: {}, things: [{ type: key.startsWith('branch:') ? 'branch' : 'session', key, ref: {} }], ...extra,
   });
@@ -195,6 +196,40 @@ test('снимок: закрывает только дела, заведённы
     await t.poll();
     assert.equal((await t.real.get(A))?.closed, undefined);
     assert.equal((await t.real.get(S))?.column, 'done');
+  } finally {
+    t.done();
+  }
+});
+
+test('снимок: дело держит и запись, которую проверка перед делом дописала к нему, — пропала своя запись, дело открыто', async () => {
+  const t = setup({ merge: A });
+  try {
+    await t.poll(t.ev(`${A}@dirty`, A));
+    await t.poll(t.ev(`${A}@dirty`, A), t.ev('ask:s1@1', S));
+    assert.equal(await t.real.get(S), undefined);
+    assert.equal((await t.real.get(A))?.signals.length, 2);
+    // запись ветки пропала, запись сессии (дописанная к делу ветки) осталась — дело ветки не закрывается
+    await t.poll(t.ev('ask:s1@1', S));
+    assert.equal((await t.real.get(A))?.closed, undefined);
+    // пропала и она — закрывается
+    await t.poll();
+    assert.ok((await t.real.get(A))?.closed);
+  } finally {
+    t.done();
+  }
+});
+
+test('снимок: условие проверки перед делом стёрли — дописанная запись всё равно держит и закрывает своё дело', async () => {
+  const t = setup({ merge: A });
+  try {
+    await t.poll(t.ev(`${A}@dirty`, A));
+    await t.poll(t.ev(`${A}@dirty`, A), t.ev('ask:s1@1', S));
+    assert.equal((await t.real.get(A))?.signals.length, 2);
+    t.engine.saveRoutine('forgot', { spec: { title: 'Забытое в проектах', when: { source: 'proj' }, mode: 'auto', task: { kind: 'Забытое' } } });
+    await t.poll(t.ev('ask:s1@1', S));
+    assert.equal((await t.real.get(A))?.closed, undefined);
+    await t.poll();
+    assert.ok((await t.real.get(A))?.closed);
   } finally {
     t.done();
   }

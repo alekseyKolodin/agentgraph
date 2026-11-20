@@ -100,7 +100,7 @@ const SCHEMA = {
     reply: { type: 'object', properties: { to: STR, draft: { type: 'boolean' } }, required: ['to'] },
     task: {
       type: 'object',
-      properties: { kind: STR, from: { type: 'string', enum: ['event', 'flow'] }, column: { type: 'string', enum: ['new', 'plan'] }, close: STR },
+      properties: { kind: STR, from: { type: 'string', enum: ['event', 'flow'] }, column: { type: 'string', enum: ['new', 'plan'] }, close: STR, merge: STR },
       required: ['kind'],
     },
     limits: { type: 'object', properties: { usd: { type: 'number' }, per_day: { type: 'integer' }, parallel: { type: 'integer' } } },
@@ -207,6 +207,8 @@ export async function buildSpec(raw: unknown, ctx: ComposeContext, checkDirFn: (
       ...(str(taskIn.column) ? { column: str(taskIn.column) } : {}),
       ...(str(taskIn.from) ? { from: str(taskIn.from) } : {}),
       ...(str(taskIn.close) ? { close: str(taskIn.close) } : {}),
+      // проверка перед делом — только у дел из события; длинное условие обрезается, а не роняет всё дело
+      ...(str(taskIn.merge) && str(taskIn.from) !== 'flow' ? { merge: str(taskIn.merge).slice(0, 2000) } : {}),
     });
     if (parsed.success) task = parsed.data;
     else adjusted.push('Дело на доске не взято: описание дела не разобралось');

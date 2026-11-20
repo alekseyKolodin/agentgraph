@@ -11,6 +11,7 @@ import { STATUS_LABEL } from '../reporters.js';
 import { SESSION_PROMPT_MAX } from '../sessions.js';
 import type { RunStatus } from '../api-types.js';
 import type { Notice } from '../notify.js';
+import { MERGE_RECENT, mergeCheck, type MergeCandidate, type MergeInput, type MergeResult } from './task-merge.js';
 import { CHECK_MODEL, checkEvent, checkPrompt, eventText, EVENT_FIELDS_MAX, EVENT_TEXT_MAX, type CheckInput, type CheckResult } from './check.js';
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
@@ -103,6 +104,8 @@ export type EngineDeps = {
   fetch?: FetchFn;
   run?: RunCommand;
   check?: (input: CheckInput) => Promise<CheckResult>;
+  /** Проверка перед делом (task.merge); по умолчанию — сессия модели (task-merge.ts). */
+  merge?: (input: MergeInput) => Promise<MergeResult>;
   /** Что-то поменялось (журнал, ожидание, статус источника): сервер шлёт homeBroadcast({ type: 'routines' }). */
   onChange?: () => void;
   /**
@@ -165,6 +168,7 @@ export class RoutineEngine {
   private readonly now: () => Date;
   private readonly timers: Timers;
   private readonly checkFn: (i: CheckInput) => Promise<CheckResult>;
+  private readonly mergeFn: (i: MergeInput) => Promise<MergeResult>;
   private readonly active = new Map<string, Active>();
   /** События запуска, пришедшие раньше, чем startRun вернул id (пауза перед первым блоком): переигрываются после. */
   private readonly early = new Map<string, { at: number; events: RoutineRunEvent[] }>();
@@ -219,6 +223,7 @@ export class RoutineEngine {
       clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
     };
     this.checkFn = deps.check ?? ((i) => checkEvent(i));
+    this.mergeFn = deps.merge ?? ((i) => mergeCheck(i));
     this.startedAt = this.now();
   }
 
@@ -901,13 +906,30 @@ export class RoutineEngine {
       }
     }
     // проверка словами у подошедшего события стоит денег так же: её расход — в строку ожидания или запуска
-    const spent = { ...(checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {}), ...(checkModel ? { checkModel } : {}), ...(unsure ? { unsure: true } : {}) };
+    const spent: Partial<Pick<LogEntry, 'costUsd' | 'checkCostUsd' | 'checkModel' | 'unsure'>> = { ...(checkCost ? { costUsd: checkCost, checkCostUsd: checkCost } : {}), ...(checkModel ? { checkModel } : {}), ...(unsure ? { unsure: true as const } : {}) };
     let deskKey: string | undefined;
     if (task) {
       // «догнать»: дело события простоя уже завелось при приходе. Неуверенное событие засев делом не сделал («не
       // подошло») — его дело заводится сейчас, чтобы ожидание было с делом, как у живого события
+      // «догнать» событие, которое засев дописал к чужому делу (проверка перед делом): запускать по нему нечего
+      if (o.noPut && seededRow?.mergedInto) return this.record(slug, e, 'task', { reason: seededRow.reason, deskKey: seededRow.mergedInto, mergedInto: seededRow.mergedInto, ...spent });
       if (o.noPut && !(unsure && !seededRow)) deskKey = seededRow?.deskKey;
       else {
+        // проверка перед делом: событие — продолжение открытого дела? Тогда только сигнал в то дело, без запуска.
+        // Неуверенный узел «ИИ рутины» спрашивает человека — это сильнее: такое событие идёт своим делом в ожидание
+        const merged = task.merge?.trim() && !unsure ? await this.mergeTarget(slug, task, e) : undefined;
+        if (merged?.costUsd) {
+          checkCost = (checkCost ?? 0) + merged.costUsd;
+          spent.costUsd = checkCost;
+          spent.checkCostUsd = checkCost;
+        }
+        if (merged?.key) {
+          const into = await this.mergeInto(slug, merged.key, e);
+          if (into) {
+            const reason = `добавлено к делу «${clip(into.title, 120)}»${merged.reason ? `: ${merged.reason}` : ''}`;
+            return this.record(slug, e, 'task', { deskKey: into.key, mergedInto: into.key, reason, ...(why ? { why } : {}), ...spent });
+          }
+        }
         try {
           deskKey = await this.putTask(slug, spec, task, e, why);
         } catch (err) {
@@ -948,10 +970,13 @@ export class RoutineEngine {
     return this.launch(slug, spec, e, { human: o.human, quiet: o.quiet, why, checkCost, checkModel, deskKey });
   }
 
-  /** Строка журнала «дело» по этому событию (засев, простой): с ней «догнать» не проверяет и не заводит дело заново. */
+  /**
+   * Строка журнала «дело» по этому событию (засев, простой): с ней «догнать» не проверяет и не заводит дело заново.
+   * Последняя: проверка перед делом может решить по вернувшейся записи иначе, чем в прошлый раз.
+   */
   private seededRow(slug: string, e: RoutineEvent): LogEntry | undefined {
     try {
-      return this.store.logAll(slug).find((x) => x.outcome === 'task' && x.event.source === e.source && x.event.id === e.id);
+      return [...this.store.logAll(slug)].reverse().find((x) => x.outcome === 'task' && x.event.source === e.source && x.event.id === e.id);
     } catch {
       return undefined;
     }
@@ -971,9 +996,31 @@ export class RoutineEngine {
     for (const r of gone.length ? this.taskRoutines(source) : []) {
       const task = taskFromEvent(r.spec)!;
       const held = new Set(events.map((e) => deskKeyOf(task, e).key));
+      // запись, которую проверка перед делом дописала к другому делу, — тоже его запись: пока она в списке, дело
+      // держится; пропала — закрывает его, как своя. По журналу, а не по task.merge: условие могли стереть, а
+      // дописанные записи остались
+      const mergedOf = new Map<string, string>();
+      {
+        let rows: LogEntry[] = [];
+        try {
+          rows = this.store.logAll(r.slug);
+        } catch {
+          rows = [];
+        }
+        // журнал — от старых к новым: последнее решение по записи побеждает (вернулась и завела своё — уже не чужая)
+        for (const x of rows) {
+          if (x.event.source !== source || !x.deskKey) continue;
+          if (x.mergedInto) mergedOf.set(x.event.id, x.mergedInto);
+          else mergedOf.delete(x.event.id);
+        }
+        for (const e of events) {
+          const into = mergedOf.get(e.id);
+          if (into) held.add(into);
+        }
+      }
       const byKey = new Map<string, string[]>();
       for (const g of gone) {
-        const key = deskKeyOf(task, g).key;
+        const key = mergedOf.get(g.id) ?? deskKeyOf(task, g).key;
         if (!held.has(key)) byKey.set(key, [...(byKey.get(key) ?? []), g.id]);
       }
       for (const [key, list] of byKey) {
@@ -1046,15 +1093,7 @@ export class RoutineEngine {
       ...(project ? { project } : {}),
       column: task.column ?? 'new',
       ...(before ? {} : { why: clip(why || e.why || spec.title, 300) }),
-      signal: {
-        source: e.source,
-        at: e.at,
-        routine: slug,
-        ...(e.link ? { link: e.link } : {}),
-        ...(e.author ? { author: e.author } : {}),
-        ...(e.text ? { text: clip(e.text, 1000) } : {}),
-        ...(e.replyTo ? { replyTo: e.replyTo } : {}),
-      },
+      signal: this.taskSignal(slug, e),
       ...(thing ? { thing: deskThing(thing) } : {}),
       onRepeat: task.on_repeat ?? 'plan',
       ...(own ? { close: task.close ?? 'thing' } : {}),
@@ -1064,6 +1103,113 @@ export class RoutineEngine {
     await this.deskApi().put(key, patch, 'routine');
     this.changed();
     return key;
+  }
+
+  /** Сигнал дела по событию: откуда, когда, кто, текст и куда отвечать. */
+  private taskSignal(slug: string, e: RoutineEvent): NonNullable<DeskPatch['signal']> {
+    return {
+      source: e.source,
+      at: e.at,
+      routine: slug,
+      ...(e.link ? { link: e.link } : {}),
+      ...(e.author ? { author: e.author } : {}),
+      ...(e.text ? { text: clip(e.text, 1000) } : {}),
+      ...(e.replyTo ? { replyTo: e.replyTo } : {}),
+    };
+  }
+
+  /**
+   * Проверка перед делом (task.merge): в какое открытое дело дописать событие вместо нового. Модель не зовётся, когда
+   * своё дело события уже есть (обычный сигнал), когда прошлое событие о той же вещи эта рутина уже дописала к открытому
+   * делу (туда же, без модели — ответ не скачет от обновления к обновлению) и когда открытых дел нет. Сбой доски или
+   * модели — undefined: дело заводится как без проверки.
+   */
+  private async mergeTarget(slug: string, task: TaskRule, e: RoutineEvent): Promise<{ key: string | null; title?: string; reason?: string; costUsd?: number } | undefined> {
+    let api: DeskApi;
+    try {
+      api = this.deskApi();
+    } catch (err) {
+      // доска не открылась: решать не по чему, дальше путь как без проверки (putTask сам скажет, что с доской)
+      this.say(`[${slug}] проверка перед делом: доска недоступна: ${msg(err)}`);
+      return undefined;
+    }
+    const open = async (key: string): Promise<DeskItem | undefined> => {
+      try {
+        const item = await api.get(key);
+        return item && !item.closed ? item : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const { key: own } = deskKeyOf(task, e);
+    if (await open(own)) return undefined;
+    // последнее решение по той же главной вещи: дописано к открытому делу — туда же; иначе (своё дело, дело закрыто)
+    // — решаем заново
+    // главная вещь — как в журнале (log): угаданные вещи туда не пишутся
+    const main = e.things?.find((t) => t.ref.guess !== true)?.key;
+    if (main) {
+      let rows: LogEntry[] = [];
+      try {
+        rows = this.store.logAll(slug);
+      } catch {
+        rows = [];
+      }
+      const last = [...rows].reverse().find((x) => x.things?.[0] === main && x.deskKey);
+      const item = last?.mergedInto ? await open(last.mergedInto) : undefined;
+      if (item) return { key: item.key, title: item.title, reason: 'туда же, куда прошлое событие о той же вещи' };
+    }
+    const candidates: MergeCandidate[] = [];
+    const seen = new Set<string>([own]);
+    const add = (item: DeskItem, byThing: boolean) => {
+      if (seen.has(item.key)) return;
+      seen.add(item.key);
+      candidates.push({ key: item.key, kind: item.kind, title: item.title, column: item.column, signals: item.signals, ...(item.thing ? { thing: { type: item.thing.type, ...(item.thing.url ? { url: item.thing.url } : {}) } } : {}), ...(byThing ? { byThing: true } : {}) });
+    };
+    // дела по вещам, которые называет само событие (MR в описании задачи), — первыми
+    for (const t of e.things ?? []) {
+      if (seen.has(t.key)) continue;
+      const item = await open(t.key);
+      if (item) add(item, true);
+    }
+    try {
+      const recent = (await api.list({ open: true })).filter((i) => !i.closed).sort((a, b) => b.movedAt.localeCompare(a.movedAt));
+      for (const item of recent.slice(0, MERGE_RECENT + candidates.length)) add(item, false);
+    } catch (err) {
+      if (!candidates.length) {
+        this.say(`[${slug}] проверка перед делом: доска не отдала дела: ${msg(err)}`);
+        return undefined;
+      }
+    }
+    if (!candidates.length) return undefined;
+    try {
+      const r = await this.mergeFn({ rule: task.merge ?? '', event: e, candidates, ...(task.merge_model?.trim() ? { model: task.merge_model.trim() } : {}) });
+      if (r.error) this.say(`[${slug}] проверка перед делом для «${e.title}» не удалась, дело заводится как обычно: ${r.error}`);
+      const hit = r.key ? candidates.find((c) => c.key === r.key) : undefined;
+      return { key: hit?.key ?? null, ...(hit ? { title: hit.title } : {}), reason: r.reason, costUsd: r.costUsd };
+    } catch (err) {
+      this.say(`[${slug}] проверка перед делом для «${e.title}» не удалась, дело заводится как обычно: ${msg(err)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Сигнал события в выбранное проверкой открытое дело. Дело закрыли или убрали, пока шла проверка, или запись не
+   * удалась — undefined: событие идёт своим делом, как без проверки (в закрытое дело сигнал не кладётся — потерялся бы).
+   */
+  private async mergeInto(slug: string, key: string, e: RoutineEvent): Promise<{ key: string; title: string } | undefined> {
+    try {
+      const api = this.deskApi();
+      const before = await api.get(key);
+      if (!before || before.closed) return undefined;
+      const item = await api.put(key, { signal: this.taskSignal(slug, e), onRepeat: 'keep' }, 'routine');
+      this.changed();
+      // дело закрыли между get и put: сигнал лёг в закрытое дело — событие всё равно идёт своим делом
+      if (item.closed) return undefined;
+      return { key, title: item.title || before.title };
+    } catch (err) {
+      this.say(`[${slug}] событие «${e.title}» не дописано к делу ${key}: ${msg(err)}`);
+      return undefined;
+    }
   }
 
   /** Перенос дела рутины (запуск начат → «В работе», «Не сейчас» → «В плане», «Не то» → закрыто). Сбой доски запуск не валит. */
@@ -2133,7 +2279,25 @@ export class RoutineEngine {
       else if (keys.has(key)) x.task = { action: repeat, key };
       else if (item) x.task = { action: repeat, key, note: 'дело уже есть: сигнал допишется к нему' };
       else {
-        x.task = { action: 'new', key };
+        // проверка перед делом на истории не зовёт модель (это была бы оплата за каждую запись): только подсказка, что
+        // у события есть открытое дело по его вещи — такое событие проверка может дописать туда
+        let note: string | undefined;
+        if (task.merge?.trim()) {
+          for (const t of x.event.things ?? []) {
+            if (t.key === key) continue;
+            let other: Awaited<ReturnType<DeskApi['get']>> | undefined;
+            try {
+              other = await api?.get(t.key);
+            } catch {
+              other = undefined;
+            }
+            if (other && !other.closed) {
+              note = `проверка перед делом решит при приходе: есть открытое дело «${clip(other.title, 80)}»`;
+              break;
+            }
+          }
+        }
+        x.task = { action: 'new', key, ...(note ? { note } : {}) };
         fresh.add(key);
       }
       keys.add(key);
