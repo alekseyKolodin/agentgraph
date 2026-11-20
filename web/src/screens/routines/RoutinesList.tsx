@@ -168,7 +168,10 @@ function Empty() {
   );
 }
 
-/** Подключённые источники: состояние, ошибка, ключ на месте, проверка и удаление. */
+/** Адрес страницы источника. */
+const sourceHref = (slug: string) => `/routines/sources/${encodeURIComponent(slug)}`;
+
+/** Подключённые источники: состояние, ошибка, ключ на месте, проверка и удаление; название и «Настроить» — страница источника. */
 function Sources({ sources, kinds }: { sources: SourceView[]; kinds: SourceKindView[] }) {
   const navigate = useNavigate();
   return (
@@ -243,13 +246,14 @@ function SourceRow({ s, kind }: { s: SourceView; kind: SourceKindView | undefine
     <li className={styles.srow}>
       <Dot tone={tone} />
       <span className={styles.rmain}>
-        <span className={styles.rname}>{s.spec.title}</span>
+        <Link className={styles.rname} to={sourceHref(s.slug)} title={t('Настройки источника «{name}»', { name: s.spec.title })}>{s.spec.title}</Link>
         <span className={styles.rsub}>
           {meta}
           {ss.note && <span className={ss.tone === 'fail' ? styles.bad : ss.tone === 'wait' ? styles.ask : styles.mute}> · {ss.note}</span>}
         </span>
       </span>
       <span className="row">
+        <Link className="btn small ghost" to={sourceHref(s.slug)} title={t('Подключение, частота опроса, поля записи и ответ')}>{t('Настроить')}</Link>
         <button type="button" className="btn small ghost" disabled={busy} title={t('Опросить источник прямо сейчас, как по таймеру: новые события пройдут правила рутин, запустят что должны и попадут в журнал')} onClick={() => void check()}>{t('Проверить сейчас')}</button>
         <button type="button" className="btn small ghost danger" title={t('Удалить источник')} onClick={() => void remove()}>{t('Удалить')}</button>
       </span>

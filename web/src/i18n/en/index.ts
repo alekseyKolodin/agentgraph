@@ -20,12 +20,14 @@ import { routineGraph } from './routine-graph';
 import { assistant } from './assistant';
 import { kinds } from './kinds';
 import { sources } from './sources';
+import { sourcePage } from './source-page';
+import { routineEditor } from './routine-editor';
+import { routineNew } from './routine-new';
 import { deskTop } from './desk-top';
 import { deskMonth } from './desk-month';
 import { deskDetail } from './desk-detail';
 import { graph } from './graph';
 import { flowRun } from './flow-run';
 
-export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...deskTop, ...deskMonth, ...deskDetail, ...graph, ...flowRun, ...flowEdit };
+export const EN: Record<string, string> = { ...kinds, ...common, ...shell, ...home, ...flow, ...launch, ...run, ...runart, ...misc, ...chat, ...ai, ...fix, ...compose, ...session, ...space, ...teamwork, ...routines, ...routineGraph, ...assistant, ...sources, ...sourcePage, ...routineEditor, ...routineNew, ...deskTop, ...deskMonth, ...deskDetail, ...graph, ...flowRun, ...flowEdit };
 import { flowEdit } from './flow-edit';
-

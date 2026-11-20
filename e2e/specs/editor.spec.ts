@@ -1,7 +1,7 @@
 // Редактор рутины (SPEC §6): «Проверить на истории» по несохранённому правилу, расхождение с прошлым ответом и «Учесть»,
 // включение черновика, правка YAML вручную, удаление источника, который используют рутины (409 в интерфейсе).
 import { expect, test } from '../support/env.js';
-import { openNode } from '../support/ui.js';
+import { openExtras, section } from '../support/ui.js';
 
 test.beforeEach(async ({ e2e }) => {
   await e2e.slackSource();
@@ -15,24 +15,23 @@ test('проверка на истории: по последним событи
   await e2e.saveRoutine('bug', e2e.bugRoutine({ enabled: false }));
 
   await page.goto('/routines/bug');
-  const history = page.getByRole('region', { name: 'Проверка на истории' });
-  await expect(history).toContainText('Проверка на последних 3 событиях Slack · #bugs');
-  await expect(history).toContainText('Запустилось бы 1 из 3');
+  const history = page.getByRole('complementary', { name: 'Проверка на истории' });
+  await expect(history).toContainText('Проверка на 3 последних событиях');
+  await expect(history.getByText('1 из 3', { exact: true })).toBeVisible();
   // оценка по частоте подходящих событий: история короче суток считается как сутки
   await expect(history).toContainText('≈ 7 запусков в неделю');
   await expect(history.getByText('Падает оплата', { exact: true })).toBeVisible();
-  await history.getByRole('button', { name: 'Показать 2 пропущенных' }).click();
+  await history.getByRole('button', { name: 'Показать все 3' }).click();
   await expect(history.getByText('Привет всем [nomatch]')).toBeVisible();
   // исходные события не запускались и в журнал не попали
   expect(await e2e.log('bug')).toEqual([]);
 
   // убрать проверку словами в форме: результат устарел, «Проверить снова» берёт правило из формы
   const calls = e2e.checkCalls().length;
-  await openNode(page, 'ИИ рутины');
-  await page.locator('#cond').fill('');
-  await expect(history).toContainText('правило поменялось — проверь снова');
+  await section(page, 'Когда').getByLabel('Условие для ИИ').fill('');
+  await expect(history).toContainText('Правило поменялось после проверки: проверь снова');
   await history.getByRole('button', { name: 'Проверить снова' }).click();
-  await expect(history).toContainText('Запустилось бы 3 из 3');
+  await expect(history.getByText('3 из 3', { exact: true })).toBeVisible();
   expect(e2e.checkCalls().length).toBe(calls);
   // файл правила не тронут
   expect((await e2e.routine('bug')).spec.when).toMatchObject({ check: 'Это баг-репорт: описано, что сломалось.' });
@@ -56,7 +55,7 @@ test('расхождение с прошлым ответом: «Это не б�
   await e2e.logEntry('bug', 'rejected', 'Цвет');
 
   await page.goto('/routines/bug');
-  const history = page.getByRole('region', { name: 'Проверка на истории' });
+  const history = page.getByRole('complementary', { name: 'Проверка на истории' });
   await expect(history).toContainText('С твоими прошлыми ответами расходится 1 событие.');
   await expect(history).toContainText('Ты отметил это как неподходящее, правило запустило бы.');
   const before = e2e.checkCalls().length;
@@ -69,7 +68,8 @@ test('расхождение с прошлым ответом: «Это не б�
 test('YAML вручную: правка сохраняется в файл и форма перечитывает её; ошибка схемы — с причинами', async ({ page, e2e }) => {
   await e2e.saveRoutine('bug', e2e.bugRoutine());
   await page.goto('/routines/bug');
-  await page.getByRole('button', { name: /Открыть YAML/ }).click();
+  await page.getByRole('button', { name: 'Ещё: YAML, удалить' }).click();
+  await page.getByRole('menuitem', { name: 'Открыть YAML' }).click();
   const yaml = page.getByRole('textbox', { name: 'YAML' });
   const text = await yaml.inputValue();
   expect(text).toMatch(/title: "?Баг в #bugs → фикс"?/);
@@ -77,8 +77,9 @@ test('YAML вручную: правка сохраняется в файл и ф
   // ошибка схемы: неизвестный режим
   await yaml.fill(text.replace('mode: until_pause', 'mode: sometimes'));
   await page.getByRole('button', { name: 'Сохранить YAML' }).click();
-  // текст ошибки схемы под полем, а не сам YAML (в textarea тоже есть «mode:»)
-  await expect(page.getByRole('alert').filter({ hasText: /mode: .*(Invalid|ожида)/ })).toBeVisible();
+  // текст ошибки схемы под полем (описание поля, aria-describedby), а не сам YAML (в textarea тоже есть «mode:»)
+  await expect(yaml).toHaveAccessibleDescription(/mode: .*(Invalid|ожида)/);
+  await expect(yaml).toHaveAttribute('aria-invalid', 'true');
   expect((await e2e.routine('bug')).spec.mode).toBe('until_pause');
 
   await yaml.fill(text.replace(/title: .*/, 'title: Баги из YAML').replace('mode: until_pause', 'mode: suggest'));
@@ -87,22 +88,21 @@ test('YAML вручную: правка сохраняется в файл и ф
   const r = await e2e.routine('bug');
   expect(r.spec).toMatchObject({ title: 'Баги из YAML', mode: 'suggest' });
   expect(r.yaml).toContain('title: Баги из YAML');
-  // форма перечитала правило: «перед запуском» выбрано
-  await openNode(page, 'Ждать меня');
-  await expect(page.getByRole('group', { name: 'Когда ждать меня' }).getByRole('button', { name: 'перед запуском' })).toHaveAttribute('aria-pressed', 'true');
+  // форма перечитала правило: «Запускать: после моего «да»» выбрано
+  await expect(section(page, 'Что сделать').getByRole('group', { name: 'Запускать' }).getByRole('button', { name: 'после моего «да»' })).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('правка формы на включённой рутине: «Сохранить» пишет файл, лимиты и куда отвечать', async ({ page, e2e }) => {
   await e2e.telegramSource();
   await e2e.saveRoutine('bug', e2e.bugRoutine());
   await page.goto('/routines/bug');
-  await openNode(page, 'ИИ рутины');
-  await page.locator('#cond').fill('Это баг в оплате');
-  await openNode(page, 'Запустить flow');
-  await page.getByLabel('Запусков в день').fill('3');
-  await page.getByLabel('Одновременно').fill('1');
-  await openNode(page, 'Ответить');
-  await page.getByLabel('Куда писать').selectOption('tg-bot');
+  await section(page, 'Когда').getByLabel('Условие для ИИ').fill('Это баг в оплате');
+  await openExtras(page);
+  await section(page, 'Что сделать').getByLabel('Запусков в день').fill('3');
+  await section(page, 'Что сделать').getByLabel('Одновременно').fill('1');
+  // куда отвечать — список в строке ответа «Как узнаю»
+  await section(page, 'Как узнаю').getByRole('button', { name: /^Куда отвечать/ }).click();
+  await page.getByRole('option').filter({ hasText: 'Telegram' }).click();
   await expect(page.getByText('есть несохранённые изменения')).toBeVisible();
   await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
   await expect(page.getByText('есть несохранённые изменения')).toHaveCount(0);

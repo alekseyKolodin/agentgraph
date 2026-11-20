@@ -112,7 +112,7 @@ import {
 import type { SessionReviewEstimate, SessionReviewState, SpaceDraftEstimate, SpaceGroupsEstimate } from './api-types.js';
 import { readReviewStore, REVIEW_MODEL, reviewedNow, reviewEstimate, reviewItems, reviewNow, reviewRunning, storedReply } from './session-review.js';
 import { Updater, type Restart } from './update.js';
-import { RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
+import { notifies, RoutineEngine, type EngineDeps, type RoutineRunEvent, type RoutineRunRequest } from './routines/engine.js';
 import { routinesRoute } from './routines/routes.js';
 import { deskStorage, deskStore } from './desk/index.js';
 import { reconcileLock, startReconcile, type ReconcileLoop, type WatchFn } from './desk/reconcile.js';
@@ -297,6 +297,8 @@ const deskEveryMs = (): number => Math.max(60_000, Math.min(5 * 60_000, ...watch
 let routineEngine: RoutineEngine | null = null;
 /** Запуски, начатые движком рутин: только их события уходят в движок (продолжение и повтор копируют source, но не это). */
 const routineRuns = new Set<string>();
+/** Запуски рутины, которым notify.os не велит говорить о вопросе агента и паузе (нет 'wait'). */
+const quietRoutineRuns = new Set<string>();
 
 /** Движок рутин с зависимостями сервера: запуск flow через startRun, пауза и стоп — как кнопки UI. */
 function routines(srv: ServerOptions): RoutineEngine {
@@ -385,7 +387,7 @@ async function startRoutineRun(r: RoutineRunRequest, srv: ServerOptions): Promis
     ...(space ? { space: space.slug, saveState: true, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
     ...(knowledge.length ? { knowledge } : {}),
     ...(r.pauseBefore.length ? { pauseBefore: r.pauseBefore } : {}),
-    routineRun: true,
+    routineRun: { wait: notifies(rs, 'wait') },
   }, srv);
 }
 
@@ -1458,8 +1460,11 @@ function startRun(
     title?: string;
     /** Запуск рутины: пауза перед этими блоками (опция раннера pauseBefore). */
     pauseBefore?: string[];
-    /** Запуск начал движок рутин: его пауза и конец уходят в движок (routineRuns). */
-    routineRun?: boolean;
+    /**
+     * Запуск начал движок рутин: его пауза и конец уходят в движок (routineRuns). wait — notify.os рутины разрешает
+     * уведомлять о вопросе агента и его паузе (notifies(spec, 'wait')).
+     */
+    routineRun?: { wait: boolean };
     /**
      * Рабочая папка — пустая папка с этим именем (runWorkdir(id)/<имя>), а не cwd: черновик Teamwork без репо кода (spec
      * §14). Имя — слаг проекта: по нему список запусков группирует их, как по папке проекта.
@@ -1483,7 +1488,10 @@ function startRun(
   }
   const { attachments: _files, attachmentsFrom: _from, emptyCwd: _empty, routineRun, ...runOpts } = o;
   // до launchRun: пауза перед первым блоком может прийти раньше, чем startRun вернёт id
-  if (routineRun) routineRuns.add(path.basename(runDir));
+  if (routineRun) {
+    routineRuns.add(path.basename(runDir));
+    if (!routineRun.wait) quietRoutineRuns.add(path.basename(runDir));
+  }
   // имя придумывает модель, кроме продолжения: оно берёт имя исходного запуска, а без него остаётся с именем flow
   const nameRun = o.continueFrom ? undefined : (input: string, signal: AbortSignal) => pickRunTitle(input, { flow: spec.name, source: o.source }, { signal });
   // запуск из задачи Teamwork (и его продолжение или повтор): «К работе» → «В работе», исполнитель, запись в local.json.
@@ -1545,7 +1553,7 @@ function launchRun(
       // этап сам попросил паузу (pause_marker): она — его, и «Возобновить» родителя её не снимет — ждёт ответа здесь
       delete lr.pausedByParent;
       const reason = lr.report?.pauseReason;
-      if (reason) notifyPause(srv, id, runLabel(spec.name, lr.report?.title), reason);
+      if (reason && !quietRoutineRuns.has(id)) notifyPause(srv, id, runLabel(spec.name, lr.report?.title), reason);
     },
     takeNotes: () => {
       const all = lr.notes;
@@ -1605,6 +1613,7 @@ function launchRun(
         runId: id,
         flow: spec.name,
         question: e.type === 'question' ? e.question : undefined,
+        quiet: e.type === 'question' && quietRoutineRuns.has(id) ? true : undefined,
         status: e.type === 'end' ? e.report.status : undefined,
         costUsd: e.type === 'end' ? e.report.totalCostUsd : e.type === 'title' || e.type === 'digest' ? e.totalCostUsd : undefined,
         title: e.type === 'title' ? e.title : undefined,
@@ -1614,9 +1623,11 @@ function launchRun(
       });
       // конец дочернего — не конец того, что запускал пользователь: о нём скажет конец родителя; конец запуска рутины —
       // движок рутин (routines → notify): заголовком событие, успешный конец молчит
-      if (e.type === 'question' || (e.type === 'end' && !parent && !routineRuns.has(id))) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
+      // вопрос агента в запуске рутины — по её notify.os ('wait'), как пауза перед блоком
+      if ((e.type === 'question' && !quietRoutineRuns.has(id)) || (e.type === 'end' && !parent && !routineRuns.has(id))) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
+    if (e.type === 'end') quietRoutineRuns.delete(id);
     // рутины: пауза перед блоком (pauseBefore) — карточка ожидания, конец — журнал, ответ и очередь
     if (!parent && routineRuns.has(id)) {
       const toEngine = (ev: RoutineRunEvent) => routineEngine?.onRunEvent(id, ev).catch((err) => console.error(`[рутины] ${errMsg(err)}`));
@@ -1682,6 +1693,8 @@ function launchRun(
   const digest = (input: Parameters<typeof writeDigest>[0], signal: AbortSignal) => writeDigest(input, { signal });
   // дочерний запуск блока-вызова — такой же живой запуск; пока он идёт, пауза и остановка этого доходят до него
   const runChild = (childSpec: FlowSpec, co: RunOptions): Promise<RunReport> => {
+    // вопросы и пауза дочернего запуска рутины молчат так же, как у родителя (notify.os без 'wait')
+    if (quietRoutineRuns.has(id)) quietRoutineRuns.add(path.basename((co as RunOptions & { runDir: string }).runDir));
     const c = launchRun(childSpec, co as RunOptions & { runDir: string }, srv, lr, deps);
     lr.child = c.id;
     if (lr.pause) pauseRun(c.id);

@@ -68,7 +68,8 @@ export function useHomeEvents(): void {
     const text = q.questions.map((x) => x.question).join(' · ');
     const title = t('{flow}: вопрос от «{phase}»', { flow: e.flow, phase: q.title || q.phase });
     if (tabAway()) {
-      if (notifies()) {
+      // запуск рутины с notify.os без 'wait' — системного уведомления нет (сервер тоже молчит)
+      if (notifies() && !e.quiet) {
         const n = new Notification(title, { body: text, tag: q.id });
         n.onclick = () => {
           window.focus();

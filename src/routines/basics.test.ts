@@ -19,6 +19,25 @@ test('правило из YAML проходит схему, лишнее пол�
   assert.ok(bad.problems.some((p) => p.startsWith('run')), bad.problems.join('\n'));
 });
 
+test('условие на поля без поля или значения рутину не роняет и не применяется; неверное — ошибка с путём, а не «Invalid input»', () => {
+  const soft = parseRoutineYaml('title: X\nwhen:\n  source: slack\n  match:\n    - { field: "", value: bugs }\n    - { field: channel, value: }\n    - { field: title }\n    - { field: channel, value: bugs }\nrun: { flow: demo }\nmode: auto\n');
+  assert.deepEqual(soft.problems, []);
+  const when = soft.spec!.when as Extract<RoutineSpec['when'], { source: string }>;
+  const e: RoutineEvent = { source: 'slack', id: '1', at: '', title: 't', text: '', fields: { channel: 'bugs' } };
+  // применяется только дописанное условие
+  assert.equal(matchRule(when.match, e).ok, true);
+  assert.equal(matchRule(when.match, { ...e, fields: { channel: 'random' } }).ok, false);
+  // старый словарь с пустым значением — тоже не применяется
+  assert.deepEqual(parseRoutineYaml('title: X\nwhen: { source: slack, match: { title: "", channel: } }\nrun: { flow: demo }\nmode: auto\n').problems, []);
+  const op = parseRoutineYaml('title: X\nwhen: { source: slack, match: [{ field: channel, op: like, value: bugs }] }\nrun: { flow: demo }\nmode: auto\n');
+  assert.deepEqual(op.problems, ['when.match.0.op: op условия — eq, ne, contains, gt или lt']);
+  const val = parseRoutineYaml('title: X\nwhen: { source: slack, match: [{ field: channel, value: { a: 1 } }] }\nrun: { flow: demo }\nmode: auto\n');
+  assert.equal(val.problems.length, 1);
+  assert.match(val.problems[0], /^when\.match\.0\.value: значение условия/);
+  const shape = parseRoutineYaml('title: X\nwhen: 5\nrun: { flow: demo }\nmode: auto\n');
+  assert.ok(shape.problems.every((p) => !/Invalid input/.test(p)), shape.problems.join('\n'));
+});
+
 test('битый YAML — одна проблема «не читается», а не исключение', () => {
   const r = parseRoutineYaml('title: [');
   assert.equal(r.spec, undefined);

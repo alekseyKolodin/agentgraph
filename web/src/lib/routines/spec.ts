@@ -1,7 +1,7 @@
 // Сборка RoutineSpec из шагов «Новой рутины» и обратно — для редактора: источник или расписание, условия и проверка
 // словами, flow с пространством, папкой и «ждать меня», ответ наружу (шаг 4), лимиты. Слаг файла — из названия.
-import type { MatchField, ReplySpec, RoutineMode, RoutineSpec, TaskRule, WhenSchedule, WhenSource } from '@server/routines/types';
-import { buildMatch, parseMatch, type Condition } from './match';
+import type { MatchField, MatchMode, NotifyEvent, ReplySpec, RoutineMode, RoutineSpec, TaskRule, WhenSchedule, WhenSource } from '@server/routines/types';
+import { buildMatch, incompleteConds, parseMatch, type Condition } from './match';
 import { fromCron, toCron, type ScheduleChoice, DEFAULT_TIME } from './schedule';
 
 /** Шаг 1 «Расписание»: не слаг источника (у источника слаг из [a-z0-9-], двоеточия в нём нет). */
@@ -9,7 +9,6 @@ export const SCHEDULE = ':schedule';
 
 /** Шаг 4: «После моей проверки» (по умолчанию), «Сразу», «Не сообщать». */
 export type ReplyChoice = 'draft' | 'auto' | 'off';
-export const REPLY_CHOICES: ReplyChoice[] = ['draft', 'auto', 'off'];
 
 export type RoutineDraft = {
   title: string;
@@ -19,6 +18,8 @@ export type RoutineDraft = {
   /** Слаг источника или SCHEDULE; '' — ещё не выбран. */
   source: string;
   conds: Condition[];
+  /** Сочетание условий (when.match_mode): all — все, any — хватает одного. В правило пишется только any. */
+  condsMode: MatchMode;
   check: string;
   /** Модель узла «ИИ рутины» (when.model); '' — по умолчанию. Пишется в правило, только когда у узла есть условие. */
   checkModel: string;
@@ -53,7 +54,16 @@ export type RoutineDraft = {
   taskRepeat: 'plan' | 'keep';
   /** 'thing' | 'never' | условие словами. */
   taskClose: string;
+  /** О чём слать системное уведомление (notify.os). В правило пишется, только если отличается от NOTIFY_OS_DEFAULT. */
+  notifyOs: NotifyEvent[];
 };
+
+/** Уведомления рутины без настройки (как NOTIFY_OS_DEFAULT в src/routines/engine.ts): всё, кроме старта. */
+export const NOTIFY_OS_DEFAULT: readonly NotifyEvent[] = ['wait', 'end', 'fail'];
+/** Порядок пунктов настройки уведомлений. */
+export const NOTIFY_EVENTS: readonly NotifyEvent[] = ['start', 'wait', 'end', 'fail'];
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x));
 
 /** Закрытие дела условием словами: в форме — отдельное поле (taskClose хранит сам текст). */
 export const isCloseText = (close: string): boolean => close !== 'thing' && close !== 'never';
@@ -64,6 +74,7 @@ export function emptyDraft(): RoutineDraft {
     enabled: false,
     source: '',
     conds: [],
+    condsMode: 'all',
     check: '',
     checkModel: '',
     checkAsk: true,
@@ -91,6 +102,7 @@ export function emptyDraft(): RoutineDraft {
     taskSame: '',
     taskRepeat: 'plan',
     taskClose: 'thing',
+    notifyOs: [...NOTIFY_OS_DEFAULT],
   };
 }
 
@@ -139,7 +151,8 @@ export function buildSpec(d: RoutineDraft, fields: MatchField[]): RoutineSpec {
     const match = buildMatch(d.conds, fields);
     // модель и «спросить меня» — настройки узла «ИИ рутины»: без условия словами узла нет, и в правило они не идут
     const node = d.check.trim() ? { check: d.check.trim(), ...(d.checkModel.trim() ? { model: d.checkModel.trim() } : {}), ...(d.checkAsk ? { ask: true } : {}) } : {};
-    when = { source: d.source, ...(match ? { match } : {}), ...node };
+    // «любое» — только когда сочетать есть что: у одного условия режим скрыт в форме и в правило не уходит
+    when = { source: d.source, ...(match ? { match } : {}), ...(match && match.length > 1 && d.condsMode === 'any' ? { match_mode: 'any' as const } : {}), ...node };
   }
   const mode = d.mode;
   const limits = { usd: num(d.usd), per_day: num(d.perDay), parallel: num(d.parallel) };
@@ -167,6 +180,8 @@ export function buildSpec(d: RoutineDraft, fields: MatchField[]): RoutineSpec {
     reply: runs ? replySpec(d.reply, d.replyTo, d.replyOn) : { to: 'none' },
     ...(hasLimits ? { limits: Object.fromEntries(Object.entries(limits).filter(([, v]) => v !== undefined)) } : {}),
     ...(task ? { task } : {}),
+    // по умолчанию не пишется: старые правила и новые без настройки ведут себя одинаково
+    ...(sameSet([...new Set(d.notifyOs)], NOTIFY_OS_DEFAULT) ? {} : { notify: { os: NOTIFY_EVENTS.filter((x) => d.notifyOs.includes(x)) } }),
   };
 }
 
@@ -186,6 +201,7 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
     ...(spec.draft ? { draft: true } : {}),
     source: sched ? SCHEDULE : w.source,
     conds: sched ? [] : parseMatch(w.match),
+    condsMode: !sched && w.match_mode === 'any' ? 'any' : 'all',
     check: sched ? '' : (w.check ?? ''),
     checkModel: sched ? '' : (w.model ?? ''),
     // у правила с условием — как записано (старые правила без поля не спрашивают); узла ещё нет — новый будет спрашивать
@@ -218,6 +234,7 @@ export function draftFromSpec(spec: RoutineSpec): RoutineDraft {
           taskClose: task.close ?? 'thing',
         }
       : {}),
+    notifyOs: [...(spec.notify?.os ?? NOTIFY_OS_DEFAULT)],
   };
 }
 
@@ -233,12 +250,22 @@ export function draftMissing(d: RoutineDraft): Array<'source' | 'flow' | 'block'
   return out;
 }
 
+/**
+ * Строки условий, которые не сохранятся, пока не дописаны (индексы d.conds): остальное правило сохраняется, а эти
+ * строки buildSpec пропускает. draftMissing их не считает — иначе одна пустая строка держала бы всё сохранение. Экран
+ * подсвечивает строки и не пишет «черновик сохранён» без оговорки, пока список не пуст: spec с такой строкой и без неё
+ * одинаков, и по сравнению spec её не видно.
+ */
+export function draftUnsavedConds(d: Pick<RoutineDraft, 'source' | 'conds'>): number[] {
+  return isSchedule(d) ? [] : incompleteConds(d.conds);
+}
+
 const TRANSLIT: Record<string, string> = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r',
   с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 /** Адреса экранов /routines/new и /routines/connect: такие слаги заняли бы маршрут. */
-const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant']);
+const RESERVED = new Set(['new', 'connect', 'waits', 'catchup', 'sources', 'recipes', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant', 'assistant-draft', 'mcp-tools']);
 
 /** Слаг файла из названия: [a-z0-9-], не длиннее 48, свободный среди taken («-2», «-3»…). */
 export function slugify(title: string, taken: Iterable<string> = []): string {

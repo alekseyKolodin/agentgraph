@@ -292,16 +292,37 @@ export type DirCheck = {
 
 // ---------------------------------------------------------------- правило (файл ~/.agentgraph/routines/<slug>.yaml)
 
+/** Значение условия на поле: одно или список (у eq и contains — любое из, у ne — ни одно из; gt и lt берут первое). */
+export type MatchValue = string | number | boolean | Array<string | number>;
+
+/** Оператор условия: eq — равно, ne — не равно, contains — содержит, gt / lt — больше / меньше (числа). */
+export type MatchOp = 'eq' | 'ne' | 'contains' | 'gt' | 'lt';
+
 /**
- * Условие на поле без модели. Ключ — поле события (title, text, author, link) или путь в fields (channel, labels.0, duration).
- * Суффикс ключа — оператор: без суффикса — равно (строки без учёта регистра; массив значений — любое из), `~` — содержит,
- * `!` — не равно, `>` `<` — числа. Поле-массив совпадает, если совпал хоть один элемент.
+ * Условие на поле без модели (новый формат when.match — список). field — поле события (title, text, author, link) или
+ * путь в fields (channel, labels.0, duration). Строки сравниваются без учёта регистра; поле-массив совпадает, если совпал
+ * хоть один элемент. Пустое значение ('' или []) — условие не дописано: движок его не применяет. Нет op — eq.
  */
-export type MatchRule = Record<string, string | number | boolean | Array<string | number>>;
+export type MatchCondition = { field: string; op?: MatchOp; value: MatchValue };
+
+/**
+ * Старый формат when.match — словарь: ключ — поле, суффикс ключа — оператор (без суффикса — равно, `~` — содержит,
+ * `!` — не равно, `>` `<` — числа). Читается как раньше; пишется уже список (MatchCondition[]): в словаре два условия на
+ * одно поле с одним оператором не помещаются.
+ */
+export type MatchMap = Record<string, MatchValue>;
+
+/** when.match в любом из форматов. */
+export type MatchRule = MatchCondition[] | MatchMap;
+
+/** Как сочетать условия на поля: all — все (по умолчанию), any — хотя бы одно. */
+export type MatchMode = 'all' | 'any';
 
 export type WhenSource = {
   source: string;
   match?: MatchRule;
+  /** Сочетание условий when.match: any — хватает одного; нет — все (all). */
+  match_mode?: MatchMode;
   /** Узел «ИИ рутины» (проверка словами): модель читает текст события по этому условию. Необязательно. */
   check?: string;
   /** Модель узла «ИИ рутины»: псевдоним (haiku, sonnet, opus) или id модели. Нет — модель по умолчанию (CHECK_MODEL, haiku). */
@@ -356,7 +377,18 @@ export type RoutineSpec = {
   limits?: { usd?: number; per_day?: number; parallel?: number };
   /** Рутина заводит дела (SPEC этап 3, блок task). С task поле run необязательно: без него событие только заводит дело. */
   task?: TaskRule;
+  /** Системные уведомления по рутине. Нет — wait, end и fail. */
+  notify?: RoutineNotify;
 };
+
+/**
+ * О чём рутина шлёт системное уведомление: start — запуск начался (не по кнопке человека); wait — событие ждёт решения
+ * («запустить?») или запуск встал перед блоком; end — запуск кончился, ответ-черновик ждёт проверки; fail — запуск
+ * кончился не успехом (ошибка, бюджет, предел итераций). Уведомления об источниках (молчит, не отвечает) от этого не зависят.
+ */
+export type NotifyEvent = 'start' | 'wait' | 'end' | 'fail';
+/** os нет — wait, end и fail (поведение до появления настройки, старт молчит); [] — рутина молчит. */
+export type RoutineNotify = { os?: NotifyEvent[] };
 
 /**
  * Блок task правила рутины. from: event — событие и есть дело; flow — дела заводит flow инструментом desk_put.
@@ -441,6 +473,8 @@ export type LogExplain = {
   schedule: boolean;
   /** Условия на поля по текущему правилу: got — что было в событии ('' — поля нет). */
   conditions: Array<{ key: string; op: string; want: string; got: string; ok: boolean }>;
+  /** Условия сочетаются через «или» (when.match_mode: any); нет — все должны пройти. */
+  matchMode?: 'any';
   /** «Если» текущего правила; нет — запускается всё, что прошло условия. */
   check?: string;
   /** Ответ проверки словами при срабатывании (why или reason строки). */
@@ -572,6 +606,23 @@ export type HistoryCheck = {
   estimate?: { runsPerWeek: number; usdPerWeek?: number };
   /** Что получит flow на одном настоящем событии (первом, которое запустило бы рутину, иначе самом свежем). task нет — задача возьмётся из input flow. */
   preview?: { eventId: string; task?: string; event: string };
+  /** Воронка для графа: «30 → 27 → 25 → 14». Нет — проверка старая или рутина по расписанию. */
+  funnel?: HistoryFunnel;
+};
+
+/**
+ * Сколько событий проверки на истории дошло до каждого шага. total — все события. fields — условия на поля в порядке
+ * правила (пустые не в счёте): при match_mode all passed — сколько прошли это условие и все до него; при any — сколько
+ * прошли это условие само по себе (подряд они не сужают). matched — прошли условия на поля целиком. check — после «ИИ
+ * рутины»: дошли бы до запуска или ожидания (started и waiting, включая «не уверен, спрошу»; повторы и ошибки проверки
+ * — нет); нет — у правила нет условия словами.
+ */
+export type HistoryFunnel = {
+  total: number;
+  mode: MatchMode;
+  fields: Array<{ field: string; op: MatchOp; passed: number }>;
+  matched: number;
+  check?: number;
 };
 
 /**

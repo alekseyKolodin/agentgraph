@@ -3,7 +3,7 @@
 // `routines` общего потока /api/events (useHomeEvents): оно снимает все ключи под routineKeys.all.
 import { useQuery } from '@tanstack/react-query';
 import type {
-  ComposeView, ConnectorBuildView, DirCheck, DraftView, EventDetail, Feedback, FlowTemplate, FormDraft, HistoryCheck, HistoryRun, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceEvents, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
+  ConnectorBuildView, DirCheck, DraftView, EventDetail, Feedback, FlowTemplate, FormDraft, HistoryCheck, HistoryRun, LogAsk, LogEntry, LogExplain, LogOutcome, LogRecheck, McpServicesView, RoutineSpec, RoutineView, RoutineWait, RoutinesOverview, SourceCheckNow, SourceEvents, SourceKindView, SourceSpec, SourceTestResult, SourceView, WaitAction,
 } from '@server/routines/types';
 import type { Recipe } from '@server/routines/kind';
 import type { ProfileResponse } from '@server/api-types';
@@ -24,7 +24,6 @@ export const routineKeys = {
   events: (source: string) => ['routines', 'events', source] as const,
   recipes: ['routines', 'recipes'] as const,
   draft: (id: string) => ['routines', 'draft', id] as const,
-  compose: (id: string) => ['routines', 'compose', id] as const,
   mcp: ['routines', 'mcp-tools'] as const,
   build: (id: string) => ['routines', 'connector-build', id] as const,
 };
@@ -56,8 +55,14 @@ export const askLog = (slug: string, id: string, question: string) => api<LogAsk
 export const recheckLog = (slug: string, id: string, check: string, node?: { model?: string; ask?: boolean }) =>
   api<LogRecheck>('POST', `${BASE}/${enc(slug)}/log/${enc(id)}/recheck`, { check, ...(node ?? {}) });
 export const checkHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryCheck>('POST', `${BASE}/${enc(slug)}/history`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
-/** Проверка на истории с ходом: начать (идёт такая же — вернётся она) и спрашивать, что уже проверено. */
-export const startHistory = (slug: string, spec?: RoutineSpec, limit?: number) => api<HistoryRun>('POST', `${BASE}/${enc(slug)}/history/runs`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}) });
+/** Проверка на истории черновика «Новой рутины» (до сохранения): тот же путь, что у рутины, с этим именем раздела. */
+export const FORM_DRAFT_HISTORY = 'form-draft';
+/**
+ * Проверка на истории с ходом: начать (идёт такая же — вернётся она) и спрашивать, что уже проверено. tab — вкладка
+ * черновика «Новой рутины»: проверка соседней вкладки не останавливается.
+ */
+export const startHistory = (slug: string, spec?: RoutineSpec, limit?: number, tab?: string) =>
+  api<HistoryRun>('POST', `${BASE}/${enc(slug)}/history/runs`, { ...(spec ? { spec } : {}), ...(limit ? { limit } : {}), ...(tab ? { tab } : {}) });
 export const fetchHistoryRun = (slug: string, id: string) => api<HistoryRun>('GET', `${BASE}/${enc(slug)}/history/runs/${enc(id)}`);
 /** Готовый flow шаблона рутины (templates/flows) у пользователя: нет — сервер копирует его в flows/Мои дела. */
 export const ensureTemplateFlow = (name: string) => api<{ flow: string; copied: boolean }>('POST', `${BASE}/flow-templates/${enc(name)}`, {});
@@ -162,24 +167,12 @@ export function useDraft(id: string | null) {
   });
 }
 
-/** Рутина по описанию словами: модель собирает черновик, ничего не сохраняется. Пока она работает, опрос раз в 1.5 с. */
-/** model — выбор человека в шапке помощника; '' — модель по умолчанию. */
-export const startCompose = (description: string, model = '') => api<ComposeView>('POST', `${BASE}/compose`, { description, ...(model ? { model } : {}) });
-
 // черновик формы «Новая рутина» лежит на сервере: уход на другой экран его не стирает (docs/ASSISTANTS.md §3)
 export const fetchFormDraft = async () => (await api<{ draft: FormDraft | null }>('GET', `${BASE}/form-draft`)).draft;
 /** keepalive — сохранение на уходе со страницы (клик по ссылке): запрос должен дойти, даже если экран уже сменился. */
 export const saveFormDraft = (data: unknown, keepalive = false) => api<{ at: string }>('PUT', `${BASE}/form-draft`, { data }, undefined, keepalive);
-export const dropFormDraft = () => api<{ ok: true }>('DELETE', `${BASE}/form-draft`);
-export const cancelCompose = (id: string) => api<{ ok: true }>('DELETE', `${BASE}/compose/${enc(id)}`);
-export function useCompose(id: string | null) {
-  return useQuery({
-    queryKey: routineKeys.compose(id ?? ''),
-    queryFn: () => api<ComposeView>('GET', `${BASE}/compose/${enc(id!)}`),
-    enabled: Boolean(id),
-    refetchInterval: (q) => (q.state.data?.state === 'working' ? 1500 : false),
-  });
-}
+/** to — рутина, сохранённая из черновика: ответы ИИ его проверки на истории переходят к ней. Идущие проверки черновика останавливаются. */
+export const dropFormDraft = (to?: string) => api<{ ok: true }>('DELETE', `${BASE}/form-draft${to ? `?to=${enc(to)}` : ''}`);
 
 /** Папка проекта рутины: есть ли, git ли. Ключ вне ['routines']: событие `routines` снимает весь префикс, а проверка папки от него не меняется. */
 export const checkDir = (path: string) => api<DirCheck>('GET', `${BASE}/check-dir?path=${enc(path)}`);

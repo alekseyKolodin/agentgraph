@@ -101,10 +101,12 @@ export function LogWhy({ e, slug, spec, busy, onFeedback }: { e: LogEntry; slug:
               <p>{t('По расписанию: условий на события нет.')}</p>
             ) : (
               <>
+                {x.conditions.length > 1 && x.matchMode === 'any' && <p className="muted">{t('Условия через «или»: хватает одного совпавшего.')}</p>}
                 {x.conditions.length ? (
                   <ul className={styles.whyConds}>
-                    {x.conditions.map((c) => (
-                      <li key={c.key}>
+                    {x.conditions.map((c, i) => (
+                      // два условия на одно поле — обычное дело: ключ по месту в списке
+                      <li key={i}>
                         <span className={c.ok ? styles.tOk : styles.tFail} aria-label={c.ok ? t('совпало') : t('не совпало')}>{c.ok ? '✓' : '✗'}</span>{' '}
                         <span className={styles.mono}>{`${c.key} ${c.op} «${c.want}»`}</span>
                         <span className="muted">{c.got ? t(' — в событии «{got}»', { got: c.got }) : t(' — в событии поля нет')}</span>

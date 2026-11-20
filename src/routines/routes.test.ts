@@ -79,6 +79,28 @@ test('источники: PUT, список, DELETE используемого �
   }
 });
 
+test('замена ключа у сохранённого источника: PUT с тем же spec и новым значением — ключ на месте, значение наружу не уходит', async () => {
+  const t = setup(null);
+  try {
+    const src = { title: 'Встречи', kind: 'command', config: { command: 'echo []' }, secrets: ['FF_KEY'] };
+    await t.call('PUT', '/api/routines/sources/ff', { spec: src });
+    const before = ((await t.call('GET', '/api/routines/sources'))?.body as Array<{ missingSecrets: string[] }>)[0]!;
+    assert.deepEqual(before.missingSecrets, ['FF_KEY']);
+    // страница источника шлёт сохранённый spec как есть и только новый ключ
+    const put = await t.call('PUT', '/api/routines/sources/ff', { spec: src, secrets: { FF_KEY: 'ff-secret-1234' } });
+    assert.equal(put?.status, 200);
+    await t.call('PUT', '/api/routines/sources/ff', { spec: src, secrets: { FF_KEY: 'ff-secret-5678' } });
+    const list = (await t.call('GET', '/api/routines/sources'))?.body as Array<{ missingSecrets: string[]; spec: { config: unknown } }>;
+    assert.deepEqual(list[0]!.missingSecrets, []);
+    assert.deepEqual(list[0]!.spec.config, { command: 'echo []' });
+    assert.ok(!JSON.stringify(list).includes('ff-secret'));
+    assert.ok(!JSON.stringify(put?.body).includes('ff-secret'));
+    assert.equal(t.engine.store.secret('FF_KEY'), 'ff-secret-5678');
+  } finally {
+    t.done();
+  }
+});
+
 test('рецепты: импорт кладёт файл, список без поля file; плохой рецепт — 400', async () => {
   const t = setup(null);
   try {
@@ -227,27 +249,13 @@ test('готовые flow шаблонов: список; чужое имя — 
   }
 });
 
-test('рутина словами и проверка папки: POST/GET/DELETE compose, 400 без описания, 501 без модели; check-dir; имена не рутины', async () => {
-  const views = new Map<string, unknown>();
-  const compose = {
-    start: (description: string) => {
-      views.set('c1', { id: 'c1', description, state: 'working', step: 'Читаю' });
-      return views.get('c1') as never;
-    },
-    get: (id: string) => views.get(id) as never,
-    cancel: (id: string) => void views.delete(id),
-  };
+test('проверка папки: check-dir, 400 без пути; прежняя сборка словами (compose) ушла — имена разделов не рутины', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
   const engine = new RoutineEngine({ jiraHosts: () => [], store: new RoutineStore(root), kinds: () => [], startRun: async () => 'run-1', resumeRun: () => {}, stopRun: () => {}, flowBlocks: () => undefined });
   const checkDir = async (p: string) => ({ path: p, exists: true, isDir: true, git: false });
-  const call = (method: string, url: string, body?: unknown, extra: Record<string, unknown> = { compose, checkDir }) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null, ...extra });
+  const call = (method: string, url: string, body?: unknown) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null, checkDir });
   try {
-    assert.equal((await call('POST', '/api/routines/compose', { description: ' ' }))?.status, 400);
-    assert.equal((await call('POST', '/api/routines/compose', { description: 'ревью моих MR' }))?.status, 201);
-    assert.equal(((await call('GET', '/api/routines/compose/c1'))?.body as { description: string }).description, 'ревью моих MR');
-    assert.deepEqual((await call('DELETE', '/api/routines/compose/c1'))?.body, { ok: true });
-    assert.equal((await call('GET', '/api/routines/compose/c1'))?.status, 404);
-    assert.equal((await call('POST', '/api/routines/compose', { description: 'x' }, { compose: null }))?.status, 501);
+    assert.equal(await call('POST', '/api/routines/compose', { description: 'ревью моих MR' }), undefined);
     assert.equal((await call('GET', '/api/routines/check-dir'))?.status, 400);
     assert.deepEqual((await call('GET', '/api/routines/check-dir?path=/tmp/x'))?.body, { path: '/tmp/x', exists: true, isDir: true, git: false });
     // имена разделов API не рутины
@@ -255,6 +263,124 @@ test('рутина словами и проверка папки: POST/GET/DELET
     assert.equal(await call('PUT', '/api/routines/check-dir', { spec }), undefined);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Ждёт конца проверки на истории черновика формы. */
+async function draftHistory(t: ReturnType<typeof setup>, body: unknown) {
+  const start = await t.call('POST', '/api/routines/form-draft/history/runs', body);
+  assert.equal(start?.status, 201);
+  let job = start!.body as { id: string; state: string; result?: { events: Array<{ event: { id: string }; outcome: string }> }; error?: string };
+  for (let i = 0; job.state === 'working' && i < 100; i++) {
+    await new Promise((ok) => setTimeout(ok, 5));
+    job = (await t.call('GET', `/api/routines/form-draft/history/runs/${job.id}`))!.body as typeof job;
+  }
+  return job;
+}
+
+test('проверка на истории черновика формы: идёт по spec без сохранённой рутины, расписание — пусто, битое правило — ошибка с причиной', async () => {
+  const t = setup(null);
+  try {
+    const at = new Date().toISOString();
+    t.engine.store.addHistory('cmd', [
+      { source: 'cmd', id: 'e1', at, title: 'Баг в логине', text: '', fields: {} },
+      { source: 'cmd', id: 'e2', at, title: 'Вопрос', text: '', fields: {} },
+    ]);
+    const draft = { ...spec, when: { source: 'cmd', match: { 'title~': 'Баг' } }, draft: true, enabled: false };
+    const job = await draftHistory(t, { spec: draft, limit: 30 });
+    assert.equal(job.state, 'done', job.error ?? '');
+    const outcomes = Object.fromEntries(job.result!.events.map((e) => [e.event.id, e.outcome]));
+    assert.deepEqual(outcomes, { e1: 'started', e2: 'filtered' });
+    // рутина при этом не появилась
+    assert.equal(((await t.call('GET', '/api/routines'))?.body as { routines: unknown[] }).routines.length, 0);
+    assert.deepEqual((await draftHistory(t, { spec })).result?.events, []);
+    const broken = await draftHistory(t, { spec: { title: 'x' } });
+    assert.equal(broken.state, 'error');
+    assert.match(broken.error ?? '', /Правило не прошло проверку/);
+    assert.equal((await t.call('POST', '/api/routines/form-draft/history/runs', {}))?.status, 400);
+    assert.equal((await t.call('GET', '/api/routines/form-draft/history/runs/abc123'))?.status, 404);
+  } finally {
+    t.done();
+  }
+});
+
+/** Движок, у которого «ИИ рутины» отвечает, когда тест отпустит: видно, что делает проверка, пока ответ в пути. */
+function setupGated() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentgraph-rroutes-'));
+  let release!: () => void;
+  const gate = new Promise<void>((ok) => (release = ok));
+  let asked!: () => void;
+  const started = new Promise<void>((ok) => (asked = ok));
+  const engine = new RoutineEngine({ jiraHosts: () => [],
+    store: new RoutineStore(root),
+    kinds: () => [],
+    startRun: async () => 'run-1',
+    resumeRun: () => {},
+    stopRun: () => {},
+    flowBlocks: () => undefined,
+    check: async () => {
+      asked();
+      await gate;
+      return { match: true, duplicate: false, reason: 'баг', costUsd: 0.01, model: 'haiku' };
+    },
+  });
+  const call = (method: string, url: string, body?: unknown) => routinesRoute(method, new URL(url, 'http://localhost'), async () => body, { engine, drafts: null });
+  engine.store.addHistory('cmd', [{ source: 'cmd', id: 'e1', at: new Date().toISOString(), title: 'Баг в логине', text: '', fields: {} }]);
+  const draft = { ...spec, when: { source: 'cmd', check: 'это баг' }, draft: true, enabled: false };
+  return { engine, call, draft, release, started, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test('«Начать заново» останавливает проверку черновика: кэш ответов ИИ пуст, и дошедший потом ответ его не наполняет', async () => {
+  const t = setupGated();
+  try {
+    const run = (await t.call('POST', '/api/routines/form-draft/history/runs', { spec: t.draft, tab: 'a1' }))!.body as { id: string };
+    await t.started;
+    assert.deepEqual((await t.call('DELETE', '/api/routines/form-draft'))?.body, { ok: true });
+    t.release();
+    for (let i = 0; i < 100 && (t.engine.historyRun('form-draft', run.id)?.state ?? 'working') === 'working'; i++) await new Promise((ok) => setTimeout(ok, 5));
+    assert.notEqual(t.engine.historyRun('form-draft', run.id)?.state, 'working');
+    assert.deepEqual(t.engine.store.checkCache('form-draft'), {});
+  } finally {
+    t.done();
+  }
+});
+
+test('сохранили рутину из черновика: ответы ИИ его проверки переходят к рутине; прогон рутины по адресу черновика — 404', async () => {
+  const t = setupGated();
+  try {
+    t.release();
+    const job = await draftHistory(t as unknown as ReturnType<typeof setup>, { spec: t.draft });
+    assert.equal(job.state, 'done', job.error ?? '');
+    assert.equal(Object.keys(t.engine.store.checkCache('form-draft')).length, 1);
+    assert.equal((await t.call('PUT', '/api/routines/bugs', { spec: { ...t.draft, draft: undefined } }))?.status, 200);
+    await t.call('DELETE', '/api/routines/form-draft?to=bugs');
+    assert.deepEqual(t.engine.store.checkCache('form-draft'), {});
+    assert.equal(Object.keys(t.engine.store.checkCache('bugs')).length, 1);
+    // проверка рутины тем же ответом модель второй раз не спрашивает
+    const own = (await t.call('POST', '/api/routines/bugs/history/runs', {}))!.body as { id: string };
+    assert.equal((await t.call('GET', `/api/routines/form-draft/history/runs/${own.id}`))?.status, 404);
+  } finally {
+    t.done();
+  }
+});
+
+test('проверки черновика из двух вкладок не останавливают друг друга', async () => {
+  const t = setupGated();
+  try {
+    // событий больше, чем модель читает разом: остановленная проверка следующие уже не берёт и кончается ошибкой
+    t.engine.store.addHistory('cmd', ['e2', 'e3', 'e4', 'e5'].map((id) => ({ source: 'cmd', id, at: new Date().toISOString(), title: id, text: '', fields: {} })));
+    const a = (await t.call('POST', '/api/routines/form-draft/history/runs', { spec: t.draft, tab: 'a1' }))!.body as { id: string };
+    const b = (await t.call('POST', '/api/routines/form-draft/history/runs', { spec: { ...t.draft, mode: 'auto' }, tab: 'b2' }))!.body as { id: string };
+    assert.notEqual(a.id, b.id);
+    assert.equal(t.engine.historyRun('form-draft', a.id)?.state, 'working');
+    // та же вкладка с другим правилом — прежняя проверка останавливается
+    await t.call('POST', '/api/routines/form-draft/history/runs', { spec: { ...t.draft, mode: 'suggest' }, tab: 'a1' });
+    t.release();
+    for (let i = 0; i < 100 && t.engine.historyRun('form-draft', b.id)?.state === 'working'; i++) await new Promise((ok) => setTimeout(ok, 5));
+    assert.equal(t.engine.historyRun('form-draft', b.id)?.state, 'done');
+    assert.equal(t.engine.historyRun('form-draft', a.id)?.state, 'error');
+  } finally {
+    t.done();
   }
 });
 

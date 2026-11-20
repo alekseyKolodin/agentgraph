@@ -61,7 +61,7 @@ test('сборка: working сразу, потом ready; рутина выкл�
   assert.ok(v.state === 'ready');
   assert.equal(v.spec.enabled, false);
   assert.equal(v.spec.draft, true);
-  assert.deepEqual(v.spec.when, { source: 'gitlab-mr', match: { event: 'review', draft: false } });
+  assert.deepEqual(v.spec.when, { source: 'gitlab-mr', match: [{ field: 'event', op: 'eq', value: 'review' }, { field: 'draft', op: 'eq', value: false }] });
   assert.deepEqual(v.spec.run, { flow: 'review-mr', input: 'Проверь MR' });
   assert.deepEqual(v.problems, []);
   assert.deepEqual(v.needs, {});
@@ -133,8 +133,17 @@ test('условие по несуществующему полю не берё�
   h.routes.start('MR');
   const v = await settle(h.routes);
   assert.ok(v.state === 'ready');
-  assert.deepEqual(v.spec.when, { source: 'gitlab-mr', match: { draft: true } });
+  assert.deepEqual(v.spec.when, { source: 'gitlab-mr', match: [{ field: 'draft', op: 'eq', value: true }] });
   assert.ok(v.notes.some((n) => /nope/.test(n)));
+});
+
+test('два «не равно» на одно поле — оба условия; «хватает одного» и уведомления берутся, чужие значения уведомлений — нет', async () => {
+  const h = harness([{ ...base, match: [{ key: 'event', op: 'not', values: ['push'] }, { key: 'event', op: 'not', values: ['tag'] }], match_mode: 'any', notify: ['start', 'fail', 'later', 'start'] }]);
+  h.routes.start('MR');
+  const v = await settle(h.routes);
+  assert.ok(v.state === 'ready');
+  assert.deepEqual(v.spec.when, { source: 'gitlab-mr', match: [{ field: 'event', op: 'ne', value: 'push' }, { field: 'event', op: 'ne', value: 'tag' }], match_mode: 'any' });
+  assert.deepEqual(v.spec.notify, { os: ['start', 'fail'] });
 });
 
 test('папка не git: worktree new снимается и человеку сказано; папки нет — поле пустое', async () => {

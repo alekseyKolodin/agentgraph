@@ -15,7 +15,7 @@ import { CHECK_MODEL, checkEvent, checkPrompt, eventText, EVENT_FIELDS_MAX, EVEN
 import { commandKind, runCommand } from './command.js';
 import { isStampedAt, type DraftDeps, type FetchFn, type RunCommand, type SourceCtx, type SourceKind } from './kind.js';
 import { acquireEngineLock, type EngineOwner, type LockDeps } from './lock.js';
-import { eventFields, explainMatch, matchRule } from './match.js';
+import { eventFields, explainMatch, matchConditions, matchRule, matchSteps } from './match.js';
 import { dueSlots, nextAt, parseCron, scheduleEvent } from './schedule.js';
 import { eventLang, routineTexts } from './texts.js';
 import { freeSlug, isSchedule, parseEvery, parseRoutine, parseRoutineYaml, parseSource, routineProblems } from './schema.js';
@@ -35,6 +35,7 @@ import type {
   Feedback,
   EventDetail,
   HistoryCheck,
+  HistoryFunnel,
   HistoryRun,
   LogAsk,
   LogExplain,
@@ -53,8 +54,10 @@ import type {
   SourceStatus,
   SourceTestResult,
   SourceView,
+  NotifyEvent,
   TaskRule,
   WaitAction,
+  WhenSource,
 } from './types.js';
 
 /** Что движок просит у сервера для запуска flow. */
@@ -863,7 +866,7 @@ export class RoutineEngine {
     const seededRow = task && o.noPut ? this.seededRow(slug, e) : undefined;
     if (seededRow) why = seededRow.why;
     if (!isSchedule(spec.when) && !seededRow) {
-      const m = matchRule(spec.when.match, e);
+      const m = matchRule(spec.when.match, e, spec.when.match_mode);
       // засев по текущему списку: то, что под условия не подошло, журнал не забивает (рутина его и так не взяла бы)
       if (!m.ok) return o.seed ? { outcome: 'filtered', reason: m.reason } : this.record(slug, e, 'filtered', { reason: m.reason });
       // «Запустить» человека (ожидание, журнал) идёт мимо process — в launch; «догнать» проходит правило: две записи о
@@ -939,10 +942,10 @@ export class RoutineEngine {
       this.store.setWaits([...this.store.waits(), { ...wait, logId: entry.id }]);
       this.changed();
       // предложения одной рутины заменяют друг друга в центре уведомлений: шумная рутина не засыпает экран
-      if (!o.quiet) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
+      if (!o.quiet && notifies(spec, 'wait')) this.notice({ title: `${e.title} — запустить?`, body: spec.title, path: '/', group: `routine:${slug}:suggest` });
       return { outcome: 'waiting', wait };
     }
-    return this.launch(slug, spec, e, { human: o.human, why, checkCost, checkModel, deskKey });
+    return this.launch(slug, spec, e, { human: o.human, quiet: o.quiet, why, checkCost, checkModel, deskKey });
   }
 
   /** Строка журнала «дело» по этому событию (засев, простой): с ней «догнать» не проверяет и не заводит дело заново. */
@@ -1085,14 +1088,14 @@ export class RoutineEngine {
   }
 
   /** Запуск с лимитами: per_day (кроме решения человека), parallel — в очередь, usd — бюджет запуска. */
-  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; logId?: string; attempts?: number; why?: string; checkCost?: number; /** Модель узла «ИИ рутины», решавшая по событию. */ checkModel?: string; /** Дело события: запуск переносит его «В работу». */ deskKey?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
+  private async launch(slug: string, spec: RoutineSpec, e: RoutineEvent, o: { human?: boolean; /** «Догнать»: старт не объявляем, как и решение человека. */ quiet?: boolean; logId?: string; attempts?: number; why?: string; checkCost?: number; /** Модель узла «ИИ рутины», решавшая по событию. */ checkModel?: string; /** Дело события: запуск переносит его «В работу». */ deskKey?: string } = {}): Promise<{ outcome: LogOutcome; runId?: string; reason?: string }> {
     const lim = spec.limits ?? {};
     // строка ожидания или очереди уже хранит why и расход проверки — патч их не трогает
     const w = { ...(o.why ? { why: o.why } : {}), ...(o.checkCost ? { costUsd: o.checkCost, checkCostUsd: o.checkCost } : {}), ...(o.checkModel ? { checkModel: o.checkModel } : {}) };
     // сервер останавливается: запуск не начинаем, событие ждёт в очереди следующего старта (виденным оно уже стало)
     if (this.stopped) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: 'сервер остановился: запуск после следующего старта', logId: o.logId, ...w });
-      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}), ...(o.attempts ? { attempts: o.attempts } : {}) }]);
+      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.quiet ? { quiet: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}), ...(o.attempts ? { attempts: o.attempts } : {}) }]);
       return { outcome: 'limit', reason: entry.reason };
     }
     if (!o.human && lim.per_day && this.startedToday(slug) >= lim.per_day) {
@@ -1100,7 +1103,7 @@ export class RoutineEngine {
     }
     if (lim.parallel && this.activeOf(slug) >= lim.parallel) {
       const entry = this.upsertLog(slug, e, 'limit', { reason: `в очереди: идут ${lim.parallel} из ${lim.parallel}`, logId: o.logId, ...w });
-      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}), ...(o.attempts ? { attempts: o.attempts } : {}) }]);
+      this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.human ? { human: true } : {}), ...(o.quiet ? { quiet: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}), ...(o.attempts ? { attempts: o.attempts } : {}) }]);
       this.changed();
       return { outcome: 'limit', reason: entry.reason };
     }
@@ -1119,7 +1122,7 @@ export class RoutineEngine {
       if (!o.human && this.stopped) {
         // сервер останавливается: событие ждёт следующего старта без паузы, как в ветке stopped выше
         const entry = this.upsertLog(slug, e, 'limit', { reason: `${why}; запуск после следующего старта`, logId: o.logId, ...w });
-        this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.attempts ? { attempts: o.attempts } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
+        this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: this.now().toISOString(), logId: entry.id, ...(o.attempts ? { attempts: o.attempts } : {}), ...(o.quiet ? { quiet: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
         this.changed();
         return { outcome: 'limit', reason: entry.reason };
       }
@@ -1127,7 +1130,7 @@ export class RoutineEngine {
         const reason = `${why}; повторю через ${START_RETRY_MS / 60_000} мин (попытка ${attempts} из ${START_TRIES})`;
         const entry = this.upsertLog(slug, e, 'limit', { reason, logId: o.logId, ...w });
         const at = this.now();
-        this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: at.toISOString(), logId: entry.id, attempts, notBefore: new Date(at.getTime() + START_RETRY_MS).toISOString(), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
+        this.store.setQueue([...this.store.queue(), { routine: slug, event: e, at: at.toISOString(), logId: entry.id, attempts, notBefore: new Date(at.getTime() + START_RETRY_MS).toISOString(), ...(o.quiet ? { quiet: true } : {}), ...(o.deskKey ? { deskKey: o.deskKey } : {}) }]);
         this.changed();
         return { outcome: 'limit', reason };
       }
@@ -1150,6 +1153,8 @@ export class RoutineEngine {
     this.active.set(runId, { routine: slug, event: e, logId: entry.id, paused: new Set() });
     this.store.addEvent(slug, 'started', e);
     this.changed();
+    // старт по кнопке человека и по «Догнать» не объявляем: их только что нажали
+    if (!o.human && !o.quiet && notifies(spec, 'start')) this.notice({ title: `${e.title} — запущено`, body: spec.title, path: `/run/${runId}`, group: runId });
     // дело — «В работу» со ссылкой на запуск (конец запуска сервер допишет делу сам); доска запуск не задерживает
     if (deskKey) void this.moveTask(deskKey, { column: 'work', by: 'routine', why: `запущен flow ${spec.run?.flow ?? ''}`.trim(), runId });
     // при draft «Взял в работу» не уходит: черновик ждёт решения человека (на паузе или в конце)
@@ -1208,7 +1213,7 @@ export class RoutineEngine {
       const r = this.store.routine(item.routine);
       if (!r?.spec) continue;
       try {
-        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human, ...(item.attempts ? { attempts: item.attempts } : {}), ...(item.deskKey ? { deskKey: item.deskKey } : {}) });
+        await this.launch(item.routine, r.spec, item.event, { logId: item.logId, human: item.human, ...(item.quiet ? { quiet: true } : {}), ...(item.attempts ? { attempts: item.attempts } : {}), ...(item.deskKey ? { deskKey: item.deskKey } : {}) });
       } catch (err) {
         this.failed(item.routine, item.event, err);
       }
@@ -1361,7 +1366,7 @@ export class RoutineEngine {
       };
       this.store.setWaits([...this.store.waits(), wait]);
       this.changed();
-      this.notice({ title: `${a.event.title} — ждёт решения`, body: `${spec?.title ?? a.routine} · перед «${ev.block}»`, path: '/', group: runId, sound: true });
+      if (notifies(spec, 'wait')) this.notice({ title: `${a.event.title} — ждёт решения`, body: `${spec?.title ?? a.routine} · перед «${ev.block}»`, path: '/', group: runId, sound: true });
       if (reply && !reply.draft && spec) await this.reply(a.routine, spec, a.event, text, a.logId);
       return;
     }
@@ -1421,9 +1426,10 @@ export class RoutineEngine {
     const label = STATUS_LABEL[ev.status as RunStatus] ?? ev.status;
     const routine = spec?.title ?? a.routine;
     if (ev.status === 'done') {
-      if (o.replyWaits) this.notice({ title: `${a.event.title} — ${label}`, body: `${routine}: ответ ждёт твоей проверки`, path: '/', group: runId, sound: true });
+      if (o.replyWaits && notifies(spec, 'end')) this.notice({ title: `${a.event.title} — ${label}`, body: `${routine}: ответ ждёт твоей проверки`, path: '/', group: runId, sound: true });
       return;
     }
+    if (!notifies(spec, 'fail')) return;
     const error = ev.error?.trim() ? clip(redact(ev.error.trim(), this.store.secrets()), 300) : undefined;
     const body = [routine, `$${ev.costUsd.toFixed(2)}`, error].filter(Boolean).join(' · ');
     this.notice({ title: `${a.event.title} — ${label}`, body, path: `/run/${runId}`, group: runId, sound: true });
@@ -1497,7 +1503,7 @@ export class RoutineEngine {
       if (!r.spec || r.spec.enabled === false || isSchedule(r.spec.when) || r.spec.when.source !== source) continue;
       // рутине без flow догонять нечего: дела простоя она заводит сама
       if (!r.spec.run) continue;
-      const match = r.spec.when.match;
+      const when = r.spec.when;
       let row = rows.find((x) => x.routine === r.slug && !x.missedAt);
       if (!row) {
         row = { id: newId(), routine: r.slug, routineTitle: r.spec.title, events: 0, matching: 0, items: [], matchingIds: [] };
@@ -1506,7 +1512,7 @@ export class RoutineEngine {
       for (const e of events) {
         if (row.items.some((x) => x.source === e.source && x.id === e.id)) continue;
         row.items.push(e);
-        if (matchRule(match, e).ok) row.matchingIds.push(e.id);
+        if (matchRule(when.match, e, when.match_mode).ok) row.matchingIds.push(e.id);
       }
       // «догнать» держит последние CATCHUP_ITEMS_MAX: подходящее под условия, что не вошло, — в журнал строкой missed, а не
       // молча (неподходящее рутина и так не запустила бы — им журнал не забиваем)
@@ -1531,7 +1537,7 @@ export class RoutineEngine {
       if (row.missedAt) {
         const e = scheduleEvent(row.routine, row.routineTitle, new Date(row.missedAt));
         if (action === 'skip' || !spec) this.log(row.routine, e, 'missed', { reason: 'пропущено по расписанию, пока приложение было закрыто' });
-        else await this.process(row.routine, spec, scheduleEvent(row.routine, spec.title, this.now()));
+        else await this.process(row.routine, spec, scheduleEvent(row.routine, spec.title, this.now()), { quiet: true });
         return;
       }
       for (const e of row.items) {
@@ -1920,7 +1926,8 @@ export class RoutineEngine {
   /** «Проверить на истории»: последние события источника (журнал + свежий опрос без записи курсора) через условия и проверку. */
   /** signal — проверку прервали (помощник остановлен): оставшиеся события модель уже не читает. */
   /** onStart — сколько событий проверяется (после опроса источника); onRow — событие проверено (i — его место в итоге). */
-  async history(slug: string, body: { spec?: unknown; limit?: number; signal?: AbortSignal; onStart?: (total: number) => void; onRow?: (i: number, row: HistoryCheck['events'][number]) => void }): Promise<HistoryCheck> {
+  /** dropCache — кэш ответов «ИИ рутины» сброшен (stopHistories): ответы, пришедшие после, не запоминаются. */
+  async history(slug: string, body: { spec?: unknown; limit?: number; signal?: AbortSignal; dropCache?: AbortSignal; onStart?: (total: number) => void; onRow?: (i: number, row: HistoryCheck['events'][number]) => void }): Promise<HistoryCheck> {
     let spec: RoutineSpec | undefined;
     if (body.spec !== undefined) {
       const p = parseRoutine(body.spec);
@@ -1960,7 +1967,7 @@ export class RoutineEngine {
       let reason: string | undefined;
       let unsure = false;
       let checkCost: number | undefined;
-      const m = matchRule(when.match, e);
+      const m = matchRule(when.match, e, when.match_mode);
       if (!m.ok) {
         outcome = 'filtered';
         reason = m.reason;
@@ -1972,7 +1979,8 @@ export class RoutineEngine {
           const hit = cache[key];
           const c = hit ? { ...hit, costUsd: 0 } : await this.checkFn(input);
           if (hit) checked.cached++;
-          else {
+          // проверку остановили вместе с кэшем (черновик стёрт или сохранён): ответ доживает, но в кэш не пишется
+          else if (!body.dropCache?.aborted) {
             // ответ запоминается сразу: за него уже заплачено, и перезапуск посреди проверки его не теряет
             const { costUsd: _cost, ...answer } = c;
             const all = this.store.checkCache(slug);
@@ -2003,12 +2011,13 @@ export class RoutineEngine {
       return row;
     });
     const tasks = await this.historyTasks(spec, out);
+    const funnel = historyFunnel(when, out);
     // рутина без flow не запускает: оценки запусков и «Что получит flow» у неё нет
     const estimate = spec.run ? this.estimate(slug, spec, out) : undefined;
     const shown = out.find((x) => x.outcome === 'started' || x.outcome === 'waiting') ?? out[0];
     const task = spec.run?.input?.trim();
     const preview = spec.run && shown && { eventId: shown.event.id, ...(task ? { task } : {}), event: eventBlock(shown.event) };
-    return { events: out, disagreements, ...(checked.events ? { check: { ...(checked.model ? { model: checked.model } : {}), costUsd: checked.costUsd, events: checked.events, ...(checked.cached ? { cached: checked.cached } : {}) } } : {}), ...(tasks !== undefined ? { tasks } : {}), ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}) };
+    return { events: out, disagreements, ...(checked.events ? { check: { ...(checked.model ? { model: checked.model } : {}), costUsd: checked.costUsd, events: checked.events, ...(checked.cached ? { cached: checked.cached } : {}) } } : {}), ...(tasks !== undefined ? { tasks } : {}), ...(estimate ? { estimate } : {}), ...(preview ? { preview } : {}), funnel };
   }
 
   /**
@@ -2016,15 +2025,17 @@ export class RoutineEngine {
    * мере готовности. Та же проверка (рутина, правило, предел), пока она идёт, второй раз не начинается: экран открыли
    * заново — он получает её же, а модель не читает события дважды. Правило поменяли — прежняя проверка останавливается.
    */
-  startHistory(slug: string, body: { spec?: unknown; limit?: number }): HistoryRun {
-    const key = JSON.stringify([slug, body.spec ?? null, body.limit ?? null]);
+  /** tab — вкладка черновика «Новой рутины»: проверка соседней вкладки с тем же ключом не останавливается. */
+  startHistory(slug: string, body: { spec?: unknown; limit?: number; tab?: string }): HistoryRun {
+    const { tab = '', ...rest } = body;
+    const key = JSON.stringify([slug, rest.spec ?? null, rest.limit ?? null, tab]);
     for (const r of this.historyRuns.values()) {
       // остановленная проверка доживает начатые ответы модели, но это уже не «она же»
-      if (r.state !== 'working' || r.slug !== slug || r.abort.signal.aborted) continue;
+      if (r.state !== 'working' || r.slug !== slug || r.tab !== tab || r.abort.signal.aborted) continue;
       if (r.key === key) return historyRunView(r);
       r.abort.abort();
     }
-    const run: HistoryJob = { id: randomBytes(6).toString('hex'), slug, key, state: 'working', total: 0, rows: [], abort: new AbortController() };
+    const run: HistoryJob = { id: randomBytes(6).toString('hex'), slug, tab, key, state: 'working', total: 0, rows: [], abort: new AbortController(), drop: new AbortController() };
     this.historyRuns.set(run.id, run);
     // помним последние проверки: законченные старые вытесняются, идущие остаются
     for (const [id, r] of this.historyRuns) {
@@ -2032,8 +2043,9 @@ export class RoutineEngine {
       if (r.state !== 'working') this.historyRuns.delete(id);
     }
     void this.history(slug, {
-      ...body,
+      ...rest,
       signal: run.abort.signal,
+      dropCache: run.drop.signal,
       onStart: (total) => {
         run.total = total;
         run.rows = new Array<HistoryCheck['events'][number] | undefined>(total);
@@ -2057,6 +2069,21 @@ export class RoutineEngine {
   historyRun(slug: string, id: string): HistoryRun | undefined {
     const r = this.historyRuns.get(id);
     return r && r.slug === slug ? historyRunView(r) : undefined;
+  }
+
+  /**
+   * Остановить все идущие проверки рутины, и ответы модели, которые ещё в пути, в кэш не писать: черновик «Новой рутины»
+   * стёрт или сохранён, его кэш очищается. Сколько остановлено.
+   */
+  stopHistories(slug: string): number {
+    let n = 0;
+    for (const r of this.historyRuns.values()) {
+      if (r.slug !== slug || r.state !== 'working') continue;
+      r.abort.abort();
+      r.drop.abort();
+      n++;
+    }
+    return n;
   }
 
   /** Остановить проверку: события, которые модель ещё не начала читать, не читаются; прочитанное остаётся в кэше. */
@@ -2186,6 +2213,7 @@ export class RoutineEngine {
       ...(event ? { event } : {}),
       schedule,
       conditions: when && event ? explainMatch(when.match, event) : [],
+      ...(when?.match_mode === 'any' ? { matchMode: 'any' as const } : {}),
       ...(when?.check?.trim() ? { check: when.check.trim() } : {}),
       ...(answer ? { answer } : {}),
       ...(when?.model?.trim() ? { model: when.model.trim() } : {}),
@@ -2485,7 +2513,7 @@ export function eventBlock(e: RoutineEvent, detail?: string): string {
 /** Сколько проверок на истории с ходом помнится. */
 const HISTORY_RUNS_MAX = 10;
 
-type HistoryJob = { id: string; slug: string; key: string; state: HistoryRun['state']; total: number; rows: Array<HistoryCheck['events'][number] | undefined>; abort: AbortController; result?: HistoryCheck; error?: string };
+type HistoryJob = { id: string; slug: string; /** Вкладка черновика формы ('' — рутина). */ tab: string; key: string; state: HistoryRun['state']; total: number; rows: Array<HistoryCheck['events'][number] | undefined>; abort: AbortController; /** Кэш ответов сброшен: дожившие ответы не запоминать. */ drop: AbortController; result?: HistoryCheck; error?: string };
 
 function historyRunView(r: HistoryJob): HistoryRun {
   return {
@@ -2518,6 +2546,42 @@ async function inPool<T, R>(items: T[], n: number, fn: (x: T, i: number) => Prom
   };
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
   return out;
+}
+
+/**
+ * Воронка проверки на истории (HistoryFunnel): сколько событий прошло каждое условие на поля — подряд при all, само по
+ * себе при any, — условия целиком и «ИИ рутины» (дошли бы до запуска или ожидания).
+ */
+function historyFunnel(when: WhenSource, rows: HistoryCheck['events']): HistoryFunnel {
+  const mode = when.match_mode === 'any' ? 'any' : 'all';
+  const conds = matchConditions(when.match);
+  const passed = conds.map(() => 0);
+  let matched = 0;
+  for (const r of rows) {
+    const steps = matchSteps(when.match, r.event);
+    let all = true;
+    steps.forEach((ok, i) => {
+      all &&= ok;
+      if (mode === 'any' ? ok : all) passed[i]!++;
+    });
+    if (mode === 'any' ? !steps.length || steps.some(Boolean) : all) matched++;
+  }
+  const reached = rows.filter((r) => r.outcome === 'started' || r.outcome === 'waiting').length;
+  return {
+    total: rows.length,
+    mode,
+    fields: conds.map((c, i) => ({ field: c.field, op: c.op, passed: passed[i]! })),
+    matched,
+    ...(when.check?.trim() ? { check: reached } : {}),
+  };
+}
+
+/** Без notify.os — всё, кроме старта: так было до настройки. */
+export const NOTIFY_OS_DEFAULT: readonly NotifyEvent[] = ['wait', 'end', 'fail'];
+
+/** Шлёт ли рутина системное уведомление об этом (spec.notify.os; правила нет — по умолчанию). */
+export function notifies(spec: Pick<RoutineSpec, 'notify'> | undefined, what: NotifyEvent): boolean {
+  return (spec?.notify?.os ?? NOTIFY_OS_DEFAULT).includes(what);
 }
 
 function disagree(past: Feedback['verdict'], outcome: HistoryCheck['events'][number]['outcome']): boolean {

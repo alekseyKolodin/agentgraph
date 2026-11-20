@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { LogEntry, SourceCheckNow } from '@server/routines/types';
-import { checkNowText, pollChoices } from './source';
+import { checkNowText } from './source';
 import { chipOf, skipWhy } from './view';
 
 const base: SourceCheckNow = { ok: true, total: 5, fresh: 0, routines: 1, started: 0, waiting: 0, tasks: 0, skipped: 0, errors: 0 };
@@ -17,14 +17,6 @@ test('проверить сейчас: итог словами — нет нов
   assert.match(checkNowText({ ...base, routines: 0 }), /Ни одной включённой рутине/);
 });
 
-test('частота опроса: варианты не чаще минимума вида, текущее нестандартное значение остаётся в списке', () => {
-  const list = pollChoices('1m', '7m');
-  assert.ok(!list.includes('30s'));
-  assert.ok(list.includes('7m') && list.includes('5m') && list.includes('6h'));
-  assert.equal(pollChoices('1m', '1d').at(-1), '1d');
-  assert.deepEqual(list, [...list].sort((a, b) => list.indexOf(a) - list.indexOf(b)));
-  assert.equal(list.indexOf('7m') > list.indexOf('5m') && list.indexOf('7m') < list.indexOf('15m'), true);
-});
 
 const row = (outcome: LogEntry['outcome'], reason?: string): LogEntry => ({ id: '1', at: '2026-11-17T10:00:00.000Z', routine: 'r', event: { source: 's', id: 'e', title: 'T', at: '2026-11-17T10:00:00.000Z' }, outcome, ...(reason ? { reason } : {}) });
 

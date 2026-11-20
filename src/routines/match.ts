@@ -1,9 +1,8 @@
-// Условия рутины на поля события без модели (MatchRule в types.ts): ключ — поле события или путь в fields, суффикс —
-// оператор: без суффикса — равно (строки без учёта регистра, массив значений — любое из), `~` — содержит, `!` — не равно,
-// `>` `<` — числа. Поле-массив совпадает, если совпал хоть один элемент.
-import type { EventField, MatchRule, RoutineEvent } from './types.js';
-
-type Op = '=' | '~' | '!' | '>' | '<';
+// Условия рутины на поля события без модели (MatchCondition в types.ts): список { field, op, value }, сочетание —
+// match_mode (all — все, any — хоть одно). Старый формат — словарь, где суффикс ключа — оператор (без суффикса — равно,
+// `~` — содержит, `!` — не равно, `>` `<` — числа); он приводится к списку (matchConditions). Строки — без учёта
+// регистра; список значений у eq и contains — любое из, у ne — ни одно из. Поле-массив совпадает, если совпал хоть один элемент.
+import type { EventField, MatchCondition, MatchMode, MatchOp, MatchRule, MatchValue, RoutineEvent } from './types.js';
 
 const TOP = new Set(['source', 'id', 'at', 'title', 'text', 'link', 'author']);
 
@@ -26,10 +25,30 @@ export function pathGet(obj: unknown, path: string): unknown {
   return cur;
 }
 
-function parseKey(raw: string): { key: string; op: Op } {
-  const last = raw.trim().slice(-1);
-  if (last === '~' || last === '!' || last === '>' || last === '<') return { key: raw.trim().slice(0, -1).trim(), op: last };
-  return { key: raw.trim(), op: '=' };
+const BY_SUFFIX: Record<string, MatchOp> = { '~': 'contains', '!': 'ne', '>': 'gt', '<': 'lt' };
+
+/** Ключ старого словаря → поле и оператор: «title~» — title, contains. */
+function parseKey(raw: string): { field: string; op: MatchOp } {
+  const k = raw.trim();
+  const op = BY_SUFFIX[k.slice(-1)];
+  return op ? { field: k.slice(0, -1).trim(), op } : { field: k, op: 'eq' };
+}
+
+/** Значение не дописано: '' или пустой список (из одних пустых строк). */
+export const emptyValue = (v: MatchValue | undefined): boolean =>
+  v === undefined || v === null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && !v.some((x) => typeof x === 'number' || String(x).trim()));
+
+/**
+ * when.match любого формата → список условий по порядку. Условие без поля или с пустым значением не применяется: в
+ * правиле его нет (недописанную строку редактор подсвечивает сам, см. web/src/lib/routines/match.ts → incompleteConds).
+ * Это касается и старого словаря: ключ с пустым значением (`title: ''` — «поле пустое», `title!: ''` — «поле не пустое»)
+ * раньше сравнивался с пустой строкой, теперь пропускается. Проверка «поле пустое / заполнено» условиями на поля не
+ * выражается — только проверкой словами (when.check).
+ */
+export function matchConditions(rule: MatchRule | undefined): Array<MatchCondition & { op: MatchOp }> {
+  if (!rule) return [];
+  const list: MatchCondition[] = Array.isArray(rule) ? rule : Object.entries(rule).map(([k, value]) => ({ ...parseKey(k), value }));
+  return list.filter((c) => c.field?.trim() && !emptyValue(c.value)).map((c) => ({ field: c.field.trim(), op: c.op ?? 'eq', value: c.value }));
 }
 
 const norm = (v: unknown): string => (typeof v === 'string' ? v : v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)).trim().toLowerCase();
@@ -43,58 +62,81 @@ function eq(a: unknown, b: string | number | boolean): boolean {
   return norm(a) === norm(b);
 }
 
-/** Одно условие; reason — человекочитаемо, почему не прошло. */
-export function matchOne(e: RoutineEvent, rawKey: string, want: MatchRule[string]): { ok: boolean; reason?: string } {
-  const { key, op } = parseKey(rawKey);
-  const got = fieldValue(e, key);
+const OP_SHOW: Record<MatchOp, string> = { eq: '=', contains: 'содержит', ne: '≠', gt: '>', lt: '<' };
+const OP_FAIL: Record<MatchOp, string> = { eq: 'не равно', contains: 'не содержит', ne: 'равно', gt: 'не больше', lt: 'не меньше' };
+
+const wantsOf = (v: MatchValue): Array<string | number | boolean> => (Array.isArray(v) ? v.filter((x) => typeof x === 'number' || String(x).trim()) : [v]);
+
+/** Одно условие; reason — человекочитаемо, почему не прошло. Старый вызов (ключ словаря и значение) тоже принимается. */
+export function matchOne(e: RoutineEvent, c: MatchCondition | string, want?: MatchValue): { ok: boolean; reason?: string } {
+  const { field, op } = typeof c === 'string' ? parseKey(c) : { field: c.field.trim(), op: c.op ?? 'eq' };
+  const wants = wantsOf(typeof c === 'string' ? want ?? '' : c.value);
+  const got = fieldValue(e, field);
   const vals = Array.isArray(got) ? got : got === undefined ? [] : [got];
-  const wants = Array.isArray(want) ? want : [want];
   let ok: boolean;
   switch (op) {
-    case '=':
+    case 'eq':
       ok = vals.some((v) => wants.some((w) => eq(v, w)));
       break;
-    case '~':
+    case 'contains':
       ok = vals.some((v) => wants.some((w) => norm(v).includes(norm(w))));
       break;
-    case '!':
+    case 'ne':
       ok = !vals.some((v) => wants.some((w) => eq(v, w)));
       break;
-    case '>':
-    case '<': {
+    case 'gt':
+    case 'lt': {
       const limit = Number(wants[0]);
       ok = vals.some((v) => {
         const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
-        return Number.isFinite(n) && (op === '>' ? n > limit : n < limit);
+        return Number.isFinite(n) && (op === 'gt' ? n > limit : n < limit);
       });
       break;
     }
   }
   if (ok) return { ok };
   const shown = got === undefined ? 'нет поля' : `«${show(got)}»`;
-  const what = { '=': 'не равно', '~': 'не содержит', '!': 'равно', '>': 'не больше', '<': 'не меньше' }[op];
-  return { ok, reason: `${key}: ${shown} ${what} ${wants.map((w) => `«${show(w)}»`).join(' / ')}` };
+  const list = op === 'gt' || op === 'lt' ? wants.slice(0, 1) : wants;
+  return { ok, reason: `${field}: ${shown} ${OP_FAIL[op]} ${list.map((w) => `«${show(w)}»`).join(' / ')}` };
 }
 
 /** Каждое условие правила по отдельности: поле, что хотели, что было в событии, прошло ли — «почему сработало» в журнале. */
 export function explainMatch(rule: MatchRule | undefined, e: RoutineEvent): Array<{ key: string; op: string; want: string; got: string; ok: boolean }> {
-  return Object.entries(rule ?? {}).map(([raw, want]) => {
-    const { key, op } = parseKey(raw);
-    const got = fieldValue(e, key);
+  return matchConditions(rule).map((c) => {
+    const got = fieldValue(e, c.field);
     return {
-      key,
-      op: { '=': '=', '~': 'содержит', '!': '≠', '>': '>', '<': '<' }[op],
-      want: (Array.isArray(want) ? want : [want]).map((w) => show(w)).join(' / '),
+      key: c.field,
+      op: OP_SHOW[c.op],
+      want: (c.op === 'gt' || c.op === 'lt' ? wantsOf(c.value).slice(0, 1) : wantsOf(c.value)).map((w) => show(w)).join(' / '),
       got: got === undefined ? '' : show(got),
-      ok: matchOne(e, raw, want).ok,
+      ok: matchOne(e, c).ok,
     };
   });
 }
 
-/** Все условия правила (И): первое не прошедшее — в reason. Пустое правило — проходит. */
-export function matchRule(rule: MatchRule | undefined, e: RoutineEvent): { ok: boolean; reason?: string } {
-  for (const [k, v] of Object.entries(rule ?? {})) {
-    const r = matchOne(e, k, v);
+/** Прошло ли событие каждое условие правила — по порядку matchConditions (воронка проверки на истории). */
+export function matchSteps(rule: MatchRule | undefined, e: RoutineEvent): boolean[] {
+  return matchConditions(rule).map((c) => matchOne(e, c).ok);
+}
+
+/**
+ * Условия правила: all (по умолчанию) — все, первое не прошедшее — в reason; any — хоть одно, в reason — все не
+ * прошедшие. Пустое правило — проходит.
+ */
+export function matchRule(rule: MatchRule | undefined, e: RoutineEvent, mode: MatchMode = 'all'): { ok: boolean; reason?: string } {
+  const conds = matchConditions(rule);
+  if (!conds.length) return { ok: true };
+  if (mode === 'any') {
+    const fails: string[] = [];
+    for (const c of conds) {
+      const r = matchOne(e, c);
+      if (r.ok) return { ok: true };
+      if (r.reason) fails.push(r.reason);
+    }
+    return { ok: false, reason: `ни одно условие не прошло: ${fails.join('; ')}` };
+  }
+  for (const c of conds) {
+    const r = matchOne(e, c);
     if (!r.ok) return r;
   }
   return { ok: true };

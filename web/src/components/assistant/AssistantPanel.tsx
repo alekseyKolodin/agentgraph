@@ -2,6 +2,9 @@
 // выбирает человек, выбор запоминается для раздела) и сколько потрачено; рядом — что помощник знает и умеет по уровням.
 // Лента: сообщение человека → шаги помощника (каждый вызов инструмента: что сделал, чем кончилось, сколько стоило) →
 // ответ. Разговор живёт на сервере: экран можно закрыть, помощник доработает, а по возврате лента откроется по id.
+// Панель-чат в колонке справа от формы (New.dc.html): высотой в экран, лента растягивается, многострочное поле внизу
+// (Enter — отправить, Shift+Enter — перенос), панель сворачивается до шапки; в свёрнутой шапке видно, что помощник
+// работает, ответил или споткнулся.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AssistantStep, AssistantView } from '@server/assistant-types';
@@ -37,9 +40,14 @@ type Props<R> = {
   footer?: (view: AssistantView<R>) => ReactNode;
   /** Что уходит помощнику вместе с сообщением: состояние экрана, как его видит человек сейчас (его правки). */
   extra?: () => Record<string, unknown> | undefined;
+  /** Что помощник делает, одной строкой — в шапке. */
+  sub: string;
+  /** Панель свёрнута до шапки. */
+  collapsed: boolean;
+  onCollapse: (collapsed: boolean) => void;
 };
 
-export function AssistantPanel<R>({ base, modelKey, title, placeholder, intro, chatId, onChatId, appliedRev, onResult, onAct, footer, extra }: Props<R>) {
+export function AssistantPanel<R>({ base, modelKey, title, placeholder, intro, chatId, onChatId, appliedRev, onResult, onAct, footer, extra, sub, collapsed, onCollapse }: Props<R>) {
   const qc = useQueryClient();
   const about = useAssistantAbout(base);
   const [model, setModel] = useState(() => LS.get<string>(modelKey, ''));
@@ -77,13 +85,20 @@ export function AssistantPanel<R>({ base, modelKey, title, placeholder, intro, c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v?.steps]);
 
-  // лента держится у последней строки, пока помощник работает
+  // лента держится у последней строки, пока помощник работает, и после разворачивания панели
   const feed = useRef<HTMLDivElement>(null);
   const size = v ? v.messages.length + v.steps.length : 0;
   useEffect(() => {
     const el = feed.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [size, working]);
+  }, [size, working, collapsed]);
+  // свёрнутая панель: что появилось в ленте с тех пор, как её свернули, — знак «новое» в шапке
+  const [seenSize, setSeenSize] = useState(size);
+  useEffect(() => {
+    if (!collapsed) setSeenSize(size);
+  }, [collapsed, size]);
+  const fresh = collapsed && size > seenSize;
+  const failed = Boolean(error) || v?.state === 'error';
 
   const send = async () => {
     const body = text.trim();
@@ -128,121 +143,149 @@ export function AssistantPanel<R>({ base, modelKey, title, placeholder, intro, c
   const turns = v ? turnsOf(v) : [];
   const defaultModel = about.data?.defaultModel ?? '';
 
-  return (
-    <section className={styles.box} aria-label={title}>
-      <div className={styles.head}>
-        <h2>{title}</h2>
-        <span className={styles.who}>
-          <span className={styles.lbl}>{t('Модель')}</span>
-          <ModelPick
-            value={model}
-            onChange={(m) => {
-              setModel(m);
-              LS.set(modelKey, m);
-            }}
-            defaultLabel={defaultModel ? t('{model}, по умолчанию', { model: defaultModel }) : t('по умолчанию')}
-            label={t('Модель помощника')}
-            title={t('Модель, на которой работает помощник. Выбор запоминается для раздела, менять можно посреди разговора — со следующего сообщения.')}
-            disabled={working}
-            selectClassName={styles.model}
-            inputClassName={styles.modelId}
-          />
-          {v && v.costUsd >= 0.005 && (
-            <span className={styles.cost} title={t('Сколько потрачено за разговор: сам помощник и модели, которые он запускал в шагах')}>
-              {usd(v.costUsd)}
-            </span>
-          )}
-        </span>
-      </div>
-
-      {about.data && can && (
-        <details className={styles.about}>
-          <summary>{t('Что помощник знает и умеет')}</summary>
-          <div className={styles.cols}>
-            <Ability title={t('Знает')} items={about.data.knows} />
-            <Ability title={t('Смотрит сам')} items={can.reads} />
-            <Ability title={t('Делает сам — шаг виден в ленте')} items={can.acts} />
-            <Ability title={t('Только ты')} items={can.onlyYou} />
-          </div>
-        </details>
-      )}
-
-      {!v && <p className={styles.intro}>{intro}</p>}
-
-      {v && (
-        <div className={styles.feed} ref={feed} role="log" aria-label={t('Разговор с помощником')}>
-          {turns.map((turn) => (
-            <div key={turn.turn} className={styles.turn}>
-              {turn.user && <div className={styles.user}>{turn.user.text}</div>}
-              {turn.steps.length > 0 && (
-                <ol className={styles.steps} aria-label={t('Шаги помощника')}>
-                  {turn.steps.map((s) => (
-                    <Step key={s.id} s={s} />
-                  ))}
-                </ol>
-              )}
-              {turn.reply && (
-                <div className={styles.reply}>
-                  <MdText text={turn.reply.text} />
-                  <span className={styles.meta}>
-                    {[turn.reply.model ? modelChip(turn.reply.model) : '', turn.reply.costUsd && turn.reply.costUsd >= 0.005 ? usd(turn.reply.costUsd) : ''].filter(Boolean).join(' · ')}
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
-          {working && (
-            <div className={styles.thinking} role="status">
-              <span className={styles.dot} aria-hidden="true" />
-              {v.steps.some((s) => s.state === 'run') ? t('Выполняет шаг…') : t('Думает…')}
-              <span className={styles.chip} title={t('Модель сессии: {model}', { model: v.model })}>{modelChip(v.model)}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {v?.state === 'error' && v.error && <span className={styles.err}>{v.error}</span>}
-      {lost && <span className={styles.note}>{t('Разговор не сохранился: приложение перезапускалось. Всё, что помощник успел сделать, осталось — напиши ему заново.')}</span>}
-      {q.isError && !gone && <span className={styles.err}>{errorText(q.error)}</span>}
-      {error && <span className={styles.err}>{error}</span>}
-      {v && footer?.(v)}
-
-      <form
-        className={styles.form}
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
+  const modelPick = (
+    <span className={styles.who}>
+      <span className={styles.lbl}>{t('Модель')}</span>
+      <ModelPick
+        value={model}
+        onChange={(m) => {
+          setModel(m);
+          LS.set(modelKey, m);
         }}
-      >
-        <textarea
-          className={styles.inp}
-          rows={2}
-          aria-label={v ? t('Сообщение помощнику') : title}
-          placeholder={v ? t('Что поправить или сделать ещё') : placeholder}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send();
-          }}
-        />
-        <div className={styles.row}>
-          {working ? (
-            <button type="button" className="btn" onClick={() => void stop()} title={t('Прервать помощника. Сделанное до остановки останется')}>
-              {t('Остановить')}
-            </button>
-          ) : (
-            <button type="submit" className="btn primary" disabled={busy || loading || !text.trim()} title={t('Отправить — ⌘↵')}>
-              {v ? t('Отправить') : t('Поручить помощнику')}
-            </button>
+        defaultLabel={defaultModel ? t('{model}, по умолчанию', { model: defaultModel }) : t('по умолчанию')}
+        label={t('Модель помощника')}
+        title={t('Модель, на которой работает помощник. Выбор запоминается для раздела, менять можно посреди разговора — со следующего сообщения.')}
+        disabled={working}
+        selectClassName={styles.model}
+        inputClassName={styles.modelId}
+      />
+      {v && v.costUsd >= 0.005 && (
+        <span className={styles.cost} title={t('Сколько потрачено за разговор: сам помощник и модели, которые он запускал в шагах')}>
+          {usd(v.costUsd)}
+        </span>
+      )}
+    </span>
+  );
+
+  return (
+    <section className={`${styles.box}${collapsed ? ` ${styles.folded}` : ''}`} aria-label={title}>
+      <div className={styles.dockHead}>
+        <svg className={styles.mark2} width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+          <path d="M7 1.5l1.3 3.2 3.2 1.3-3.2 1.3L7 10.5 5.7 7.3 2.5 6l3.2-1.3z" stroke="currentColor" fill="none" strokeWidth="1.2" />
+        </svg>
+        <h2>{title}</h2>
+        <span className={styles.sub}>{sub}</span>
+        {collapsed && working && <span className={styles.dot} role="img" aria-label={t('Помощник работает')} title={t('Помощник работает')} />}
+        {collapsed && !working && failed && <span className={styles.flagErr} role="img" aria-label={t('Помощник споткнулся — разверни, чтобы увидеть')} title={t('Помощник споткнулся — разверни, чтобы увидеть')} />}
+        {collapsed && !working && !failed && fresh && <span className={styles.flagNew} title={t('В ленте новое — разверни, чтобы прочитать')}>{t('новое')}</span>}
+        <button
+          type="button"
+          className="btn small ghost"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t('Развернуть помощника') : t('Свернуть помощника')}
+          title={collapsed ? t('Развернуть помощника') : t('Свернуть помощника')}
+          onClick={() => onCollapse(!collapsed)}
+        >
+          {collapsed ? '+' : '—'}
+        </button>
+      </div>
+      {!collapsed && (
+        <div className={styles.dockBody}>
+          <div className={styles.dockTools}>{modelPick}</div>
+
+          {about.data && can && (
+            <details className={styles.about}>
+              <summary>{t('Что помощник знает и умеет')}</summary>
+              <div className={styles.cols}>
+                <Ability title={t('Знает')} items={about.data.knows} />
+                <Ability title={t('Смотрит сам')} items={can.reads} />
+                <Ability title={t('Делает сам — шаг виден в ленте')} items={can.acts} />
+                <Ability title={t('Только ты')} items={can.onlyYou} />
+              </div>
+            </details>
           )}
-          {v && !working && (
-            <button type="button" className="btn ghost small" onClick={restart} title={t('Закрыть этот разговор и начать с чистого листа. Сделанное помощником останется')}>
-              {t('Новый разговор')}
-            </button>
-          )}
-          {working && <span className={styles.note}>{t('Можно уйти с экрана: помощник доработает, лента будет здесь.')}</span>}
+
+          <div className={styles.feed} ref={feed} role="log" aria-label={t('Разговор с помощником')}>
+            <div className={styles.hello}>{intro}</div>
+            {turns.map((turn) => (
+              <div key={turn.turn} className={styles.turn}>
+                {turn.user && <div className={styles.user}>{turn.user.text}</div>}
+                {turn.steps.length > 0 && (
+                  <ol className={styles.steps} aria-label={t('Шаги помощника')}>
+                    {turn.steps.map((st) => (
+                      <Step key={st.id} s={st} />
+                    ))}
+                  </ol>
+                )}
+                {turn.reply && (
+                  <div className={styles.reply}>
+                    <MdText text={turn.reply.text} />
+                    <span className={styles.meta}>
+                      {[turn.reply.model ? modelChip(turn.reply.model) : '', turn.reply.costUsd && turn.reply.costUsd >= 0.005 ? usd(turn.reply.costUsd) : ''].filter(Boolean).join(' · ')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+            {working && v && (
+              <div className={styles.thinking} role="status">
+                <span className={styles.dot} aria-hidden="true" />
+                {v.steps.some((st) => st.state === 'run') ? t('Выполняет шаг…') : t('Думает…')}
+                <span className={styles.chip} title={t('Модель сессии: {model}', { model: v.model })}>{modelChip(v.model)}</span>
+              </div>
+            )}
+          </div>
+
+          {v?.state === 'error' && v.error && <span className={styles.err}>{v.error}</span>}
+          {lost && <span className={styles.note}>{t('Разговор не сохранился: приложение перезапускалось. Всё, что помощник успел сделать, осталось — напиши ему заново.')}</span>}
+          {q.isError && !gone && <span className={styles.err}>{errorText(q.error)}</span>}
+          {error && <span className={styles.err}>{error}</span>}
+          {v && footer?.(v)}
+
+          <form
+            className={styles.form}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send();
+            }}
+          >
+            <textarea
+              className={styles.inp}
+              rows={3}
+              aria-label={v ? t('Сообщение помощнику') : title}
+              placeholder={v ? t('Что поправить или сделать ещё') : placeholder}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                // как в чате: Enter отправляет, Shift+Enter — новая строка (ввод иероглифов Enter не крадёт)
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <div className={styles.row}>
+              {!working && <span className={styles.note}>{t('Enter — отправить, Shift+Enter — новая строка')}</span>}
+              {working && <span className={styles.note}>{t('Можно уйти с экрана: помощник доработает, лента будет здесь.')}</span>}
+              <span className={styles.gap} />
+              {v && !working && (
+                <button type="button" className="btn ghost small" onClick={restart} title={t('Закрыть этот разговор и начать с чистого листа. Сделанное помощником останется')}>
+                  {t('Новый разговор')}
+                </button>
+              )}
+              {working ? (
+                <button type="button" className="btn small" onClick={() => void stop()} title={t('Прервать помощника. Сделанное до остановки останется')}>
+                  {t('Остановить')}
+                </button>
+              ) : (
+                <button type="submit" className="btn primary small" disabled={busy || loading || !text.trim()} title={t('Отправить — Enter')}>
+                  {t('Отправить')}
+                </button>
+              )}
+            </div>
+          </form>
         </div>
-      </form>
+      )}
     </section>
   );
 }

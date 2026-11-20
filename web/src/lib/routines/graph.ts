@@ -1,49 +1,11 @@
-// Граф рутины (docs/ASSISTANTS.md §4): фиксированная цепочка узлов — Триггер → Условия по полям → ИИ рутины → Дело →
-// Запустить flow → Ждать меня → Ответить. Здесь — что написать на узле по черновику формы (кто работает, что настроено,
-// сколько событий дошло на истории) и путь одного срабатывания по тому же графу: какие узлы пройдены, где событие
-// остановилось и почему. Без React и DOM.
-import type { HistoryCheck, LogEntry, LogExplain } from '@server/routines/types';
+// Путь одного срабатывания рутины по её шагам (docs/ASSISTANTS.md §4) — для «Срабатываний»: Триггер → Условия по полям
+// → ИИ рутины → Дело → Запустить flow → Ждать меня → Ответить; какие шаги пройдены, где событие остановилось и почему.
+// Редактор рисует правило разделами (screens/routines/sections), отсюда берёт подписи моделей. Без React и DOM.
+import type { LogEntry, LogExplain } from '@server/routines/types';
 import { MODELS } from '../flow/tools';
-import { plural, t } from '../i18n';
-import { describeSchedule, toCron } from './schedule';
-import { everyLabel } from './source';
-import { draftRuns, isSchedule, type RoutineDraft } from './spec';
+import { t } from '../i18n';
 
 export type NodeId = 'trigger' | 'conds' | 'ai' | 'task' | 'run' | 'wait' | 'reply';
-
-/** Кто работает в узле: никто (без модели), модель, сам человек. */
-export type NodeWho = { kind: 'none' | 'model' | 'me'; label: string };
-
-export type GraphNode = {
-  id: NodeId;
-  title: string;
-  /** Что настроено, одной строкой. */
-  sub: string;
-  who: NodeWho;
-  /** Узел сейчас ничего не делает (ИИ без условия, дело не заводится, запуска нет): рисуется приглушённо. */
-  off?: boolean;
-  /** Сколько событий прошло узел на последней проверке на истории (у триггера — сколько пришло). */
-  count?: number;
-  /** Узел «ИИ рутины»: что он решил по событиям истории. */
-  outcomes?: { run: number; skip: number; ask: number };
-  /** Чего не хватает, чтобы правило заработало: подсказка на узле. */
-  warn?: string;
-};
-
-export type GraphCtx = {
-  /** Источник черновика: название, вид, частота опроса. */
-  source?: { title: string; kind: string; every?: string };
-  /** Как приходят события вида: live — сразу, poll — опрос, model — каждую проверку читает модель. */
-  delivery?: 'live' | 'poll' | 'model';
-  /** Куда уйдёт ответ, словами («в тред Slack»). */
-  replyWhere?: string;
-  /** Последняя проверка на истории: по ней счётчики узлов. */
-  hist?: HistoryCheck | null;
-  /** Чего не хватает (draftMissing). */
-  missing?: string[];
-};
-
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /** Подпись модели: название из общего списка, иначе id как есть; '' — «по умолчанию». */
 export function modelName(id: string | undefined, fallback: string): string {
@@ -54,96 +16,6 @@ export function modelName(id: string | undefined, fallback: string): string {
 
 /** Модель узла «ИИ рутины» по умолчанию (CHECK_MODEL сервера — haiku): подпись, когда своя не выбрана. */
 export const DEFAULT_CHECK_MODEL = t('haiku, по умолчанию');
-
-const NONE: NodeWho = { kind: 'none', label: t('без модели') };
-
-/** Счётчики узлов по проверке на истории: сколько событий пришло, прошло условия, что решил ИИ, сколько запустилось бы. */
-export function historyCounts(hist: HistoryCheck | null | undefined): { total: number; conds: number; run: number; skip: number; ask: number } | undefined {
-  if (!hist) return undefined;
-  const ev = hist.events;
-  const passed = ev.filter((e) => e.outcome !== 'filtered');
-  const ask = passed.filter((e) => e.unsure).length;
-  const run = passed.filter((e) => !e.unsure && (e.outcome === 'started' || e.outcome === 'waiting')).length;
-  return { total: ev.length, conds: passed.length, run, ask, skip: passed.length - run - ask };
-}
-
-/** Узлы графа по черновику: расписание — без условий и ИИ (событий нет), рутина только с делом — запуск приглушён. */
-export function routineNodes(d: RoutineDraft, ctx: GraphCtx = {}): GraphNode[] {
-  const sched = isSchedule(d);
-  const runs = draftRuns(d);
-  const c = sched ? undefined : historyCounts(ctx.hist);
-  const missing = ctx.missing ?? [];
-  const out: GraphNode[] = [];
-
-  if (sched) {
-    out.push({ id: 'trigger', title: t('Триггер'), sub: t('Расписание: {when}', { when: describeSchedule(toCron(d.schedule)) }), who: NONE });
-  } else {
-    const src = ctx.source;
-    const how = ctx.delivery === 'live' ? t('события приходят сразу') : src?.every ? t('опрос {every}', { every: everyLabel(src.every) }) : t('опрос');
-    out.push({
-      id: 'trigger',
-      title: t('Триггер'),
-      sub: src ? `${src.title} · ${how}` : t('источник не выбран'),
-      // «Сервис через Claude» без скрипта читает сервис моделью на каждой проверке — это видно на узле
-      who: ctx.delivery === 'model' ? { kind: 'model', label: t('модель на каждой проверке') } : NONE,
-      ...(c ? { count: c.total } : {}),
-      ...(missing.includes('source') ? { warn: t('выбери, что запускает') } : {}),
-    });
-    out.push({
-      id: 'conds',
-      title: t('Условия по полям'),
-      sub: d.conds.length ? t('{n} {w}', { n: d.conds.length, w: plural(d.conds.length, 'условие', 'условия', 'условий') }) : t('условий нет: проходит любое событие'),
-      who: NONE,
-      off: !d.conds.length,
-      ...(c ? { count: c.conds } : {}),
-    });
-    const check = d.check.trim();
-    out.push({
-      id: 'ai',
-      title: t('ИИ рутины'),
-      sub: check ? clip(check, 110) : t('выключен: проходит всё, что прошло условия'),
-      who: check ? { kind: 'model', label: modelName(d.checkModel, DEFAULT_CHECK_MODEL) } : NONE,
-      off: !check,
-      ...(c && check ? { count: c.run + c.ask, outcomes: { run: c.run, skip: c.skip, ask: c.ask } } : {}),
-    });
-  }
-
-  out.push({
-    id: 'task',
-    title: t('Дело'),
-    sub: d.taskOn ? (d.taskFrom === 'flow' ? t('«{kind}» заводит flow', { kind: d.taskKind || '…' }) : t('«{kind}» в «{col}»', { kind: d.taskKind || '…', col: d.taskColumn === 'plan' ? t('В плане') : t('Новое') })) : t('не заводить'),
-    who: NONE,
-    off: !d.taskOn,
-    ...(missing.includes('kind') ? { warn: t('назови вид дела') } : missing.includes('close') ? { warn: t('напиши, когда закрыть дело') } : {}),
-  });
-
-  const where = [d.space, d.worktree === 'new' ? t('новое рабочее дерево') : ''].filter(Boolean).join(' · ');
-  out.push({
-    id: 'run',
-    title: t('Запустить flow'),
-    sub: !runs ? t('ничего — только завести дело') : d.flow ? [d.flow, where].filter(Boolean).join(' · ') : t('flow не выбран'),
-    who: runs ? { kind: 'model', label: modelName(d.model, t('модель flow')) } : NONE,
-    off: !runs,
-    ...(c && runs ? { count: c.run } : {}),
-    ...(missing.includes('flow') ? { warn: t('выбери flow') } : {}),
-  });
-  out.push({
-    id: 'wait',
-    title: t('Ждать меня'),
-    sub: !runs ? t('ждать нечего') : d.mode === 'suggest' ? t('перед запуском') : d.mode === 'until_pause' ? (d.pauseBefore.length ? t('перед блоком «{block}»', { block: d.pauseBefore.join('», «') }) : t('перед блоком — блок не выбран')) : t('не ждать'),
-    who: runs && d.mode !== 'auto' ? { kind: 'me', label: t('ты') } : NONE,
-    off: !runs || d.mode === 'auto',
-    ...(missing.includes('block') ? { warn: t('выбери блок, перед которым ждать') } : {}),
-  });
-  out.push({
-    id: 'reply',
-    title: t('Ответить'),
-    sub: !runs || d.reply === 'off' ? t('не сообщать') : `${ctx.replyWhere ?? t('в источник')}, ${d.reply === 'draft' ? t('после твоей проверки') : t('сразу')}`,
-    who: runs && d.reply === 'draft' ? { kind: 'me', label: t('ты проверяешь') } : NONE,
-    off: !runs || d.reply === 'off',
-  });
-  return out;
-}
 
 // ---------------------------------------------------------------- путь срабатывания
 

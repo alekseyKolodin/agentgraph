@@ -20,45 +20,66 @@ export async function connectReady(page: Page, kind: string, fields: Record<stri
 }
 
 export type NewRoutine = {
-  /** Заголовок источника на шаге 1 или «Расписание». */
+  /** Заголовок карточки источника в «Когда» или «По расписанию». */
   source: string;
   flow: string;
-  /** Ждать меня: перед запуском | перед блоком | не ждать. */
-  wait?: 'перед запуском' | 'перед блоком' | 'не ждать';
-  /** Сообщать о результате. */
-  reply?: 'После моей проверки' | 'Сразу' | 'Не сообщать';
+  /** «Запускать» в «Что сделать»: после моего «да» | сразу, но стоп перед блоком | сразу. */
+  wait?: 'после моего «да»' | 'сразу, но стоп перед блоком' | 'сразу';
+  /** Как уходит ответ в «Как узнаю»; «не сообщать» — убрать строку ответа (×). */
+  reply?: 'после проверки' | 'сразу' | 'не сообщать';
+  /** Условие для ИИ в «Когда». */
   check?: string;
   title?: string;
   /** Что ещё сделать на форме до сохранения. */
   extra?: (page: Page) => Promise<void>;
 };
 
-/** «Новая рутина»: четыре шага и «Дальше: проверка на истории» → редактор черновика. Возвращает слаг. */
+/** Выбрать flow в «Что сделать»: список с поиском — кнопка поля «Flow», потом строка списка. */
+export async function pickFlow(page: Page, flow: string): Promise<void> {
+  const what = page.getByRole('region', { name: 'Что сделать' });
+  await what.getByRole('button', { name: /^Flow\b/ }).click();
+  await page.getByRole('option', { name: new RegExp(`^${flow.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).click();
+}
+
+/**
+ * «Новая рутина»: три раздела «Когда · Что сделать · Как узнаю» и «Сохранить черновиком» → редактор черновика.
+ * Возвращает слаг.
+ */
 export async function createRoutine(page: Page, r: NewRoutine, o: { goto?: boolean } = {}): Promise<string> {
   if (o.goto !== false) await page.goto('/routines/new');
   await expect(page.getByRole('heading', { name: 'Новая рутина' })).toBeVisible();
-  const s1 = page.getByRole('region', { name: 'Что запускает' });
-  await pick(s1, r.source).click();
-  if (r.check) {
-    await page.getByRole('button', { name: '+ ИИ рутины' }).click();
-    await page.getByLabel('ИИ рутины: какие события запускать').fill(r.check);
+  const when = page.getByRole('region', { name: 'Когда' });
+  await pick(when.getByRole('group', { name: 'Что запускает' }), r.source).click();
+  if (r.check) await when.getByLabel('Условие для ИИ').fill(r.check);
+  await pickFlow(page, r.flow);
+  if (r.wait) await page.getByRole('region', { name: 'Что сделать' }).getByRole('group', { name: 'Запускать' }).getByRole('button', { name: r.wait, exact: true }).click();
+  const notify = page.getByRole('region', { name: 'Как узнаю' });
+  if (r.reply === 'не сообщать') {
+    const off = notify.getByRole('button', { name: 'Не отвечать' });
+    if (await off.count()) await off.click();
+  } else if (r.reply) {
+    const how = notify.getByRole('group', { name: 'Как уходит ответ' });
+    // ответа ещё нет (источник не отвечает сам или ответ сняли) — сперва строка ответа
+    if (!(await how.count())) await notify.getByRole('button', { name: '+ Ответ в сервис' }).click();
+    await how.getByRole('button', { name: r.reply, exact: true }).click();
   }
-  const s3 = page.getByRole('region', { name: 'Что запустить' });
-  await pick(s3, r.flow).click();
-  if (r.wait) await s3.getByRole('group', { name: 'Когда ждать меня' }).getByRole('button', { name: r.wait }).click();
-  if (r.reply) await page.getByRole('region', { name: 'Сообщать о результате' }).getByRole('button', { name: r.reply }).click();
   await r.extra?.(page);
-  const summary = page.getByRole('complementary', { name: 'Что получится' });
-  if (r.title) await summary.getByLabel('Название').fill(r.title);
-  await summary.getByRole('button', { name: 'Дальше: проверка на истории' }).click();
+  if (r.title) await page.getByLabel('Название', { exact: true }).fill(r.title);
+  await page.getByRole('button', { name: 'Сохранить черновиком' }).click();
   await expect(page).toHaveURL((u) => /^\/routines\/[a-z0-9-]+$/.test(u.pathname) && u.pathname !== '/routines/new');
   await expect(page.getByRole('link', { name: 'Правило' })).toBeVisible();
   return decodeURIComponent(new URL(page.url()).pathname.split('/').pop()!);
 }
 
-/** Редактор — граф: настройки узла открываются кликом по нему (имя кнопки начинается с названия узла). */
-export async function openNode(page: Page, title: 'Триггер' | 'Условия по полям' | 'ИИ рутины' | 'Дело' | 'Запустить flow' | 'Ждать меня' | 'Ответить'): Promise<void> {
-  await page.getByRole('list', { name: 'Граф рутины' }).getByRole('button', { name: new RegExp(`^${title}`) }).click();
+/** Раздел редактора или «Новой рутины»: «Когда», «Что сделать», «Как узнаю» — поля в нём видны сразу. */
+export function section(page: Page, title: 'Когда' | 'Что сделать' | 'Как узнаю'): Locator {
+  return page.getByRole('region', { name: title });
+}
+
+/** «Дополнительно ›» в «Что сделать»: пространство, рабочее дерево, лимиты, модель flow. */
+export async function openExtras(page: Page): Promise<void> {
+  const more = section(page, 'Что сделать').getByRole('button', { name: /^Дополнительно/ });
+  if ((await more.getAttribute('aria-expanded')) !== 'true') await more.click();
 }
 
 /** Редактор черновика: «Включить» → «Срабатывания» этой рутины. */

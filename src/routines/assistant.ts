@@ -382,6 +382,7 @@ export function routineTools(deps: RoutineAssistantDeps): AssistantTool<RoutineA
           .array(z.object({ key: STR.min(1).describe('Поле из полей вида источника'), op: z.enum(['is', 'contains', 'not', 'gt', 'lt']).describe('is — равно, contains — содержит, not — не равно, gt/lt — больше/меньше'), values: z.array(STR).min(1).describe('Значения; для да/нет-поля — ["true"] или ["false"]') }))
           .optional()
           .describe('Условия по полям без модели — только названные человеком'),
+        match_mode: z.enum(['all', 'any']).optional().describe('all — должны пройти все условия по полям (по умолчанию), any — хватает одного'),
         check: STR.max(2000).optional().describe('Условие словами для узла «ИИ рутины»: критерий, по которому модель решает, запускать ли'),
         check_model: STR.max(100).optional().describe('Модель узла «ИИ рутины», только если человек её назвал: haiku, sonnet, opus или id модели'),
         ask: z.boolean().optional().describe('ИИ рутины не уверен — спросить человека, а не пропустить. По умолчанию true'),
@@ -397,6 +398,7 @@ export function routineTools(deps: RoutineAssistantDeps): AssistantTool<RoutineA
         reply: z.object({ to: STR.describe('none или source'), draft: z.boolean().optional().describe('true — после проверки человеком') }).optional().describe('Сообщить о результате в источник'),
         task: z.object({ kind: STR.min(1).describe('Вид дела: «Ревью», «Баг»'), from: z.enum(['event', 'flow']).optional(), column: z.enum(['new', 'plan']).optional(), close: STR.optional() }).optional().describe('Дело на доске «Мои дела»'),
         limits: z.object({ usd: z.number().positive().optional(), per_day: z.number().int().positive().optional(), parallel: z.number().int().positive().optional() }).optional().describe('Лимиты, только названные человеком'),
+        notify: z.array(z.enum(['start', 'wait', 'end', 'fail'])).optional().describe('Системные уведомления рутины: start — запуск начался, wait — ждёт решения, end — ответ ждёт проверки, fail — запуск не удался. Чтобы оставить по умолчанию (wait, end, fail), НЕ передавай поле вовсе; [] — молчать обо всём. В form есть notify.os — передай его как есть; человек ничего не говорил об уведомлениях и в form их нет — поле не передавай'),
         notes: z.array(STR).max(6).optional().describe('Короткие фразы для человека: что выбрано и что ты предположил'),
       },
       say: (i) => `Заполнить черновик «${clip(i.title, 80)}»`,
@@ -499,7 +501,7 @@ export function routineSection(deps: RoutineAssistantDeps): AssistantSection<Rou
     context: (chat) => routineState(deps, chat),
     tools: routineTools(deps),
     about: {
-      knows: ['Как устроена рутина: триггер, условия по полям, ИИ рутины, flow, ожидание, ответ', 'Все поля правила, примеры готовых рутин и рецепты по шагам', 'Твои источники, сервисы в Claude, flow, пространства, рутины и форму ниже — с твоими правками'],
+      knows: ['Как устроена рутина: триггер, условия по полям, ИИ рутины, flow, ожидание, ответ', 'Все поля правила, примеры готовых рутин и рецепты по шагам', 'Твои источники, сервисы в Claude, flow, пространства, рутины и разделы слева — с твоими правками'],
       onlyYou: ['Включить рутину', 'Ввести ключ или токен', 'Удалить источник, рутину или flow', 'Отправить что-то наружу'],
     },
     maxTurns: 40,

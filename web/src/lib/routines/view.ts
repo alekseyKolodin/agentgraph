@@ -1,6 +1,6 @@
 // Что показывать в списке рутин, журнале срабатываний и карточках главной: состояние рутины (точка и подпись), полоска
 // последних срабатываний, исход строки журнала с цветом и действием, фильтры-чипы, кнопки карточки ожидания и «догнать».
-import type { CatchUp, Feedback, HistoryCheck, LogEntry, LogOutcome, RoutineView, RoutineWait, SourceView } from '@server/routines/types';
+import type { CatchUp, Feedback, HistoryCheck, HistoryFunnel, LogEntry, LogOutcome, RoutineView, RoutineWait, SourceView } from '@server/routines/types';
 import { usd } from '../format';
 import { plural, t } from '../i18n';
 

@@ -24,7 +24,13 @@ fs.writeFileSync(path.join(home, 'flows', 'demo.yaml'), 'name: demo\nphases:\n  
 const { startServer, stopServer } = await import('./server.js');
 
 const notices: Notice[] = [];
-const fakeRunFlow = async (): Promise<never> => {
+/** Следующий запуск сначала задаст вопрос агента — как раннер на AskUserQuestion. */
+let askNext = false;
+const fakeRunFlow = async (_spec: unknown, opts: { onEvent?: (e: unknown) => void }): Promise<never> => {
+  if (askNext) {
+    askNext = false;
+    opts.onEvent?.({ type: 'question', question: { id: `q-${Date.now()}`, block: 'work', iteration: 1, phase: 'work', title: 'Работа', questions: [{ question: 'Какую базу берём?', header: 'База', options: [], multiSelect: false }], askedAt: new Date().toISOString() } });
+  }
   throw new Error('поддельный раннер');
 };
 
@@ -115,6 +121,32 @@ test('конец запуска рутины: заголовком событи�
   assert.equal(mine[0].title, 'Ночная сверка — по расписанию — ошибка');
   assert.equal(mine[0].path, `/run/${runId}`);
   assert.match(mine[0].body, /Ночная сверка · \$0\.00 · поддельный раннер/);
+});
+
+/** Запустить рутину кнопкой с вопросом агента и собрать её уведомления (ждём конец запуска). */
+async function routineAsk(slug: string, notify?: unknown): Promise<Notice[]> {
+  const before = notices.length;
+  const put = await fetch(`${base}/api/routines/${slug}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec: { title: 'Сверка', when: { schedule: '0 3 * * *' }, run: { flow: 'demo', cwd: proj }, mode: 'auto', ...(notify ? { notify } : {}) } }) });
+  assert.equal(put.status, 200, await put.clone().text());
+  askNext = true;
+  const run = await fetch(`${base}/api/routines/${slug}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(run.status, 200, await run.clone().text());
+  const { runId } = (await run.json()) as { runId: string };
+  const until = Date.now() + 5000;
+  for (;;) {
+    const runs = (await (await fetch(`${base}/api/runs`)).json()) as { id: string; status: string }[];
+    if (runs.find((r) => r.id === runId)?.status === 'failed' || Date.now() > until) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await new Promise((r) => setTimeout(r, 100));
+  return notices.slice(before);
+}
+
+test('вопрос агента в запуске рутины: по умолчанию уведомляет, notify.os: [] — молчит', async () => {
+  const loud = await routineAsk('ask-loud');
+  assert.ok(loud.some((n) => /вопрос от «Работа»/.test(n.title)), JSON.stringify(loud));
+  const quiet = await routineAsk('ask-quiet', { os: [] });
+  assert.deepEqual(quiet, []);
 });
 
 test('уведомление о сессии: вопрос — «Спрашивает: …», разрешение — «Просит разрешения: …», без вопроса — закончила ход', async () => {

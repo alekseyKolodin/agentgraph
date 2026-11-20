@@ -66,6 +66,7 @@
 .srow:first-child { border-top: 0; }
 /* имя источника — не ссылка: растянутый ::after строки рутины перекрыл бы кнопки «Проверить» и «Удалить» и полосу ожидания */
 .srow .rname::after { content: none; }
+.srow .rname:focus-visible { box-shadow: var(--focus); border-radius: var(--r-xs); }
 .skey { grid-column: 2 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .skey .inp { max-width: 320px; }
 
@@ -84,16 +85,12 @@
 .pick[aria-pressed="true"] { border-color: var(--ink); background: var(--raised); }
 .pick b { font-weight: 500; font-size: var(--fs-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick span { font-size: var(--fs-meta); color: var(--ink-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.pick.dashed { border-style: dashed; background: transparent; }
 .pick[disabled] { opacity: .55; cursor: default; }
 
 .slot { font: inherit; font-weight: 500; color: var(--ink); background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-xs); padding: 0 8px; line-height: 24px; margin: 2px 0; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: baseline; }
 .slot:hover { border-color: rgba(255, 255, 255, .24); }
 .slot[aria-expanded="true"] { border-color: var(--ink); }
 .slot.add { border-style: dashed; color: var(--ink-3); font-weight: 400; }
-.slot.task-kind { cursor: text; font-weight: 500; }
-.slot.gate { border-color: color-mix(in srgb, var(--st-wait) 55%, transparent); }
-.sentence { line-height: 30px; }
 
 .seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
 .seg button { font: inherit; font-size: var(--fs-small); color: var(--ink-2); background: transparent; border: 0; border-right: 1px solid var(--line); padding: 4px 14px; line-height: 22px; cursor: pointer; }
@@ -110,28 +107,26 @@ select.inp { height: 34px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .inline > .inp { flex: 1 1 220px; width: auto; }
-.inline > .inp.inline-sel { flex: none; }
-
-/* редактор условий: строка «поле · оператор · значение · ×» под фразой */
-.cond-edit { display: grid; grid-template-columns: minmax(120px, 180px) minmax(90px, 120px) minmax(0, 1fr) auto; gap: 6px; align-items: center; margin-top: 6px; padding: 8px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
-.cond-edit .inp { min-height: 30px; padding: 4px 8px; background: var(--panel); }
-.cond-edit select.inp { height: 30px; }
 
 /* найденные записи: заголовок и время */
 .found-list { display: flex; flex-direction: column; }
 .found { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: var(--fs-small); align-items: baseline; }
 .found > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- новая рутина: шаги слева, итог справа */
-.new-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 32px; align-items: start; max-width: 1180px; }
-.step { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 14px; padding: 20px 0; border-top: 1px solid var(--line); }
-.step:first-child { border-top: 0; padding-top: 4px; }
-.num { width: 26px; height: 26px; border-radius: var(--r-sm); background: var(--raised); display: grid; place-items: center; font: 500 var(--fs-meta) var(--font-mono); color: var(--ink-2); }
-.step-body { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.sh { margin: 0; font-size: var(--fs-h3); font-weight: 600; line-height: 26px; }
-.summary { position: sticky; top: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }
-.summary p { margin: 0; font-size: var(--fs-h3); line-height: 1.5; text-wrap: pretty; }
-.summary .btn { align-self: flex-start; }
+/* ---------- новая рутина (New.dc.html): название и шаблоны над разделами; справа чат помощника и проверка на истории.
+   Колонка липкая и не выше экрана: чат высотой в экран, проверка под ним прокручивается внутри колонки */
+.new-top { display: flex; flex-direction: column; gap: 10px; margin: -4px 0 20px; }
+.new-name { display: flex; align-items: center; gap: 10px; max-width: 560px; }
+.new-name > :last-child { flex: 1 1 auto; }
+.new-side { display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.new-side > * { flex: none; }
+.pill-draft { background: transparent; color: var(--ink-2); border: 1px dashed var(--line-strong); }
+.tpl-row a.chip[aria-current="true"] { background: var(--raised); color: var(--ink); border-color: var(--ink-2); }
+.new-top .tpl-row { margin: 0; }
+/* разделы в fieldset: на время сохранения форма выключена целиком, своей рамки у него нет */
+.lock { border: 0; margin: 0; padding: 0; min-width: 0; }
+/* чего не хватает, чтобы включить: видно под шапкой, а не только в подсказке у кнопки */
+.why { margin: -8px 0 14px; font-size: var(--fs-small); color: var(--st-wait); text-wrap: pretty; }
 .flow-search { max-width: 320px; }
 
 /* ---------- подключить сервис */
@@ -151,29 +146,16 @@ select.inp { height: 34px; }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
-/* ---------- редактор: правило фразами слева, проверка на истории справа */
+/* ---------- шапка рутины, строки проверки на истории (sections/HistoryPanel), фразы «Новой рутины» */
 .title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .title-row h1 { margin: 0; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.01em; }
 .pill { font-size: var(--fs-cap); font-weight: 500; border-radius: var(--r-pill); padding: 1px 8px; white-space: nowrap; background: var(--raised); color: var(--ink-2); }
 .pill.on { background: color-mix(in srgb, var(--st-ok) 18%, transparent); color: var(--st-ok); }
 .pill.paused { background: var(--well); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
-.edit-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
-.rule { flex: 999 1 520px; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }
 .clause { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 14px; padding: 12px 16px; border-top: 1px solid var(--line); align-items: baseline; }
 .clause:first-child { border-top: 0; }
 .k { font-size: var(--fs-small); font-weight: 500; line-height: 24px; color: var(--ink-3); }
-.poll { display: flex; flex-direction: column; gap: 2px; }
 .clause-body { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.more { display: flex; gap: 10px; align-items: baseline; width: 100%; padding: 11px 16px; background: transparent; border: 0; border-top: 1px solid var(--line); font: inherit; font-size: var(--fs-small); color: var(--ink-2); cursor: pointer; text-align: left; }
-.more:hover { background: var(--hover); }
-.more > span:first-child { flex: none; white-space: nowrap; }
-.more-sum { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.history { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.hist-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.hist-big { font-size: var(--fs-h3); font-weight: 600; }
-/* проверка идёт: под уже проверенными событиями — что дальше */
-.hist-progress { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-small); color: var(--ink-2); text-wrap: pretty; }
-.hist-progress .spinner { flex: none; }
 .dr { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); font-size: var(--fs-small); align-items: baseline; }
 .dr-v { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
 .dr-v.run { color: var(--st-ok); }
@@ -183,11 +165,9 @@ select.inp { height: 34px; }
 .dr > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problems { margin: 0 0 12px; padding: 8px 14px; border: 1px solid color-mix(in srgb, var(--st-fail) 40%, transparent); background: color-mix(in srgb, var(--st-fail) 6%, var(--panel)); border-radius: var(--r-md); color: var(--ink); font-size: var(--fs-small); }
 .problems ul { margin: 4px 0 0; padding-left: 18px; }
-.bar { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 12px 0; margin-top: 16px; background: var(--deck); border-top: 1px solid var(--line); }
 .bar-gap { flex: 1; }
 .yaml { width: 100%; min-height: 280px; font-family: var(--font-mono); font-size: var(--fs-small); }
 .self-start { align-self: flex-start; }
-.inline-sel { width: auto; display: inline-block; }
 .tab-link { text-decoration: none; }
 .chips-inline { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
 /* «Сервис через Claude»: инструменты выбранного сервиса */
@@ -240,11 +220,11 @@ select.inp { height: 34px; }
 .t-fail { color: var(--st-fail); }
 
 @media (max-width: 1100px) {
-  .new-grid, .connect-grid { grid-template-columns: minmax(0, 1fr); }
-  .summary { position: static; }
+  .connect-grid { grid-template-columns: minmax(0, 1fr); }
+  /* колонка помощника ушла под разделы: не липнет и не режется по высоте экрана */
+  .new-side.new-side { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 700px) {
-  .tpls { grid-template-columns: minmax(0, 1fr); }
   .strip { display: none; }
   .rrow { grid-template-columns: 8px minmax(0, 1fr) 34px; }
   /* узко: время прячем, исход важнее */
@@ -258,15 +238,10 @@ select.inp { height: 34px; }
 .lg-detail { grid-column: 2 / -1; }
 .lg-skip { grid-column: 2 / -1; }
   .clause { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .cond-edit { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 
-/* «Папка проекта»: чипы недавних папок под полем */
-.recent-dirs { align-items: center; }
-.recent-dirs :global(.chip) { padding: 2px 9px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* проверка на истории: что получит flow на настоящем событии */
-.preview > summary { cursor: pointer; font-size: var(--fs-meta); color: var(--ink-3); }
 .preview-text { margin: 8px 0 0; padding: 8px 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); }
 
 /* пример события в узлах «Условия по полям» и «ИИ рутины»: что приходит с сервиса */
@@ -291,26 +266,4 @@ select.inp { height: 34px; }
 .why-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
 .why-conds { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 
-/* ---------- редактор-граф (docs/routines/design/v2): слева цепочка узлов, справа настройки выбранного и проверка на истории */
-.graph-grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
-.graph-col { flex: 1 1 280px; max-width: 360px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.graph-note { margin: 0; font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
-.node-col { flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
-.node-col > .rule, .node-col > .history { flex: none; }
-.node-head { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-.node-head h2 { margin: 0; font-size: var(--fs-h3); font-weight: 600; }
-.node-head + .clause { border-top: 0; }
-.node-about { flex: 1 1 100%; font-size: var(--fs-small); color: var(--ink-2); text-wrap: pretty; }
-.node-who { font-size: var(--fs-cap); font-weight: 500; border-radius: var(--r-xs); padding: 1px 6px; background: var(--select); color: var(--ink-2); white-space: nowrap; }
-.node-who.model { background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); }
-.node-who.me { background: color-mix(in srgb, var(--st-wait) 16%, transparent); color: var(--st-wait); }
-.plain { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-small); color: var(--ink-2); }
-.plain b { font-weight: 600; color: var(--ink); }
-.check-row { display: flex; gap: 8px; align-items: baseline; font-size: var(--fs-small); color: var(--ink-2); cursor: pointer; }
-.check-row b { font-weight: 600; color: var(--ink); }
-.check-row input { flex: none; }
-/* помощник: кто работает, что он знает и умеет, сколько потратил */
-.ai-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ai-chip { font-family: var(--font-mono); font-size: var(--fs-cap); border-radius: var(--r-xs); padding: 1px 6px; background: color-mix(in srgb, var(--live) 16%, transparent); color: var(--live); white-space: nowrap; }
-.saved { font-size: var(--fs-meta); color: var(--ink-3); }
 .path-wrap { display: flex; flex-direction: column; gap: 6px; max-width: 520px; }

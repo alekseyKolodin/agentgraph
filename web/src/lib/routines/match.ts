@@ -1,18 +1,31 @@
-// Условия рутины на поля события (when.match, без модели): разбор MatchRule в строки редактора и обратно, текст условия
-// для фразы и слотов. Оператор живёт суффиксом ключа (src/routines/types.ts → MatchRule): без суффикса — равно (массив —
-// любое из), `~` — содержит, `!` — не равно, `>` `<` — числа.
-import type { MatchField, MatchRule, SourceKindView } from '@server/routines/types';
+// Условия рутины на поля события (when.match, без модели): разбор правила в строки редактора и обратно, текст условия
+// для фразы и слотов. Правило — список { field, op, value } (src/routines/types.ts → MatchCondition); старый словарь, где
+// оператор живёт суффиксом ключа (без суффикса — равно, `~` — содержит, `!` — не равно, `>` `<` — числа), тоже читается,
+// а пишется уже список: строки не схлопываются, два «≠» на одно поле остаются двумя условиями.
+import type { MatchCondition, MatchField, MatchOp, MatchRule, MatchValue, SourceKindView } from '@server/routines/types';
 import { t } from '../i18n';
 
-export type MatchOp = 'eq' | 'contains' | 'ne' | 'gt' | 'lt';
+export type { MatchOp };
 /**
- * Строка редактора условий: значение всегда строкой, «a, b» у «равно» — любое из. raw — значение из файла как было:
- * пока строку не трогали (field, op и value те же), оно и пишется обратно — «Ошибка, срочно» не станет массивом, а
- * [100, 200] у числа — строкой.
+ * Строка редактора условий: значение всегда строкой, «a, b» у «равно», «содержит» и «≠» — список (любое из / ни одно
+ * из). raw — значение из файла как было: пока строку не трогали (field, op и value те же), оно и пишется обратно —
+ * «Ошибка, срочно» не станет массивом, а [100, 200] у числа — строкой.
  */
-export type Condition = { field: string; op: MatchOp; value: string; raw?: { field: string; op: MatchOp; value: string; v: MatchRule[string] } };
+export type Condition = {
+  field: string;
+  op: MatchOp;
+  value: string;
+  /**
+   * Значения явным списком (поле «Значения» токенами): есть — buildMatch берёт их как есть и не делит value по запятой,
+   * так что «Ошибка, срочно» остаётся одним значением, а «1,5» у числа — числом 1.5. value при этом — они же через «, »
+   * (для фразы и проверки «дописано ли»). Нет — value разбирается по-старому (фраза «Новой рутины»).
+   */
+  values?: string[];
+  /** Набрано в поле «Значения», но ещё не стало токеном (без Enter): уже часть правила — его видят сохранение и проверка. */
+  pending?: string;
+  raw?: { field: string; op: MatchOp; value: string; v: MatchValue };
+};
 
-const SUFFIX: Record<MatchOp, string> = { eq: '', contains: '~', ne: '!', gt: '>', lt: '<' };
 const BY_SUFFIX: Record<string, MatchOp> = { '~': 'contains', '!': 'ne', '>': 'gt', '<': 'lt' };
 
 /** Поля, которые движок даёт любому событию (BASE_MATCH в src/routines/kind.ts): веб не тянет рантайм из src. */
@@ -37,58 +50,92 @@ export function opsFor(type: MatchField['type'] | undefined): MatchOp[] {
   return ['eq', 'contains', 'ne'];
 }
 
-/** Подпись оператора в строке условия. */
-export function opLabel(op: MatchOp): string {
-  return { eq: '=', contains: t('содержит'), ne: '≠', gt: '>', lt: '<' }[op];
-}
-
-/** MatchRule → строки редактора, в порядке ключей файла. */
+/** Правило (список или старый словарь) → строки редактора, в порядке файла. */
 export function parseMatch(rule: MatchRule | undefined): Condition[] {
   if (!rule) return [];
-  return Object.entries(rule).map(([key, v]) => {
-    const last = key.slice(-1);
-    const op = BY_SUFFIX[last];
-    const field = op ? key.slice(0, -1) : key;
-    const value = Array.isArray(v) ? v.join(', ') : String(v);
-    const o = op ?? 'eq';
-    return { field, op: o, value, raw: { field, op: o, value, v } };
+  const rows: MatchCondition[] = Array.isArray(rule)
+    ? rule
+    : Object.entries(rule).map(([key, value]) => {
+        const op = BY_SUFFIX[key.slice(-1)];
+        return { field: op ? key.slice(0, -1) : key, op: op ?? 'eq', value };
+      });
+  return rows.map((c) => {
+    const o = c.op ?? 'eq';
+    const value = Array.isArray(c.value) ? c.value.join(', ') : String(c.value ?? '');
+    const values = (Array.isArray(c.value) ? c.value.map(String) : [value]).filter((x) => x.trim());
+    return { field: c.field, op: o, value, values, raw: { field: c.field, op: o, value, v: c.value } };
   });
 }
 
+const splitList = (raw: string): string[] => raw.split(',').map((s) => s.trim()).filter(Boolean);
+const untouched = (c: Condition): boolean => Boolean(c.raw && c.raw.field === c.field && c.raw.op === c.op && c.raw.value === c.value && !c.pending?.trim());
+/** Список значений строки в силе, пока value — он же: строку правили по-старому (фразой) — value главнее. */
+const synced = (c: Condition): boolean => Boolean(c.values && c.values.join(', ') === c.value);
+
 /**
- * Строки редактора → MatchRule. Пустые строки пропускаются. Тип значения — по типу поля: число, да/нет; «a, b» у «равно»
- * текстового поля — массив (любое из). Два условия на один ключ с одним оператором — последнее.
+ * Значения строки так, как они уйдут в правило: нетронутая строка из файла — как в файле (raw), явный список (values),
+ * иначе value по запятой; набранное без Enter (pending) — последним. Пустые и из одних пробелов не считаются — как
+ * emptyValue в src/routines/match.ts: массив из одних пустых значений сервер не применяет.
  */
-export function buildMatch(conds: Condition[], fields: MatchField[]): MatchRule | undefined {
-  const out: MatchRule = {};
+export function condValues(c: Condition): string[] {
+  if (untouched(c)) {
+    const v = c.raw!.v;
+    return (Array.isArray(v) ? v : [v]).filter((x) => x !== null && x !== undefined).map((x) => String(x).trim()).filter(Boolean);
+  }
+  const base = synced(c) ? c.values!.map((x) => x.trim()).filter(Boolean) : splitList(c.value);
+  const more = c.pending?.trim();
+  return more && !base.some((x) => x.toLowerCase() === more.toLowerCase()) ? [...base, more] : base;
+}
+
+/** Строка не дописана (нет поля или ни одного непустого значения) — в правило она не попадёт. */
+export const conditionReady = (c: Condition): boolean => Boolean(c.field.trim()) && condValues(c).length > 0;
+
+/**
+ * Индексы строк, которые в правило не попадут, пока не дописаны: нет поля или значения. Редактор подсвечивает их
+ * («не сохранится, пока пусто») — остальное правило при этом сохраняется.
+ */
+export function incompleteConds(conds: readonly Condition[]): number[] {
+  return conds.flatMap((c, i) => (conditionReady(c) ? [] : [i]));
+}
+
+/**
+ * Строки редактора → when.match (список, порядок строк). Недописанные строки пропускаются (см. incompleteConds), прочие
+ * не схлопываются. Тип значения — по типу поля: число, да/нет; «a, b» у «равно», «содержит» и «≠» — список (у «≠» — ни
+ * одно из). У «>» и «<» — одно число.
+ */
+export function buildMatch(conds: Condition[], fields: MatchField[]): MatchCondition[] | undefined {
+  const out: MatchCondition[] = [];
   for (const c of conds) {
+    if (!conditionReady(c)) continue;
     const field = c.field.trim();
-    const raw = c.value.trim();
-    if (!field || !raw) continue;
-    if (c.raw && c.raw.field === c.field && c.raw.op === c.op && c.raw.value === c.value) {
-      out[field + SUFFIX[c.op]] = c.raw.v;
+    if (untouched(c)) {
+      out.push({ field, op: c.op, value: c.raw!.v });
       continue;
     }
     const type = fields.find((f) => f.key === field)?.type ?? 'text';
-    const key = field + SUFFIX[c.op];
-    if (type === 'bool') out[key] = raw === 'true' || raw === t('да');
-    else if (type === 'number' || c.op === 'gt' || c.op === 'lt') {
-      // число или список чисел у «равно»: «100, 200»
-      const nums = c.op === 'eq' && raw.includes(',') ? raw.split(',').map((x) => Number(x.trim())) : [Number(raw.replace(',', '.'))];
-      out[key] = nums.every(Number.isFinite) ? (nums.length > 1 ? nums : nums[0]!) : raw;
-    } else if (c.op === 'eq' && raw.includes(',')) out[key] = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    else out[key] = raw;
+    // явный список или набранное без Enter — значения строки списком; иначе value разбирается по-старому
+    const list = synced(c) || c.pending?.trim() ? condValues(c) : undefined;
+    const raw = list ? list.join(', ') : c.value.trim();
+    let value: MatchValue;
+    if (type === 'bool') value = raw === 'true' || raw === t('да');
+    else if (list?.length && c.op !== 'gt' && c.op !== 'lt') {
+      // явный список: по запятой не делится; у числа «1,5» — десятичная запятая
+      if (type === 'number') {
+        const nums = list.map((x) => Number(x.replace(',', '.')));
+        value = nums.every(Number.isFinite) ? (nums.length > 1 ? nums : nums[0]!) : list.length > 1 ? list : list[0]!;
+      } else value = list.length > 1 ? list : list[0]!;
+    } else if (c.op === 'gt' || c.op === 'lt') {
+      const n = Number(raw.replace(',', '.'));
+      value = Number.isFinite(n) ? n : raw;
+    } else if (type === 'number') {
+      // число или список чисел у «равно» и «≠»: «100, 200»
+      const nums = raw.includes(',') ? splitList(raw).map(Number) : [Number(raw)];
+      value = nums.every(Number.isFinite) ? (nums.length > 1 ? nums : nums[0]!) : raw;
+    } else if (raw.includes(',')) {
+      const vals = splitList(raw);
+      value = vals.length > 1 ? vals : (vals[0] ?? raw);
+    } else value = raw;
+    out.push({ field, op: c.op, value });
   }
-  return Object.keys(out).length ? out : undefined;
+  return out.length ? out : undefined;
 }
-
-/** Условие одной строкой для фразы и слота: «Канал = bugs», «Тред: нет», «Длительность > 10». */
-export function conditionText(c: Condition, fields: MatchField[]): string {
-  const f = fields.find((x) => x.key === c.field);
-  const label = f ? f.label : c.field;
-  if (f?.type === 'bool') return `${label}: ${c.value === 'true' ? t('да') : t('нет')}`;
-  return `${label} ${opLabel(c.op)} ${c.value}`;
-}
-
-/** Строка пуста или ещё не дописана — в правило она не попадёт. */
-export const conditionReady = (c: Condition): boolean => Boolean(c.field.trim() && c.value.trim());

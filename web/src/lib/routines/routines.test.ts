@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { LogEntry, MatchField, RoutineView, SourceView } from '@server/routines/types';
-import { buildMatch, conditionText, matchFields, opsFor, parseMatch } from './match';
+import { buildMatch, conditionReady, condValues, incompleteConds, matchFields, opsFor, parseMatch, type Condition } from './match';
 import { describeSchedule, formatNext, fromCron, nextRuns, parseCron, toCron } from './schedule';
-import { buildSpec, draftFromSpec, draftMissing, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
+import { buildSpec, draftFromSpec, draftMissing, draftUnsavedConds, emptyDraft, replyChoice, replySpec, SCHEDULE, slugify } from './spec';
 import { logDetail as detailOf, taskVerdict } from './view';
-import { defaultTitle, replyWhere, sentence, step2Title } from './phrase';
+import { defaultTitle, replyWhere } from './phrase';
 import {
   brokenSources, catchUpCount, catchUpRunLabel, catchUpText, chipCounts, chipOutcomes, decidedDeskKeys, decisionText, isDraft, logAction, logDetail, logTime, overviewMeta, pollCostText, routineNote, routineState,
   sourceState, stateLabel, stateTone, strip, verdict, waitButtons, weekCost,
@@ -19,27 +19,159 @@ const FIELDS: MatchField[] = [
   ...matchFields(),
 ];
 
-test('условия: MatchRule разбирается в строки и собирается обратно с типами значений', () => {
+const noRaw = (c: Condition) => {
+  const { raw: _, values: __, ...rest } = c;
+  return rest;
+};
+
+test('условия: старый словарь разбирается в строки, собирается списком с типами значений', () => {
   const rule = { channel: ['bugs', 'qa'], thread: false, 'duration>': 10, 'title~': 'billing', 'author!': 'bot' };
   const conds = parseMatch(rule);
-  assert.deepEqual(conds.map(({ raw: _, ...c }) => c), [
+  assert.deepEqual(conds.map(noRaw), [
     { field: 'channel', op: 'eq', value: 'bugs, qa' },
     { field: 'thread', op: 'eq', value: 'false' },
     { field: 'duration', op: 'gt', value: '10' },
     { field: 'title', op: 'contains', value: 'billing' },
     { field: 'author', op: 'ne', value: 'bot' },
   ]);
-  assert.deepEqual(buildMatch(conds, FIELDS), rule);
+  assert.deepEqual(buildMatch(conds, FIELDS), [
+    { field: 'channel', op: 'eq', value: ['bugs', 'qa'] },
+    { field: 'thread', op: 'eq', value: false },
+    { field: 'duration', op: 'gt', value: 10 },
+    { field: 'title', op: 'contains', value: 'billing' },
+    { field: 'author', op: 'ne', value: 'bot' },
+  ]);
   // нетронутая строка пишется как была: запятая в «равно» — не список, массив чисел — массив
   const tricky = { title: 'Ошибка, срочно', duration: [100, 200] };
-  assert.deepEqual(buildMatch(parseMatch(tricky), FIELDS), tricky);
+  assert.deepEqual(buildMatch(parseMatch(tricky), FIELDS), [
+    { field: 'title', op: 'eq', value: 'Ошибка, срочно' },
+    { field: 'duration', op: 'eq', value: [100, 200] },
+  ]);
   // тронутая — по типу поля: «100, 200» у числа — список чисел
   const edited = parseMatch(tricky).map((c) => (c.field === 'duration' ? { ...c, value: '100, 300' } : c));
-  assert.deepEqual(buildMatch(edited, FIELDS), { title: 'Ошибка, срочно', duration: [100, 300] });
+  assert.deepEqual(buildMatch(edited, FIELDS)?.[1], { field: 'duration', op: 'eq', value: [100, 300] });
   assert.equal(buildMatch([{ field: 'title', op: 'eq', value: '  ' }], FIELDS), undefined);
-  assert.equal(conditionText(conds[1]!, FIELDS), 'Тред: нет');
-  assert.equal(conditionText(conds[2]!, FIELDS), 'Длительность > 10');
   assert.deepEqual(opsFor('bool'), ['eq']);
+});
+
+test('условия: значения явным списком не делятся по запятой, «1,5» у числа — 1.5', () => {
+  // как в файле: строка с запятой — одно значение, список — список
+  assert.deepEqual(parseMatch([{ field: 'title', op: 'eq', value: 'Ошибка, срочно' }, { field: 'channel', op: 'eq', value: ['bugs', 'qa'] }]).map((c) => c.values), [['Ошибка, срочно'], ['bugs', 'qa']]);
+  const rows: Condition[] = [
+    { field: 'title', op: 'ne', value: 'Ошибка, срочно', values: ['Ошибка, срочно'] },
+    { field: 'title', op: 'contains', value: 'a, b', values: ['a', 'b'] },
+    { field: 'duration', op: 'eq', value: '1,5', values: ['1,5'] },
+    { field: 'duration', op: 'gt', value: '1.5', values: ['1.5'] },
+  ];
+  assert.deepEqual(buildMatch(rows, FIELDS), [
+    { field: 'title', op: 'ne', value: 'Ошибка, срочно' },
+    { field: 'title', op: 'contains', value: ['a', 'b'] },
+    { field: 'duration', op: 'eq', value: 1.5 },
+    { field: 'duration', op: 'gt', value: 1.5 },
+  ]);
+  // строку поправили фразой (value разошёлся со списком) — главнее value
+  assert.deepEqual(buildMatch([{ field: 'title', op: 'eq', value: 'x, y', values: ['z'] }], FIELDS), [{ field: 'title', op: 'eq', value: ['x', 'y'] }]);
+});
+
+test('условия: два «≠» на одно поле оба сохраняются и читаются обратно — строки не схлопываются', () => {
+  const conds: Condition[] = [
+    { field: 'title', op: 'ne', value: 'A' },
+    { field: 'title', op: 'ne', value: 'B' },
+    { field: 'title', op: 'contains', value: 'x, y' },
+  ];
+  const match = buildMatch(conds, FIELDS);
+  assert.deepEqual(match, [
+    { field: 'title', op: 'ne', value: 'A' },
+    { field: 'title', op: 'ne', value: 'B' },
+    // «a, b» у «содержит» — любое из
+    { field: 'title', op: 'contains', value: ['x', 'y'] },
+  ]);
+  const back = parseMatch(match);
+  assert.deepEqual(back.map(noRaw), [
+    { field: 'title', op: 'ne', value: 'A' },
+    { field: 'title', op: 'ne', value: 'B' },
+    { field: 'title', op: 'contains', value: 'x, y' },
+  ]);
+  assert.deepEqual(buildMatch(back, FIELDS), match);
+});
+
+test('условия: незаполненная строка не сохраняется, остальное — да, и её индекс виден редактору', () => {
+  const conds: Condition[] = [
+    { field: 'channel', op: 'eq', value: 'bugs' },
+    { field: 'title', op: 'ne', value: '' },
+    { field: '', op: 'eq', value: '' },
+    { field: 'author', op: 'ne', value: 'bot' },
+  ];
+  assert.deepEqual(incompleteConds(conds), [1, 2]);
+  assert.deepEqual(buildMatch(conds, FIELDS), [
+    { field: 'channel', op: 'eq', value: 'bugs' },
+    { field: 'author', op: 'ne', value: 'bot' },
+  ]);
+  const d = { ...emptyDraft(), title: 'x', source: 'slack-work', flow: 'f', conds };
+  // пустая строка сохранение не держит: draftMissing её не считает, а draftUnsavedConds говорит о ней
+  assert.deepEqual(draftMissing(d), []);
+  assert.deepEqual(draftUnsavedConds(d), [1, 2]);
+  assert.deepEqual(draftUnsavedConds({ ...d, source: SCHEDULE }), []);
+});
+
+test('условия: пустые значения считаются как на сервере (emptyValue) — массив из одних пустых не заполнен', () => {
+  const ready = (c: Partial<Condition>) => conditionReady({ field: 'channel', op: 'eq', value: '', ...c });
+  // явный список из одних пустых — не заполнено, хоть value и не пустое
+  assert.equal(ready({ value: ' ,  ', values: ['', ' '] }), false);
+  assert.equal(ready({ value: ',' }), false);
+  // из файла: пустой массив и массив пустых строк — не заполнено; 0 и false — значения
+  assert.equal(ready(parseMatch([{ field: 'channel', value: [] }])[0]!), false);
+  assert.equal(ready(parseMatch([{ field: 'channel', value: ['', ' '] }])[0]!), false);
+  assert.equal(ready(parseMatch([{ field: 'duration', value: 0 }])[0]!), true);
+  assert.equal(ready(parseMatch([{ field: 'thread', value: false }])[0]!), true);
+  assert.equal(ready({ value: '0', values: ['0'] }), true);
+  assert.equal(ready({ value: 'false', values: ['false'] }), true);
+  // незаполненное в правило не уходит — сервер его тоже не применил бы
+  assert.equal(buildMatch([{ field: 'channel', op: 'eq', value: ',' }, ...parseMatch([{ field: 'title', value: ['', ' '] }])], FIELDS), undefined);
+  assert.deepEqual(condValues({ field: 'channel', op: 'eq', value: 'a, ', values: ['a', ' '] }), ['a']);
+});
+
+test('условия: набранное без Enter — уже значение: строка заполнена и уходит в правило последним', () => {
+  const c: Condition = { field: 'channel', op: 'eq', value: '', values: [], pending: 'bugs' };
+  assert.equal(conditionReady(c), true);
+  assert.deepEqual(incompleteConds([c]), []);
+  assert.deepEqual(buildMatch([c], FIELDS), [{ field: 'channel', op: 'eq', value: 'bugs' }]);
+  assert.deepEqual(buildMatch([{ ...c, value: 'a', values: ['a'] }], FIELDS), [{ field: 'channel', op: 'eq', value: ['a', 'bugs'] }]);
+  // повтор токена не дублируется; одни пробелы — не значение
+  assert.deepEqual(condValues({ ...c, value: 'Bugs', values: ['Bugs'] }), ['Bugs']);
+  assert.equal(conditionReady({ ...c, pending: '  ' }), false);
+  // строка из файла с набранным уже не «нетронутая»: пишется списком
+  const [fromFile] = parseMatch([{ field: 'channel', value: 'a' }]);
+  assert.deepEqual(buildMatch([{ ...fromFile!, pending: 'b' }], FIELDS), [{ field: 'channel', op: 'eq', value: ['a', 'b'] }]);
+});
+
+test('условия: режим «хватает одного» пишется в правило и читается обратно; «все» не пишется', () => {
+  const conds = [{ field: 'channel', op: 'eq' as const, value: 'bugs' }, { field: 'channel', op: 'eq' as const, value: 'alerts' }];
+  const d = { ...emptyDraft(), title: 'x', source: 'slack-work', flow: 'f', conds };
+  const all = buildSpec(d, FIELDS);
+  assert.equal('match_mode' in all.when, false);
+  const any = buildSpec({ ...d, condsMode: 'any' }, FIELDS);
+  assert.equal('match_mode' in any.when ? any.when.match_mode : undefined, 'any');
+  assert.equal(draftFromSpec(any).condsMode, 'any');
+  assert.equal(draftFromSpec(all).condsMode, 'all');
+  // без условий и с одним условием режиму сочетать нечего: скрытое «любое» в правило не уходит
+  assert.equal('match_mode' in buildSpec({ ...d, conds: [], condsMode: 'any' }, FIELDS).when, false);
+  assert.equal('match_mode' in buildSpec({ ...d, conds: conds.slice(0, 1), condsMode: 'any' }, FIELDS).when, false);
+  // вторая строка не дописана — в правиле одно условие, режима тоже нет
+  assert.equal('match_mode' in buildSpec({ ...d, conds: [conds[0]!, { field: 'channel', op: 'eq', value: '' }], condsMode: 'any' }, FIELDS).when, false);
+});
+
+test('уведомления: по умолчанию в правило не пишутся, выключенные и со стартом — пишутся', () => {
+  const d = { ...emptyDraft(), title: 'x', source: 'slack-work', flow: 'f' };
+  assert.deepEqual(d.notifyOs, ['wait', 'end', 'fail']);
+  assert.equal(buildSpec(d, FIELDS).notify, undefined);
+  // тот же набор в другом порядке — всё ещё по умолчанию
+  assert.equal(buildSpec({ ...d, notifyOs: ['fail', 'wait', 'end'] }, FIELDS).notify, undefined);
+  assert.deepEqual(buildSpec({ ...d, notifyOs: [] }, FIELDS).notify, { os: [] });
+  const withStart = buildSpec({ ...d, notifyOs: ['wait', 'start'] }, FIELDS);
+  assert.deepEqual(withStart.notify, { os: ['start', 'wait'] });
+  assert.deepEqual(draftFromSpec(withStart).notifyOs, ['start', 'wait']);
+  assert.deepEqual(draftFromSpec(buildSpec(d, FIELDS)).notifyOs, ['wait', 'end', 'fail']);
 });
 
 test('matchFields: поля вида первыми, общие — без повторов', () => {
@@ -96,7 +228,7 @@ test('сборка RoutineSpec из шагов: источник с услови
     title: 'Баг в #bugs → таска и фикс',
     enabled: false,
     // новый узел «ИИ рутины» спрашивает, когда не уверен (checkAsk у нового черновика включён)
-    when: { source: 'slack-work', match: { channel: 'bugs', thread: false }, check: 'Это баг-репорт', ask: true },
+    when: { source: 'slack-work', match: [{ field: 'channel', op: 'eq', value: 'bugs' }, { field: 'thread', op: 'eq', value: false }], check: 'Это баг-репорт', ask: true },
     run: { flow: 'bug-to-fix', space: 'billing', worktree: 'new', pause_before: ['fix'] },
     mode: 'until_pause',
     reply: { to: 'source', on: ['pause', 'end'], draft: true },
@@ -173,24 +305,13 @@ test('slugify: транслит, без занятых и зарезервиро
   assert.equal(slugify('Баг в #bugs → таска и фикс'), 'bag-v-bugs-taska-i-fiks');
   assert.equal(slugify('Утренняя сводка', ['utrennyaya-svodka']), 'utrennyaya-svodka-2');
   assert.equal(slugify('new'), 'new-routine');
+  assert.equal(slugify('mcp-tools'), 'mcp-tools-routine');
   assert.equal(slugify('→ !!'), 'routine');
 });
 
-test('фраза-итог: источник, расписание, ожидание и ответ', () => {
-  const src = { title: 'Fireflies.ai', kind: 'command' };
-  const d = { ...emptyDraft(), source: 'fireflies', flow: 'meeting-to-tasks', space: 'billing', mode: 'auto' as const };
-  assert.equal(sentence(d, src, FIELDS), 'Когда в Fireflies.ai появляется новая запись, запустить meeting-to-tasks в ◇ billing. Ответ уходит после твоей проверки.');
-  const slack = { ...d, conds: [{ field: 'channel', op: 'eq' as const, value: 'bugs' }], check: 'баг', mode: 'until_pause' as const, pauseBefore: ['fix'], reply: 'off' as const };
-  assert.equal(
-    sentence(slack, { title: 'Slack · work', kind: 'slack' }, FIELDS),
-    'Когда в Slack · work приходит новое сообщение, где Канал = bugs и оно подходит под условие словами, запустить meeting-to-tasks в ◇ billing. Остановится перед «fix».',
-  );
+test('слова о рутине: название по умолчанию и куда уйдёт ответ', () => {
   const sched = { ...emptyDraft(), source: SCHEDULE, flow: 'mr-digest', mode: 'auto' as const, reply: 'auto' as const };
-  assert.equal(sentence(sched, undefined, []), 'По будням в 09:30 запустить mr-digest. О результате пишет сама.');
-  assert.equal(sentence({ ...sched, mode: 'suggest' }, undefined, []), 'По будням в 09:30 запустить mr-digest. Перед запуском спросит тебя. О результате пишет сама.');
   assert.equal(defaultTitle(sched, undefined), 'По будням в 09:30 → mr-digest');
-  assert.equal(step2Title('slack'), 'Какие сообщения');
-  assert.equal(step2Title('command'), 'Какие записи');
   assert.equal(replyWhere('slack', 'source', []), 'в тред сообщения');
   assert.equal(replyWhere('command', 'tg', [{ slug: 'tg', spec: { title: 'Telegram', kind: 'telegram', config: {} } }]), 'мне в Telegram');
 });

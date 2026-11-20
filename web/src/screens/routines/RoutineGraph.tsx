@@ -1,38 +1,10 @@
-// Граф рутины (docs/ASSISTANTS.md §4, макеты docs/routines/design/v2): цепочка узлов с фиксированным порядком. В
-// редакторе узел — кнопка: клик открывает его настройки справа. В «Срабатываниях» тот же граф показывает путь одного
-// события: что прошло, где остановилось и почему. Что написано на узлах — lib/routines/graph.ts.
-import type { GraphNode, NodeId, PathNode } from '../../lib/routines/graph';
+// Путь одного срабатывания в «Срабатываниях» (docs/ASSISTANTS.md §4): шаги рутины цепочкой — что прошло, где событие
+// остановилось и почему. Шаги и подписи — lib/routines/graph.ts. Редактор правило так не рисует: там разделы.
+import type { PathNode } from '../../lib/routines/graph';
 import { modelChip } from '../../lib/flow/ai-progress';
 import { t } from '../../lib/i18n';
 import { cx } from './parts';
 import styles from './RoutineGraph.module.css';
-
-export function RoutineGraph({ nodes, selected, onSelect }: { nodes: GraphNode[]; selected?: NodeId; onSelect: (id: NodeId) => void }) {
-  return (
-    <ol className={styles.graph} aria-label={t('Граф рутины')}>
-      {nodes.map((n, i) => (
-        <li key={n.id}>
-          {i > 0 && <span className={styles.link} aria-hidden="true" />}
-          <button type="button" className={cx(styles.node, n.off && styles.off, n.warn && styles.warned)} aria-pressed={selected === n.id} onClick={() => onSelect(n.id)}>
-            <b>{n.title}</b>
-            <span className={styles.meta}>
-              <span className={cx(styles.who, n.who.kind === 'model' && styles.model, n.who.kind === 'me' && styles.me)}>{n.who.label}</span>
-              {n.count !== undefined && <span className={styles.count} title={t('Сколько событий прошло узел на проверке на истории')}>{n.count}</span>}
-            </span>
-            <span className={styles.sub}>{n.warn ?? n.sub}</span>
-            {n.outcomes && (
-              <span className={styles.outs}>
-                <span className={cx(styles.out, styles.run)}>{t('запустить · {n}', { n: n.outcomes.run })}</span>
-                <span className={styles.out}>{t('пропустить · {n}', { n: n.outcomes.skip })}</span>
-                <span className={cx(styles.out, styles.ask)}>{t('спросить меня · {n}', { n: n.outcomes.ask })}</span>
-              </span>
-            )}
-          </button>
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 const MARK: Record<PathNode['state'], string> = { pass: '✓', stop: '✕', ask: '?', off: '' };
 const MARK_LABEL: Record<PathNode['state'], string> = { pass: t('пройдено'), stop: t('остановилось здесь'), ask: t('ждёт тебя'), off: t('не дошло') };

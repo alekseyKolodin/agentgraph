@@ -94,8 +94,8 @@ export function EventSample({ source, kind, sample, onPick }: Props) {
   );
 }
 
-/** Примера ещё нет: читается журнал, журнал пуст (пробный опрос кнопкой) или сервис не ответил. */
-function SampleState({ source, kind, sample }: Pick<Props, 'source' | 'kind' | 'sample'>) {
+/** Примера ещё нет: читается журнал, журнал пуст (пробный опрос кнопкой) или сервис не ответил. Общая со страницей источника. */
+export function SampleState({ source, kind, sample }: Pick<Props, 'source' | 'kind' | 'sample'>) {
   const title = source.spec.title;
   const has = Boolean(sample.data?.events.length);
   const live = kind?.delivery === 'live';

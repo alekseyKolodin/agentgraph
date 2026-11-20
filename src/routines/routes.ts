@@ -7,7 +7,7 @@ import { getMcpServers, type McpServer } from '../connectors.js';
 import { createConnectorBuilds, mcpServices, type ConnectorBuilds } from './sources/connector.js';
 import { draftRoutes, loadRecipes } from './sources/index.js';
 import { ensureTemplateFlow, flowTemplates, NoFlowTemplate } from './flow-templates.js';
-import { createComposeRoutes, type ComposeContext, type ComposeRoutes } from './compose.js';
+import type { ComposeContext } from './compose.js';
 import { createRoutineAssistant, type RoutineAssistant } from './assistant.js';
 import { AssistantBusy } from '../assistant.js';
 import { checkDir } from './dir-check.js';
@@ -20,6 +20,12 @@ export type Reply = { status: number; body: unknown };
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const bad = (error: string, status = 400, extra?: Record<string, unknown>): Reply => ({ status, body: { error, ...extra } });
 
+/**
+ * Ключ проверки на истории черновика «Новой рутины»: правило ещё не сохранено, проверка идёт по spec формы. Ключ из
+ * RESERVED — рутины с ним не бывает, поэтому чужие ответы человека, журнал и кэш ИИ в эту проверку не попадают.
+ */
+export const FORM_DRAFT_HISTORY = 'form-draft';
+
 /** Слаги, занятые разделами API: рутина с таким именем не открылась бы. */
 export const RESERVED = new Set(['sources', 'recipes', 'waits', 'catchup', 'mcp-tools', 'flow-templates', 'compose', 'check-dir', 'form-draft', 'assistant', 'assistant-draft']);
 
@@ -29,8 +35,6 @@ export type RoutinesRouteDeps = {
   engine: RoutineEngine;
   /** Подключение словами; по умолчанию draftRoutes() видов. null (или draftRoutes вернул undefined) — 501. */
   drafts?: DraftRoutes | null;
-  /** Рутина по описанию словами; по умолчанию — сессия модели над источниками, flow и пространствами человека. null — 501. */
-  compose?: ComposeRoutes | null;
   /** Проверка папки («Папка проекта» в форме); по умолчанию — настоящая, через git. */
   checkDir?: typeof checkDir;
   /** MCP-серверы для источника «Сервис через Claude»; по умолчанию getMcpServers (процесс Claude Code без модели). */
@@ -90,17 +94,6 @@ export function composeContext(engine: RoutineEngine): ComposeContext {
     flows,
     spaces,
   };
-}
-
-const composeCache = new WeakMap<RoutineEngine, ComposeRoutes>();
-function compose(deps: RoutinesRouteDeps): ComposeRoutes | undefined {
-  if (deps.compose !== undefined) return deps.compose ?? undefined;
-  let c = composeCache.get(deps.engine);
-  if (!c) {
-    c = createComposeRoutes({ context: () => composeContext(deps.engine), ...(deps.checkDir ? { dir: (p: string) => deps.checkDir!(p) } : {}) });
-    composeCache.set(deps.engine, c);
-  }
-  return c;
 }
 
 const assistantCache = new WeakMap<RoutineEngine, RoutineAssistant>();
@@ -186,8 +179,30 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       if (method === 'PUT') return ok(engine.saveFormDraft(obj(await readBody()).data));
       if (method === 'DELETE') {
         engine.dropFormDraft();
+        // черновик кончился (сохранён рутиной или «Начать заново»): идущие проверки по нему останавливаются, а ответы
+        // ИИ, за которые уже заплачено, переходят к сохранённой рутине (?to=<slug>) — редактор не платит за них второй раз
+        engine.stopHistories(FORM_DRAFT_HISTORY);
+        const to = url.searchParams.get('to') ?? '';
+        if (to && SLUG_RE.test(to) && !RESERVED.has(to) && engine.store.routine(to)) {
+          engine.store.setCheckCache(to, { ...engine.store.checkCache(FORM_DRAFT_HISTORY), ...engine.store.checkCache(to) });
+        }
+        engine.store.setCheckCache(FORM_DRAFT_HISTORY, {});
         return ok({ ok: true });
       }
+      return undefined;
+    }
+    // проверка на истории по черновику формы, до сохранения рутины: spec обязателен, «Учесть» (feedback) здесь нет
+    if ((m = p.match(/^\/api\/routines\/form-draft\/history\/runs(?:\/([a-f0-9]{1,32}))?$/))) {
+      if (!m[1]) {
+        if (method !== 'POST') return undefined;
+        const b = obj(await readBody());
+        if (b.spec === undefined) return bad('Нужно правило формы (spec)');
+        // tab — вкладка с формой: проверка соседней вкладки не останавливается
+        const tab = typeof b.tab === 'string' && /^[a-z0-9]{1,32}$/.test(b.tab) ? b.tab : undefined;
+        return ok(engine.startHistory(FORM_DRAFT_HISTORY, { spec: b.spec, limit: typeof b.limit === 'number' ? b.limit : undefined, ...(tab ? { tab } : {}) }), 201);
+      }
+      if (method === 'GET') return found(engine.historyRun(FORM_DRAFT_HISTORY, m[1]), 'Проверка не найдена: приложение перезапускалось. Запусти её снова');
+      if (method === 'DELETE') return engine.stopHistory(FORM_DRAFT_HISTORY, m[1]) ? ok({ ok: true }) : bad('Проверка не найдена', 404);
       return undefined;
     }
 
@@ -196,27 +211,6 @@ export async function routinesRoute(method: string, url: URL, readBody: () => Pr
       const dir = url.searchParams.get('path')?.trim() ?? '';
       if (!dir) return bad('Нужен путь к папке');
       return ok(await (deps.checkDir ?? checkDir)(dir.slice(0, 1000)));
-    }
-
-    // --- рутина по описанию словами: модель собирает черновик, ничего не сохраняется
-    if (p === '/api/routines/compose' || p.startsWith('/api/routines/compose/')) {
-      const c = compose(deps);
-      if (!c) return bad('Сборка рутины словами пока недоступна', 501);
-      if (p === '/api/routines/compose' && method === 'POST') {
-        const b = obj(await readBody());
-        const description = typeof b.description === 'string' ? b.description.trim() : '';
-        if (!description) return bad('Опиши словами, что рутина должна делать');
-        const model = typeof b.model === 'string' ? b.model.trim().slice(0, 100) : '';
-        return ok(c.start(description.slice(0, 4000), model || undefined), 201);
-      }
-      if ((m = p.match(/^\/api\/routines\/compose\/([A-Za-z0-9_-]+)$/))) {
-        if (method === 'GET') return found(c.get(m[1]), 'Черновик не найден');
-        if (method === 'DELETE') {
-          c.cancel(m[1]);
-          return ok({ ok: true });
-        }
-      }
-      return undefined;
     }
 
     // --- помощник раздела: разговор с инструментами; что он знает и умеет — GET без id

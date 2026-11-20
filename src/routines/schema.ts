@@ -74,12 +74,32 @@ export const SourceSpecSchema = z
   })
   .strict();
 
-const MatchValue = z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number()]))]);
+/**
+ * Значение условия. Пустое — '' (в YAML `value:` без значения это null, нет ключа — undefined) — допустимо: условие не
+ * дописано и не применяется (matchConditions в match.ts), рутина из-за него не ломается.
+ */
+const MatchValue = z.preprocess(
+  (v) => v ?? '',
+  z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number()]))], { error: 'значение условия — строка, число, да/нет или список строк и чисел' }),
+);
+
+const MatchConditionSchema = z
+  .object({
+    // пустое поле — недописанная строка редактора: не применяется, как пустое значение
+    field: z.preprocess((v) => v ?? '', z.string().trim()).describe('Поле события (title, text, author, link) или путь в fields через точку: channel, labels.0. Пусто — условие не применяется'),
+    op: z.enum(['eq', 'ne', 'contains', 'gt', 'lt'], { error: 'op условия — eq, ne, contains, gt или lt' }).optional().describe('eq — равно (по умолчанию), ne — не равно, contains — содержит, gt / lt — больше / меньше'),
+    value: MatchValue.describe('Значение или список: у eq и contains — любое из, у ne — ни одно из. Пусто — условие не применяется'),
+  })
+  .strict();
 
 const WhenSourceSchema = z
   .object({
     source: z.string().regex(SLUG_RE, 'источник — слаг: латиница в нижнем регистре, цифры, дефис'),
-    match: z.record(z.string(), MatchValue).optional(),
+    match: z
+      .union([z.array(MatchConditionSchema), z.record(z.string(), MatchValue)], { error: 'match — список условий { field, op, value } (или старый словарь «поле: значение»)' })
+      .optional()
+      .describe('Условия на поля без модели: список { field, op, value }. Старый словарь «поле+суффикс: значение» тоже читается'),
+    match_mode: z.enum(['all', 'any']).optional().describe('Как сочетать условия на поля: all — все (по умолчанию), any — хватает одного'),
     check: z.string().optional(),
     model: z.string().trim().min(1).max(100).optional().describe('Модель узла «ИИ рутины» (проверки словами): псевдоним (haiku, sonnet, opus) или id модели. Нет — модель по умолчанию'),
     ask: z.boolean().optional().describe('Исход «спросить меня»: когда модель не уверена, событие ждёт человека на главной, а не отсеивается. Действует у рутины с flow'),
@@ -88,7 +108,7 @@ const WhenSourceSchema = z
 
 const WhenScheduleSchema = z
   .object({
-    schedule: z.string().min(1),
+    schedule: z.string().min(1, 'нужно расписание cron: «30 9 * * 1-5»'),
     missed: z.enum(['ask', 'skip']).optional(),
   })
   .strict();
@@ -111,7 +131,7 @@ export const RoutineSpecSchema = z
     title: z.string().min(1, 'нужен title'),
     enabled: z.boolean().optional(),
     draft: z.boolean().optional(),
-    when: z.union([WhenSourceSchema, WhenScheduleSchema]),
+    when: z.union([WhenSourceSchema, WhenScheduleSchema], { error: 'when — источник { source, match, … } или расписание { schedule }' }),
     run: z
       .object({
         flow: z.string().min(1, 'нужен run.flow'),
@@ -143,6 +163,16 @@ export const RoutineSpecSchema = z
       .strict()
       .optional(),
     task: TaskRuleSchema.optional(),
+    notify: z
+      .object({
+        os: z
+          .array(z.enum(['start', 'wait', 'end', 'fail']))
+          .optional()
+          .describe('О чём слать системное уведомление: start — запуск начался, wait — ждёт решения, end — ответ ждёт проверки, fail — запуск не удался. Нет — wait, end, fail; [] — молчать'),
+      })
+      .strict()
+      .optional()
+      .describe('Уведомления по рутине; уведомления об источниках от них не зависят'),
   })
   .strict()
   .superRefine((spec, ctx) => {
@@ -151,8 +181,35 @@ export const RoutineSpecSchema = z
     else if (!spec.run && spec.task?.from === 'flow') ctx.addIssue({ code: 'custom', path: ['run'], message: 'task.from: flow — дела заводит flow, нужен run.flow' });
   });
 
+type Issue = z.core.$ZodIssue;
+
+/** Насколько глубоко ушла ветка union: чем глубже, тем ближе она к тому, что имел в виду автор. */
+const depthOf = (list: Issue[]): number => Math.max(0, ...list.map((i) => i.path.length + (i.code === 'invalid_union' ? Math.max(0, ...i.errors.map(depthOf)) : 0)));
+
+/**
+ * Ошибки zod → строки «путь: что не так». union (when — источник или расписание, match — список или словарь) при
+ * неудаче всех веток zod называет одной строкой («Invalid input» или error union); здесь вместо неё — ошибки той ветки,
+ * что прошла дальше всех. Все ветки упали на самом значении (не тот тип) — сообщение union.
+ */
+function flatIssues(list: Issue[], base: PropertyKey[] = []): Array<{ path: PropertyKey[]; message: string }> {
+  const out: Array<{ path: PropertyKey[]; message: string }> = [];
+  for (const i of list) {
+    const path = [...base, ...i.path];
+    if (i.code === 'invalid_union' && i.errors.length) {
+      const deep = i.errors.filter((b) => depthOf(b) > 0);
+      if (deep.length) {
+        const best = deep.reduce((a, b) => (depthOf(b) > depthOf(a) ? b : a));
+        out.push(...flatIssues(best, path));
+        continue;
+      }
+    }
+    out.push({ path, message: i.message });
+  }
+  return out;
+}
+
 function issues(err: z.ZodError): string[] {
-  return err.issues.map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message));
+  return flatIssues(err.issues).map((i) => (i.path.length ? `${i.path.map(String).join('.')}: ${i.message}` : i.message));
 }
 
 export type Parsed<T> = { spec?: T; problems: string[] };

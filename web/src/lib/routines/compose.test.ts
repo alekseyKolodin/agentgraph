@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { connectNeedHref, draftTouched, packDraft, pickNewFlow, unpackDraft } from './compose.js';
+import { connectNeedHref, draftToOpen, draftTouched, packDraft, pickNewFlow, shouldSaveDraft, unpackDraft } from './compose.js';
 import { emptyDraft } from './spec.js';
 
 test('черновик формы: что ушло на сервер, то и вернулось; название и список flow — вместе с ним', () => {
   const d = { ...emptyDraft(), title: 'Ревью', flow: 'review-mr', check: 'ревью мне' };
-  const back = unpackDraft(JSON.parse(JSON.stringify(packDraft(d, true, ['a', 'b']))));
+  const back = unpackDraft(JSON.parse(JSON.stringify(packDraft(d, true, { flowsBefore: ['a', 'b'] }))));
   assert.deepEqual(back, { v: 1, d, titleEdited: true, flowsBefore: ['a', 'b'] });
   assert.equal(unpackDraft(JSON.parse(JSON.stringify(packDraft(d, false))))?.flowsBefore, undefined);
 });
@@ -43,4 +43,42 @@ test('ссылка на подключение: готовый вид — kind, 
   assert.equal(u.searchParams.get('q'), 'записи встреч в Fireflies');
   assert.equal(u.searchParams.get('kind'), null);
   assert.equal(u.searchParams.get('from'), 'new');
+});
+
+test('черновик формы: разделы «заполнил помощник» переживают уход с экрана, чужие номера отбрасываются', () => {
+  const d = emptyDraft();
+  assert.deepEqual(unpackDraft(JSON.parse(JSON.stringify(packDraft(d, false, { filled: [1, 3] }))))?.filled, [1, 3]);
+  // пустой список не пишется
+  assert.equal('filled' in packDraft(d, false, { filled: [] }), false);
+  assert.deepEqual(unpackDraft({ v: 1, d: { title: '', conds: [] }, filled: [2, 7, 'x'] })?.filled, [2]);
+  assert.equal(unpackDraft({ v: 1, d: { title: '', conds: [] }, filled: 'все' })?.filled, undefined);
+});
+
+test('черновик формы: шаблон и снимок формы для помощника переживают уход; чужой шаблон отбрасывается', () => {
+  const d = { ...emptyDraft(), source: 'ff' };
+  const back = unpackDraft(JSON.parse(JSON.stringify(packDraft(d, false, { tpl: 'meetings', chat: { id: 'c1', rev: 2, base: d } }))));
+  assert.equal(back?.tpl, 'meetings');
+  assert.deepEqual(back?.chat, { id: 'c1', rev: 2, base: d });
+  assert.equal(unpackDraft({ v: 1, d: { title: '', conds: [] }, tpl: '../x' })?.tpl, undefined);
+});
+
+test('с чем открыть форму: черновик того же шаблона или без шаблона; другой шаблон — с нуля', () => {
+  const saved = packDraft({ ...emptyDraft(), source: 'ff' }, false, { tpl: 'meetings' });
+  assert.equal(draftToOpen(saved, null), saved);
+  assert.equal(draftToOpen(saved, 'meetings'), saved);
+  assert.equal(draftToOpen(saved, 'review-gitlab'), undefined);
+  assert.equal(draftToOpen(packDraft(emptyDraft(), false), 'meetings'), undefined);
+  assert.equal(draftToOpen(undefined, null), undefined);
+});
+
+test('нетронутый шаблон не перезаписывает черновик: пишется только тронутое человеком', () => {
+  const tpl = JSON.stringify(packDraft({ ...emptyDraft(), source: 'ff', flow: 'desk-meeting-tasks' }, false, { tpl: 'meetings' }));
+  const before = JSON.stringify(packDraft({ ...emptyDraft(), source: 'gitlab' }, true));
+  // открыли шаблон, автоподстановки поменяли форму, но человек её не трогал
+  assert.equal(shouldSaveDraft({ human: false, noSave: false, closed: false, payload: tpl, last: before }), false);
+  assert.equal(shouldSaveDraft({ human: true, noSave: false, closed: false, payload: tpl, last: before }), true);
+  // то же, что уже на сервере; черновик не прочитался; форма уже сохранена рутиной
+  assert.equal(shouldSaveDraft({ human: true, noSave: false, closed: false, payload: tpl, last: tpl }), false);
+  assert.equal(shouldSaveDraft({ human: true, noSave: true, closed: false, payload: tpl, last: before }), false);
+  assert.equal(shouldSaveDraft({ human: true, noSave: false, closed: true, payload: tpl, last: before }), false);
 });

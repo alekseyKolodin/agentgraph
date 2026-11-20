@@ -246,6 +246,69 @@ test('проверка на истории: неуверенное событи�
   }
 });
 
+test('проверка на истории: воронка — сколько событий прошло каждое условие по порядку и ИИ рутины', async () => {
+  const t = setup({ check: (i) => ({ match: i.event.id !== '3', duplicate: false, reason: 'x', costUsd: 0 }) });
+  try {
+    t.connected();
+    t.routine('r', {
+      mode: 'auto',
+      when: {
+        source: 'src',
+        match: [
+          { field: 'channel', op: 'eq', value: 'bugs' },
+          { field: 'title', op: 'ne', value: 'Баг 2' },
+          // недописанное условие в воронку не идёт: движок его не применяет
+          { field: 'author', op: 'eq', value: '' },
+        ],
+        check: 'настоящий баг',
+      },
+    });
+    t.items.push(t.event('1'), t.event('2'), t.event('3'), t.event('4'), t.event('5', { fields: { channel: 'random' } }));
+    const h = await t.engine.history('r', {});
+    assert.deepEqual(h.funnel, {
+      total: 5,
+      mode: 'all',
+      fields: [
+        { field: 'channel', op: 'eq', passed: 4 },
+        { field: 'title', op: 'ne', passed: 3 },
+      ],
+      matched: 3,
+      check: 2,
+    });
+    // «хватает одного»: каждое условие считается само по себе, check нет — у правила нет условия словами
+    const any = await t.engine.history('r', { spec: { title: 'x', when: { source: 'src', match_mode: 'any', match: [{ field: 'channel', op: 'eq', value: 'random' }, { field: 'title', op: 'eq', value: ['Баг 1', 'Баг 2'] }] }, run: { flow: 'demo' }, mode: 'auto' } });
+    assert.deepEqual(any.funnel, {
+      total: 5,
+      mode: 'any',
+      fields: [
+        { field: 'channel', op: 'eq', passed: 1 },
+        { field: 'title', op: 'eq', passed: 2 },
+      ],
+      matched: 3,
+    });
+  } finally {
+    t.done();
+  }
+});
+
+test('два «≠» на одно поле в рутине: оба сохраняются в файле и оба отсеивают', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('r', { when: { source: 'src', match: [{ field: 'title', op: 'ne', value: 'Баг 1' }, { field: 'title', op: 'ne', value: 'Баг 2' }] } });
+    assert.deepEqual(t.store.routine('r')!.spec!.when, { source: 'src', match: [{ field: 'title', op: 'ne', value: 'Баг 1' }, { field: 'title', op: 'ne', value: 'Баг 2' }] });
+    await t.push(t.event('1'), t.event('2'), t.event('3'));
+    assert.deepEqual(t.started.map((r) => r.event.id), ['3']);
+    const filtered = t.engine.logOf('r', {}).filter((x) => x.outcome === 'filtered');
+    assert.deepEqual(filtered.map((x) => x.reason).sort(), ['title: «Баг 1» равно «Баг 1»', 'title: «Баг 2» равно «Баг 2»']);
+    // «почему» по строке журнала — оба условия, по порядку
+    const x = t.engine.explain('r', filtered.find((f) => f.event.id === '2')!.id);
+    assert.deepEqual(x.conditions.map((c) => [c.key, c.op, c.want, c.ok]), [['title', '≠', 'Баг 1', true], ['title', '≠', 'Баг 2', false]]);
+  } finally {
+    t.done();
+  }
+});
+
 test('своё сообщение (isSelf) — не событие', async () => {
   const t = setup();
   try {

@@ -1,0 +1,66 @@
+/* Страница источника (SourcePage.tsx, docs/routines/design → Source): слева карточка настроек строками «подпись · правка»
+   и строка сохранения, справа — последние записи и рутины, которые им пользуются. */
+.head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.head h1 { margin: 0; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.01em; min-width: 0; overflow-wrap: anywhere; }
+.meta { font-size: var(--fs-meta); color: var(--ink-2); }
+.meta .bad { color: var(--st-fail); }
+.meta .ask { color: var(--st-wait); }
+.grow { flex: 1 1 auto; }
+
+.layout { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; max-width: 1216px; }
+.main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.aside { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+
+/* карточка: без overflow — поповеры полей не обрезаются */
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); }
+.row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 16px 18px; border-top: 1px solid var(--line); align-items: start; }
+.row:first-child { border-top: 0; }
+.k { font-size: var(--fs-small); font-weight: 500; color: var(--ink-2); line-height: var(--ctl-h); }
+.body { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.hint { font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+.warn { font-size: var(--fs-meta); color: var(--st-wait); }
+.err { font-size: var(--fs-small); color: var(--st-fail); white-space: pre-wrap; }
+.ok { font-size: var(--fs-small); color: var(--st-ok); }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.mono { font-family: var(--font-mono); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
+
+/* ключ: имя и «сохранён» в коробке как у поля, значение не показывается никогда */
+.keyRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.keyBox { flex: 1 1 240px; min-width: 0; display: flex; align-items: center; gap: 8px; height: var(--ctl-h); padding: 0 10px; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--ink-2); }
+.keyBox .keyState { margin-left: auto; font-family: var(--font-sans); font-size: var(--fs-meta); }
+.keyForm { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.keyForm > :first-child { flex: 1 1 240px; width: auto; }
+
+/* команда только для чтения: как поле, но текстом */
+.code { margin: 0; padding: 8px 10px; background: var(--well); border: 1px solid var(--line-strong); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.6; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* поля записи: «Заголовок ← title» */
+.map { display: grid; grid-template-columns: 120px 16px minmax(0, 1fr); gap: 6px 8px; align-items: center; font-size: var(--fs-small); }
+.map > .from { color: var(--ink-2); }
+.map > .arrow { color: var(--ink-3); }
+
+.steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-small); }
+.steps li { display: flex; flex-direction: column; gap: 1px; }
+.steps .mono { color: var(--ink-2); overflow-wrap: anywhere; }
+
+.saveBar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* правая колонка */
+.side { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.sideHead { display: flex; align-items: center; gap: 8px; }
+.lbl { font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; width: 100%; padding: 7px 0; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-small); text-align: left; cursor: pointer; }
+.rec:hover { color: var(--act-hover); }
+.rec > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec[aria-expanded="true"] > span:first-child { font-weight: 500; }
+.recBlock { margin: 0 0 8px; max-height: 320px; overflow: auto; padding: 8px 10px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.user { display: flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; font-size: var(--fs-small); min-width: 0; }
+.user:hover { color: var(--act-hover); }
+.user > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.self { align-self: flex-start; }
+
+@media (max-width: 640px) {
+  .row { grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 14px; }
+  .k { line-height: 1.5; }
+  .map { grid-template-columns: 96px 16px minmax(0, 1fr); }
+}

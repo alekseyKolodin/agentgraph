@@ -1,0 +1,79 @@
+/* Общая система полей (Field, Select, TokenInput, Seg, Chips, NumberField; system.md → Fields): подпись сверху, контрол
+   var(--ctl-h), шрифт интерфейса. Моноширинный — только классом .mono (пути, cron, деньги). */
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); font-weight: 500; color: var(--ink-3); }
+.help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 10px; line-height: 1; color: var(--ink-3); cursor: help; }
+.hint { font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+.hint.warn { color: var(--st-wait); }
+.hint.err { color: var(--st-fail); }
+
+/* сам контрол: input, кнопка-триггер Select, коробка токенов и числа */
+.ctl {
+  font: inherit; font-size: var(--fs-body); color: var(--ink); background: var(--well);
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  height: var(--ctl-h); padding: 0 10px; min-width: 0; width: 100%;
+  display: inline-flex; align-items: center; gap: 8px; text-align: left;
+  transition: border-color .12s;
+}
+.ctl:hover { border-color: color-mix(in srgb, var(--line-strong) 60%, var(--ink-2)); }
+.ctl:focus, .ctl:focus-visible, .ctl:focus-within { outline: none; box-shadow: var(--focus); }
+.ctl::placeholder { color: var(--ink-off); }
+textarea.ctl { height: auto; min-height: var(--ctl-h); padding: 6px 10px; line-height: 1.5; resize: vertical; display: block; }
+.ctl.mono, .mono { font-family: var(--font-mono); font-size: var(--fs-small); font-variant-numeric: tabular-nums; }
+.ctl.warn { border-color: var(--st-wait); }
+.ctl.err { border-color: var(--st-fail); }
+.ctl:disabled, .ctl.disabled { opacity: .45; cursor: not-allowed; }
+.ctl:disabled:hover, .ctl.disabled:hover { border-color: var(--line-strong); }
+/* вложенный input внутри коробки (токены, число): рамку и фокус рисует коробка */
+.bare { flex: 1 1 60px; min-width: 40px; height: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; outline: none; }
+.bare::placeholder { color: var(--ink-off); }
+.affix { flex: none; color: var(--ink-3); }
+.affix.end { font-size: var(--fs-small); }
+
+/* Select: кнопка-триггер и поповер с поиском */
+.select { position: relative; min-width: 0; }
+.trigger { cursor: pointer; }
+.value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.placeholder { color: var(--ink-off); }
+.chev { flex: none; color: var(--ink-3); }
+.pop { position: absolute; left: 0; top: calc(100% + 4px); z-index: 40; min-width: 100%; max-width: min(420px, 90vw); padding: 4px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r-md); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; gap: 4px; }
+.search { height: var(--ctl-h-sm); font-size: var(--fs-small); }
+.list { margin: 0; padding: 0; list-style: none; max-height: calc(8 * 34px); overflow-y: auto; }
+.opt { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-small); }
+.opt.active { background: var(--select); }
+.opt[aria-selected="true"] .optLabel { font-weight: 500; }
+.opt[aria-disabled="true"] { color: var(--ink-off); cursor: not-allowed; }
+.optLabel { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt[aria-disabled="true"] .optLabel { color: var(--ink-off); }
+.optSub { font-size: var(--fs-meta); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { padding: 6px 10px; font-size: var(--fs-small); color: var(--ink-3); }
+/* пустой живой регион Select: в DOM для чтения с экрана, но места и зазора в поповере не занимает */
+.empty:empty { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+
+/* TokenInput: коробка с токенами, растёт в высоту, если токенов много */
+.tokens { height: auto; min-height: var(--ctl-h); padding: 3px 6px; flex-wrap: wrap; gap: 6px; cursor: text; }
+.tok { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 2px 0 8px; border-radius: var(--r-xs); background: var(--raised); border: 1px solid var(--line-strong); font-size: var(--fs-small); max-width: 100%; }
+.tokText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tokX { font: inherit; font-size: var(--fs-meta); line-height: 1; color: var(--ink-3); background: transparent; border: 0; border-radius: var(--r-xs); padding: 2px 4px; cursor: pointer; }
+.tokX:hover { color: var(--ink); }
+
+/* ModelSelect: список моделей и поле своего id рядом (переносится под список, если тесно) */
+.model-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.model-pick > .select { flex: 1 1 160px; }
+.model-id { flex: 1 1 160px; width: auto; }
+
+/* Seg: 2–4 варианта, один выбран */
+.seg { display: inline-flex; align-self: flex-start; max-width: 100%; height: var(--ctl-h); border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; }
+.seg button { font: inherit; font-size: var(--fs-small); color: var(--ink-2); background: transparent; border: 0; border-right: 1px solid var(--line); padding: 0 12px; white-space: nowrap; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--ink); font-weight: 500; }
+.seg button:disabled { color: var(--ink-off); cursor: not-allowed; }
+.seg button:focus-visible { box-shadow: inset var(--focus); }
+
+/* Chips: мультивыбор, 24 px */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: inherit; font-size: var(--fs-meta); height: var(--chip-h); padding: 0 9px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); display: inline-flex; align-items: center; cursor: pointer; }
+.chip:hover { color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--raised); color: var(--ink); border-color: color-mix(in srgb, var(--ink) 24%, transparent); }
+.chip:disabled { opacity: .45; cursor: not-allowed; }

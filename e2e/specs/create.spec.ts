@@ -1,6 +1,7 @@
 // Создание рутины через интерфейс на каждом типе источника (SPEC §6): Slack, Telegram, своя команда, подключение
-// словами, расписание. Источник подключается на «Подключить сервис», рутина собирается на «Новой рутине» и включается
-// в редакторе; затем настоящее событие источника доходит до запуска.
+// словами, расписание. Источник подключается на «Подключить сервис», рутина собирается на «Новой рутине» по разделам
+// «Когда · Что сделать · Как узнаю», сохраняется черновиком и включается в редакторе; затем настоящее событие источника
+// доходит до запуска.
 import { FAKE_API_KEY, SLACK_APP_TOKEN, SLACK_TOKEN, TELEGRAM_TOKEN, expect, test } from '../support/env.js';
 import { connectReady, createRoutine, enable, pick } from '../support/ui.js';
 
@@ -12,7 +13,7 @@ test('Slack: подключить готовый вид, собрать рути
   // ключи в файл источника не попали
   expect(JSON.stringify(src.spec)).not.toContain(SLACK_TOKEN);
 
-  const slug = await createRoutine(page, { source: 'Slack', flow: 'bugfix', wait: 'перед блоком', reply: 'После моей проверки', check: 'Это баг-репорт', title: 'Баги из Slack' });
+  const slug = await createRoutine(page, { source: 'Slack', flow: 'bugfix', wait: 'сразу, но стоп перед блоком', reply: 'после проверки', check: 'Это баг-репорт', title: 'Баги из Slack' });
   const draft = await e2e.routine(slug);
   expect(draft.spec).toMatchObject({ enabled: false, draft: true });
   expect(draft.spec.mode).toBe('until_pause');
@@ -32,7 +33,7 @@ test('Slack: подключить готовый вид, собрать рути
 
 test('Telegram: бот, запуск без остановок и ответ сразу в чат', async ({ page, e2e }) => {
   await connectReady(page, 'Telegram', { 'Токен бота': TELEGRAM_TOKEN });
-  const slug = await createRoutine(page, { source: 'Telegram', flow: 'digest', wait: 'не ждать', reply: 'Сразу', title: 'Сводка по запросу' });
+  const slug = await createRoutine(page, { source: 'Telegram', flow: 'digest', wait: 'сразу', reply: 'сразу', title: 'Сводка по запросу' });
   expect((await e2e.routine(slug)).spec).toMatchObject({ mode: 'auto', reply: { to: 'source', draft: false } });
   await enable(page);
 
@@ -60,7 +61,7 @@ test('своя команда: curl к сервису, опрос по инте�
   const src = (await e2e.overview()).sources.find((s) => s.spec.kind === 'command')!;
   expect(src.spec.every).toBe('30s');
 
-  const slug = await createRoutine(page, { source: 'Заявки', flow: 'digest', wait: 'не ждать', title: 'Заявки → сводка' });
+  const slug = await createRoutine(page, { source: 'Заявки', flow: 'digest', wait: 'сразу', title: 'Заявки → сводка' });
   await enable(page);
   // первый опрос только запоминает «уже видено»: старая заявка не запускается
   await e2e.until(() => e2e.readState(`seen/${src.slug}.json`), { message: 'первый опрос не прошёл' });
@@ -73,7 +74,7 @@ test('своя команда: curl к сервису, опрос по инте�
 test('подключение словами: агент находит API, просит ключ, проверяет и сохраняет источник', async ({ page, e2e }) => {
   e2e.items.add({ id: 'w-1', title: 'Заявка из сервиса', text: 'нужна помощь' });
   await page.goto('/routines/new');
-  await page.getByRole('link', { name: /Другой сервис/ }).click();
+  await pick(page.getByRole('group', { name: 'Что запускает' }), '+ Подключить сервис').click();
   await expect(page).toHaveURL(/\/routines\/connect\?from=new/);
   await page.getByLabel('Что должно запускать рутину').fill('Новые заявки в фейк-сервисе');
   await page.getByRole('button', { name: 'Подобрать' }).click();
@@ -91,8 +92,8 @@ test('подключение словами: агент находит API, пр
   await expect(ready.locator('pre')).not.toContainText(FAKE_API_KEY);
   await ready.getByRole('button', { name: 'Сохранить источник' }).click();
 
-  // вернулись на «Новую рутину» с выбранным источником
-  await expect(page).toHaveURL(/\/routines\/new\?source=/);
+  // вернулись на «Новую рутину» с выбранным источником; ?source= применяется один раз и снимается из адреса
+  await expect(page).toHaveURL(/\/routines\/new$/);
   const draftCalls = e2e.claudeCalls().filter((c) => c.system.startsWith('Ты подключаешь внешний сервис'));
   expect(draftCalls).toHaveLength(1);
   expect(draftCalls[0]!.prompt).toContain('Новые заявки в фейк-сервисе');
@@ -100,26 +101,27 @@ test('подключение словами: агент находит API, пр
   expect(src.spec).toMatchObject({ kind: 'command', secrets: ['FAKE_API_KEY'] });
   expect(src.missingSecrets).toEqual([]);
   expect(JSON.stringify(src)).not.toContain(FAKE_API_KEY);
-  await expect(pick(page.getByRole('region', { name: 'Что запускает' }), src.spec.title)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pick(page.getByRole('group', { name: 'Что запускает' }), src.spec.title)).toHaveAttribute('aria-pressed', 'true');
 
-  const slug = await createRoutine(page, { source: src.spec.title, flow: 'digest', wait: 'перед запуском', title: 'Заявки из сервиса' }, { goto: false });
+  const slug = await createRoutine(page, { source: src.spec.title, flow: 'digest', wait: 'после моего «да»', title: 'Заявки из сервиса' }, { goto: false });
   // проверка на истории в редакторе — свежий опрос источника с ключом
-  const history = page.getByRole('region', { name: 'Проверка на истории' });
+  const history = page.getByRole('complementary', { name: 'Проверка на истории' });
   await expect(history.getByText('Заявка из сервиса', { exact: true })).toBeVisible();
-  await expect(history).toContainText('Запустилось бы 1 из 1');
+  await expect(history).toContainText('1 из 1');
+  await expect(history).toContainText('запустилось бы');
   expect((await e2e.routine(slug)).spec.mode).toBe('suggest');
 });
 
 test('расписание: пресет на «Новой рутине», своё cron в редакторе и запуск в назначенную минуту', async ({ page, e2e }) => {
   test.setTimeout(150_000);
   await page.goto('/routines/new');
-  await pick(page.getByRole('region', { name: 'Что запускает' }), 'Расписание').click();
   const when = page.getByRole('region', { name: 'Когда' });
+  await pick(when.getByRole('group', { name: 'Что запускает' }), 'По расписанию').click();
   await when.getByRole('group', { name: 'Как часто' }).getByRole('button', { name: 'Каждый день' }).click();
   await when.getByLabel('Время').fill('07:15');
   await expect(when).toContainText('Ближайшие:');
-  await when.getByLabel('Задача для flow').fill('Сводка по MR');
-  const slug = await createRoutine(page, { source: 'Расписание', flow: 'digest', title: 'Утренняя сводка' }, { goto: false });
+  await page.getByRole('region', { name: 'Что сделать' }).getByLabel('Задача для flow').fill('Сводка по MR');
+  const slug = await createRoutine(page, { source: 'По расписанию', flow: 'digest', title: 'Утренняя сводка' }, { goto: false });
   const r = await e2e.routine(slug);
   expect(r.spec.when).toMatchObject({ schedule: '15 7 * * *' });
   expect(r.spec.mode).toBe('auto');

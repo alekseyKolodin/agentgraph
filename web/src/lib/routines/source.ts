@@ -78,15 +78,6 @@ export function foundText(total: number, command = false): string {
   return command ? t('Команда отработала. Нашёл {n} {w}.', { n: total, w }) : t('Сервис отвечает. Нашёл {n} {w}.', { n: total, w });
 }
 
-/** Интервалы для редактора рутины: не чаще минимума вида, плюс текущий (если он нестандартный). */
-export function pollChoices(minEvery: string | undefined, current: string | undefined): string[] {
-  const list = [...everyOptions(minEvery), '3h', '6h'].filter((v, i, a) => a.indexOf(v) === i);
-  if (current && !list.includes(current)) list.push(current);
-  // нестандартное значение из файла (например '1d') everyMs не разбирает — такое встаёт в конец
-  const ms = (v: string) => (Number.isNaN(everyMs(v)) ? Infinity : everyMs(v));
-  return list.sort((a, b) => ms(a) - ms(b));
-}
-
 /** Итог «Проверить сейчас» одной фразой: что нашлось и что стало с новым. */
 export function checkNowText(r: SourceCheckNow): string {
   if (!r.ok) return r.error ?? t('не отвечает');

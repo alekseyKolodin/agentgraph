@@ -417,6 +417,89 @@ test('уведомления ожиданий рутины: suggest и пауз�
   }
 });
 
+test('уведомления рутины: notify.os: [] молчит обо всём своём, а поломку источника всё равно объявляет', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('s', { mode: 'suggest', notify: { os: [] } });
+    await t.push(t.event('1'));
+    t.routine('s', { mode: 'until_pause', run: { flow: 'demo', pause_before: ['analyze'] }, notify: { os: [] } });
+    await t.push(t.event('2'));
+    await t.engine.onRunEvent('run-1', { type: 'pause', block: 'analyze' });
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'failed', costUsd: 0.1, error: 'упало' });
+    t.routine('s', { mode: 'auto', reply: { to: 'source', on: ['end'], draft: true }, notify: { os: [] } });
+    await t.push(t.event('3'));
+    await t.engine.onRunEvent('run-2', { type: 'end', status: 'done', costUsd: 0.1, summary: 'готово' });
+    assert.deepEqual(t.notices.map((n) => n.title), []);
+    // уведомления об источнике от настройки рутины не зависят
+    t.poller.fn = async () => {
+      throw new Error('401 токен отозван');
+    };
+    for (let i = 0; i < 3; i++) await t.engine.pollSource('src');
+    assert.equal(t.notices.length, 1);
+    assert.match(t.notices[0].title, /Источник «Чат» не отвечает/);
+  } finally {
+    t.done();
+  }
+});
+
+test('уведомления рутины: старт по умолчанию молчит; со start — «запущено» со ссылкой на запуск, но не на запуск по кнопке', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('r');
+    await t.push(t.event('1'));
+    assert.equal(t.started.length, 1);
+    assert.equal(t.notices.length, 0);
+    t.routine('r', { notify: { os: ['start'] } });
+    await t.push(t.event('2'));
+    assert.equal(t.notices.length, 1);
+    assert.equal(t.notices[0].title, 'Ревью !2 — запущено');
+    assert.equal(t.notices[0].body, 'Рутина r');
+    assert.equal(t.notices[0].path, '/run/run-2');
+    // только start: ошибка запуска не объявляется
+    await t.engine.onRunEvent('run-2', { type: 'end', status: 'failed', costUsd: 0.1, error: 'упало' });
+    assert.equal(t.notices.length, 1);
+    // «Запустить» человека — его только что нажали
+    await t.engine.runNow('r');
+    assert.equal(t.started.length, 3);
+    assert.equal(t.notices.length, 1);
+  } finally {
+    t.done();
+  }
+});
+
+test('«Догнать» с notify.os start не объявляет старты — ни сразу, ни из очереди parallel', async () => {
+  const t = setup();
+  try {
+    t.connected();
+    t.routine('r', { notify: { os: ['start'] }, limits: { parallel: 1 } });
+    const old = ['a', 'b', 'c'].map((id, i) => t.event(id, { at: new Date(Date.parse('2026-11-17T08:00:00Z') + i * 1000).toISOString() }));
+    await t.push(...old);
+    const row = t.store.catchUp()[0];
+    assert.equal(row.events, 3);
+    await t.engine.catchUpAction(row.id, 'run');
+    await t.engine.idle();
+    assert.equal(t.started.length, 1);
+    assert.equal(t.store.queue().length, 2);
+    assert.ok(t.store.queue().every((q) => q.quiet));
+    // место освободилось — очередь стартует, но тоже молча
+    await t.engine.onRunEvent('run-1', { type: 'end', status: 'done', costUsd: 0.1 });
+    await t.engine.idle();
+    assert.equal(t.started.length, 2);
+    assert.deepEqual(t.notices.filter((n) => /запущено/.test(n.title)), []);
+    // обычное событие той же рутины объявляется
+    await t.engine.onRunEvent('run-2', { type: 'end', status: 'done', costUsd: 0.1 });
+    await t.engine.idle();
+    await t.engine.onRunEvent('run-3', { type: 'end', status: 'done', costUsd: 0.1 });
+    await t.engine.idle();
+    await t.push(t.event('d'));
+    assert.deepEqual(t.notices.filter((n) => /запущено/.test(n.title)).map((n) => n.title), ['Ревью !d — запущено']);
+  } finally {
+    t.done();
+  }
+});
+
 test('журнал одной рутины не пишется — остальные рутины и события пачки обрабатываются, сбой виден в лог и problems', async () => {
   const logs: string[] = [];
   const t = setup();

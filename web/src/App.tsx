@@ -40,6 +40,7 @@ const NewRoutine = lazy(() => import('./screens/routines').then((m) => ({ defaul
 const ConnectSource = lazy(() => import('./screens/routines').then((m) => ({ default: m.ConnectSource })));
 const RoutineEditor = lazy(() => import('./screens/routines').then((m) => ({ default: m.RoutineEditor })));
 const RoutineLog = lazy(() => import('./screens/routines').then((m) => ({ default: m.RoutineLog })));
+const SourcePage = lazy(() => import('./screens/routines').then((m) => ({ default: m.SourcePage })));
 
 // старые ссылки /#run/<id>, /#flow/<имя>, /#tags/<slug>, /#context — до создания роутера: он читает адрес сразу
 const legacy = legacyLocation(location);
@@ -70,6 +71,7 @@ const router = createBrowserRouter(
             { path: 'routines', element: <Suspense><RoutinesList /></Suspense> },
             { path: 'routines/new', element: <Suspense><NewRoutine /></Suspense> },
             { path: 'routines/connect', element: <Suspense><ConnectSource /></Suspense> },
+            { path: 'routines/sources/:slug', element: <Suspense><SourcePage /></Suspense> },
             { path: 'routines/:slug', element: <Suspense><RoutineEditor /></Suspense> },
             { path: 'routines/:slug/log', element: <Suspense><RoutineLog /></Suspense> },
             { path: 'flow/:name', element: <Suspense><FlowScreen /></Suspense> },

@@ -1,0 +1,11 @@
+/* Подсказки-плашки экранов рутин: чего не хватает помощнику (RoutineAssistant) и что нужно для GitLab/GitHub
+   (ConnectSource). Токены «Пульта», глубина — линии. */
+.need { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: var(--fs-small); }
+.need b { font-weight: 500; }
+.saved { font-size: var(--fs-meta); color: var(--ink-3); }
+
+/* что нужно для GitLab/GitHub */
+.forge { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; background: var(--well); border: 1px solid var(--line); border-radius: var(--r-sm); font-size: var(--fs-small); color: var(--ink-2); }
+.forge ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.forge code { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink); background: var(--panel); padding: 1px 5px; border-radius: var(--r-sm); border: 1px solid var(--line); }
+.forgeErr { color: var(--st-fail); font-size: var(--fs-small); text-wrap: pretty; }

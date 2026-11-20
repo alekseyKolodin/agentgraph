@@ -1,0 +1,10 @@
+/* «Папка проекта» рутины (CwdField): поле и «Выбрать…» в строку, под ним — что сервер увидел в папке, недавние чипами. */
+.meta { font-size: var(--fs-meta); color: var(--ink-3); text-wrap: pretty; }
+.err { font-size: var(--fs-meta); color: var(--st-fail); }
+.ok { font-size: var(--fs-meta); color: var(--st-ok); }
+.dir-row { display: flex; gap: 6px; align-items: center; }
+.dir-row > :first-child { flex: 1 1 auto; }
+.recent { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.recent-chip { font: inherit; font-size: var(--fs-meta); height: var(--chip-h); padding: 0 9px; border-radius: var(--r-pill); border: 1px solid var(--line-strong); background: transparent; color: var(--ink-2); cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-chip:hover { color: var(--ink); }
+.recent-chip[aria-pressed="true"] { background: var(--raised); color: var(--ink); border-color: color-mix(in srgb, var(--ink) 24%, transparent); }

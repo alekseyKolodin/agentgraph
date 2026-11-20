@@ -47,7 +47,7 @@ test('ревью из GitLab: событие review, дело «Ревью» п�
   const d = templateDraft('review-forge', { source: SOURCES[3] });
   assert.deepEqual(draftMissing(d), []);
   const spec = buildSpec({ ...d, title: 'Ревью' }, [{ key: 'event', label: 'Что', type: 'enum' }]);
-  assert.deepEqual(spec.when, { source: 'gl', match: { event: 'review' } });
+  assert.deepEqual(spec.when, { source: 'gl', match: [{ field: 'event', op: 'eq', value: 'review' }] });
   assert.equal(spec.run?.flow, 'desk-review-mr');
   assert.equal(spec.mode, 'suggest');
   assert.deepEqual(spec.task, { kind: 'Ревью', same: 'thing' });
@@ -56,7 +56,7 @@ test('ревью из GitLab: событие review, дело «Ревью» п�
 
 test('ревью по ссылке в Slack: условие на ссылку MR/PR в тексте; без инструмента ответа — без ответа рутины', () => {
   const spec = buildSpec({ ...templateDraft('review-slack', { source: SOURCES[2] }), title: 'x' }, []);
-  assert.deepEqual(spec.when, { source: 'slack-claude', match: { 'text~': ['/merge_requests/', '/pull/'] } });
+  assert.deepEqual(spec.when, { source: 'slack-claude', match: [{ field: 'text', op: 'contains', value: ['/merge_requests/', '/pull/'] }] });
   assert.deepEqual(spec.task, { kind: 'Ревью', same: 'thing' });
   assert.deepEqual(spec.reply, { to: 'none' });
   // инструмент ответа в источнике настроен — черновик в тред
@@ -65,7 +65,7 @@ test('ревью по ссылке в Slack: условие на ссылку MR
 
 test('Jira и встречи: назначили на меня → дело и запуск по кнопке; встреча → дела заводит flow, «кто я» в задаче', () => {
   const jira = buildSpec({ ...templateDraft('jira', { source: SOURCES[4] }), title: 'x' }, []);
-  assert.deepEqual(jira.when, { source: 'jira', match: { change: ['assigned', 'new'] } });
+  assert.deepEqual(jira.when, { source: 'jira', match: [{ field: 'change', op: 'eq', value: ['assigned', 'new'] }] });
   assert.equal(jira.run?.flow, 'desk-task-start');
   // правки задачи — в новом рабочем дереве
   assert.equal(jira.run?.worktree, 'new');
@@ -116,5 +116,5 @@ test('источник выбран руками: условие шаблона 
   assert.deepEqual(templateConds('nope', forge), []);
   // правило получается то же, что у подставленного источника
   const spec = buildSpec({ ...templateDraft('review-slack', { source: SOURCES[2] }), conds: templateConds('review-slack', plain) }, plain);
-  assert.deepEqual('match' in spec.when ? spec.when.match : undefined, { 'text~': ['/merge_requests/', '/pull/'] });
+  assert.deepEqual('match' in spec.when ? spec.when.match : undefined, [{ field: 'text', op: 'contains', value: ['/merge_requests/', '/pull/'] }]);
 });

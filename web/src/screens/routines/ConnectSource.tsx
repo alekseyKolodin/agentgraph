@@ -1,7 +1,8 @@
 // «Подключить сервис» (/routines/connect, docs/routines/design/Source.dc.html): три способа — «Описать словами» (агент
 // находит API, просит ключ, собирает проверку и показывает, что нашёл: черновик /api/routines/sources/draft), «Готовые»
 // (виды и рецепты: форма из setup вида) и «Своя команда» (команда, поля записи, ключи окружения, проверка). Сохранённый
-// источник возвращает на «Новую рутину» (?from=new) уже выбранным, иначе — к списку источников. Шаблон может сразу открыть
+// источник возвращает на «Новую рутину» (?from=new) уже выбранным (с &for=reply — каналом ответа «мне в Slack или
+// Telegram», а не тем, что запускает), иначе — к списку источников. Шаблон может сразу открыть
 // нужный вид в «Готовых» (?mode=ready&kind=connector&service=slack — connectHref в lib/routines/templates.ts).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
@@ -18,7 +19,7 @@ import { connectParam, servicesFor } from '../../lib/routines/templates';
 import { NotAvailable } from './RoutinesList';
 import { ReplyStep } from './ReplySetup';
 import { cx, Dot, Seg } from './parts';
-import notes from './ComposeBox.module.css';
+import notes from './Notes.module.css';
 import styles from './Routines.module.css';
 
 type Mode = 'words' | 'ready' | 'cmd';
@@ -74,14 +75,17 @@ const tplQuery = (params: URLSearchParams): string => {
 function useSaveSource(data: RoutinesOverview, fromNew: boolean) {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const tplBack = tplQuery(useSearchParams()[0]);
+  const [params] = useSearchParams();
+  const tplBack = tplQuery(params);
+  // подключали, куда писать мне (раздел «Как узнаю»): источник рутины не меняется, новый становится каналом ответа
+  const back = params.get('for') === 'reply' ? 'reply' : 'source';
   return async (spec: SourceSpec, secrets?: Record<string, string>, slugHint?: string) => {
     const taken = data.sources.map((s) => s.slug);
     const slug = slugHint && !taken.includes(slugHint) ? slugHint : slugify(spec.title, taken);
     await saveSource(slug, spec, secrets);
     await qc.invalidateQueries({ queryKey: routineKeys.all });
     // шаблон «Новой рутины» (?tpl=) переживает подключение источника: форма откроется с ним и с новым источником
-    void navigate(fromNew ? `/routines/new?source=${encodeURIComponent(slug)}${tplBack}` : '/routines#sources');
+    void navigate(fromNew ? `/routines/new?${back}=${encodeURIComponent(slug)}${tplBack}` : '/routines#sources');
   };
 }
 

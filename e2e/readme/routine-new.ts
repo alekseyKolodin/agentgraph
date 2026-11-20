@@ -1,4 +1,5 @@
-// Ролик README «новая рутина в четыре шага»: настоящий интерфейс на окружении e2e.
+// Ролик README «новая рутина по разделам»: настоящий интерфейс на окружении e2e (английский интерфейс). Разделы «When ·
+// What to do · How I find out» слева, проверка на истории справа.
 //   npx tsx e2e/readme/routine-new.ts docs/assets/routine-new.gif
 import { SLACK_APP_TOKEN, SLACK_TOKEN } from '../support/fakes.js';
 import { demoEnv } from './demo.js';
@@ -18,27 +19,25 @@ try {
   await s.caption('A routine is a rule: <b>when</b> something happens, <b>run</b> a flow');
   await s.pause(1400);
 
-  await s.click(app.getByRole('region', { name: 'What triggers it' }).getByRole('button', { name: /^Slack · #bugs/ }), { after: 900 });
+  const when = app.getByRole('region', { name: 'When' });
+  await s.click(when.getByRole('group', { name: 'What triggers it' }).getByRole('button', { name: /^Slack · #bugs/ }), { after: 900 });
   await s.caption('Field conditions cost nothing. A check <b>in your own words</b> is optional');
-  await s.click(app.getByRole('button', { name: '+ check in words' }), { after: 500 });
-  await s.type(app.getByLabel('If'), 'A bug report: something in the product is broken. Questions are not bugs.', 22);
+  await s.type(when.getByLabel('Condition for AI'), 'A bug report: something in the product is broken. Questions are not bugs.', 22);
   await s.pause(700);
 
-  const s3 = app.getByRole('region', { name: 'What to run' });
+  const what = app.getByRole('region', { name: 'What to do' });
   await s.caption('Pick the flow and where it <b>waits for you</b>');
-  await s.click(s3.getByRole('button', { name: /^bug-to-fix/ }), { after: 800 });
-  await s.click(s3.getByRole('group', { name: 'When to wait for me' }).getByRole('button', { name: 'before a block' }), { after: 1100 });
+  await s.click(what.getByRole('button', { name: /^Flow\b/ }), { after: 500 });
+  await s.click(app.getByRole('option', { name: /^bug-to-fix/ }), { after: 800 });
+  await s.click(what.getByRole('group', { name: 'Run' }).getByRole('button', { name: 'now, but stop before a block', exact: true }), { after: 1100 });
 
-  await s.caption('The result goes back to the thread <b>after your review</b>, right away, or not at all');
-  await s.click(app.getByRole('region', { name: 'Report the result' }).getByRole('button', { name: /^After my review/ }), { after: 1300 });
+  await s.caption('The result goes back to the thread <b>after your review</b> or right away');
+  await s.click(app.getByRole('region', { name: 'How I find out' }).getByRole('group', { name: 'How the reply goes out' }).getByRole('button', { name: 'after review', exact: true }), { after: 1300 });
 
-  const summary = app.getByRole('complementary', { name: 'What you get' });
-  await s.caption('The whole rule reads as <b>one sentence</b>');
-  await s.type(summary.getByLabel('Name'), 'Bug in #bugs → ticket and fix', 30, { clear: true });
-  await s.pause(1500);
-  await s.click(summary.getByRole('button', { name: 'Check and turn on' }), { after: 1200 });
+  await s.type(app.getByLabel('Name', { exact: true }), 'Bug in #bugs → ticket and fix', 30, { clear: true });
   await s.caption('Before turning it on: what it <b>would have done</b> on recent events');
-  await s.pause(4200);
+  await s.click(app.getByRole('complementary', { name: 'History check' }).getByRole('button', { name: 'Check on history' }), { after: 4200 });
+  await s.click(app.getByRole('button', { name: 'Turn on', exact: true }), { after: 1500 });
   await s.save(out, { fps: 12 });
 } finally {
   await e.dispose();
