@@ -13,6 +13,7 @@ import {
 } from '../../api';
 import { markRunSeen } from '../../api/desk';
 import { AdhocBadge, Badge, SpaceBadge, TagBadge } from '../../components/Badge';
+import { CopyForSession } from '../../components/CopyForSession';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { InlineRename } from '../../components/InlineRename';
 import { MdText } from '../../components/MdText';
@@ -28,6 +29,7 @@ import type { GraphBlock } from '../../lib/graph/model';
 import { LIVE_STATUSES, withoutQuestion } from '../../lib/home';
 import { sourceLabel } from '../../lib/run-form';
 import { deleteRunText } from '../../lib/runs';
+import { runForSession } from '../../lib/session-links';
 import { artAttention } from '../../lib/run/artifacts';
 import {
   continueTitle, continueVisible, flowEditsLine, headerStatus, limitEditable, pauseHint, pauseText, runBlocks, runFinished, runMeta, runPause,
@@ -421,6 +423,7 @@ function RunPage({ id }: { id: string }) {
           {!multi && limitEditable(r, blocks[0]!) && <p className={cx('muted', styles.runLimit)}>{t('Лимит итераций:')} <LimitCtl block={blocks[0]!} /></p>}
         </div>
         <div className="row">
+          <CopyForSession what="run" text={runForSession(r)} />
           {!r.adhoc && <button className="btn ghost" onClick={() => void openFlow(r.flow)}>{t('К flow')}</button>}
           {r.adhoc && canAdhoc && <button className="btn" title={t('Разовый запуск: сохранить его flow в flows/, чтобы запускать снова')} onClick={() => setSaveOpen(true)}>{t('Сохранить как flow')}</button>}
           {r.live && !pause && <button className="btn" title={t('Текущий этап доработает, следующий не начнётся')} onClick={() => void act(() => pauseRun(id))}>{t('Пауза')}</button>}

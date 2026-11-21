@@ -4,7 +4,7 @@ import type { FlowSummary, RunReport, RunSummary } from './api-types.js';
 import type { RunView } from './chat.js';
 import { draftSpec } from './adhoc.js';
 import {
-  describeRun, FLOW_EXAMPLE, flowGuideText, runCwd, runNoteText, sessionFlowsCtx, sessionSpecProblems,
+  appLink, describeRun, FLOW_EXAMPLE, flowGuideText, runCwd, runNoteText, sessionFlowsCtx, sessionSpecProblems,
   type FlowSessionRef, type PreparedRun, type SessionFlowsDeps, type SessionRunStart,
 } from './session-flows.js';
 import { mcpReply, parseFlowRunArgs, parseFlowStatusArgs, type McpCtx } from './sessions-mcp.js';
@@ -84,8 +84,10 @@ test('flow_status, flow_answer, flow_stop: только запуски этой 
   const t = setup({ views: { mine: view('mine'), other: view('other') }, owner: { mine: 's1', other: 's2' }, list: [{ ...summary('mine'), session: 's1' }, { ...summary('other'), session: 's2' }, child] });
   // список — по session и parent из RunSummary: дочерний запуск — тоже её
   assert.match(await t.f.status({}), /Запуски этой сессии \(2\)[\s\S]*mine — flow fix — running[\s\S]*child/);
-  await assert.rejects(t.f.status({ run: 'other' }), /Запуска other у этой сессии нет/);
-  assert.throws(() => t.f.stop('other'), /у этой сессии нет/);
+  // чужой запуск читать можно (его могли дать «Для сессии»), останавливать — нет; несуществующего — нет вовсе
+  assert.match(await t.f.status({ run: 'other' }), /"id": "other"/);
+  assert.throws(() => t.f.stop('other'), /начат не этой сессией/);
+  await assert.rejects(t.f.status({ run: 'nope' }), /Запуска nope нет/);
   assert.match(t.f.stop('mine'), /остановлен/);
   assert.deepEqual(t.aborted, ['mine']);
   assert.match(await t.f.status({ run: 'mine' }), /"id": "mine"/);
@@ -108,6 +110,20 @@ test('flow_status с ожиданием: ждёт, пока запуск не и
   const text = await sessionFlowsCtx(ref, deps).status({ run: 'r', wait: 60 });
   assert.match(text, /"status": "done"/);
   assert.equal(calls, 3);
+});
+
+test('ссылки в ответах: с адресом сервера — markdown-ссылка на экран запуска с именем, без него — просто имя', async () => {
+  const withUrl = sessionFlowsCtx({ ...ref, appUrl: () => 'http://127.0.0.1:4750' }, {
+    prepare: (s) => ({ spec: draftSpec({ yaml: FLOW_EXAMPLE }), adhoc: true, o: s }), start: () => '2026-11-21_12-00-00-fix-and-review', ownerOf: () => 's1',
+    view: () => view('2026-11-21_12-00-00-fix-and-review'), list: () => [{ ...summary('2026-11-21_12-00-00-fix-and-review'), session: 's1', title: 'Сборка [быстрее]' }],
+    answer: () => {}, abort: () => {}, flows: () => [],
+  });
+  const started = await withUrl.run({ yaml: FLOW_EXAMPLE, input: 'x' });
+  assert.match(started, /Ссылка: \[fix-and-review\]\(http:\/\/127\.0\.0\.1:4750\/run\/2026-11-21_12-00-00-fix-and-review\) — Пользователю называй его этой ссылкой/);
+  // скобки в имени не ломают markdown
+  assert.match(await withUrl.status({}), /\[Сборка быстрее\]\(http:\/\/127\.0\.0\.1:4750\/run\//);
+  assert.match(await withUrl.status({ run: '2026-11-21_12-00-00-fix-and-review' }), /^\[Состояние запуска[^\n]*\nСсылка: \[flow fix\]\(http/);
+  assert.equal(appLink({}, 'имя', '/run/x'), 'имя');
 });
 
 test('flow_guide: правила оркестратора, пример YAML и готовые flow', () => {
@@ -168,4 +184,7 @@ test('MCP: инструменты flow — только у сессии с ор�
   const denied = (await mcpReply(rpc('tools/call', { name: 'flow_run', arguments: { flow: 'fix', input: 'x' } }), mcpCtx())).body as CallResult;
   assert.equal(denied.result.isError, true);
   assert.match(denied.result.content[0].text, /не включена оркестрация/);
+  // flow_write: ссылка на экран flow — если сервер дал свой адрес
+  const written = (await mcpReply(rpc('tools/call', { name: 'flow_write', arguments: { name: 'fix', yaml: 'x' } }), { ...mcpCtx(), appUrl: () => 'http://127.0.0.1:4750' })).body as CallResult;
+  assert.match(written.result.content[0].text, /Ссылка для пользователя: \[fix\]\(http:\/\/127\.0\.0\.1:4750\/flow\/fix\)/);
 });

@@ -5,11 +5,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, Navigate, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { deleteFlow, errorText, fetchFlow, keys, useFeature, useFlowHistory, useTags } from '../../api';
+import { deleteFlow, errorText, fetchFlow, keys, useFeature, useFlowHistory, useFlows, useTags } from '../../api';
 import { AdhocBadge } from '../../components/Badge';
+import { CopyForSession } from '../../components/CopyForSession';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { ICON } from '../../components/shell/FlowList';
 import { usageLine } from '../../lib/flow/history';
+import { flowForSession } from '../../lib/session-links';
 import { t } from '../../lib/i18n';
 import type { RunTabState } from '../home/FlowPicker';
 import { EditTab } from './EditTab';
@@ -138,6 +140,8 @@ function FlowHead() {
   const qc = useQueryClient();
   const { askConfirm, notify } = useConfirm();
   const move = useMoveFlow();
+  // путь к файлу flow для «Для сессии» — из списка flow (у открытого flow его нет)
+  const file = useFlows().data?.find((f) => f.name === flow.name)?.file;
   const desc = useRef<HTMLParagraphElement>(null);
   const [descOpen, setDescOpen] = useState(false);
   const [descMore, setDescMore] = useState(false);
@@ -251,6 +255,7 @@ function FlowHead() {
       {/* редкие и опасные действия с flow — в меню, а не рядом с вкладками */}
       {!flow.draft && (
         <div className="row menu-wrap">
+          <CopyForSession what="flow" text={file ? flowForSession({ name: flow.name, file }) : undefined} />
           <button
             ref={menuBtn}
             type="button"

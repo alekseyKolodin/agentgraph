@@ -102,6 +102,8 @@ export type McpCtx = {
   deskHint?: () => DeskHint;
   /** Запуски flow (оркестрация): нет — инструментов flow_run и соседей у сессии нет. */
   flows?: SessionFlowsCtx;
+  /** Адрес сервера agentgraph для ссылок в ответах (flow_write → экран flow): терминал сессии откроет их в приложении. */
+  appUrl?: () => string;
   /**
    * Запись знания в тег (knowledge_note, всегда с вопросом человеку): строка в конец заметок тега знаний, тега нет —
    * заводится; ответ — что записано. Нет — инструмента у сессии нет.
@@ -309,7 +311,7 @@ function flowTools(scope: ReturnType<McpScope>) {
       name: FLOW_STATUS_TOOL,
       description:
         'Состояние запусков flow этой сессии: статус, текущий этап, расход, вопросы агентов, ждущие ответа, последние этапы и проверки, артефакты (файлы — читай Read). ' +
-        `Без run — коротко все запуски сессии. wait_seconds (до ${FLOW_WAIT_MAX}) — подождать, пока запуск закончится, остановится или задаст вопрос.`,
+        `Без run — коротко все запуски сессии; с run — любой запуск (пользователь мог дать его id), отвечать и останавливать можно только свои. wait_seconds (до ${FLOW_WAIT_MAX}) — подождать, пока запуск закончится, остановится или задаст вопрос.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -571,8 +573,10 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
     }
     if (name === SPACE_SETTINGS_TOOL) return { content: [{ type: 'text', text: ctx.spaceSettings(parseSpaceSettingsArgs(args)) }] };
     if (name === FLOW_WRITE_TOOL) {
-      const file = ctx.writeFlow(parseFlowWriteArgs(args));
-      return { content: [{ type: 'text', text: `Flow записан: ${file}. ${FLOW_RUNS_NOTE}.` }] };
+      const a = parseFlowWriteArgs(args);
+      const file = ctx.writeFlow(a);
+      const link = ctx.appUrl ? ` Ссылка для пользователя: [${a.name}](${ctx.appUrl()}/flow/${encodeURIComponent(a.name)}) — терминал agentgraph откроет flow внутри приложения.` : '';
+      return { content: [{ type: 'text', text: `Flow записан: ${file}. ${FLOW_RUNS_NOTE}.${link}` }] };
     }
     if (name === KNOWLEDGE_READ_TOOL) {
       const slug = args.slug;

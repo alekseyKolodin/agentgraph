@@ -13,8 +13,20 @@ import { DESIGN_RULES, ORCHESTRATOR_RULES } from './generate.js';
 import { flowBlocks, type FlowSpec } from './schema.js';
 import type { FlowAnswerArgs, FlowRunArgs, FlowStatusArgs, SessionFlowsCtx } from './sessions-mcp.js';
 
-/** Что известно о сессии на момент вызова: пространство и теги выбирают на ходу. */
-export type FlowSessionRef = { id: string; name: () => string; cwd: () => string; space: () => string | undefined; tags: () => string[] };
+/**
+ * Что известно о сессии на момент вызова: пространство и теги выбирают на ходу; appUrl — адрес сервера agentgraph
+ * (http://127.0.0.1:<порт>): ссылки на запуски и flow в ответах — на него, терминал сессии откроет их внутри приложения.
+ */
+export type FlowSessionRef = { id: string; name: () => string; cwd: () => string; space: () => string | undefined; tags: () => string[]; appUrl?: () => string };
+
+/** Markdown-ссылка для пользователя на экран приложения; без адреса сервера — просто имя. */
+export function appLink(ref: Pick<FlowSessionRef, 'appUrl'>, label: string, path: string): string {
+  const base = ref.appUrl?.();
+  return base ? `[${label.replace(/[[\]]/g, '')}](${base}${path})` : label;
+}
+
+/** Как называть запуск или flow пользователю: ссылкой с именем, не голым адресом. */
+const LINK_NOTE = 'Пользователю называй его этой ссылкой (или id запуска): терминал agentgraph откроет экран внутри приложения; голый адрес не пиши.';
 
 /** Что передаётся серверу для старта: flow или yaml и опции запуска от сессии. */
 export type SessionRunStart = {
@@ -111,8 +123,8 @@ export function flowGuideText(flows: FlowSummary[]): string {
 const money = (n: number) => `$${n.toFixed(2)}`;
 
 /** Строка запуска в списке flow_status без run. */
-function summaryLine(r: RunSummary): string {
-  return `${r.id} — ${r.title ? `«${r.title}» (flow ${r.flow})` : `flow ${r.flow}`} — ${r.status} — ${money(r.totalCostUsd)} — начат ${r.startedAt}`;
+function summaryLine(r: RunSummary, ref: Pick<FlowSessionRef, 'appUrl'>): string {
+  return `${r.id} — ${appLink(ref, r.title || `flow ${r.flow}`, `/run/${r.id}`)}${r.title ? ` (flow ${r.flow})` : ''} — ${r.status} — ${money(r.totalCostUsd)} — начат ${r.startedAt}`;
 }
 
 /**
@@ -180,12 +192,19 @@ const mark = (v: RunView) => `${v.status}|${v.pending.map((q) => q.id).join(',')
 export function sessionFlowsCtx(ref: FlowSessionRef, deps: SessionFlowsDeps): SessionFlowsCtx {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = deps.now ?? (() => new Date());
-  const mine = (id: string): RunView => {
+  // читать можно любой запуск (его могли дать сессии кнопкой «Для сессии»), отвечать и останавливать — только свои
+  const any = (id: string): RunView => {
     const v = deps.view(id);
-    if (!v || deps.ownerOf(id) !== ref.id) throw new Error(`Запуска ${id} у этой сессии нет: flow_status без run покажет её запуски`);
+    if (!v) throw new Error(`Запуска ${id} нет: flow_status без run покажет запуски этой сессии`);
     return v;
   };
-  const report = (v: RunView) => `${statusLine(v, now())}\n${JSON.stringify(statusReport(v), null, 1)}`;
+  const mine = (id: string): RunView => {
+    const v = any(id);
+    if (deps.ownerOf(id) !== ref.id) throw new Error(`Запуск ${id} начат не этой сессией: отвечать его агентам и останавливать его может пользователь — на странице запуска`);
+    return v;
+  };
+  const report = (v: RunView) =>
+    `${statusLine(v, now())}\nСсылка: ${appLink(ref, v.report.title || `flow ${v.report.flow}`, `/run/${v.report.id}`)}\n${JSON.stringify(statusReport(v), null, 1)}`;
   const prepare = (a: FlowRunArgs): PreparedRun => {
     const space = ref.space();
     const p = deps.prepare({
@@ -208,7 +227,7 @@ export function sessionFlowsCtx(ref: FlowSessionRef, deps: SessionFlowsDeps): Se
     run: async (a: FlowRunArgs) => {
       const p = prepare(a);
       const id = deps.start(p);
-      return `Запуск ${id} начат: ${describeRun(p)}\nПользователь видит его под этой сессией. Дальше — flow_status с run: "${id}" (wait_seconds — подождать изменения).`;
+      return `Запуск ${id} начат: ${describeRun(p)}\nСсылка: ${appLink(ref, p.spec.name, `/run/${id}`)} — ${LINK_NOTE}\nПользователь видит его под этой сессией. Дальше — flow_status с run: "${id}" (wait_seconds — подождать изменения).`;
     },
     status: async (a: FlowStatusArgs) => {
       if (!a.run) {
@@ -216,16 +235,16 @@ export function sessionFlowsCtx(ref: FlowSessionRef, deps: SessionFlowsDeps): Se
         const byId = new Map(all.map((r) => [r.id, r]));
         const runs = all.filter((r) => ownerIn(byId, r.id) === ref.id);
         if (!runs.length) return 'У этой сессии запусков flow нет.';
-        return [`Запуски этой сессии (${runs.length}), новые сверху:`, ...runs.slice(0, 30).map(summaryLine)].join('\n');
+        return [`Запуски этой сессии (${runs.length}), новые сверху:`, ...runs.slice(0, 30).map((r) => summaryLine(r, ref))].join('\n');
       }
-      let v = mine(a.run);
+      let v = any(a.run);
       if (a.wait && v.live && LIVE.includes(v.status)) {
         // ждём перемены: конец, пауза, новый вопрос или законченный этап — раз в секунду, не дольше wait
         const before = mark(v);
         const until = Date.now() + a.wait * 1000;
         while (Date.now() < until) {
           await sleep(1000);
-          v = mine(a.run);
+          v = any(a.run);
           if (mark(v) !== before || !v.live) break;
         }
       }

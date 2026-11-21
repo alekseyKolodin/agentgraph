@@ -1,0 +1,2 @@
+/* значок ›_ перед подписью — как у «Открыть терминал» в форме сессии */
+.prompt { font-family: var(--font-mono); font-weight: 600; margin-right: 6px; }

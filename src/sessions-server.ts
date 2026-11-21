@@ -1202,7 +1202,8 @@ export class SessionManager {
       },
       open: (args) => this.openFrom(s, args, port),
       // запуски flow — у сессии с оркестрацией: пространство, теги, папка и модель — на момент вызова
-      ...(s.rec.orchestrate && flowsHooks ? { flows: flowsHooks(this.flowRef(s)) } : {}),
+      ...(s.rec.orchestrate && flowsHooks ? { flows: flowsHooks(this.flowRef(s, port)) } : {}),
+      appUrl: () => `http://127.0.0.1:${port}`,
       writeDoc: (name, text) => {
         const space = this.spaceOf(s, 'документ');
         const doc = writeSpaceDoc(space.slug, name, text, { exts: WRITE_DOC_EXTS });
@@ -1265,10 +1266,11 @@ export class SessionManager {
     });
   }
 
-  /** Сессия глазами её запусков flow: пространство, теги и папка — на момент вызова. */
-  private flowRef(s: Live): FlowSessionRef {
+  /** Сессия глазами её запусков flow: пространство, теги и папка — на момент вызова; ссылки — на этот сервер. */
+  private flowRef(s: Live, port: number): FlowSessionRef {
     return {
       id: s.rec.id,
+      appUrl: () => `http://127.0.0.1:${port}`,
       name: () => s.rec.name,
       cwd: () => s.rec.cwd,
       space: () => this.ctx(s.rec).space?.slug,

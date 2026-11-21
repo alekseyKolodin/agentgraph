@@ -3,7 +3,10 @@
 // Клавиатура: Shift+Enter — перевод строки в поле claude, Option — Meta; перетащенный файл — путь в командную строку.
 // Копирование: claude сам выделяет мышью и шлёт текст через OSC 52 — он уходит в буфер обмена; Option+мышь (Shift — не
 // на Mac) выделяет средствами терминала, мимо claude, дальше — ⌘C.
+// Ссылки: адрес своего сервера (localhost, любой порт) и id запуска в выводе — ссылки внутрь приложения (lib/session-links),
+// как и такие же ссылки OSC 8; остальные http(s) — в новой вкладке (в приложении — в браузере по умолчанию).
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -14,6 +17,7 @@ import { readBase64 } from '../../components/readBase64';
 import { useToast } from '../../components/Toast';
 import { t } from '../../lib/i18n';
 import { fileUris, NEWLINE_SEQ, osc52Text, sessionWsUrl, shellPath } from '../../lib/sessions';
+import { appPathOf, terminalLinks } from '../../lib/session-links';
 import styles from './Session.module.css';
 
 const RECONNECT_MS = 1000;
@@ -55,6 +59,9 @@ export function SessionTerminal({ id, onState, onOpened, live, overlay }: Props)
   const [conn, setConn] = useState<'connecting' | 'open' | 'lost'>('connecting');
   const [drop, setDrop] = useState(false);
   const toast = useToast();
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     const el = box.current!;
@@ -70,16 +77,27 @@ export function SessionTerminal({ id, onState, onOpened, live, overlay }: Props)
       altClickMovesCursor: false,
       scrollback: 5000,
       theme: theme(),
-      // ссылки OSC 8 из вывода модели и инструментов: только http(s) и в новой вкладке — javascript: и прочие схемы не открываем
+      // ссылки OSC 8 из вывода модели и инструментов: свой сервер — экран внутри приложения, остальное — только http(s) и в
+      // новой вкладке; javascript: и прочие схемы не открываем
       linkHandler: {
         activate: (_e, uri) => {
-          if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener');
+          const inApp = appPathOf(uri);
+          if (inApp) void navigateRef.current(inApp);
+          else if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener');
         },
       },
     });
     termRef.current = term;
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // адреса своего сервера и id запусков в обычном тексте вывода — ссылки внутрь приложения (строка целиком, без переноса)
+    const links = term.registerLinkProvider({
+      provideLinks: (y, cb) => {
+        const line = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? '';
+        const found = terminalLinks(line);
+        cb(found.length ? found.map((l) => ({ range: { start: { x: l.start + 1, y }, end: { x: l.end, y } }, text: l.text, activate: () => void navigateRef.current(l.path) })) : undefined);
+      },
+    });
     term.open(el);
     fit.fit();
 
@@ -154,6 +172,7 @@ export function SessionTerminal({ id, onState, onOpened, live, overlay }: Props)
       ro.disconnect();
       el.removeEventListener('mouseup', mark, true);
       el.removeEventListener('keydown', mark, true);
+      links.dispose();
       term.dispose();
       termRef.current = null;
     };

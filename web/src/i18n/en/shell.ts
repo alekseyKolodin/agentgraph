@@ -136,4 +136,9 @@ export const shell: Record<string, string> = {
   'Перезагрузить': 'Reload',
   'Загрузить страницу заново': 'Load the page again',
   'Запуск начала сессия выше': 'Started by the session above',
+  'Для сессии': 'For a session',
+  'Скопировано — вставь в сессию терминала': 'Copied — paste it into a terminal session',
+  'Не скопировалось: браузер не дал доступа к буферу обмена': 'Not copied: the browser denied access to the clipboard',
+  'Скопировать для сессии терминала: имя flow, путь к файлу и как его запустить': 'Copy for a terminal session: the flow name, its file path and how to run it',
+  'Скопировать для сессии терминала: id запуска, папку с его файлами и как узнать состояние': 'Copy for a terminal session: the run id, its files folder and how to check its state',
 };
