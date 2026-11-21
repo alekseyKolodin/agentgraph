@@ -5,7 +5,9 @@
 // space_state_write (состояние), space_settings (заголовок, папки чтения, рабочая папка — space.json); flow_write —
 // flow в папке flow (проверка схемой до записи); session_new — открыть рядом новую сессию agentgraph; у сессии из задачи
 // Teamwork (spec §9.5) ещё team_task_update — статус, PR и комментарий её задачи, и team_doc_write — документ проекта
-// команды; дела на доске «Мои дела» — desk_put, desk_close, desk_list (src/desk/tools.ts: сессия, проект и ветка
+// команды; у сессии с оркестрацией agentgraph — flow_guide, flow_run, flow_status, flow_answer, flow_stop (session-flows.ts),
+// а space_write, space_map_write, space_state_write и desk_put она зовёт без вопроса (ORCHESTRATE_ALLOWED_TOOLS);
+// дела на доске «Мои дела» — desk_put, desk_close, desk_list (src/desk/tools.ts: сессия, проект и ветка
 // подставляются сами, сигнал — от 'session'; ответ desk_close после работы по делу предлагает записать вывод) и
 // knowledge_note — строка в заметки тега знаний вида работы (docs/desk/SPEC.md, 6.6). Кроме knowledge_read и desk_list
 // ничего нет в allowedTools; о записи пространства, flow, знания, новой сессии и задачи Teamwork хук PreToolUse велит
@@ -17,6 +19,7 @@ import { knowledgeReadText } from './knowledge-tools.js';
 import { KNOWLEDGE_NOTE_TOOL, KNOWLEDGE_READ_TOOL, TAG_NOTE_MAX } from './tags.js';
 import { DOCS_DIR, MAP_FILE, META_FILE, SPACE_DIRS_MAX, SPACE_DOC_TEXT_MAX, SPACE_MAP_MAX, SPACE_STATE_MAX, SPACE_WRITE_TOOL, STATE_FILE, WRITE_DOC_EXTS } from './spaces.js';
 import {
+  FLOW_ANSWER_TOOL, FLOW_GUIDE_TOOL, FLOW_RUN_TOOL, FLOW_STATUS_TOOL, FLOW_STOP_TOOL, ORCHESTRATE_TOOLS,
   FLOW_WRITE_TOOL, SESSION_NEW_TOOL, SPACE_MAP_WRITE_TOOL, SPACE_SETTINGS_TOOL, SPACE_STATE_WRITE_TOOL, TEAM_DOC_WRITE_TOOL, TEAM_TASK_UPDATE_TOOL,
 } from './sessions.js';
 import { TASK_STATUSES } from './teamwork.js';
@@ -27,7 +30,35 @@ import { deskCall, deskInputSchemas, deskToolDescriptions, DESK_CLOSE_TOOL, DESK
  * Что у сессии на момент вызова: пространство (слаг и папка), теги знаний, папка flow и задача Teamwork, если сессия
  * открыта из неё.
  */
-export type McpScope = () => { space?: string; spaceDir?: string; knowledge: string[]; flowsDir?: string; task?: { id: string; team: string; project: string } };
+export type McpScope = () => {
+  space?: string;
+  spaceDir?: string;
+  knowledge: string[];
+  flowsDir?: string;
+  task?: { id: string; team: string; project: string };
+  /** Сессия с оркестрацией agentgraph: пространство ведёт сама, без вопроса пользователю. */
+  orchestrate?: boolean;
+};
+
+/** Параметры flow_run: готовый flow по имени или разовый YAML, задача, папка, модель и бюджет. */
+export type FlowRunArgs = { flow?: string; yaml?: string; input: string; cwd?: string; model?: string; budget?: number };
+/** Параметры flow_status: запуск (нет — все запуски сессии) и сколько секунд ждать изменения. */
+export type FlowStatusArgs = { run?: string; wait?: number };
+/** Параметры flow_answer: запуск, вопрос и ответы — по тексту вопроса. */
+export type FlowAnswerArgs = { run: string; question: string; answers: Record<string, string> };
+
+/** Запуски flow от сессии (server.ts → setSessionFlows): ответы — текст модели, ошибки — исключением. */
+export type SessionFlowsCtx = {
+  /** Как собрать flow: правила оркестратора, пример YAML, готовые flow. */
+  guide: () => string;
+  run: (a: FlowRunArgs) => Promise<string>;
+  status: (a: FlowStatusArgs) => Promise<string>;
+  answer: (a: FlowAnswerArgs) => string;
+  stop: (run: string) => string;
+};
+
+/** Дольше flow_status не ждёт: вызов MCP не должен висеть дольше, чем терпит клиент. */
+export const FLOW_WAIT_MAX = 300;
 
 /** Параметры session_new: чего нет — берётся у сессии, из которой вызвали; space: null — без пространства. */
 export type SessionNewArgs = { prompt?: string; tags?: string[]; space?: string | null; cwd?: string; name?: string; model?: string };
@@ -69,6 +100,8 @@ export type McpCtx = {
   desk?: () => DeskCallCtx;
   /** Вещь и проект сессии для описаний desk_*: на момент tools/list. */
   deskHint?: () => DeskHint;
+  /** Запуски flow (оркестрация): нет — инструментов flow_run и соседей у сессии нет. */
+  flows?: SessionFlowsCtx;
   /**
    * Запись знания в тег (knowledge_note, всегда с вопросом человеку): строка в конец заметок тега знаний, тега нет —
    * заводится; ответ — что записано. Нет — инструмента у сессии нет.
@@ -82,10 +115,12 @@ const PROTOCOL_FALLBACK = '2025-06-18';
 
 const str = (description: string) => ({ type: 'string', description });
 
-function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
+function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false, flows = false) {
   const space = scope.space ? ` (${scope.space})` : ' (у сессии сейчас нет пространства — вызов вернёт ошибку)';
   const file = (name: string) => (scope.spaceDir ? `${scope.spaceDir}/${name}` : name);
   const ask = 'Пользователь подтверждает вызов.';
+  // с оркестрацией пространство ведёт сама сессия: когда звать — по правилам ведения из контекста agentgraph
+  const own = (when: string) => (scope.orchestrate ? 'Вызывай сам по ходу работы, по правилам ведения пространства из контекста agentgraph; без вопроса пользователю.' : `${when} ${ask}`);
   return [
     {
       name: KNOWLEDGE_READ_TOOL,
@@ -103,7 +138,7 @@ function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
       description:
         `Записать документ в ${DOCS_DIR}/ пространства agentgraph этой сессии${space}: спеку, решение, заметку по фиче. ` +
         'Файл пишется целиком (новый или поверх старого: сначала прочитай его инструментом Read). Его увидят все следующие сессии и запуски пространства. ' +
-        `Вызывай, когда пользователь просит записать что-то в документы фичи или проекта. Карту пишет ${SPACE_MAP_WRITE_TOOL}, состояние — ${SPACE_STATE_WRITE_TOOL}, заголовок и папки — ${SPACE_SETTINGS_TOOL}. ${ask}`,
+        `Карту пишет ${SPACE_MAP_WRITE_TOOL}, состояние — ${SPACE_STATE_WRITE_TOOL}, заголовок и папки — ${SPACE_SETTINGS_TOOL}. ${own('Вызывай, когда пользователь просит записать что-то в документы фичи или проекта.')}`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -120,7 +155,7 @@ function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
       description:
         `Переписать карту (${MAP_FILE}) пространства agentgraph этой сессии${space}: суть, где что, куда за чем ходить, договорённости. ` +
         `Карту получают памятью все следующие сессии и запуски пространства — пиши её как инструкции для них, до ${SPACE_MAP_MAX} знаков; справочное — в документы (${SPACE_WRITE_TOOL}). ` +
-        `Пишется целиком: сначала прочитай текущую инструментом Read (${file(MAP_FILE)}). Вызывай, когда пользователь просит поправить карту. ${ask}`,
+        `Пишется целиком: сначала прочитай текущую инструментом Read (${file(MAP_FILE)}). ${own('Вызывай, когда пользователь просит поправить карту.')}`,
       inputSchema: { type: 'object', properties: { text: str(`Карта целиком (Markdown), до ${SPACE_MAP_MAX} знаков; пусто — карты не будет.`) }, required: ['text'], additionalProperties: false },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
@@ -129,7 +164,7 @@ function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
       description:
         `Переписать состояние (${STATE_FILE}) пространства agentgraph этой сессии${space} — «где мы сейчас»: что сделано, что в работе, что дальше, открытые вопросы. ` +
         `Не журнал: текущее состояние целиком, до ${SPACE_STATE_MAX} знаков (сначала прочитай текущее: ${file(STATE_FILE)}). Его получат следующие сессии и запуски. ` +
-        `Вызывай, когда пользователь просит обновить состояние. ${ask}`,
+        own('Вызывай, когда пользователь просит обновить состояние.'),
       inputSchema: { type: 'object', properties: { text: str(`Состояние целиком, до ${SPACE_STATE_MAX} знаков.`) }, required: ['text'], additionalProperties: false },
       annotations: { readOnlyHint: false, destructiveHint: true },
     },
@@ -235,7 +270,131 @@ function tools(scope: ReturnType<McpScope>, desk?: DeskHint, note = false) {
     // дела — личная доска пользователя: в конце списка, после инструментов задачи
     ...(desk ? deskTools(desk) : []),
     ...(note ? [knowledgeNoteTool()] : []),
+    ...(flows ? flowTools(scope) : []),
   ];
+}
+
+/** Инструменты оркестрации: есть только у сессии с оркестрацией agentgraph. */
+function flowTools(scope: ReturnType<McpScope>) {
+  const runId = str('Id запуска — из ответа flow_run или flow_status.');
+  return [
+    {
+      name: FLOW_GUIDE_TOOL,
+      description: 'Как собрать flow agentgraph: как оркестратор исполняет этапы и блоки, правила проектирования, пример YAML и список готовых flow. Открывай перед первым flow_run с разовым flow.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true },
+    },
+    {
+      name: FLOW_RUN_TOOL,
+      description:
+        'Запустить flow agentgraph: готовый по имени (flow) или разовый — YAML целиком (yaml), он не попадает в библиотеку flow. Запуск идёт в фоне, в пространстве и с тегами знаний этой сессии ' +
+        `(${scope.space ?? 'без пространства'}), пользователь видит его под этой сессией; подтверждать его не нужно — запускай сам, когда задача того стоит. Этапы работают со своими инструментами без вопросов. ` +
+        'Разовый flow не задаёт permission_mode, add_dirs и plugins. Ответ — id запуска: дальше flow_status. Схема и вызовы flow проверяются до старта — ошибки вернутся текстом.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          flow: str('Имя готового flow из библиотеки (см. flow_guide). Задай flow или yaml.'),
+          yaml: str('Разовый flow целиком — YAML по схеме agentgraph (см. flow_guide).'),
+          input: str('Задача запуска целиком, с контекстом: агенты этапов не видят этот разговор.'),
+          cwd: str('Папка проекта для агентов: абсолютный путь или относительно папки этой сессии. Не задано — папка этой сессии.'),
+          model: str('Модель этапов по умолчанию: sonnet, opus, haiku или id. Не задано — как в flow.'),
+          max_budget_usd: { type: 'number', description: 'Предел расхода запуска в долларах. Не задано — без предела.' },
+        },
+        required: ['input'],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    {
+      name: FLOW_STATUS_TOOL,
+      description:
+        'Состояние запусков flow этой сессии: статус, текущий этап, расход, вопросы агентов, ждущие ответа, последние этапы и проверки, артефакты (файлы — читай Read). ' +
+        `Без run — коротко все запуски сессии. wait_seconds (до ${FLOW_WAIT_MAX}) — подождать, пока запуск закончится, остановится или задаст вопрос.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          run: runId,
+          wait_seconds: { type: 'number', description: `Сколько секунд ждать изменения (0–${FLOW_WAIT_MAX}); только с run.` },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    {
+      name: FLOW_ANSWER_TOOL,
+      description: 'Ответить на вопрос агента запуска (pendingQuestions в flow_status). Отвечай сам, когда ответ следует из задачи и разговора; решение, которое должен принять пользователь, — спроси у него.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          run: runId,
+          question_id: str('Id вопроса из pendingQuestions.'),
+          answers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Ответы: ключ — текст вопроса (question), значение — ответ.' },
+        },
+        required: ['run', 'question_id', 'answers'],
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    {
+      name: FLOW_STOP_TOOL,
+      description: 'Остановить запуск этой сессии: он пошёл не туда или больше не нужен. Остановленный не продолжается сам.',
+      inputSchema: { type: 'object', properties: { run: runId }, required: ['run'], additionalProperties: false },
+      annotations: { readOnlyHint: false, destructiveHint: true },
+    },
+  ];
+}
+
+const RUN_RE = /^[A-Za-z0-9_-]{1,200}$/;
+
+function runArg(args: Record<string, unknown>): string {
+  if (typeof args.run !== 'string' || !RUN_RE.test(args.run.trim())) throw new Error('run — id запуска: латиница, цифры, _ и -');
+  return args.run.trim();
+}
+
+/** Аргументы flow_run: flow или yaml (ровно одно), input обязателен; бюджет — положительное число. */
+export function parseFlowRunArgs(args: Record<string, unknown>): FlowRunArgs {
+  onlyKeys(args, ['flow', 'yaml', 'input', 'cwd', 'model', 'max_budget_usd']);
+  const opt = (k: string): string | undefined => {
+    const v = args[k];
+    if (v === undefined || v === null || v === '') return undefined;
+    if (typeof v !== 'string') throw new Error(`${k} — строка`);
+    return v.trim() || undefined;
+  };
+  const flow = opt('flow');
+  const yaml = typeof args.yaml === 'string' && args.yaml.trim() ? args.yaml : undefined;
+  if (args.yaml !== undefined && args.yaml !== null && typeof args.yaml !== 'string') throw new Error('yaml — строка');
+  if (Boolean(flow) === Boolean(yaml)) throw new Error('Задай ровно одно: flow (имя готового) или yaml (разовый flow)');
+  const input = opt('input');
+  if (!input) throw new Error('Нужен input — задача запуска');
+  const b = args.max_budget_usd;
+  if (b !== undefined && b !== null && (typeof b !== 'number' || !Number.isFinite(b) || b <= 0)) throw new Error('max_budget_usd — положительное число');
+  const cwd = opt('cwd');
+  const model = opt('model');
+  return { ...(flow ? { flow } : {}), ...(yaml ? { yaml } : {}), input, ...(cwd ? { cwd } : {}), ...(model ? { model } : {}), ...(typeof b === 'number' ? { budget: b } : {}) };
+}
+
+export function parseFlowStatusArgs(args: Record<string, unknown>): FlowStatusArgs {
+  onlyKeys(args, ['run', 'wait_seconds']);
+  const run = args.run === undefined || args.run === null || args.run === '' ? undefined : runArg(args);
+  const w = args.wait_seconds;
+  if (w !== undefined && w !== null && (typeof w !== 'number' || !Number.isFinite(w) || w < 0)) throw new Error('wait_seconds — число секунд, не меньше 0');
+  if (typeof w === 'number' && w > 0 && !run) throw new Error('wait_seconds — только вместе с run');
+  return { ...(run ? { run } : {}), ...(typeof w === 'number' && w > 0 ? { wait: Math.min(w, FLOW_WAIT_MAX) } : {}) };
+}
+
+export function parseFlowAnswerArgs(args: Record<string, unknown>): FlowAnswerArgs {
+  onlyKeys(args, ['run', 'question_id', 'answers']);
+  const run = runArg(args);
+  if (typeof args.question_id !== 'string' || !args.question_id.trim()) throw new Error('question_id — id вопроса из flow_status');
+  const a = args.answers;
+  if (!a || typeof a !== 'object' || Array.isArray(a)) throw new Error('answers — объект: текст вопроса → ответ');
+  const answers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(a)) {
+    if (typeof v !== 'string') throw new Error(`Ответ на «${k}» — строка`);
+    answers[k] = v;
+  }
+  if (!Object.keys(answers).length) throw new Error('answers пуст: нужен хотя бы один ответ');
+  return { run, question: args.question_id.trim(), answers };
 }
 
 /** knowledge_note: вывод после дела — в заметки тега вида работы (desk_close подскажет тег). */
@@ -432,6 +591,19 @@ async function call(name: unknown, raw: unknown, ctx: McpCtx) {
     if (name === KNOWLEDGE_NOTE_TOOL && ctx.writeNote) {
       return { content: [{ type: 'text', text: ctx.writeNote(parseKnowledgeNoteArgs(args)) }] };
     }
+    if ((ORCHESTRATE_TOOLS as readonly unknown[]).includes(name)) {
+      const f = ctx.flows;
+      if (!f) throw new Error('У этой сессии не включена оркестрация agentgraph: инструменты flow недоступны');
+      if (name === FLOW_GUIDE_TOOL) {
+        onlyKeys(args, []);
+        return { content: [{ type: 'text', text: f.guide() }] };
+      }
+      if (name === FLOW_RUN_TOOL) return { content: [{ type: 'text', text: await f.run(parseFlowRunArgs(args)) }] };
+      if (name === FLOW_STATUS_TOOL) return { content: [{ type: 'text', text: await f.status(parseFlowStatusArgs(args)) }] };
+      if (name === FLOW_ANSWER_TOOL) return { content: [{ type: 'text', text: f.answer(parseFlowAnswerArgs(args)) }] };
+      onlyKeys(args, ['run']);
+      return { content: [{ type: 'text', text: f.stop(runArg(args)) }] };
+    }
     if (ctx.desk && (DESK_TOOLS as readonly unknown[]).includes(name)) {
       return { content: [{ type: 'text', text: (await deskCall(name, args, ctx.desk()))! }] };
     }
@@ -459,7 +631,7 @@ async function one(msg: RpcMessage, ctx: McpCtx): Promise<unknown> {
     case 'ping':
       return result({});
     case 'tools/list':
-      return result({ tools: tools(ctx.scope(), ctx.desk ? (ctx.deskHint?.() ?? {}) : undefined, Boolean(ctx.writeNote)) });
+      return result({ tools: tools(ctx.scope(), ctx.desk ? (ctx.deskHint?.() ?? {}) : undefined, Boolean(ctx.writeNote), Boolean(ctx.flows)) });
     case 'tools/call':
       return result(await call(params.name, params.arguments, ctx));
     default:

@@ -165,6 +165,11 @@ export const space: Record<string, string> = {
     'Each tag\'s line goes into the context, Claude takes the full text with the knowledge_read tool. Tags are optional.',
   'по пространству или папке': 'from the space or the folder',
   'Обновлять состояние пространства при выходе': 'Update the space state on exit',
+  'Оркестрация agentgraph': 'agentgraph orchestration',
+  'Сессия сама ведёт пространство (карта, решения, состояние) и дело на доске, а большую задачу решает через flow — их запуски видны под ней в «Сейчас».':
+    'The session keeps the space (map, decisions, state) and its task on the board itself, and solves a big task through flows — their runs show under it in "Now".',
+  'Без галочки сессия — обычный Claude Code: пространство меняет только с твоего разрешения, flow не запускает':
+    'Unchecked, the session is plain Claude Code: it changes the space only with your permission and does not start flows',
   'Короткая сессия haiku перепишет «где мы сейчас» по ходам этой сессии, как после запуска flow. Можно и вручную — кнопкой в сессии.':
     'A short haiku session rewrites "where we are now" from this session\'s turns, like after a flow run. You can also do it by hand — with the button in the session.',
   'Пространство и теги': 'Space and tags',

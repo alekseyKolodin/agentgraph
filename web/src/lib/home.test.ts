@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { HomeCond, HomeRun, QuestionRecord } from '@server/api-types';
 import {
   collectAnswers, docTitle, homeMeta, homeRunView, homeStuck, ignoredConfirmText, inbox, inboxCount, liveCount, liveRows, liveRowTitle,
-  optionView, OTHER, questionLastCond, questionWhere, sideLiveInfo, withoutQuestion,
+  optionView, OTHER, questionLastCond, questionWhere, sideLiveInfo, splitBySession, withoutQuestion,
 } from './home';
 import { setLangForTest } from './i18n';
 
@@ -149,4 +149,16 @@ test('ответ: варианты через запятую, свой отве�
   // выбран «свой», но текста нет — вопрос без ответа
   assert.equal(collectAnswers([qs[1]!], [[OTHER]], ['  ']).missing, true);
   assert.equal(ignoredConfirmText(['H3', 'Q4']), 'Свой ответ написан, но не выбран — он не уйдёт агенту:\n• H3\n• Q4\nОтправить без него?');
+});
+
+test('«Сейчас»: запуск живой сессии — под ней, запуск ушедшей сессии и без сессии — сверху, порядок сохраняется', () => {
+  const rows = liveRows([
+    { id: 'a', flow: 'f', status: 'running', session: 's1' },
+    { id: 'b', flow: 'f', status: 'running' },
+    { id: 'c', flow: 'f', status: 'waiting', session: 's1' },
+    { id: 'd', flow: 'f', status: 'running', session: 'gone' },
+  ]);
+  const { top, under } = splitBySession(rows, ['s1']);
+  assert.deepEqual(top.map((x) => x.r.id), ['b', 'd']);
+  assert.deepEqual(under.get('s1')?.map((x) => x.r.id), ['c', 'a']);
 });

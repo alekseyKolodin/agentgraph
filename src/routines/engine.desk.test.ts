@@ -797,3 +797,61 @@ test('проверка перед делом: дело закрыли между
     t.done();
   }
 });
+
+test('событие о MR, привязанном к делу сессии (links.mr), у рутины без flow: сигнал в то дело — без своего дела и без запуска', async () => {
+  const t = setup();
+  try {
+    t.desk.items.set('own:s1', {
+      id: 'own:s1', key: 'own:s1', kind: 'Своё', title: 'Оптимизация', column: 'work', why: 'из сессии', signals: [],
+      links: { runs: [], sessions: ['s1'], mr: MR }, createdAt: '2026-11-17T09:00:00.000Z', movedAt: '2026-11-17T09:00:00.000Z', movedBy: 'session',
+      createdBy: { session: 's1' },
+    });
+    t.routine('gitlab', 'gl', { run: undefined });
+    await t.push('gl', t.gl('review:1'));
+    assert.equal(t.desk.items.has(MR_KEY), false);
+    assert.deepEqual(t.desk.puts().map((p) => [p.key, p.patch.onRepeat]), [['own:s1', 'keep']]);
+    assert.equal(t.started.length, 0);
+    const [line] = t.log('gitlab');
+    assert.equal(line.outcome, 'task');
+    assert.equal(line.mergedInto, 'own:s1');
+    assert.match(line.reason ?? '', /MR привязан к нему/);
+  } finally {
+    t.done();
+  }
+});
+
+test('своё дело о MR уже есть — привязка к делу сессии не мешает: сигнал в дело MR, как раньше', async () => {
+  const t = setup();
+  try {
+    t.desk.items.set('own:s1', {
+      id: 'own:s1', key: 'own:s1', kind: 'Своё', title: 'Оптимизация', column: 'work', why: '', signals: [],
+      links: { runs: [], sessions: ['s1'], mr: MR }, createdAt: '2026-11-17T09:00:00.000Z', movedAt: '2026-11-17T09:00:00.000Z', movedBy: 'session',
+    });
+    t.routine('gitlab', 'gl', { run: undefined });
+    await t.desk.api.put(MR_KEY, { title: 'MR', signal: { source: 'gl', at: '2026-11-17T09:30:00.000Z' } }, 'routine');
+    await t.push('gl', t.gl('review:1'));
+    assert.deepEqual(t.desk.puts().map((p) => p.key), [MR_KEY, MR_KEY]);
+  } finally {
+    t.done();
+  }
+});
+
+test('событие о MR, привязанном к делу сессии, у рутины с flow: сигнал в дело сессии, своего дела нет, flow запускается по делу сессии', async () => {
+  const t = setup();
+  try {
+    t.desk.items.set('own:s1', {
+      id: 'own:s1', key: 'own:s1', kind: 'Своё', title: 'Оптимизация', column: 'work', why: '', signals: [],
+      links: { runs: [], sessions: ['s1'], mr: MR }, createdAt: '2026-11-17T09:00:00.000Z', movedAt: '2026-11-17T09:00:00.000Z', movedBy: 'session',
+      createdBy: { session: 's1' },
+    });
+    t.routine('gitlab', 'gl', { run: { flow: 'review' } });
+    await t.push('gl', t.gl('review:1'));
+    assert.equal(t.desk.items.has(MR_KEY), false);
+    assert.equal(t.started.length, 1);
+    // запуск — в ссылках дела сессии
+    assert.deepEqual(t.desk.links().map((p) => [p.key, p.patch.links?.runs]), [['own:s1', ['run-1']]]);
+    assert.equal(t.log('gitlab')[0].deskKey, 'own:s1');
+  } finally {
+    t.done();
+  }
+});

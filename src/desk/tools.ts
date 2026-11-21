@@ -50,6 +50,8 @@ export type DeskCallCtx = {
   /** Ключ ветки branch:<корень>#<ветка> (см. branchKeyOf). */
   branch?: () => Promise<string | undefined>;
   session?: string;
+  /** Дело (id), с карточки которого начата сессия: к нему, как и к заведённому ею, привязывается её MR. */
+  sourceItem?: string;
   /** Запуск flow: в links.mentionedBy (не в runs — это не запуск по делу) и в createdBy нового дела. */
   run?: string;
   /** Рутина, запустившая flow: в сигнал. */
@@ -249,6 +251,30 @@ export function itemLine(i: DeskItem): string {
 }
 
 /**
+ * Открытое дело, к которому привязан MR с ключом key (links.mr): дело сессии, в которой MR открыли. Событие рутины
+ * о таком MR и desk_put с его адресом дописываются туда, а не заводят второе дело о том же. Не MR — undefined.
+ */
+export async function itemByMr(api: Pick<DeskApi, 'list'>, key: string): Promise<DeskItem | undefined> {
+  const k = canonicalKey(key);
+  if (!k?.startsWith('mr:')) return undefined;
+  const items = await api.list({ open: true });
+  return items
+    .filter((i) => !i.closed && i.key !== k && i.links.mr && thingOfUrl(i.links.mr)?.key === k)
+    .sort((a, b) => b.movedAt.localeCompare(a.movedAt))[0];
+}
+
+/**
+ * Дело этой сессии без MR, к которому привязать новый MR: открытое, заведённое ею или то, с карточки которого её начали
+ * (sourceItem), — последнее по движению. Дело, куда сессия только дописала сигнал (чужой тикет «напомни потом»), — не её.
+ */
+async function sessionItemForMr(api: Pick<DeskApi, 'list'>, session: string, sourceItem?: string): Promise<DeskItem | undefined> {
+  const items = await api.list({ open: true });
+  return items
+    .filter((i) => !i.closed && !i.links.mr && !i.key.startsWith('mr:') && (i.createdBy?.session === session || (sourceItem !== undefined && i.id === sourceItem)))
+    .sort((a, b) => b.movedAt.localeCompare(a.movedAt))[0];
+}
+
+/**
  * desk_put: дела по ключу нет — заводится в колонке column (по умолчанию «Новое») с видом по типу вещи; есть — сигнал
  * дописывается, правила движения применяет хранилище. Проект и ветка — только новому делу и делу без них: дело о MR,
  * к которому вернулись из другой папки, своего проекта не теряет.
@@ -256,6 +282,23 @@ export function itemLine(i: DeskItem): string {
 export async function deskPut(ctx: DeskCallCtx, a: DeskPutArgs): Promise<{ item: DeskItem; created: boolean; text: string }> {
   const ref: ThingRef = a.thing ? await resolveOrExisting(ctx, a.thing) : { key: `own:${crypto.randomUUID()}` };
   const before = await ctx.api.get(ref.key);
+  // MR без своего дела: привязан к делу (сессия открыла его там) — дописываем туда; сессия кладёт MR впервые — он
+  // привязывается к её делу без MR, и события GitLab/GitHub о нём лягут в историю этого дела, а не новым делом
+  if (!before && ref.thing?.type === 'mr') {
+    const linked = await itemByMr(ctx.api, ref.key);
+    const url = ref.thing.url ?? ref.link;
+    const own = !linked && ctx.session && url ? await sessionItemForMr(ctx.api, ctx.session, ctx.sourceItem) : undefined;
+    const target = linked ?? own;
+    if (target) {
+      const at = (ctx.now?.() ?? new Date()).toISOString();
+      const signal: DeskSignal = { source: ctx.source, at, ...(url ? { link: url } : {}), ...(a.text ? { text: a.text } : {}), ...(ctx.routine ? { routine: ctx.routine } : {}) };
+      const item = await ctx.api.put(target.key, { signal, onRepeat: 'keep', links: { ...(own && url ? { mr: url } : {}), ...(ctx.run ? { mentionedBy: [ctx.run] } : {}), ...(ctx.session ? { sessions: [ctx.session] } : {}) } }, ctx.by);
+      ctx.onPut?.(item, false);
+      const ignored = [a.title && 'title', a.kind && 'kind', a.why && 'why', a.due && 'due', a.column && 'column'].filter(Boolean);
+      const head = own ? 'MR привязан к делу сессии — события по нему лягут в его историю' : 'Сигнал добавлен к делу, к которому привязан этот MR';
+      return { item, created: false, text: `${head}${ignored.length ? ` (${ignored.join(', ')} не применены: это сигнал к делу)` : ''}: ${itemLine(item)}` };
+    }
+  }
   if (!before && !a.title && !ref.thing && !ref.link) throw new Error('У своего дела нужен title — заголовок одной строкой');
   const at = (ctx.now?.() ?? new Date()).toISOString();
   const signal: DeskSignal = {
@@ -397,7 +440,9 @@ export function deskToolDescriptions(where: 'session' | 'flow', hint: DeskHint =
       'Завести дело на личной доске пользователя «Мои дела» или добавить сигнал к существующему: дело — это вещь (MR, задача Jira, ветка) или своё дело, по которому ход за пользователем. ' +
       `Одно дело на вещь: повторный вызов с тем же thing дописывает сигнал, а не заводит второе. ${self}${thing}${project} ` +
       (where === 'flow' ? 'Дело, которое завёл не этот запуск, получает только сигнал: заголовок, почему, срок и колонка у него не меняются. ' : '') +
-      (where === 'session' ? 'Вызывай, когда пользователь просит запомнить, отложить или завести дело.' : 'Вызывай, когда задача этапа — завести дела или когда нашлось то, что пользователь должен сделать сам.'),
+      (where === 'session'
+        ? 'Адрес MR или PR, у которого ещё нет дела, привязывается к открытому делу этой сессии: события о нём лягут в его историю. Вызывай, когда пользователь просит запомнить, отложить или завести дело, а с оркестрацией agentgraph — и сам, по правилам из контекста agentgraph.'
+        : 'Вызывай, когда задача этапа — завести дела или когда нашлось то, что пользователь должен сделать сам.'),
     [DESK_CLOSE_TOOL]:
       'Закрыть дело на доске «Мои дела»: сделано или больше не нужно. Ключ — из desk_list или ссылка на вещь. Закрытое дело откроется снова, если по вещи придёт новый сигнал.' +
       (where === 'flow' ? ' Запуск закрывает только дела, которые завёл сам.' : ''),

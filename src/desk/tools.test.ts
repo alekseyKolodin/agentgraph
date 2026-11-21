@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Exec } from '../git.js';
 import {
-  branchKeyOf, canonicalKey, deskCall, deskCommand, itemLine, deskClose, deskInputSchemas, deskList, deskPut, deskToolDescriptions, parseCloseArgs, parseDue, parseListArgs, parsePutArgs, resolveThing,
+  branchKeyOf, canonicalKey, deskCall, itemByMr, deskCommand, itemLine, deskClose, deskInputSchemas, deskList, deskPut, deskToolDescriptions, parseCloseArgs, parseDue, parseListArgs, parsePutArgs, resolveThing,
   type DeskCallCtx,
 } from './tools.js';
 import type { DeskApi, DeskBy, DeskFilter, DeskItem, DeskPatch } from './types.js';
@@ -19,13 +19,13 @@ function memDesk(): DeskApi & { puts: Array<{ key: string; patch: DeskPatch; by:
     async put(key, patch, by) {
       puts.push({ key, patch, by });
       const prev = items.get(key);
-      const links = { runs: [...(prev?.links.runs ?? []), ...(patch.links?.runs ?? [])], sessions: [...(prev?.links.sessions ?? []), ...(patch.links?.sessions ?? [])], ...(prev?.links.branch || patch.links?.branch ? { branch: prev?.links.branch ?? patch.links?.branch } : {}) };
+      const links = { runs: [...(prev?.links.runs ?? []), ...(patch.links?.runs ?? [])], sessions: [...(prev?.links.sessions ?? []), ...(patch.links?.sessions ?? [])], ...(prev?.links.branch || patch.links?.branch ? { branch: prev?.links.branch ?? patch.links?.branch } : {}), ...(prev?.links.mr || patch.links?.mr ? { mr: prev?.links.mr ?? patch.links?.mr } : {}) };
       const item: DeskItem = prev
         ? { ...prev, signals: [...prev.signals, ...(patch.signal ? [patch.signal] : [])], links, ...(patch.title ? { title: patch.title } : {}), ...(patch.due ? { due: patch.due } : {}) }
         : {
             id: String(items.size + 1), key, kind: patch.kind ?? 'Своё', title: patch.title ?? key, ...(patch.project ? { project: patch.project } : {}), column: patch.column ?? 'new',
             why: patch.why ?? '', signals: patch.signal ? [patch.signal] : [], ...(patch.due ? { due: patch.due } : {}), ...(patch.thing ? { thing: patch.thing } : {}),
-            links, createdAt: at, movedAt: at, movedBy: by,
+            links, createdAt: at, movedAt: at, movedBy: by, ...(patch.createdBy ? { createdBy: patch.createdBy } : {}),
           };
       items.set(key, item);
       return item;
@@ -362,4 +362,56 @@ test('desk_close: afterClose дописывает к ответу (у сесси
   const ctx = { api, by: 'session' as const, afterClose: (i: DeskItem) => (i.key === 'own:a' ? 'Предложи записать вывод' : undefined) };
   assert.match((await deskClose(ctx, { thing: 'own:a', reason: 'готово' })).text, /^Дело закрыто: .*\nПредложи записать вывод$/);
   assert.doesNotMatch((await deskClose(ctx, { thing: 'own:b', reason: 'готово' })).text, /\n/);
+});
+
+const MR_URL = 'https://gitlab.company.com/grp/app/-/merge_requests/12';
+
+test('desk_put с адресом MR из сессии: MR привязывается к её делу без MR — нового дела нет, события о MR найдут это дело', async () => {
+  const api = memDesk();
+  await deskPut(ctxOf(api), { title: 'Оптимизация горячих мест', text: 'начали' });
+  const own = [...api.items.values()][0];
+  const r = await deskPut(ctxOf(api), { thing: MR_URL, text: 'MR открыт' });
+  assert.equal(r.created, false);
+  assert.match(r.text, /^MR привязан к делу сессии/);
+  assert.equal(api.items.size, 1);
+  assert.equal(api.items.get(own.key)?.links.mr, MR_URL);
+  assert.deepEqual(api.items.get(own.key)?.signals.map((x) => x.text), ['начали', 'MR открыт']);
+  // ключ MR в любом виде находит дело по привязке
+  assert.equal((await itemByMr(api, 'mr:gitlab.company.com/grp/app/12'))?.key, own.key);
+  // следующий desk_put о том же MR — сигнал туда же
+  const again = await deskPut(ctxOf(api), { thing: MR_URL, text: 'ревью' });
+  assert.match(again.text, /^Сигнал добавлен к делу, к которому привязан этот MR/);
+  assert.equal(api.items.size, 1);
+});
+
+test('desk_put с адресом MR: у сессии нет своего дела — заводится дело о MR, как раньше; чужое дело и дело, куда сессия лишь дописала сигнал, — не её', async () => {
+  const api = memDesk();
+  await deskPut(ctxOf(api, { session: 's2' }), { title: 'Чужая работа' });
+  // s1 только дописала сигнал в чужой тикет — привязывать к нему MR нельзя
+  await deskPut(ctxOf(api, { session: 's3' }), { thing: 'jira:acme.atlassian.net/ABC-1', title: 'Тикет' });
+  await deskPut(ctxOf(api), { thing: 'jira:acme.atlassian.net/ABC-1', text: 'напомни потом' });
+  const r = await deskPut(ctxOf(api), { thing: MR_URL });
+  assert.equal(r.created, true);
+  assert.equal(r.item.key, 'mr:gitlab.company.com/grp/app/12');
+  assert.equal(api.items.size, 3);
+});
+
+test('desk_put с адресом MR: дело, с карточки которого начата сессия, — её; поля нового дела не применяются и названы', async () => {
+  const api = memDesk();
+  await deskPut(ctxOf(api, { session: 'other' }), { title: 'Своё дело с карточки' });
+  const card = [...api.items.values()][0];
+  const r = await deskPut(ctxOf(api, { sourceItem: card.id }), { thing: MR_URL, title: 'MR', column: 'done' });
+  assert.match(r.text, /^MR привязан к делу сессии — события по нему лягут в его историю \(title, column не применены: это сигнал к делу\)/);
+  assert.equal(api.items.get(card.key)?.links.mr, MR_URL);
+});
+
+test('MR привязан к закрытому делу — itemByMr его не отдаёт: событие и desk_put заводят своё дело', async () => {
+  const api = memDesk();
+  await deskPut(ctxOf(api), { title: 'Работа' });
+  await deskPut(ctxOf(api), { thing: MR_URL });
+  const own = [...api.items.values()][0];
+  await api.close(own.key, 'готово', 'me');
+  assert.equal(await itemByMr(api, 'mr:gitlab.company.com/grp/app/12'), undefined);
+  const r = await deskPut(ctxOf(api, { session: 's9' }), { thing: MR_URL });
+  assert.equal(r.created, true);
 });

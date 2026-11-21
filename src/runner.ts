@@ -129,6 +129,8 @@ export type RunOptions = {
   loadFlow?: (name: string) => FlowSpec;
   /** Запуск вызван блоком-вызовом другого запуска: в отчёт. */
   parent?: RunParent;
+  /** Запуск начала сессия терминала (flow_run): id сессии — в отчёт (report.session). */
+  fromSession?: string;
   /**
    * Блоки, перед первой итерацией которых запуск встаёт на паузу с pauseReason (before: true) — рутина ждёт человека
    * (src/routines). Продолжение снимает её как обычную паузу. Без control.requestPause (CLI) опция не действует.
@@ -487,6 +489,7 @@ async function runFlowBody(spec: FlowSpec, opts: RunOptions, namer: RunNamer, di
     ...(opts.autoSpace ? { autoSpace: opts.autoSpace } : {}),
     ...(opts.title ? { title: opts.title } : {}),
     ...(opts.parent ? { parent: opts.parent } : {}),
+    ...(opts.fromSession ? { session: opts.fromSession } : {}),
   };
   // абсолютные пути вложений считаются от runDir, а из CLI он в opts не приходит
   const runOpts: RunOptions = { ...opts, runDir };

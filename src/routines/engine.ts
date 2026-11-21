@@ -27,6 +27,7 @@ import { ownKey, threadKey } from '../things/keys.js';
 import { desk as sharedDesk } from '../desk/index.js';
 import type { DeskApi, DeskItem, DeskPatch } from '../desk/types.js';
 import { closesWithThing } from '../desk/rules.js';
+import { itemByMr } from '../desk/tools.js';
 import { projectOfPath } from '../spaces.js';
 import type { CatchUpRecord, FeedbackRecord, QueueItem, SnapshotEntry, SourceChecks, StoredWait } from './store.js';
 import { LogReadError, RoutineStore } from './store.js';
@@ -915,9 +916,16 @@ export class RoutineEngine {
       if (o.noPut && seededRow?.mergedInto) return this.record(slug, e, 'task', { reason: seededRow.reason, deskKey: seededRow.mergedInto, mergedInto: seededRow.mergedInto, ...spent });
       if (o.noPut && !(unsure && !seededRow)) deskKey = seededRow?.deskKey;
       else {
+        // MR события привязан к открытому делу (сессия открыла его там, desk_put): событие — история того дела, своего
+        // дела нет. У рутины без flow — как у проверки перед делом; рутина с flow запускает его как обычно, по этому делу
+        // (ревью MR из сессии не должно молча пропасть). Своё дело о MR уже есть — путь обычный
+        const linked = !unsure ? await this.linkedItem(task, e) : undefined;
+        const toLinked = linked ? await this.mergeInto(slug, linked.key, e) : undefined;
+        if (toLinked && (!spec.run || o.seed)) return this.record(slug, e, 'task', { deskKey: toLinked.key, mergedInto: toLinked.key, reason: `добавлено к делу «${clip(toLinked.title, 120)}»: MR привязан к нему`, ...(why ? { why } : {}), ...spent });
+        if (toLinked) deskKey = toLinked.key;
         // проверка перед делом: событие — продолжение открытого дела? Тогда только сигнал в то дело, без запуска.
         // Неуверенный узел «ИИ рутины» спрашивает человека — это сильнее: такое событие идёт своим делом в ожидание
-        const merged = task.merge?.trim() && !unsure ? await this.mergeTarget(slug, task, e) : undefined;
+        const merged = task.merge?.trim() && !unsure && !toLinked ? await this.mergeTarget(slug, task, e) : undefined;
         if (merged?.costUsd) {
           checkCost = (checkCost ?? 0) + merged.costUsd;
           spent.costUsd = checkCost;
@@ -931,7 +939,7 @@ export class RoutineEngine {
           }
         }
         try {
-          deskKey = await this.putTask(slug, spec, task, e, why);
+          if (!toLinked) deskKey = await this.putTask(slug, spec, task, e, why);
         } catch (err) {
           // дело не завелось: у рутины без flow это и есть исход; с flow — запуск идёт как раньше, без дела
           if (!spec.run || o.seed) return this.record(slug, e, 'error', { reason: `дело не завелось: ${msg(err)}`, ...(why ? { why } : {}), ...spent });
@@ -1103,6 +1111,22 @@ export class RoutineEngine {
     await this.deskApi().put(key, patch, 'routine');
     this.changed();
     return key;
+  }
+
+  /**
+   * Открытое дело, к которому привязан MR события (links.mr), когда своего дела о нём нет. Сбой доски — undefined:
+   * дело заводится как обычно.
+   */
+  private async linkedItem(task: TaskRule, e: RoutineEvent): Promise<DeskItem | undefined> {
+    const { key } = deskKeyOf(task, e);
+    if (!key.startsWith('mr:')) return undefined;
+    try {
+      const api = this.deskApi();
+      if (await api.get(key)) return undefined;
+      return await itemByMr(api, key);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Сигнал дела по событию: откуда, когда, кто, текст и куда отвечать. */

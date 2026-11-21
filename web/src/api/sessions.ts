@@ -30,6 +30,8 @@ export type NewSession = {
   model?: string;
   permissionMode?: SessionPermissionMode;
   saveState: boolean;
+  /** Оркестрация agentgraph; не задано — включена (сервер). */
+  orchestrate?: boolean;
   /** Первое сообщение новой сессии. */
   prompt?: string;
   /** Откуда сессия (вещь, дело, запуск, рутина). С вещью и без space сервер берёт открытое пространство проекта папки. */

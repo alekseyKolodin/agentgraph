@@ -4,7 +4,9 @@
 // на UserPromptSubmit и PostToolBatch) с бюджетом, разбор хуков и решение «продолжить разговор или начать новый».
 // Контекст заходит только штатными механизмами Claude Code: папка пространства — в --add-dir, и его CLAUDE.md claude
 // грузит памятью сам; хуки из --settings отвечают additionalContext (шапка пространства, документы, состояние, строки
-// тегов знаний); полный текст тега знаний отдаёт knowledge_read MCP-сервера agentgraph (sessions-mcp.ts). Своё
+// тегов знаний); полный текст тега знаний отдаёт knowledge_read MCP-сервера agentgraph (sessions-mcp.ts). Сессия с
+// оркестрацией agentgraph ведёт карту, документы и состояние своего пространства инструментами без вопроса и получает
+// раздел среды (agentgraphNote). Иначе своё
 // пространство и flow сессия меняет только с вопросом пользователю — инструментами space_*/flow_write или правкой
 // файлов, которую решает хук записи (session-edit.ts). --append-system-prompt не используется: он замораживается на
 // первом запросе. Процессы и экран — sessions-pty.ts, маршруты — sessions-server.ts.
@@ -16,7 +18,7 @@ import type { SessionAsk, SessionPermissionMode, SessionStatus, Space, Tag } fro
 import { isInside, WRITE_TOOLS } from './artifacts.js';
 import { configDir } from './settings.js';
 import { attachDir, existingTagPaths, knowledgeBlock, KNOWLEDGE_NOTE_TOOL, KNOWLEDGE_READ_TOOL, tagsDir } from './tags.js';
-import { DESK_LIST_TOOL } from './desk/tools.js';
+import { DESK_LIST_TOOL, DESK_PUT_TOOL } from './desk/tools.js';
 import { existingSpacePaths, spaceArtifactDirs, spaceContext, spacesDir, SPACE_WRITE_TOOL } from './spaces.js';
 import { teamsDir } from './teamwork.js';
 
@@ -43,6 +45,23 @@ export const TEAM_TASK_UPDATE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_TASK_UP
 export const TEAM_DOC_WRITE_FULL = `mcp__${SESSION_MCP_SERVER}__${TEAM_DOC_WRITE_TOOL}`;
 /** Запись знания в тег (docs/desk/SPEC.md, 6.6): заметки тега уходят промптом следующим сессиям и запускам — с вопросом. */
 export const KNOWLEDGE_NOTE_FULL = `mcp__${SESSION_MCP_SERVER}__${KNOWLEDGE_NOTE_TOOL}`;
+/** Оркестрация: как писать flow, разовый запуск flow, его состояние, ответ на вопрос агента, остановка. */
+export const FLOW_GUIDE_TOOL = 'flow_guide';
+export const FLOW_RUN_TOOL = 'flow_run';
+export const FLOW_STATUS_TOOL = 'flow_status';
+export const FLOW_ANSWER_TOOL = 'flow_answer';
+export const FLOW_STOP_TOOL = 'flow_stop';
+/** Инструменты оркестрации: есть только у сессии с оркестрацией agentgraph. */
+export const ORCHESTRATE_TOOLS = [FLOW_GUIDE_TOOL, FLOW_RUN_TOOL, FLOW_STATUS_TOOL, FLOW_ANSWER_TOOL, FLOW_STOP_TOOL] as const;
+const full = (t: string) => `mcp__${SESSION_MCP_SERVER}__${t}`;
+/**
+ * Сессия с оркестрацией работает сама, без вопроса пользователю: ведёт своё пространство (документы, карта, состояние —
+ * решение владельца 21.11: «сессия должна иметь права всё это менять»), заводит дело и работает с flow. Настройки
+ * пространства (папки чтения открываются всем), flow в библиотеке, новая сессия, знание и задача Teamwork — с вопросом.
+ * flow_run тоже без вопроса (решение владельца 21.11: оркестратор работает сам); от этапа с полными правами защищает
+ * проверка разового flow и папки запуска (session-flows.ts). Проверка до записи остаётся в обработчиках MCP (sessions-server.ts).
+ */
+export const ORCHESTRATE_ALLOWED_TOOLS: string[] = [SPACE_WRITE_TOOL, SPACE_MAP_WRITE_TOOL, SPACE_STATE_WRITE_TOOL, DESK_PUT_TOOL, ...ORCHESTRATE_TOOLS].map(full);
 /** Инструменты, о каждом вызове которых спрашивают человека: хук PreToolUse отвечает ask (в dontAsk — отказ с причиной). */
 const ASK_TOOLS: Record<string, string> = {
   [SESSION_NEW_FULL]: 'agentgraph: новая сессия запустит claude с заданием от модели',
@@ -95,12 +114,20 @@ export function versionAtLeast(version: string | undefined, min: string): boolea
  * не в ASK_TOOLS: личная доска, о вызове спрашивает сам claude по режиму разрешений сессии.
  */
 export const SESSION_ALLOWED_TOOLS = [KNOWLEDGE_READ_TOOL, DESK_LIST_TOOL].map((t) => `mcp__${SESSION_MCP_SERVER}__${t}`);
+
+/** --allowedTools сессии: с оркестрацией — ещё ведение пространства, desk_put и инструменты flow. */
+export const sessionAllowedTools = (orchestrate?: boolean): string[] => (orchestrate ? [...SESSION_ALLOWED_TOOLS, ...ORCHESTRATE_ALLOWED_TOOLS] : SESSION_ALLOWED_TOOLS);
+
+/** Инструменты agentgraph с вопросом человеку: с оркестрацией — без тех, что сессия делает сама. */
+export const askTools = (orchestrate?: boolean): string[] => Object.keys(ASK_TOOLS).filter((t) => !orchestrate || !ORCHESTRATE_ALLOWED_TOOLS.includes(t));
 /** Заголовок с токеном сессии у хуков и MCP: без него (или с чужим) — 404. */
 export const SESSION_TOKEN_HEADER = 'X-Agentgraph-Session';
 /** Живых сессий не больше: каждый claude занимает около 300 МБ. */
 export const LIVE_SESSIONS_MAX = 6;
 /** Claude Code режет additionalContext хука после 10 000 знаков (дальше — файл и превью на 2 КБ), держим запас. */
 export const CONTEXT_BUDGET = 8500;
+/** Предел additionalContext с запасом: контекст и новости о запусках вместе. */
+const CONTEXT_LIMIT = 9800;
 /** Режимы разрешений claude 2.1.311, которые предлагает форма. bypassPermissions и dontAsk не принимаем. */
 export const PERMISSION_MODES: readonly SessionPermissionMode[] = ['acceptEdits', 'auto', 'manual', 'plan'];
 export const SESSION_NAME_MAX = 80;
@@ -192,8 +219,11 @@ export function sessionPrompt(raw: unknown): string | undefined {
 
 // --- запуск claude
 
-/** Что сессия получает от agentgraph: пространство (может не быть) и теги знаний — существующие на момент чтения. */
-export type SessionCtx = { space?: Space; knowledge: Tag[] };
+/**
+ * Что сессия получает от agentgraph: пространство (может не быть) и теги знаний — существующие на момент чтения;
+ * orchestrate — сессия с оркестрацией agentgraph (раздел среды и ведение пространства без вопроса).
+ */
+export type SessionCtx = { space?: Space; knowledge: Tag[]; orchestrate?: boolean };
 
 /**
  * Папки чтения сессии (--add-dir): папка пространства, его пути-папки и артефакты прошлых запусков; пути-папки и вложения
@@ -355,6 +385,8 @@ export type SessionLaunch = {
   permissionMode?: SessionPermissionMode;
   /** Первое сообщение: claude отправит его сам, как `claude "задача"` (у --resume — следом за прошлым разговором). */
   prompt?: string;
+  /** Оркестрация agentgraph: сессия сама ведёт пространство, заводит дело и запускает flow (ORCHESTRATE_ALLOWED_TOOLS). */
+  orchestrate?: boolean;
 };
 
 const base = (l: Pick<SessionLaunch, 'port' | 'id'>) => `http://127.0.0.1:${l.port}/api/sessions/${l.id}`;
@@ -381,7 +413,7 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
       // чужое пространство, теги, папка команд — отказ, своё пространство и flow — вопрос с проверкой до записи
       // Bash — без onFailure: block: эвристика для bypassPermissions (BASH_GUARD_MODES) не должна останавливать каждую
       // команду, когда сервер agentgraph недоступен
-      PreToolUse: [...Object.keys(ASK_TOOLS).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }, { matcher: 'Bash', hooks: http[0].hooks }],
+      PreToolUse: [...askTools(l.orchestrate).map((matcher) => ({ matcher, hooks: [askHook] })), { matcher: WRITE_MATCHER, hooks: [askHook] }, { matcher: 'Bash', hooks: http[0].hooks }],
       // после записи: проверенный файл (space.json, карта, состояние, flow) — ещё раз на диске, UI — обновить
       // и после любого инструмента без матчера: разрешённый вызов снимает «Ждёт разрешения» (handleHook → PostToolUse)
       PostToolUse: http,
@@ -392,7 +424,7 @@ export function sessionSettings(l: SessionLaunch): Record<string, unknown> {
     // пространств и папка flow: сбой хука или старый claude не делают правку там тихой
     permissions: {
       deny: [...l.denyDirs.flatMap(dirRules), ...(l.denyFiles ?? []).map((f) => `Edit(/${f})`)],
-      ask: [...Object.keys(ASK_TOOLS), ...(l.askDirs ?? []).flatMap(dirRules)],
+      ask: [...askTools(l.orchestrate), ...(l.askDirs ?? []).flatMap(dirRules)],
     },
   };
 }
@@ -410,7 +442,7 @@ export function sessionArgs(l: SessionLaunch): string[] {
   // id — через `=`: значение не может стать флагом, даже если бы пришло из хука кривым
   const args = [l.resume ? `--resume=${l.claudeSessionId}` : `--session-id=${l.claudeSessionId}`];
   args.push(`--name=${l.name}`, '--settings', JSON.stringify(sessionSettings(l)), '--mcp-config', JSON.stringify(sessionMcpConfig(l)));
-  args.push('--allowedTools', SESSION_ALLOWED_TOOLS.join(','));
+  args.push('--allowedTools', sessionAllowedTools(l.orchestrate).join(','));
   for (const d of l.addDirs) args.push('--add-dir', d);
   if (l.model) args.push('--model', l.model);
   if (l.permissionMode) args.push('--permission-mode', l.permissionMode);
@@ -474,9 +506,9 @@ export type Delivered = { space?: string; tags: string[] };
  * Части текста на уровне подробности: 0 — всё (документы списком до DOCS_LIST_MAX), 1 — пять документов, 2 — только
  * число документов, 3 — и теги знаний «целиком» строкой. mapLoaded — карта уже память (пространство было в --add-dir).
  */
-function parts(space: Space | undefined, knowledge: Tag[], mapLoaded: boolean, level: number): string[] {
+function parts(space: Space | undefined, knowledge: Tag[], mapLoaded: boolean, level: number, steward = false): string[] {
   const out: string[] = [];
-  if (space) out.push(spaceContext(space, { where: 'session', mapLoaded, docsMax: level === 0 ? undefined : level === 1 ? 5 : 0 }));
+  if (space) out.push(spaceContext(space, { where: 'session', mapLoaded, docsMax: level === 0 ? undefined : level === 1 ? 5 : 0, ...(steward ? { steward } : {}) }));
   const k = knowledgeBlock(level < 3 ? knowledge : knowledge.map((t) => ({ ...t, inline: undefined })));
   return k ? [...out, k] : out;
 }
@@ -496,9 +528,35 @@ function fit(head: string, variant: (level: number) => string[], budget: number)
  * пространство, с которым запущен процесс claude: только его карта уже в памяти. Без пространства и тегов — пусто.
  */
 export function sessionContext(ctx: SessionCtx, launchSpace?: string, budget = CONTEXT_BUDGET): string {
-  if (!ctx.space && !ctx.knowledge.length) return '';
+  // раздел среды — первым и целиком: без него сессия не знает, что ведёт пространство и может запускать flow
+  const env = ctx.orchestrate ? agentgraphNote({ space: ctx.space?.slug }) : '';
+  if (!ctx.space && !ctx.knowledge.length) return env;
   const mapLoaded = Boolean(ctx.space && ctx.space.slug === launchSpace);
-  return fit(CONTEXT_HEAD, (level) => parts(ctx.space, ctx.knowledge, mapLoaded, level), budget);
+  const rest = fit(CONTEXT_HEAD, (level) => parts(ctx.space, ctx.knowledge, mapLoaded, level, ctx.orchestrate), budget - (env ? env.length + 2 : 0));
+  return env ? `${env}\n\n${rest}` : rest;
+}
+
+/**
+ * Раздел среды для сессии с оркестрацией: где она работает, как вести пространство (знание, а не журнал), когда заводить
+ * дело и как решать большую задачу через flow. Приходит на SessionStart (и после /clear, compact) — целиком, до бюджета.
+ */
+export function agentgraphNote(o: { space?: string } = {}): string {
+  const lines = [
+    'Ты работаешь в agentgraph — среде, где сессии, пространства, дела и flow связаны в одну работу. Инструменты MCP-сервера agentgraph — твои рабочие инструменты: пользуйся ими сам, не дожидаясь просьбы.',
+    '',
+    o.space
+      ? `Пространство ${o.space} — память этой работы для следующих сессий и запусков, и ведёшь его ты, по ходу работы, а не в конце:`
+      : 'У сессии пока нет пространства — памяти для следующих сессий. Когда у работы появятся цель и решения, предложи пользователю выбрать или завести пространство в строке сессии. Как его вести:',
+    `- карта (${SPACE_MAP_WRITE_TOOL}) — инструкция следующей сессии: цель пространства, какую задачу решаем, где что лежит (документы, код, индексы, команды проверки), договорённости;`,
+    `- документы (${SPACE_WRITE_TOOL}) — решения (ADR), спеки, исследования: по файлу на тему, ссылки на них — в карте;`,
+    `- состояние (${SPACE_STATE_WRITE_TOOL}) — где мы сейчас: что сделано, что в работе, что дальше, открытые вопросы.`,
+    'Пиши знание, а не журнал. Плохо: «поправил файл X, потом собрал тесты, всё ок». Хорошо: «цель — оптимизация Y; решения — docs/adr-*.md; сейчас — шаг 2 из 3, дальше — Z». Обновляй, когда принято решение, сменился план или закончен заметный кусок; перед записью прочитай текущий текст.',
+    '',
+    `Дела (${DESK_PUT_TOOL}, desk_list, desk_close) — доска пользователя «Мои дела». Сессия — это работа по делу: когда работа оформилась в задачу (больше пары ходов, нужна передача, ревью, MR), заведи дело ${DESK_PUT_TOOL} с заголовком задачи, без вопроса пользователю; важное по ходу дописывай в него (text). Открыл MR или PR — ${DESK_PUT_TOOL} с thing = адрес MR: он привяжется к делу этой сессии, и события GitLab/GitHub лягут в его историю, а не новым делом.`,
+    '',
+    `Flow (${FLOW_GUIDE_TOOL}, ${FLOW_RUN_TOOL}, ${FLOW_STATUS_TOOL}, ${FLOW_ANSWER_TOOL}, ${FLOW_STOP_TOOL}) — запуски агентов по этапам. Маленькую задачу (несколько правок, ответ на вопрос) делай сам. Если задача не маленькая — независимые части, исследование + реализация + независимая проверка, долгий цикл «правка → тесты» — выступай оркестратором: разбей её, возьми готовый flow или собери разовый (${FLOW_GUIDE_TOOL} — правила и пример), запусти ${FLOW_RUN_TOOL} (без вопроса пользователю), следи за ним ${FLOW_STATUS_TOOL} (wait_seconds — подождать изменения), отвечай на вопросы его агентов ${FLOW_ANSWER_TOOL}, проверь результат сам и реши, что дальше. Запуски видны пользователю под этой сессией; что они дали — внеси в пространство.`,
+  ];
+  return lines.join('\n');
 }
 
 /** Что модель получит этим текстом: пространство и существующие теги знаний сессии. */
@@ -521,7 +579,7 @@ export function contextDelta(ctx: SessionCtx, injected: Delivered, launchSpace?:
     ...removed.map((s) => `Тег ${s} снят: его контекст выше больше не действует.`),
   ];
   const mapLoaded = Boolean(space && space.slug === launchSpace);
-  return fit(DELTA_HEAD, (level) => [...(gone.length ? [gone.join('\n')] : []), ...parts(space, knowledge, mapLoaded, level)], budget);
+  return fit(DELTA_HEAD, (level) => [...(gone.length ? [gone.join('\n')] : []), ...parts(space, knowledge, mapLoaded, level, ctx.orchestrate)], budget);
 }
 
 // --- хуки
@@ -588,6 +646,8 @@ export type HookState = {
   preSpacesTags?: string[];
   /** Открытый вопрос человеку (вопрос в ответе, разрешение, форма MCP); в правке null — снят. */
   ask?: SessionAsk | null;
+  /** Сессия с оркестрацией agentgraph: раздел среды в контексте, пространство — без вопроса. */
+  orchestrate?: boolean;
 };
 
 /**
@@ -635,9 +695,16 @@ export type HookDeps = {
   bashGuard?: (command: string, call: WriteCall) => WriteVerdict | undefined;
   /** Время для ask.at; по умолчанию — сейчас. */
   now?: () => string;
+  /** Инструменты agentgraph, которые сессия вызывает без вопроса (оркестрация): хук их не спрашивает. */
+  autoTools?: readonly string[];
+  /**
+   * Новости о запусках этой сессии (закончился, ждёт ответа) — забираются целиком: строка уходит модели со следующим
+   * сообщением или шагом основного разговора. Пусто — новостей нет.
+   */
+  runNotes?: (room: number) => string;
 };
 /** Что нужно решению PreToolUse: сессия терминала и сценарий check-sdk-hooks решают одной функцией. */
-export type PreToolDeps = Pick<HookDeps, 'askDetail' | 'writeGuard' | 'claudeVersion' | 'bashGuard'>;
+export type PreToolDeps = Pick<HookDeps, 'askDetail' | 'writeGuard' | 'claudeVersion' | 'bashGuard' | 'autoTools'>;
 
 /** Что хук записи знает о вызове из входа хука. */
 export type WriteCall = { cwd?: string; toolUseId?: string };
@@ -755,7 +822,7 @@ export function preToolDecision(input: HookInput, deps: PreToolDeps): Record<str
   // session_new запускает claude с текстом модели, space_* и flow_write пишут то, что получат все следующие сессии и
   // запуски: спрашиваем человека в любом режиме (в dontAsk и у старого claude в bypassPermissions — отказ, см. выше)
   const why = ASK_TOOLS[tool];
-  if (!why) return {};
+  if (!why || deps.autoTools?.includes(tool)) return {};
   let detail: string | { deny: string } | undefined;
   try {
     detail = deps.askDetail?.(tool, input.tool_input ?? {});
@@ -778,7 +845,7 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
   if (sid && input.transcript_path) patch.transcriptPath = input.transcript_path;
   if (input.permission_mode && !input.agent_id && input.permission_mode !== s.permissionMode) patch.permissionMode = input.permission_mode;
   const event = input.hook_event_name;
-  const ctx = () => deps.readCtx(s.space, s.tags);
+  const ctx = (): SessionCtx => ({ ...deps.readCtx(s.space, s.tags), ...(s.orchestrate ? { orchestrate: true } : {}) });
   const now = deps.now ?? (() => new Date().toISOString());
 
   switch (event) {
@@ -803,11 +870,14 @@ export function handleHook(s: HookState, input: HookInput, deps: HookDeps): Hook
       // ответили или модель пошла дальше (разрешение дали): вопроса больше нет
       if (s.ask) patch.ask = null;
       const c = ctx();
-      const text = s.injected === null ? sessionContext(c, s.launchSpace) : contextDelta(c, s.injected, s.launchSpace);
+      const ctxText = s.injected === null ? sessionContext(c, s.launchSpace) : contextDelta(c, s.injected, s.launchSpace);
+      // новости — в то, что осталось до предела additionalContext у Claude Code (10 000 знаков)
+      const news = deps.runNotes?.(CONTEXT_LIMIT - ctxText.length) ?? '';
+      const text = [ctxText, news].filter(Boolean).join('\n\n');
       const working = { ...patch, status: 'working' as const };
       const turn = event === 'UserPromptSubmit' ? { prompt: input.prompt ?? '' } : undefined;
       if (event === 'UserPromptSubmit') working.turns = s.turns + 1;
-      return { reply: withContext(event, text), patch: working, ...(text || s.injected === null ? { delivered: delivered(c) } : {}), ...(turn ? { turn } : {}) };
+      return { reply: withContext(event, text), patch: working, ...(ctxText || s.injected === null ? { delivered: delivered(c) } : {}), ...(turn ? { turn } : {}) };
     }
     case 'Stop': {
       // ждёт ответа, только если ответ кончился вопросом; иначе — просто закончил ход

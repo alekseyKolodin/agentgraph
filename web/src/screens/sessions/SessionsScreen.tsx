@@ -128,6 +128,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
   const [model, setModel] = useState('');
   const [mode, setMode] = useState<SessionPermissionMode | ''>('');
   const [saveState, setSaveState] = useState(true);
+  const [orchestrate, setOrchestrate] = useState(true);
   const [msg, setMsg] = useState<Msg>({ text: '', tone: '' });
   const [busy, setBusy] = useState(false);
 
@@ -206,6 +207,7 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         ...(model ? { model } : {}),
         ...(mode ? { permissionMode: mode } : {}),
         saveState,
+        orchestrate,
         ...termSize(window.innerWidth, window.innerHeight),
       });
       LS.setRaw(SESSION_CWD_KEY, s.cwd);
@@ -297,6 +299,13 @@ function NewSession({ preset, onCancel, full, max }: { preset: Preset; onCancel:
         <p className="muted small">{t('Строка каждого тега — в контексте, полный текст Claude возьмёт инструментом knowledge_read. Можно и без тегов.')}</p>
       </div>
       <ModelPreview space={space} tags={tags} where="session" cwd={cwd} options={spaceList} loaded={!spacesOn || !spacesQuery.isPending} />
+      <label className={styles.check} title={t('Без галочки сессия — обычный Claude Code: пространство меняет только с твоего разрешения, flow не запускает')}>
+        <input type="checkbox" name="orchestrate" checked={orchestrate} onChange={(e) => setOrchestrate(e.target.checked)} />
+        <span>
+          <span>{t('Оркестрация agentgraph')}</span>
+          <span className="muted small">{t('Сессия сама ведёт пространство (карта, решения, состояние) и дело на доске, а большую задачу решает через flow — их запуски видны под ней в «Сейчас».')}</span>
+        </span>
+      </label>
       <details className={styles.more}>
         <summary>{t('Дополнительно')}</summary>
         <div className={styles.moreBody}>

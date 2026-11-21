@@ -135,4 +135,5 @@ export const shell: Record<string, string> = {
   'Экран не открылся': 'The screen failed to open',
   'Перезагрузить': 'Reload',
   'Загрузить страницу заново': 'Load the page again',
+  'Запуск начала сессия выше': 'Started by the session above',
 };

@@ -10,7 +10,7 @@ import type { SessionView } from '@server/api-types';
 import { useFeature, useHome, useRuns } from '../../api';
 import { useRoutines } from '../../api/routines';
 import { activeWaits } from '../../lib/routines/view';
-import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle } from '../../lib/home';
+import { inboxCount, LIVE_STATUSES, liveCount, liveRows, liveRowTitle, splitBySession, type LiveRow } from '../../lib/home';
 import { panelForPath, railClick, validPanel, type SidePanel } from '../../lib/side-panel';
 import { useNow } from '../useNow';
 import { getLang, saveLang, t } from '../../lib/i18n';
@@ -63,13 +63,34 @@ function useLiveRows() {
   return liveRows(src);
 }
 
-/** «Сейчас»: идущие запуски, ждущие тебя — первыми. */
+/** Строка запуска в «Сейчас»; child — запуск сессии, под её строкой с отступом. */
+function LiveRunRow({ row, activeId, child }: { row: LiveRow; activeId: string | undefined; child?: boolean }) {
+  return (
+    <li
+      className={[styles.lrun, styles[row.tone], child ? styles.lrunChild : '', row.r.id === activeId ? styles.active : ''].filter(Boolean).join(' ')}
+      title={`${liveRowTitle(row)}${row.it ? `\n${t('Итерация идущего блока / лимит')}: ${row.it}` : ''}${child ? `\n${t('Запуск начала сессия выше')}` : ''}`}
+    >
+      <span className={styles.lrunDot} aria-hidden="true" />
+      <span className={styles.lrunMain}>
+        <Link className={`${styles.lrunTitle} ${styles.rowLink}`} to={`/run/${row.r.id}`} aria-current={row.r.id === activeId ? 'page' : undefined}>
+          {row.r.title || row.r.flow}
+        </Link>
+        <span className={styles.lrunSub}>{row.sub}</span>
+      </span>
+      {/* подсказка «2/5» — в подсказке строки: ссылка строки лежит поверх */}
+      {row.it && <span className={styles.lrunIt}>{row.it}</span>}
+    </li>
+  );
+}
+
+/** «Сейчас»: идущие запуски, ждущие тебя — первыми; запуски сессии — под ней. */
 function LiveSection({ all }: { all: SessionView[] }) {
   const activeId = useMatch('/run/:id')?.params.id;
   const rows = useLiveRows();
   const sessions = all.filter((s) => s.live);
   if (!rows.length && !sessions.length) return null;
   const count = liveCount(rows);
+  const { top, under } = splitBySession(rows, sessions.map((s) => s.id));
   return (
     <Section
       title={t('Сейчас')}
@@ -77,26 +98,12 @@ function LiveSection({ all }: { all: SessionView[] }) {
       className={styles.sideLive}
       extra={rows.length > 0 && <span className={`${styles.sideCount} ${count.wait ? styles.wait : ''}`}>{count.text}</span>}
     >
-      <ul className={`${styles.sideBody} ${styles.liveList}`}>
-        {rows.map((row) => (
-          <li
-            key={row.r.id}
-            className={[styles.lrun, styles[row.tone], row.r.id === activeId ? styles.active : ''].filter(Boolean).join(' ')}
-            title={`${liveRowTitle(row)}${row.it ? `\n${t('Итерация идущего блока / лимит')}: ${row.it}` : ''}`}
-          >
-            <span className={styles.lrunDot} aria-hidden="true" />
-            <span className={styles.lrunMain}>
-              <Link className={`${styles.lrunTitle} ${styles.rowLink}`} to={`/run/${row.r.id}`} aria-current={row.r.id === activeId ? 'page' : undefined}>
-                {row.r.title || row.r.flow}
-              </Link>
-              <span className={styles.lrunSub}>{row.sub}</span>
-            </span>
-            {/* подсказка «2/5» — в подсказке строки: ссылка строки лежит поверх */}
-            {row.it && <span className={styles.lrunIt}>{row.it}</span>}
-          </li>
-        ))}
-      </ul>
-      <LiveSessions sessions={sessions} />
+      {top.length > 0 && (
+        <ul className={`${styles.sideBody} ${styles.liveList}`}>
+          {top.map((row) => <LiveRunRow key={row.r.id} row={row} activeId={activeId} />)}
+        </ul>
+      )}
+      <LiveSessions sessions={sessions} runs={under} activeRun={activeId} />
     </Section>
   );
 }
@@ -105,14 +112,14 @@ function LiveSection({ all }: { all: SessionView[] }) {
  * Живые сессии терминала в «Сейчас» — под запусками и не в счётчике «ждут» раздела. Точка: работает — синяя с ореолом,
  * ждёт тебя (вопрос или разрешение) — янтарная, закончила ход без вопроса и запускается — серая: простой — не тревога.
  */
-function LiveSessions({ sessions }: { sessions: SessionView[] }) {
+function LiveSessions({ sessions, runs, activeRun }: { sessions: SessionView[]; runs: Map<string, LiveRow[]>; activeRun: string | undefined }) {
   const activeId = useMatch('/sessions/:id')?.params.id;
   // «5 мин назад» во второй строке: у ждущей сессии данные не меняются — перерисовка раз в 30 секунд
   const now = new Date(useNow(30_000));
   if (!sessions.length) return null;
   return (
     <ul className={`${styles.sideBody} ${styles.liveList}`} aria-label={t('Сессии терминала')}>
-      {sessions.map((s) => (
+      {sessions.map((s) => [
         <li
           key={s.id}
           className={[styles.lrun, asksNow(s) ? styles.wait : '', s.status === 'waiting' && !s.ask ? styles.sessionIdle : '', s.status === 'working' ? styles.sessionWorking : '', s.status === 'starting' ? styles.sessionStarting : '', s.id === activeId ? styles.active : '', RENAME_HOST].filter(Boolean).join(' ')}
@@ -124,8 +131,10 @@ function LiveSessions({ sessions }: { sessions: SessionView[] }) {
             <span className={styles.lrunSub}>{sessionSub(s, now)}</span>
           </span>
           <span className={styles.lrunIt} aria-hidden="true">›_</span>
-        </li>
-      ))}
+        </li>,
+        // запуски, которые начала сессия (flow_run), — сразу под ней
+        ...(runs.get(s.id) ?? []).map((row) => <LiveRunRow key={row.r.id} row={row} activeId={activeRun} child />),
+      ])}
     </ul>
   );
 }

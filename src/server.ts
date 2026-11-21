@@ -104,7 +104,9 @@ import {
 } from './spaces.js';
 import { pickAutoSpace, type AutoSpaceReport } from './auto-space.js';
 import { analyzeRun, readAnalysis, type RunAnalysis } from './run-analysis.js';
-import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionToFlowSkill, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions } from './sessions-server.js';
+import { assertSpaceFree, liveSessionDirs, liveSessionNames, looseSpaceSessions, onSessionEdit, onSessionWaiting, releaseSpaceSessions, SessionError, sessionDraftSource, sessionReviewSources, sessionsAvailable, sessionsRoute, sessionsUpgrade, sessionToFlowSkill, sessionWorkStatus, setSessionTeamwork, spacelessSessions, spaceSessions, stopSessions, setSessionFlows, sessionRunNote } from './sessions-server.js';
+import { runNoteText, sessionFlowsCtx, type PreparedRun, type SessionRunStart } from './session-flows.js';
+import { safeRealpath } from './sessions.js';
 import {
   draftEstimate, draftModel, draftReply, groupItems, groupsEstimate, groupsReply, resolveDraftInput, SPACE_GROUPS_MODEL, type DraftDeps, type DraftInput, type DraftResolveDeps, type DraftSession,
   type GroupSource,
@@ -437,6 +439,19 @@ export function startServer(opts: ServerOptions): Promise<string> {
     homeBroadcast({ type: 'session', runId: '', flow: '', session });
     notifySession(opts, session, v.ask);
   });
+  // оркестрация из сессий: flow_run и соседи MCP сессии запускают flow тем же startRun, что форма
+  setSessionFlows((ref) =>
+    sessionFlowsCtx(ref, {
+      prepare: (o) => prepareSessionRun(o, opts),
+      start: (p) => startSessionRun(p, opts),
+      view: runView,
+      ownerOf: runOwnerSession,
+      list: listRuns,
+      answer: answerQuestion,
+      abort: abortRun,
+      flows: listFlows,
+    }),
+  );
   // Teamwork: событие team после записи в клон команды или pull; «UI открыт» — есть подписчики /api/events (spec §7.3)
   if (!teamChanges) {
     const service = teamService({ hasSubscribers: () => homeClients.size > 0, workStatus: teamWorkStatus, ...opts.teamwork });
@@ -516,6 +531,7 @@ export async function stopServer(timeoutMs = 10_000): Promise<void> {
   teamChanges?.();
   teamChanges = null;
   setSessionTeamwork(null);
+  setSessionFlows(null);
   await stopTeamworkStatus();
   // текущий push без сети висит до таймаута git (2 минуты): выход ждёт его не дольше оставшегося времени — коммиты и так
   // остаются в клоне и уйдут при следующем запуске
@@ -1470,6 +1486,8 @@ function startRun(
      * §14). Имя — слаг проекта: по нему список запусков группирует их, как по папке проекта.
      */
     emptyCwd?: string;
+    /** Запуск начала сессия терминала (flow_run): id сессии — в run.json, новости о запуске — ей. */
+    fromSession?: string;
   },
   srv: ServerOptions,
 ): string {
@@ -1625,6 +1643,21 @@ function launchRun(
       // движок рутин (routines → notify): заголовком событие, успешный конец молчит
       // вопрос агента в запуске рутины — по её notify.os ('wait'), как пауза перед блоком
       if ((e.type === 'question' && !quietRoutineRuns.has(id)) || (e.type === 'end' && !parent && !routineRuns.has(id))) notifyOs(srv, id, runLabel(spec.name, lr.report?.title), e);
+      // запуск сессии-оркестратора: конец, вопрос агента и пауза — новостью в её следующий шаг (вопрос дочернего — тоже ей)
+      const paused = e.type === 'pause' && e.state === 'paused';
+      const owner = e.type === 'question' || paused || (e.type === 'end' && !parent) ? runOwnerSession(id) : undefined;
+      if (owner) {
+        const title = runLabel(spec.name, lr.report?.title);
+        const note =
+          e.type === 'question'
+            ? runNoteText({ type: 'question', id, title, phase: e.question.title || e.question.phase, questions: e.question.questions.map((q) => q.question) })
+            : e.type === 'end'
+              ? runNoteText({ type: 'end', id, title, status: e.report.status, costUsd: e.report.totalCostUsd, ...(e.report.error ? { error: e.report.error.slice(0, 200) } : {}) })
+              : e.type === 'pause'
+                ? runNoteText({ type: 'pause', id, title, ...(e.reason?.phase ? { phase: e.reason.phase } : {}) })
+                : '';
+        if (note) sessionRunNote(owner, note);
+      }
     } else if (lr.logs.push(payload) > LOG_REPLAY_MAX * 1.2) lr.logs.splice(0, lr.logs.length - LOG_REPLAY_MAX);
     for (const client of lr.clients) client.write(payload);
     if (e.type === 'end') quietRoutineRuns.delete(id);
@@ -2129,6 +2162,8 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     root: chainRoot(prev, readReport),
     source: prev.source,
     ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
+    // запуск сессии-оркестратора и его продолжение или повтор — её же: она видит их в flow_status и «Сейчас»
+    ...(prev.session ? { fromSession: prev.session } : {}),
     worktree: prev.worktree,
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
@@ -2145,6 +2180,53 @@ function continueRun(prevId: string, o: { maxBudgetUsd?: number; model?: string 
     ...(prev.title ? { title: prev.title } : {}),
   }, srv);
   return { id, skipped: cont.skipBlocks };
+}
+
+// --- оркестрация из сессии терминала (session-flows.ts)
+
+/**
+ * Проверки запуска flow от сессии (flow_run) — как у POST /api/runs (flow или разовый yaml, папка, теги знаний), без
+ * эффектов: ими же собирается сводка вопроса. Рабочая папка — не папка данных agentgraph (настройки с токенами, папка
+ * запусков, папка flow): этап правил бы инструкции следующих сессий и запусков без вопроса; папку команд отсекает resolveDir.
+ */
+function prepareSessionRun(o: SessionRunStart, srv: ServerOptions): PreparedRun {
+  const { spec, adhoc } = specFromRunBody(o.flow ? { flow: o.flow } : { yaml: o.yaml });
+  spec.input = o.input.trim();
+  const cwd = resolveDir(o.cwd, srv.defaultCwd);
+  for (const [dir, what] of [[configDir(), 'папка настроек agentgraph'], [RUNS_DIR, 'папка запусков agentgraph'], [FLOWS_DIR, 'папка flow']] as const) {
+    if (isInside(safeRealpath(cwd), safeRealpath(dir))) throw new Error(`${cwd} — ${what}: запуск от сессии здесь не работает, дай папку проекта`);
+  }
+  const knowledge = knowledgeTags(runTagSlugs(o.tags)).map((t) => t.slug);
+  resolveKnowledge(spec, knowledge);
+  return { spec, adhoc, o: { ...o, cwd, tags: knowledge } };
+}
+
+/** Старт проверенного запуска сессии. Пространство сессии — без записи состояния: его ведёт сама сессия. */
+function startSessionRun(p: PreparedRun, srv: ServerOptions): string {
+  const { spec, adhoc, o } = p;
+  const space = o.space ? readSpace(o.space) : undefined;
+  return startRun(spec, {
+    cwd: o.cwd,
+    ...(o.model ? { model: o.model } : {}),
+    ...(o.budget ? { maxBudgetUsd: o.budget } : {}),
+    addDirs: [],
+    attachments: [],
+    adhoc,
+    ...(space ? { space: space.slug, saveState: false, spaceDirs: spaceReadDirs(space, RUNS_DIR) } : {}),
+    ...(o.tags.length ? { knowledge: o.tags } : {}),
+    fromSession: o.session,
+  }, srv);
+}
+
+/** Сессия, начавшая запуск: из run.json, у дочернего запуска блока-вызова — его корня. Нет — undefined. */
+function runOwnerSession(id: string): string | undefined {
+  let r = live.get(id)?.report ?? readReport(id);
+  for (let depth = 0; r && depth < 20; depth++) {
+    if (r.session) return r.session;
+    if (!r.parent) return undefined;
+    r = live.get(r.parent.runId)?.report ?? readReport(r.parent.runId);
+  }
+  return undefined;
 }
 
 // --- чат запуска (src/chat.ts): сервер даёт ему состояние запуска и те же функции управления, что у кнопок
@@ -2283,6 +2365,8 @@ function rerunRun(prevId: string, o: { maxBudgetUsd?: number; model?: string }, 
     model: o.model,
     source: prev.source,
     ...(prev.teamwork ? { teamwork: prev.teamwork } : {}),
+    // запуск сессии-оркестратора и его продолжение или повтор — её же: она видит их в flow_status и «Сейчас»
+    ...(prev.session ? { fromSession: prev.session } : {}),
     worktree: prev.worktree,
     addDirs,
     attachmentsFrom: path.join(RUNS_DIR, prevId),
@@ -2500,6 +2584,7 @@ function liveRuns(): HomeRun[] {
   for (const lr of live.values()) {
     const r = lr.report;
     if (!r) continue;
+    const owner = r.session ?? (r.parent ? runOwnerSession(lr.id) : undefined);
     out.push({
       id: lr.id,
       flow: r.flow,
@@ -2522,6 +2607,8 @@ function liveRuns(): HomeRun[] {
       // «Ответить на странице запуска» на главной: пауза по просьбе агента и артефакт решений
       ...homePauseFields(lr.pause, r.pauseReason, lr.artifacts?.hasDecisions() ?? false),
       ...(r.parent ? { parent: r.parent } : {}),
+      // дочерний запуск блока-вызова — под той же сессией, что его корень
+      ...(owner ? { session: owner } : {}),
       ...(r.teamwork ? { teamwork: r.teamwork } : {}),
       projectRef: runProject(proj, r),
     });
@@ -2625,6 +2712,7 @@ function listRuns(): RunSummary[] {
       ...(!r.space && (r.tags?.length ?? 0) > 1 ? { legacyTags: r.tags } : {}),
       ...(r.knowledge?.length ? { knowledge: r.knowledge } : {}),
       ...(r.parent ? { parent: r.parent } : {}),
+      ...(r.session ? { session: r.session } : {}),
     });
   }
   return out.sort((a, b) => b.startedAt.localeCompare(a.startedAt));

@@ -171,6 +171,8 @@ export type RunSummary = {
   knowledge?: string[];
   /** Дочерний запуск блока-вызова: список показывает его под родителем. */
   parent?: RunParent;
+  /** Запуск начала сессия терминала (инструмент flow_run): «Сейчас» показывает его под ней. */
+  session?: string;
   /** Продолжение: id первого запуска цепочки (ключ run:<root> не меняется от продолжения к продолжению). */
   root?: string;
 };
@@ -208,6 +210,8 @@ export type HomeRun = {
   decisions?: true;
   /** Дочерний запуск блока-вызова: кто его вызвал. */
   parent?: RunParent;
+  /** Запуск начала сессия терминала (flow_run): id сессии. */
+  session?: string;
   /** Запуск по задаче или черновик Teamwork (run.json → teamwork): строка на главной ссылается на задачу. */
   teamwork?: RunTeamworkLink;
   /** Проект запуска — как у RunSummary. */
@@ -752,6 +756,8 @@ export type SessionView = {
   projectRef?: ProjectRef;
   /** Ветка, на которой сейчас стоит папка сессии (HEAD, без вызова git); только в списке GET /api/sessions — поиск по ветке. */
   branch?: string;
+  /** Оркестрация agentgraph: сессия сама ведёт пространство и дело, большие задачи решает через flow. */
+  orchestrate?: true;
 };
 
 /**
@@ -1255,6 +1261,8 @@ export type RunReport = {
   flowEdits?: RunFlowEdit[];
   /** Запуск вызван блоком-вызовом другого запуска (flow: X). */
   parent?: RunParent;
+  /** Запуск начала сессия терминала инструментом flow_run: id сессии. */
+  session?: string;
   /** Дела, которые запуск завёл или дополнил инструментом desk_put (вместе с вызванными flow). Нет вызовов — поля нет. */
   desk?: RunDesk;
 };

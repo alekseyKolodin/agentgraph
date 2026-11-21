@@ -894,6 +894,11 @@ export type SpaceContextOpts = {
   mapLoaded: boolean;
   /** Сколько документов назвать; остальные — «ещё N». 0 — только число. По умолчанию: сессии — 30, этапу — 10. */
   docsMax?: number;
+  /**
+   * Сессия с оркестрацией agentgraph ведёт пространство сама: карту, документы и состояние пишет инструментами без
+   * вопроса пользователю (правила ведения — в разделе среды, sessions.ts → agentgraphNote).
+   */
+  steward?: boolean;
 };
 
 /**
@@ -948,7 +953,9 @@ export function spaceContext(space: Space, o: SpaceContextOpts): string {
     if (paths.length && dirsMax <= 0) lines.push(`Папок пространства (только чтение): ${paths.length}.`);
     else if (paths.length) lines.push(`Папки пространства (только чтение): ${paths.slice(0, dirsMax).join(', ')}${paths.length > dirsMax ? `, …и ещё ${paths.length - dirsMax}` : ''}`);
     lines.push(
-      o.where === 'session'
+      o.where === 'session' && o.steward
+        ? `Это пространство ведёшь ты: карту пиши инструментом space_map_write, состояние — space_state_write, документ в ${DOCS_DIR}/ — ${SPACE_WRITE_TOOL} — без вопроса пользователю, по правилам ведения выше. Заголовок и папки (space_settings) и правка файлов в папке пространства — только с его разрешения: agentgraph спросит.`
+        : o.where === 'session'
         ? `Пространство меняется только с разрешения пользователя — agentgraph спросит его о каждой правке: карту пиши инструментом space_map_write, состояние — space_state_write, документ в ${DOCS_DIR}/ — ${SPACE_WRITE_TOOL}, заголовок и папки — space_settings; остальное в папке пространства — правкой файлов. Меняй, только когда пользователь просит.`
         : 'Папка пространства только для чтения: состояние после запуска запишет agentgraph.',
     );

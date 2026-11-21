@@ -345,7 +345,7 @@ test('сессия из задачи: связь в ответе, старт —
   assert.deepEqual(t.work?.filter((w) => w.kind === 'session').map((w) => [w.id, w.status, w.title]), [[s.id, 'starting', 'Сессия PAY-2']]);
   const rpc = (method: string, params?: unknown) => call<{ result: { tools?: { name: string }[]; content?: { text: string }[]; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }, { 'X-Agentgraph-Session': token });
   const tools = (await rpc('tools/list')).body.result.tools!.map((x) => x.name);
-  assert.deepEqual(tools, ['knowledge_read', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'session_new', 'team_task_update', 'team_doc_write', 'desk_put', 'desk_close', 'desk_list', 'knowledge_note']);
+  assert.deepEqual(tools, ['knowledge_read', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'session_new', 'team_task_update', 'team_doc_write', 'desk_put', 'desk_close', 'desk_list', 'knowledge_note', 'flow_guide', 'flow_run', 'flow_status', 'flow_answer', 'flow_stop']);
   const tool = async (name: string, args: unknown) => (await rpc('tools/call', { name, arguments: args })).body.result;
   // статус, PR и комментарий одним вызовом — коммит задачи и файл комментария
   const upd = await tool('team_task_update', { status: 'review', pr: 'https://github.com/acme/billing/pull/7', comment: 'Готово к ревью' });
@@ -379,7 +379,7 @@ test('сессия из задачи: связь в ответе, старт —
   // сессия без задачи инструментов не получает
   const plain = (await call<SessionView>('POST', '/api/sessions', { cwd: proj, saveState: false })).body;
   const plainTools = (await call<{ result: { tools: { name: string }[] } }>('POST', `/api/sessions/${plain.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { 'X-Agentgraph-Session': tokenOf(spawned.at(-1)!) })).body.result.tools.map((x) => x.name);
-  assert.deepEqual(plainTools, ['knowledge_read', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'session_new', 'desk_put', 'desk_close', 'desk_list', 'knowledge_note']);
+  assert.deepEqual(plainTools, ['knowledge_read', 'space_write', 'space_map_write', 'space_state_write', 'space_settings', 'flow_write', 'session_new', 'desk_put', 'desk_close', 'desk_list', 'knowledge_note', 'flow_guide', 'flow_run', 'flow_status', 'flow_answer', 'flow_stop']);
   await call('POST', `/api/sessions/${plain.id}/end`);
   // конец сессии — статус ended в work, задача не двигается
   await call('POST', `/api/sessions/${s.id}/end`);

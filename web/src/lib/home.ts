@@ -112,7 +112,7 @@ export function homeRunView(r: HomeRun, project: string, artifacts: boolean, now
 }
 
 /** Запуск для «Сейчас»: строка /api/home или, без неё, запись списка запусков (там нет блоков и этапов). */
-export type LiveSource = Pick<HomeRun, 'id' | 'flow' | 'status'> & Partial<Pick<HomeRun, 'title' | 'blocks' | 'running' | 'current' | 'pause' | 'conds'>>;
+export type LiveSource = Pick<HomeRun, 'id' | 'flow' | 'status'> & Partial<Pick<HomeRun, 'title' | 'blocks' | 'running' | 'current' | 'pause' | 'conds' | 'session'>>;
 
 export type LiveRow = { r: LiveSource; tone: 'live' | 'wait'; sub: string; it: string };
 
@@ -131,6 +131,22 @@ export function sideLiveInfo(r: LiveSource): Omit<LiveRow, 'r'> {
 /** Строки «Сейчас»: ждущие тебя — первыми. */
 export function liveRows(src: LiveSource[]): LiveRow[] {
   return src.map((r) => ({ r, ...sideLiveInfo(r) })).sort((a, b) => (a.tone === 'wait' ? 0 : 1) - (b.tone === 'wait' ? 0 : 1));
+}
+
+/**
+ * Запуски «Сейчас» по сессиям: запуск, который начала живая сессия (flow_run), — под ней (under), остальные — сверху
+ * (top). Порядок внутри — как в rows.
+ */
+export function splitBySession(rows: LiveRow[], liveSessions: readonly string[]): { top: LiveRow[]; under: Map<string, LiveRow[]> } {
+  const live = new Set(liveSessions);
+  const top: LiveRow[] = [];
+  const under = new Map<string, LiveRow[]>();
+  for (const row of rows) {
+    const s = row.r.session;
+    if (s && live.has(s)) under.set(s, [...(under.get(s) ?? []), row]);
+    else top.push(row);
+  }
+  return { top, under };
 }
 
 /** Счётчик «Сейчас»: «ждут 1 · идут 2». */

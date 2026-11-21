@@ -89,6 +89,9 @@
 .lrun-sub { font-size: var(--fs-meta); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lrun.wait .lrun-sub { color: var(--st-wait); }
 .lrun-it { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* запуск, который начала сессия (flow_run), — под её строкой: отступ и уголок к ней */
+.lrun-child { margin-left: 16px; }
+.lrun-child::before { content: ''; position: absolute; left: -8px; top: -2px; height: 50%; width: 8px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); border-bottom-left-radius: 4px; pointer-events: none; }
 
 .side-section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .side-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }

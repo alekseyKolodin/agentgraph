@@ -98,7 +98,8 @@ type Decision = { permissionDecision: string; permissionDecisionReason: string }
 
 /** Живая сессия и её хуки/MCP с токеном, как их зовёт claude. */
 async function session(body: Record<string, unknown>) {
-  const { body: v } = await call<SessionView>('POST', '/api/sessions', { cwd: proj, ...body });
+  // правка с вопросом — у сессии без оркестрации (с ней пространство пишется без вопроса: sessions.orchestrate.test.ts)
+  const { body: v } = await call<SessionView>('POST', '/api/sessions', { cwd: proj, orchestrate: false, ...body });
   const p = spawned.at(-1)!;
   const headers = tokenOf(p);
   const hook = async (input: Record<string, unknown>) => (await call<Record<string, unknown>>('POST', `/api/sessions/${v.id}/hook`, input, headers)).body;

@@ -9,7 +9,8 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import type { HomeEvent, SessionView, SessionWsServer } from './api-types.js';
 import { startServer, stopServer } from './server.js';
-import { LEGACY_RECORD_FILE, onSessionWaiting, SessionError, SessionManager, sessionManager } from './sessions-server.js';
+import { FLOW_EXAMPLE } from './session-flows.js';
+import { LEGACY_RECORD_FILE, onSessionWaiting, SessionError, SessionManager, sessionManager, sessionRunNote } from './sessions-server.js';
 import { createMirror, type PtyExit, type PtyProcess, type PtyKit } from './sessions-pty.js';
 import { LIVE_SESSIONS_MAX } from './sessions.js';
 import { createTag, readTag, tagDir, updateTag } from './tags.js';
@@ -134,6 +135,8 @@ after(() => {
 });
 
 async function call<T = unknown>(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: T }> {
+  // тесты этого файла — про сессию без оркестрации (вопрос на каждую запись пространства); оркестрацию проверяет свой тест
+  if (method === 'POST' && url === '/api/sessions' && body && typeof body === 'object' && !('orchestrate' in body)) body = { ...body, orchestrate: false };
   const res = await fetch(base + url, { method, headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   return { status: res.status, body: (text ? JSON.parse(text) : undefined) as T };
@@ -744,6 +747,42 @@ test('выход без SessionStart с диалогом доверия на э�
   await until(async () => !(await view(s.id)).live);
   const v = await view(s.id);
   assert.deepEqual([v.status, v.exitCode, v.outcome], ['ended', 0, 'untrusted']);
+});
+
+test('оркестрация по умолчанию: в виде сессии, в --allowedTools у claude, раздел среды на SessionStart, новости о запусках — со следующим шагом', async () => {
+  // orchestrate: undefined — поле не уходит на сервер: проверяем значение по умолчанию
+  const { body: s } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), orchestrate: undefined });
+  try {
+    assert.equal(s.orchestrate, true);
+    const p = spawned.at(-1)!;
+    assert.ok(p.args[p.args.indexOf('--allowedTools') + 1].split(',').includes('mcp__agentgraph__flow_status'));
+    const token = tokenOf(p);
+    const start = await hook(s.id, token, { hook_event_name: 'SessionStart', source: 'startup', session_id: s.id });
+    const ctx = (start.body.hookSpecificOutput as { additionalContext: string }).additionalContext;
+    assert.match(ctx, /^Ты работаешь в agentgraph/);
+    sessionRunNote(s.id, 'Запуск r1 закончился: done');
+    // шаг основного разговора (не ход: разбор сессий в соседнем тесте считает сессии с ходами)
+    const next = await hook(s.id, token, { hook_event_name: 'PostToolBatch', session_id: s.id });
+    assert.match((next.body.hookSpecificOutput as { additionalContext: string }).additionalContext, /Новости о запусках flow этой сессии[\s\S]*Запуск r1 закончился/);
+    // flow_run без вопроса: хук его не трогает
+    const pre = await hook(s.id, token, { hook_event_name: 'PreToolUse', tool_name: 'mcp__agentgraph__flow_run', tool_input: { yaml: FLOW_EXAMPLE, input: 'x' }, permission_mode: 'acceptEdits', session_id: s.id });
+    assert.equal(pre.body.hookSpecificOutput, undefined);
+    // но папка настроек agentgraph и разовый flow с правами — отказ до старта, запуска нет
+    const runMcp = async (args: Record<string, unknown>) =>
+      (await call<{ result: { content: { text: string }[]; isError?: boolean } }>('POST', `/api/sessions/${s.id}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'flow_run', arguments: args } }, { 'X-Agentgraph-Session': token })).body.result;
+    const cfg = await runMcp({ yaml: FLOW_EXAMPLE, input: 'x', cwd: path.join(root, 'cfg') });
+    assert.equal(cfg.isError, true);
+    assert.match(cfg.content[0].text, /папка настроек agentgraph/);
+    const bypass = await runMcp({ yaml: FLOW_EXAMPLE.replace('        tools: [Read, Edit, Write, Grep, Glob, Bash]', '        tools: [Read, Edit, Write, Grep, Glob, Bash]\n        permission_mode: bypassPermissions'), input: 'x' });
+    assert.equal(bypass.isError, true);
+    assert.match(bypass.content[0].text, /permission_mode/);
+    // без галочки — как раньше
+    const { body: off } = await call<SessionView>('POST', '/api/sessions', { cwd: path.join(root, 'proj'), orchestrate: false });
+    assert.equal(off.orchestrate, undefined);
+    await call('POST', `/api/sessions/${off.id}/end`);
+  } finally {
+    await call('POST', `/api/sessions/${s.id}/end`);
+  }
 });
 
 test('WebSocket: чужой Origin, без Origin и чужой Host — отказ; свой — состояние, снимок экрана, вывод и ввод', async () => {
